@@ -18,6 +18,7 @@ import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_CACHE_CAPACITY;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_BACKGROUND_COMPACTIONS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_OPEN_FILES;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_READ_ONLY;
 
 import java.nio.file.Path;
 
@@ -29,6 +30,7 @@ public class RocksDBConfigurationBuilder {
   private long cacheCapacity = DEFAULT_CACHE_CAPACITY;
   private int maxBackgroundCompactions = DEFAULT_MAX_BACKGROUND_COMPACTIONS;
   private int backgroundThreadCount = DEFAULT_BACKGROUND_THREAD_COUNT;
+  private boolean readOnly = DEFAULT_READ_ONLY;
 
   public RocksDBConfigurationBuilder databaseDir(final Path databaseDir) {
     this.databaseDir = databaseDir;
@@ -60,12 +62,18 @@ public class RocksDBConfigurationBuilder {
     return this;
   }
 
+  public RocksDBConfigurationBuilder readOnly(final boolean readOnly) {
+    this.readOnly = readOnly;
+    return this;
+  }
+
   public static RocksDBConfigurationBuilder from(final RocksDBFactoryConfiguration configuration) {
     return new RocksDBConfigurationBuilder()
         .backgroundThreadCount(configuration.getBackgroundThreadCount())
         .cacheCapacity(configuration.getCacheCapacity())
         .maxBackgroundCompactions(configuration.getMaxBackgroundCompactions())
-        .maxOpenFiles(configuration.getMaxOpenFiles());
+        .maxOpenFiles(configuration.getMaxOpenFiles())
+        .readOnly(configuration.isReadOnly());
   }
 
   public RocksDBConfiguration build() {
@@ -75,6 +83,7 @@ public class RocksDBConfigurationBuilder {
         maxBackgroundCompactions,
         backgroundThreadCount,
         cacheCapacity,
+        readOnly,
         label);
   }
 }

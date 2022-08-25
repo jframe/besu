@@ -27,6 +27,7 @@ import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksD
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfigurationBuilder;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBFactoryConfiguration;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.segmented.RocksDBColumnarKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.segmented.RocksDBReadOnlyColumnarKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.unsegmented.RocksDBKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedKeyValueStorageAdapter;
@@ -122,8 +123,17 @@ public class RocksDBKeyValueStorageFactory implements KeyValueStorageFactory {
                     .filter(segmentId -> segmentId.includeInDatabaseVersion(databaseVersion))
                     .collect(Collectors.toList());
             segmentedStorage =
-                new RocksDBColumnarKeyValueStorage(
-                    rocksDBConfiguration, segmentsForVersion, metricsSystem, rocksDBMetricsFactory);
+                rocksDBConfiguration.isReadOnly()
+                    ? new RocksDBReadOnlyColumnarKeyValueStorage(
+                        rocksDBConfiguration,
+                        segmentsForVersion,
+                        metricsSystem,
+                        rocksDBMetricsFactory)
+                    : new RocksDBColumnarKeyValueStorage(
+                        rocksDBConfiguration,
+                        segmentsForVersion,
+                        metricsSystem,
+                        rocksDBMetricsFactory);
           }
           return new SegmentedKeyValueStorageAdapter<>(segment, segmentedStorage);
         }

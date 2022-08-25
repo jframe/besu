@@ -24,6 +24,7 @@ public class RocksDBConfiguration {
   private final int maxBackgroundCompactions;
   private final int backgroundThreadCount;
   private final long cacheCapacity;
+  private final boolean readOnly;
 
   public RocksDBConfiguration(
       final Path databaseDir,
@@ -31,12 +32,14 @@ public class RocksDBConfiguration {
       final int maxBackgroundCompactions,
       final int backgroundThreadCount,
       final long cacheCapacity,
+      final boolean readOnly,
       final String label) {
     this.maxBackgroundCompactions = maxBackgroundCompactions;
     this.backgroundThreadCount = backgroundThreadCount;
     this.databaseDir = databaseDir;
     this.maxOpenFiles = maxOpenFiles;
     this.cacheCapacity = cacheCapacity;
+    this.readOnly = readOnly;
     this.label = label;
   }
 
@@ -58,6 +61,10 @@ public class RocksDBConfiguration {
 
   public long getCacheCapacity() {
     return cacheCapacity;
+  }
+
+  public boolean isReadOnly() {
+    return readOnly;
   }
 
   public String getLabel() {

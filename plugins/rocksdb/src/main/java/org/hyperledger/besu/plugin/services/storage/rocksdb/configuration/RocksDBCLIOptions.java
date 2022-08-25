@@ -23,6 +23,7 @@ public class RocksDBCLIOptions {
   public static final long DEFAULT_CACHE_CAPACITY = 134217728;
   public static final int DEFAULT_MAX_BACKGROUND_COMPACTIONS = 4;
   public static final int DEFAULT_BACKGROUND_THREAD_COUNT = 4;
+  public static final boolean DEFAULT_READ_ONLY = false;
 
   private static final String MAX_OPEN_FILES_FLAG = "--Xplugin-rocksdb-max-open-files";
   private static final String CACHE_CAPACITY_FLAG = "--Xplugin-rocksdb-cache-capacity";
@@ -30,6 +31,7 @@ public class RocksDBCLIOptions {
       "--Xplugin-rocksdb-max-background-compactions";
   private static final String BACKGROUND_THREAD_COUNT_FLAG =
       "--Xplugin-rocksdb-background-thread-count";
+  private static final String READ_ONLY_FLAG = "--Xplugin-rocksdb-read-only-enabled";
 
   @CommandLine.Option(
       names = {MAX_OPEN_FILES_FLAG},
@@ -63,6 +65,14 @@ public class RocksDBCLIOptions {
       description = "Number of RocksDB background threads (default: ${DEFAULT-VALUE})")
   int backgroundThreadCount;
 
+  @CommandLine.Option(
+      names = {READ_ONLY_FLAG},
+      hidden = true,
+      defaultValue = "false",
+      paramLabel = "<BOOLEAN>",
+      description = "Enable read-only mode for rocksDB (default: ${DEFAULT-VALUE})")
+  boolean readOnly;
+
   private RocksDBCLIOptions() {}
 
   public static RocksDBCLIOptions create() {
@@ -75,12 +85,13 @@ public class RocksDBCLIOptions {
     options.cacheCapacity = config.getCacheCapacity();
     options.maxBackgroundCompactions = config.getMaxBackgroundCompactions();
     options.backgroundThreadCount = config.getBackgroundThreadCount();
+    options.readOnly = config.isReadOnly();
     return options;
   }
 
   public RocksDBFactoryConfiguration toDomainObject() {
     return new RocksDBFactoryConfiguration(
-        maxOpenFiles, maxBackgroundCompactions, backgroundThreadCount, cacheCapacity);
+        maxOpenFiles, maxBackgroundCompactions, backgroundThreadCount, cacheCapacity, readOnly);
   }
 
   @Override
