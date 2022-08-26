@@ -47,6 +47,7 @@ public class SynchronizerConfiguration {
   public static final int DEFAULT_COMPUTATION_PARALLELISM = 2;
   public static final int DEFAULT_WORLD_STATE_TASK_CACHE_SIZE =
       CachingTaskCollection.DEFAULT_CACHE_SIZE;
+  public static final boolean DEFAULT_UPDATE_HEAD_FROM_DB = false;
 
   // Fast sync config
   private final int fastSyncPivotDistance;
@@ -77,6 +78,7 @@ public class SynchronizerConfiguration {
   private final int computationParallelism;
   private final int maxTrailingPeers;
   private final long worldStateMinMillisBeforeStalling;
+  private final boolean updateHeadFromDb;
 
   private SynchronizerConfiguration(
       final int fastSyncPivotDistance,
@@ -98,7 +100,8 @@ public class SynchronizerConfiguration {
       final int downloaderParallelism,
       final int transactionsParallelism,
       final int computationParallelism,
-      final int maxTrailingPeers) {
+      final int maxTrailingPeers,
+      final boolean updateHeadFromDb) {
     this.fastSyncPivotDistance = fastSyncPivotDistance;
     this.fastSyncFullValidationRate = fastSyncFullValidationRate;
     this.fastSyncMinimumPeerCount = fastSyncMinimumPeerCount;
@@ -119,6 +122,7 @@ public class SynchronizerConfiguration {
     this.transactionsParallelism = transactionsParallelism;
     this.computationParallelism = computationParallelism;
     this.maxTrailingPeers = maxTrailingPeers;
+    this.updateHeadFromDb = updateHeadFromDb;
   }
 
   public static Builder builder() {
@@ -234,6 +238,10 @@ public class SynchronizerConfiguration {
     return maxTrailingPeers;
   }
 
+  public boolean getUpdateHeadFromDb() {
+    return updateHeadFromDb;
+  }
+
   public static class Builder {
     private SyncMode syncMode = SyncMode.FULL;
     private int fastSyncMinimumPeerCount = DEFAULT_FAST_SYNC_MINIMUM_PEERS;
@@ -259,6 +267,7 @@ public class SynchronizerConfiguration {
         DEFAULT_WORLD_STATE_MAX_REQUESTS_WITHOUT_PROGRESS;
     private long worldStateMinMillisBeforeStalling = DEFAULT_WORLD_STATE_MIN_MILLIS_BEFORE_STALLING;
     private int worldStateTaskCacheSize = DEFAULT_WORLD_STATE_TASK_CACHE_SIZE;
+    private boolean updateHeadFromDb = DEFAULT_UPDATE_HEAD_FROM_DB;
 
     public Builder fastSyncPivotDistance(final int distance) {
       fastSyncPivotDistance = distance;
@@ -371,6 +380,11 @@ public class SynchronizerConfiguration {
       return this;
     }
 
+    public Builder updateHeadFromDb(final boolean updateHeadFromDb) {
+      this.updateHeadFromDb = updateHeadFromDb;
+      return this;
+    }
+
     public SynchronizerConfiguration build() {
       return new SynchronizerConfiguration(
           fastSyncPivotDistance,
@@ -392,7 +406,8 @@ public class SynchronizerConfiguration {
           downloaderParallelism,
           transactionsParallelism,
           computationParallelism,
-          maxTrailingPeers);
+          maxTrailingPeers,
+          updateHeadFromDb);
     }
   }
 }

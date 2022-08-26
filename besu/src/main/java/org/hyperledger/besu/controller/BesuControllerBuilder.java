@@ -300,7 +300,8 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             blockchainStorage,
             metricsSystem,
             reorgLoggingThreshold,
-            dataDirectory.toString());
+            dataDirectory.toString(),
+            syncConfig.getUpdateHeadFromDb());
 
     final WorldStateArchive worldStateArchive =
         createWorldStateArchive(worldStateStorage, blockchain);

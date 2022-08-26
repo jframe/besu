@@ -35,6 +35,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -81,6 +84,8 @@ public class RocksDBReadOnlyColumnarKeyValueStorage
   private final RocksDBMetrics metrics;
   private final WriteOptions tryDeleteOptions =
       new WriteOptions().setNoSlowdown(true).setIgnoreMissingColumnFamilies(true);
+  private final ScheduledExecutorService secondaryCatchup =
+      Executors.newSingleThreadScheduledExecutor();
 
   public RocksDBReadOnlyColumnarKeyValueStorage(
       final RocksDBConfiguration configuration,
@@ -118,13 +123,18 @@ public class RocksDBReadOnlyColumnarKeyValueStorage
               .setStatistics(stats)
               .setCreateMissingColumnFamilies(true)
               .setEnv(
-                  Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()));
+                  Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()))
+              .setMaxOpenFiles(-1);
 
       txOptions = new TransactionDBOptions();
       final List<ColumnFamilyHandle> columnHandles = new ArrayList<>(columnDescriptors.size());
       db =
-          TransactionDB.openReadOnly(
-              options, configuration.getDatabaseDir().toString(), columnDescriptors, columnHandles);
+          TransactionDB.openAsSecondary(
+              options,
+              configuration.getDatabaseDir().toString(),
+              configuration.getDatabaseDir().getParent().resolve("secondary_database").toString(),
+              columnDescriptors,
+              columnHandles);
       metrics = rocksDBMetricsFactory.create(metricsSystem, configuration, db, stats);
       final Map<Bytes, String> segmentsById =
           segments.stream()
@@ -142,6 +152,17 @@ public class RocksDBReadOnlyColumnarKeyValueStorage
       }
       columnHandlesByName = builder.build();
 
+      secondaryCatchup.scheduleAtFixedRate(
+          () -> {
+            try {
+              db.tryCatchUpWithPrimary();
+            } catch (RocksDBException e) {
+              LOG.error("Error attempting to catchup with primary", e);
+            }
+          },
+          0,
+          1,
+          TimeUnit.SECONDS);
     } catch (final RocksDBException e) {
       throw new StorageException(e);
     }

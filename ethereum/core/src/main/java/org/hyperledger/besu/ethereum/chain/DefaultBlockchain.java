@@ -45,6 +45,9 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -64,6 +67,8 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   private final Subscribers<BlockAddedObserver> blockAddedObservers = Subscribers.create();
   private final Subscribers<ChainReorgObserver> blockReorgObservers = Subscribers.create();
+  private final ScheduledExecutorService blockUpdateScheduler =
+      Executors.newSingleThreadScheduledExecutor();
   private final long reorgLoggingThreshold;
 
   private volatile BlockHeader chainHeader;
@@ -78,7 +83,7 @@ public class DefaultBlockchain implements MutableBlockchain {
       final BlockchainStorage blockchainStorage,
       final MetricsSystem metricsSystem,
       final long reorgLoggingThreshold) {
-    this(genesisBlock, blockchainStorage, metricsSystem, reorgLoggingThreshold, null);
+    this(genesisBlock, blockchainStorage, metricsSystem, reorgLoggingThreshold, null, false);
   }
 
   private DefaultBlockchain(
@@ -86,7 +91,8 @@ public class DefaultBlockchain implements MutableBlockchain {
       final BlockchainStorage blockchainStorage,
       final MetricsSystem metricsSystem,
       final long reorgLoggingThreshold,
-      final String dataDirectory) {
+      final String dataDirectory,
+      final boolean updateCacheFromDb) {
     checkNotNull(genesisBlock);
     checkNotNull(blockchainStorage);
     checkNotNull(metricsSystem);
@@ -144,6 +150,27 @@ public class DefaultBlockchain implements MutableBlockchain {
 
     this.reorgLoggingThreshold = reorgLoggingThreshold;
     this.blockChoiceRule = heaviestChainBlockChoiceRule;
+
+    if (updateCacheFromDb) {
+      this.blockUpdateScheduler.scheduleAtFixedRate(
+          () -> {
+            final Optional<Hash> ch = blockchainStorage.getChainHead();
+            final Optional<BlockHeader> cbh = ch.flatMap(blockchainStorage::getBlockHeader);
+            if (cbh.isPresent() && !cbh.get().equals(this.chainHeader)) {
+              final Optional<BlockBody> dbChainHeadBody = blockchainStorage.getBlockBody(ch.get());
+              final Optional<Difficulty> dbChainTotalDifficulty =
+                  blockchainStorage.getTotalDifficulty(ch.get());
+
+              this.chainHeader = cbh.get();
+              this.totalDifficulty = dbChainTotalDifficulty.get();
+              this.chainHeadTransactionCount = dbChainHeadBody.get().getTransactions().size();
+              this.chainHeadOmmerCount = dbChainHeadBody.get().getOmmers().size();
+            }
+          },
+          0,
+          1,
+          TimeUnit.SECONDS);
+    }
   }
 
   public static MutableBlockchain createMutable(
@@ -161,14 +188,16 @@ public class DefaultBlockchain implements MutableBlockchain {
       final BlockchainStorage blockchainStorage,
       final MetricsSystem metricsSystem,
       final long reorgLoggingThreshold,
-      final String dataDirectory) {
+      final String dataDirectory,
+      final boolean updateCacheFromDb) {
     checkNotNull(genesisBlock);
     return new DefaultBlockchain(
         Optional.of(genesisBlock),
         blockchainStorage,
         metricsSystem,
         reorgLoggingThreshold,
-        dataDirectory);
+        dataDirectory,
+        updateCacheFromDb);
   }
 
   public static Blockchain create(

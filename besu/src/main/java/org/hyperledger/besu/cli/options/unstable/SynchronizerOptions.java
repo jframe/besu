@@ -72,6 +72,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private static final String SNAP_TRIENODE_COUNT_PER_REQUEST_FLAG =
       "--Xsnapsync-synchronizer-trienode-count-per-request";
 
+  private static final String UPDATE_HEAD_FROM_DB = "--Xupdate-head-from-db";
+
   @CommandLine.Option(
       names = BLOCK_PROPAGATION_RANGE_FLAG,
       hidden = true,
@@ -272,6 +274,14 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private int snapsyncTrieNodeCountPerRequest =
       SnapSyncConfiguration.DEFAULT_TRIENODE_COUNT_PER_REQUEST;
 
+  @CommandLine.Option(
+      names = UPDATE_HEAD_FROM_DB,
+      hidden = true,
+      defaultValue = "false",
+      paramLabel = "<BOOLEAN>",
+      description = "Update cache from local shared database (default: ${DEFAULT-VALUE})")
+  private boolean updateHeadFromDb = SynchronizerConfiguration.DEFAULT_UPDATE_HEAD_FROM_DB;
+
   private SynchronizerOptions() {}
 
   public static SynchronizerOptions create() {
@@ -308,6 +318,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
         config.getSnapSyncConfiguration().getBytecodeCountPerRequest();
     options.snapsyncTrieNodeCountPerRequest =
         config.getSnapSyncConfiguration().getTrienodeCountPerRequest();
+    options.updateHeadFromDb = config.getUpdateHeadFromDb();
     return options;
   }
 
@@ -330,6 +341,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     builder.worldStateMaxRequestsWithoutProgress(worldStateMaxRequestsWithoutProgress);
     builder.worldStateMinMillisBeforeStalling(worldStateMinMillisBeforeStalling);
     builder.worldStateTaskCacheSize(worldStateTaskCacheSize);
+    builder.updateHeadFromDb(updateHeadFromDb);
     builder.snapSyncConfiguration(
         ImmutableSnapSyncConfiguration.builder()
             .pivotBlockWindowValidity(snapsyncPivotBlockWindowValidity)
@@ -386,6 +398,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
         SNAP_BYTECODE_COUNT_PER_REQUEST_FLAG,
         OptionParser.format(snapsyncBytecodeCountPerRequest),
         SNAP_TRIENODE_COUNT_PER_REQUEST_FLAG,
-        OptionParser.format(snapsyncTrieNodeCountPerRequest));
+        OptionParser.format(snapsyncTrieNodeCountPerRequest),
+        UPDATE_HEAD_FROM_DB,
+        OptionParser.format(updateHeadFromDb));
   }
 }

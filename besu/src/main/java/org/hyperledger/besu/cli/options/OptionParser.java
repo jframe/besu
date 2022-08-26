@@ -53,4 +53,8 @@ public class OptionParser {
   public static String format(final UInt256 value) {
     return value.toBigInteger().toString(10);
   }
+
+  public static String format(final boolean value) {
+    return Boolean.toString(value);
+  }
 }
