@@ -23,12 +23,15 @@ import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 public interface BlockchainStorage {
 
   Optional<Hash> getChainHead();
 
   Collection<Hash> getForkHeads();
+
+  Set<Hash> getForks(final long blockNumber);
 
   Optional<Hash> getFinalized();
 
@@ -66,6 +69,8 @@ public interface BlockchainStorage {
 
     void setForkHeads(Collection<Hash> forkHeadHashes);
 
+    void setForks(final long blockNumber, Set<Hash> forkHashes);
+
     void setFinalized(Hash blockHash);
 
     void setSafeBlock(Hash blockHash);
@@ -73,6 +78,12 @@ public interface BlockchainStorage {
     void removeBlockHash(long blockNumber);
 
     void removeTransactionLocation(Hash transactionHash);
+
+    void removeBlockHeader(final Hash blockHash);
+
+    void removeBlockBody(final Hash blockHash);
+
+    void removeTransactionReceipts(final Hash blockHash);
 
     void commit();
 

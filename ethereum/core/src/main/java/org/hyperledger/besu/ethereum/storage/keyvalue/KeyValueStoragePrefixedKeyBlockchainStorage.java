@@ -28,8 +28,10 @@ import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import com.google.common.collect.Lists;
 import org.apache.tuweni.bytes.Bytes;
@@ -54,6 +56,7 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
   private static final Bytes BLOCK_HASH_PREFIX = Bytes.of(5);
   private static final Bytes TOTAL_DIFFICULTY_PREFIX = Bytes.of(6);
   private static final Bytes TRANSACTION_LOCATION_PREFIX = Bytes.of(7);
+  private static final Bytes FORKS_PREFIX = Bytes.of(8);
 
   final KeyValueStorage storage;
   final BlockHeaderFunctions blockHeaderFunctions;
@@ -74,6 +77,15 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
     return get(VARIABLES_PREFIX, FORK_HEADS_KEY)
         .map(bytes -> RLP.input(bytes).readList(in -> this.bytesToHash(in.readBytes32())))
         .orElse(Lists.newArrayList());
+  }
+
+  @Override
+  public Set<Hash> getForks(final long blockNumber) {
+    return get(FORKS_PREFIX, UInt256.valueOf(blockNumber))
+        .map(
+            bytes ->
+                new HashSet<>(RLP.input(bytes).readList(in -> this.bytesToHash(in.readBytes32()))))
+        .orElse(new HashSet<>());
   }
 
   @Override
@@ -189,6 +201,13 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
     }
 
     @Override
+    public void setForks(final long blockNumber, final Set<Hash> forkHashes) {
+      final Bytes data =
+          RLP.encode(o -> o.writeList(forkHashes, (val, out) -> out.writeBytes(val)));
+      set(FORKS_PREFIX, UInt256.valueOf(blockNumber), data);
+    }
+
+    @Override
     public void setFinalized(final Hash blockHash) {
       set(VARIABLES_PREFIX, FINALIZED_BLOCK_HASH_KEY, blockHash);
     }
@@ -206,6 +225,21 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
     @Override
     public void removeTransactionLocation(final Hash transactionHash) {
       remove(TRANSACTION_LOCATION_PREFIX, transactionHash);
+    }
+
+    @Override
+    public void removeBlockHeader(final Hash blockHash) {
+      remove(BLOCK_HEADER_PREFIX, blockHash);
+    }
+
+    @Override
+    public void removeBlockBody(final Hash blockHash) {
+      remove(BLOCK_BODY_PREFIX, blockHash);
+    }
+
+    @Override
+    public void removeTransactionReceipts(final Hash blockHash) {
+      remove(TRANSACTION_RECEIPTS_PREFIX, blockHash);
     }
 
     @Override

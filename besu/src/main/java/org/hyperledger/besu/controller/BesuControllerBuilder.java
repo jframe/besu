@@ -34,6 +34,7 @@ import org.hyperledger.besu.ethereum.bonsai.BonsaiWorldStateArchive;
 import org.hyperledger.besu.ethereum.bonsai.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.chain.BlockchainStorage;
+import org.hyperledger.besu.ethereum.chain.ChainPruner;
 import org.hyperledger.besu.ethereum.chain.DefaultBlockchain;
 import org.hyperledger.besu.ethereum.chain.GenesisState;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
@@ -299,6 +300,9 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             metricsSystem,
             reorgLoggingThreshold,
             dataDirectory.toString());
+
+    final ChainPruner chainPruner = new ChainPruner(blockchainStorage);
+    blockchain.observeBlockAdded(chainPruner);
 
     final WorldStateArchive worldStateArchive =
         createWorldStateArchive(worldStateStorage, blockchain);
