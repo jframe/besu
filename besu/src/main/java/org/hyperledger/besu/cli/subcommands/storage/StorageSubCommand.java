@@ -21,15 +21,20 @@ import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.FINALIZE
 import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.FORK_HEADS;
 import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.SAFE_BLOCK_HASH;
 import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.SEQ_NO_STORE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.BLOCKCHAIN;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRANSACTION_RECEIPT;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRANSACTION_RECEIPT_COMPRESSED;
 
 import org.hyperledger.besu.cli.BesuCommand;
 import org.hyperledger.besu.cli.util.VersionProvider;
+import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
-import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import java.io.PrintWriter;
+import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -48,7 +53,7 @@ import picocli.CommandLine.Spec;
     subcommands = {
       StorageSubCommand.RevertVariablesStorage.class,
       RocksDbSubCommand.class,
-      TrieLogSubCommand.class
+      StorageSubCommand.ReceiptsComparisonStorage.class
     })
 public class StorageSubCommand implements Runnable {
 
@@ -110,8 +115,7 @@ public class StorageSubCommand implements Runnable {
 
     private void revert(final StorageProvider storageProvider) {
       final var variablesStorage = storageProvider.createVariablesStorage();
-      final var blockchainStorage =
-          getStorageProvider().getStorageBySegmentIdentifier(KeyValueSegmentIdentifier.BLOCKCHAIN);
+      final var blockchainStorage = getStorageProvider().getStorageBySegmentIdentifier(BLOCKCHAIN);
       final var blockchainUpdater = blockchainStorage.startTransaction();
       final var variablesUpdater = variablesStorage.updater();
 
@@ -173,6 +177,79 @@ public class StorageSubCommand implements Runnable {
         final Bytes value) {
       blockchainTransaction.put(
           Bytes.concatenate(prefix, key).toArrayUnsafe(), value.toArrayUnsafe());
+    }
+  }
+
+  /** The Hash sub command for password. */
+  @Command(
+      name = "receipts-compare",
+      description = "This command compares receipts storage with and without compression",
+      mixinStandardHelpOptions = true,
+      versionProvider = VersionProvider.class)
+  static class ReceiptsComparisonStorage implements Runnable {
+    private static final Logger LOG = LoggerFactory.getLogger(ReceiptsComparisonStorage.class);
+
+    @SuppressWarnings("unused")
+    @ParentCommand
+    private StorageSubCommand parentCommand;
+
+    @Override
+    public void run() {
+      checkNotNull(parentCommand);
+
+      final var storageProvider = getStorageProvider();
+
+      compare(storageProvider);
+    }
+
+    private StorageProvider getStorageProvider() {
+      // init collection of ignorable segments
+      parentCommand.parentCommand.setIgnorableStorageSegments();
+      return parentCommand.parentCommand.getStorageProvider();
+    }
+
+    private void compare(final StorageProvider storageProvider) {
+      final var blockchainStorage = storageProvider.getStorageBySegmentIdentifier(BLOCKCHAIN);
+      final var txReceipt =
+          storageProvider.getStorageBySegmentIdentifiers(
+              List.of(TRANSACTION_RECEIPT, TRANSACTION_RECEIPT_COMPRESSED));
+      txReceipt.clear(TRANSACTION_RECEIPT);
+      txReceipt.clear(TRANSACTION_RECEIPT_COMPRESSED);
+      final var blockchainUpdater = blockchainStorage.startTransaction();
+      final Bytes TRANSACTION_RECEIPTS_PREFIX = Bytes.of(4);
+
+      final Bytes startKey =
+          Bytes.concatenate(TRANSACTION_RECEIPTS_PREFIX, Bytes.repeat((byte) 0, 32));
+      final Bytes endKey =
+          Bytes.concatenate(TRANSACTION_RECEIPTS_PREFIX, Bytes.repeat((byte) 0xff, 32));
+
+      LOG.info("Starting receipt compression comparison");
+      blockchainStorage
+          .streamFromKey(startKey.toArrayUnsafe(), endKey.toArrayUnsafe())
+          .forEach(
+              receiptKeyPair -> {
+                final SegmentedKeyValueStorageTransaction receiptTx = txReceipt.startTransaction();
+                final byte[] txReceiptsRlp = receiptKeyPair.getValue();
+                receiptTx.put(TRANSACTION_RECEIPT, receiptKeyPair.getKey(), txReceiptsRlp);
+                final List<TransactionReceipt> txReceipts =
+                    RLP.input(Bytes.wrap(txReceiptsRlp)).readList(TransactionReceipt::readFrom);
+                final byte[] txReceiptsRlpCompressed =
+                    RLP.encode(
+                            o ->
+                                o.writeList(
+                                    txReceipts,
+                                    (transactionReceipt, rlpOutput) ->
+                                        transactionReceipt.writeToWithRevertReason(
+                                            rlpOutput, true)))
+                        .toArrayUnsafe();
+                receiptTx.put(
+                    TRANSACTION_RECEIPT_COMPRESSED,
+                    receiptKeyPair.getKey(),
+                    txReceiptsRlpCompressed);
+                receiptTx.commit();
+              });
+      LOG.info("Finished receipt compression comparison");
+      blockchainUpdater.commit();
     }
   }
 }
