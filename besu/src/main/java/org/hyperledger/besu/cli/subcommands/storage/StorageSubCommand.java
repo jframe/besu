@@ -249,7 +249,7 @@ public class StorageSubCommand implements Runnable {
                       txReceiptsRlpCompressed);
                   receiptTx.commit();
                 } catch (Exception e) {
-                  LOG.info("Failed receipt: {}", Bytes.wrap(txReceiptsRlp));
+                  LOG.info("Failed due to {} receipt: {}", e, Bytes.wrap(txReceiptsRlp));
                 }
               });
       LOG.info("Finished receipt compression comparison");
