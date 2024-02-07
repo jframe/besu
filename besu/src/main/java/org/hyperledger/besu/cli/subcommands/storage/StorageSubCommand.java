@@ -231,22 +231,26 @@ public class StorageSubCommand implements Runnable {
                 final SegmentedKeyValueStorageTransaction receiptTx = txReceipt.startTransaction();
                 final byte[] txReceiptsRlp = receiptKeyPair.getValue();
                 receiptTx.put(TRANSACTION_RECEIPT, receiptKeyPair.getKey(), txReceiptsRlp);
-                final List<TransactionReceipt> txReceipts =
-                    RLP.input(Bytes.wrap(txReceiptsRlp)).readList(TransactionReceipt::readFrom);
-                final byte[] txReceiptsRlpCompressed =
-                    RLP.encode(
-                            o ->
-                                o.writeList(
-                                    txReceipts,
-                                    (transactionReceipt, rlpOutput) ->
-                                        transactionReceipt.writeToWithRevertReason(
-                                            rlpOutput, true)))
-                        .toArrayUnsafe();
-                receiptTx.put(
-                    TRANSACTION_RECEIPT_COMPRESSED,
-                    receiptKeyPair.getKey(),
-                    txReceiptsRlpCompressed);
-                receiptTx.commit();
+                try {
+                  final List<TransactionReceipt> txReceipts =
+                      RLP.input(Bytes.wrap(txReceiptsRlp)).readList(TransactionReceipt::readFrom);
+                  final byte[] txReceiptsRlpCompressed =
+                      RLP.encode(
+                              o ->
+                                  o.writeList(
+                                      txReceipts,
+                                      (transactionReceipt, rlpOutput) ->
+                                          transactionReceipt.writeToWithRevertReason(
+                                              rlpOutput, true)))
+                          .toArrayUnsafe();
+                  receiptTx.put(
+                      TRANSACTION_RECEIPT_COMPRESSED,
+                      receiptKeyPair.getKey(),
+                      txReceiptsRlpCompressed);
+                  receiptTx.commit();
+                } catch (Exception e) {
+                  LOG.info("Failed receipt: {}", Bytes.wrap(txReceiptsRlp));
+                }
               });
       LOG.info("Finished receipt compression comparison");
       blockchainUpdater.commit();
