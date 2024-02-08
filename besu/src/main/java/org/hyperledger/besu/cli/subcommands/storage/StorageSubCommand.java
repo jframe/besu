@@ -25,16 +25,26 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRANSACTION_RECEIPT;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRANSACTION_RECEIPT_COMPRESSED;
 
+import com.google.common.util.concurrent.AtomicDouble;
 import org.hyperledger.besu.cli.BesuCommand;
 import org.hyperledger.besu.cli.util.VersionProvider;
+import org.hyperledger.besu.controller.BesuController;
+import org.hyperledger.besu.ethereum.chain.BlockchainStorage;
+import org.hyperledger.besu.ethereum.chain.GenesisState;
+import org.hyperledger.besu.ethereum.chain.VariablesStorage;
+import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
+import org.hyperledger.besu.ethereum.worldstate.WorldStateStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import java.io.PrintWriter;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -199,16 +209,21 @@ public class StorageSubCommand implements Runnable {
 
       final var storageProvider = getStorageProvider();
 
-      compare(storageProvider);
+      final BesuController besuController = parentCommand.parentCommand.buildController();
+      final ProtocolSchedule protocolSchedule = besuController.getProtocolSchedule();
+      final VariablesStorage variablesStorage = storageProvider.createVariablesStorage();
+      final BlockchainStorage blockchainStorage = storageProvider.createBlockchainStorage(protocolSchedule, variablesStorage);
+
+      compare(storageProvider, blockchainStorage);
     }
 
     private StorageProvider getStorageProvider() {
       // init collection of ignorable segments
       parentCommand.parentCommand.setIgnorableStorageSegments();
-      return parentCommand.parentCommand.getStorageProvider();
+      return parentCommand.parentCommand.buildController().getStorageProvider();
     }
 
-    private void compare(final StorageProvider storageProvider) {
+    private void compare(final StorageProvider storageProvider, final BlockchainStorage blockchain) {
       final var blockchainStorage = storageProvider.getStorageBySegmentIdentifier(BLOCKCHAIN);
       final var txReceipt =
           storageProvider.getStorageBySegmentIdentifiers(
@@ -224,6 +239,12 @@ public class StorageSubCommand implements Runnable {
           Bytes.concatenate(TRANSACTION_RECEIPTS_PREFIX, Bytes.repeat((byte) 0xff, 32));
 
       LOG.info("Starting receipt compression comparison");
+
+      final long estimatedCount = blockchain.getChainHead().flatMap(blockchain::getBlockHeader).map(ProcessableBlockHeader::getNumber).get();
+      LOG.info("Receipt estimated count = {}", estimatedCount);
+
+      final AtomicLong receiptCount = new AtomicLong();
+      final AtomicLong receiptsProcessedPercent = new AtomicLong();
       blockchainStorage
           .streamFromKey(startKey.toArrayUnsafe(), endKey.toArrayUnsafe())
           .forEach(
@@ -234,20 +255,20 @@ public class StorageSubCommand implements Runnable {
                 try {
                   final List<TransactionReceipt> txReceipts =
                       RLP.input(Bytes.wrap(txReceiptsRlp)).readList(TransactionReceipt::readFrom);
-                  final byte[] txReceiptsRlpCompressed =
-                      RLP.encode(
-                              o ->
-                                  o.writeList(
-                                      txReceipts,
-                                      (transactionReceipt, rlpOutput) ->
-                                          transactionReceipt.writeToWithRevertReason(
-                                              rlpOutput, true)))
-                          .toArrayUnsafe();
+                  final byte[] txReceiptsRlpCompressed = KeyValueStoragePrefixedKeyBlockchainStorage.Updater.rlpEncode(txReceipts).toArrayUnsafe();
                   receiptTx.put(
                       TRANSACTION_RECEIPT_COMPRESSED,
                       receiptKeyPair.getKey(),
                       txReceiptsRlpCompressed);
                   receiptTx.commit();
+
+                  final long newCount = receiptCount.incrementAndGet();
+                  final long newPercentValue = (long) (((double) newCount / estimatedCount) * 100);
+                  final long oldPercentValue = receiptsProcessedPercent.get();
+                  if (newPercentValue > oldPercentValue) {
+                    receiptsProcessedPercent.set(newPercentValue);
+                    LOG.info("Compared {}% of receipts", newPercentValue);
+                  }
                 } catch (Exception e) {
                   LOG.info("Failed due to {} receipt: {}", e, Bytes.wrap(txReceiptsRlp));
                 }
