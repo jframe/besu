@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -26,6 +27,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.bytes.MutableBytes;
 
 /**
@@ -56,13 +58,22 @@ public class Log {
   }
 
   public void writeTo(final RLPOutput out) {
-    writeTo(out, false);
+    writeTo(out, false, new ArrayList<>());
   }
 
-  public void writeTo(final RLPOutput out, final boolean isCompacted) {
+  public void writeTo(
+      final RLPOutput out, final boolean isCompacted, final List<Bytes32> logTopics) {
     out.startList();
     out.writeBytes(logger);
-    out.writeList(topics, (topic, listOut) -> listOut.writeBytes(topic));
+    out.writeList(
+        topics,
+        (topic, listOut) -> {
+          if (isCompacted) {
+            listOut.writeIntScalar(logTopics.indexOf(topic));
+          } else {
+            listOut.writeBytes(topic);
+          }
+        });
     if (isCompacted) {
       final Bytes shortData = data.trimLeadingZeros();
       final int zeroLeadDataSize = data.size() - shortData.size();
@@ -75,7 +86,7 @@ public class Log {
   }
 
   public static Log readFrom(final RLPInput in) {
-    return readFrom(in, false);
+    return readFrom(in, false, new ArrayList<>());
   }
   /**
    * Reads the log entry from the provided RLP input.
@@ -83,10 +94,19 @@ public class Log {
    * @param in the input from which to decode the log entry.
    * @return the read log entry.
    */
-  public static Log readFrom(final RLPInput in, final boolean isCompacted) {
+  public static Log readFrom(
+      final RLPInput in, final boolean isCompacted, final List<Bytes32> logTopics) {
     in.enterList();
     final Address logger = Address.wrap(in.readBytes());
-    final List<LogTopic> topics = in.readList(listIn -> LogTopic.wrap(listIn.readBytes32()));
+    final List<LogTopic> topics =
+        in.readList(
+            listIn -> {
+              if (isCompacted) {
+                return LogTopic.wrap(logTopics.get(listIn.readIntScalar()));
+              } else {
+                return LogTopic.wrap(listIn.readBytes32());
+              }
+            });
     final Bytes data;
     if (isCompacted) {
       final int zeroLeadDataSize = in.readInt();

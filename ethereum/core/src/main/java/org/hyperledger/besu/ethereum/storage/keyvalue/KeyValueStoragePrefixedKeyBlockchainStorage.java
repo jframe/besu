@@ -30,12 +30,16 @@ import org.hyperledger.besu.ethereum.core.BlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -129,7 +133,18 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
   }
 
   private List<TransactionReceipt> rlpDecodeTransactionReceipts(final Bytes bytes) {
-    return RLP.input(bytes).readList(input -> TransactionReceipt.readFrom(input, true, true));
+    return RLP.input(bytes)
+        .readList(
+            input -> {
+              input.enterList();
+
+              ArrayList<Bytes32> logTopics = new ArrayList<>(input.readList(RLPInput::readBytes32));
+
+              TransactionReceipt transactionReceipt =
+                  TransactionReceipt.readFrom(input, true, true, logTopics);
+              input.leaveList();
+              return transactionReceipt;
+            });
   }
 
   private Hash bytesToHash(final Bytes bytes) {
@@ -143,7 +158,7 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
   /**
    * One time migration of variables from the blockchain storage to the dedicated variable storage.
    * To avoid state inconsistency in case of a downgrade done without running the storage
-   * revert-variables subcommand it fails giving the possibility to retry the downgrade procedure.
+   * revert-variables subcommand it fails giving the pos1sibility to retry the downgrade procedure.
    */
   private void migrateVariables() {
     final var blockchainUpdater = updater();
@@ -366,11 +381,19 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
 
     public static Bytes rlpEncode(final List<TransactionReceipt> receipts) {
       return RLP.encode(
-          o ->
-              o.writeList(
-                  receipts,
-                  (transactionReceipt, rlpOutput) ->
-                      transactionReceipt.writeToWithRevertReason(rlpOutput, true)));
+          o -> {
+            o.startList();
+            final Set<Bytes32> topics = new HashSet<>();
+            receipts.forEach(
+                receipt -> receipt.getLogs().forEach(log -> topics.addAll(log.getTopics())));
+            ArrayList<Bytes32> logTopics = new ArrayList<>(topics);
+            o.writeList(logTopics, (bytes32, rlpOutput) -> rlpOutput.writeBytes(bytes32));
+            o.writeList(
+                receipts,
+                (transactionReceipt, rlpOutput) ->
+                    transactionReceipt.writeToWithRevertReason(rlpOutput, true, logTopics));
+            o.endList();
+          });
     }
 
     private void removeVariables() {
