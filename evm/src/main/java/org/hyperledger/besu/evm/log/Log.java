@@ -62,7 +62,20 @@ public class Log {
   public void writeTo(final RLPOutput out, final boolean isCompacted) {
     out.startList();
     out.writeBytes(logger);
-    out.writeList(topics, (topic, listOut) -> listOut.writeBytes(topic));
+
+    if (isCompacted) {
+      out.writeList(
+          topics,
+          (topic, listOut) -> {
+            final Bytes shortTopic = topic.trimLeadingZeros();
+            final int zeroLeadTopicSize = topic.size() - shortTopic.size();
+            out.writeIntScalar(zeroLeadTopicSize);
+            out.writeBytes(shortTopic);
+          });
+    } else {
+      out.writeList(topics, (topic, listOut) -> listOut.writeBytes(topic));
+    }
+
     if (isCompacted) {
       final Bytes shortData = data.trimLeadingZeros();
       final int zeroLeadDataSize = data.size() - shortData.size();
@@ -86,7 +99,22 @@ public class Log {
   public static Log readFrom(final RLPInput in, final boolean isCompacted) {
     in.enterList();
     final Address logger = Address.wrap(in.readBytes());
-    final List<LogTopic> topics = in.readList(listIn -> LogTopic.wrap(listIn.readBytes32()));
+
+    final List<LogTopic> topics;
+    if (isCompacted) {
+      topics =
+          in.readList(
+              listIn -> {
+                final int zeroLeadTopicSize = in.readIntScalar();
+                final Bytes shortTopic = in.readBytes();
+                MutableBytes unCompactedTopic =
+                    MutableBytes.create(zeroLeadTopicSize + shortTopic.size());
+                return LogTopic.wrap(unCompactedTopic);
+              });
+    } else {
+      topics = in.readList(listIn -> LogTopic.wrap(listIn.readBytes32()));
+    }
+
     final Bytes data;
     if (isCompacted) {
       final int zeroLeadDataSize = in.readIntScalar();
