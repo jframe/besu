@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Objects;
 
@@ -26,7 +27,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.MutableBytes;
 
 /**
  * A log entry is a tuple of a logger’s address (the address of the contract that added the logs), a
@@ -67,20 +67,16 @@ public class Log {
       out.writeList(
           topics,
           (topic, listOut) -> {
-            final Bytes shortTopic = topic.trimLeadingZeros();
-            final int zeroLeadTopicSize = topic.size() - shortTopic.size();
-            out.writeIntScalar(zeroLeadTopicSize);
-            out.writeBytes(shortTopic);
+            final BigInteger topicBigInt = topic.toBigInteger();
+            out.writeBigIntegerScalar(topicBigInt);
           });
     } else {
       out.writeList(topics, (topic, listOut) -> listOut.writeBytes(topic));
     }
 
     if (isCompacted) {
-      final Bytes shortData = data.trimLeadingZeros();
-      final int zeroLeadDataSize = data.size() - shortData.size();
-      out.writeIntScalar(zeroLeadDataSize);
-      out.writeBytes(shortData);
+      final BigInteger dataBigInt = data.toBigInteger();
+      out.writeBigIntegerScalar(dataBigInt);
     } else {
       out.writeBytes(data);
     }
@@ -104,29 +100,14 @@ public class Log {
     if (isCompacted) {
       topics =
           in.readList(
-              listIn -> {
-                final int zeroLeadTopicSize = in.readIntScalar();
-                final Bytes shortTopic = in.readBytes();
-                MutableBytes unCompactedTopic =
-                    MutableBytes.create(zeroLeadTopicSize + shortTopic.size());
-                return LogTopic.wrap(unCompactedTopic);
-              });
+              listIn -> LogTopic.wrap(Bytes.wrap(listIn.readBigIntegerScalar().toByteArray())));
     } else {
       topics = in.readList(listIn -> LogTopic.wrap(listIn.readBytes32()));
     }
 
     final Bytes data;
     if (isCompacted) {
-      final int zeroLeadDataSize = in.readIntScalar();
-      if (in.nextIsNull()) {
-        data = MutableBytes.create(zeroLeadDataSize);
-        in.skipNext();
-      } else {
-        final Bytes shortData = in.readBytes();
-        MutableBytes unCompactedData = MutableBytes.create(zeroLeadDataSize + shortData.size());
-        unCompactedData.set(zeroLeadDataSize, shortData);
-        data = unCompactedData;
-      }
+      data = Bytes.wrap(in.readBigIntegerScalar().toByteArray());
     } else {
       data = in.readBytes();
     }
