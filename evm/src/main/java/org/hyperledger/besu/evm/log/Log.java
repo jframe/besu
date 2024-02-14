@@ -66,7 +66,7 @@ public class Log {
     if (isCompacted) {
       final Bytes shortData = data.trimLeadingZeros();
       final int zeroLeadDataSize = data.size() - shortData.size();
-      out.writeInt(zeroLeadDataSize);
+      out.writeIntScalar(zeroLeadDataSize);
       out.writeBytes(shortData);
     } else {
       out.writeBytes(data);
@@ -89,7 +89,7 @@ public class Log {
     final List<LogTopic> topics = in.readList(listIn -> LogTopic.wrap(listIn.readBytes32()));
     final Bytes data;
     if (isCompacted) {
-      final int zeroLeadDataSize = in.readInt();
+      final int zeroLeadDataSize = in.readIntScalar();
       if (in.nextIsNull()) {
         data = MutableBytes.create(zeroLeadDataSize);
         in.skipNext();
