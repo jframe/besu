@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.FORK_HEA
 import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.SAFE_BLOCK_HASH;
 import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.SEQ_NO_STORE;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.BlockchainStorage;
 import org.hyperledger.besu.ethereum.chain.TransactionLocation;
@@ -138,10 +139,11 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
             input -> {
               input.enterList();
 
+              ArrayList<Address> logAddresses = new ArrayList<>(input.readList(Address::readFrom));
               ArrayList<Bytes32> logTopics = new ArrayList<>(input.readList(RLPInput::readBytes32));
 
               TransactionReceipt transactionReceipt =
-                  TransactionReceipt.readFrom(input, true, true, logTopics);
+                  TransactionReceipt.readFrom(input, true, true, logTopics, logAddresses);
               input.leaveList();
               return transactionReceipt;
             });
@@ -383,15 +385,24 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
       return RLP.encode(
           o -> {
             o.startList();
+
+            final Set<Address> addresses = new HashSet<>();
+            receipts.forEach(
+                receipt -> receipt.getLogs().forEach(log -> addresses.add(log.getLogger())));
+            ArrayList<Address> logAddresses = new ArrayList<>(addresses);
+            o.writeList(logAddresses, (address, rlpOutput) -> rlpOutput.writeBytes(address));
+
             final Set<Bytes32> topics = new HashSet<>();
             receipts.forEach(
                 receipt -> receipt.getLogs().forEach(log -> topics.addAll(log.getTopics())));
             ArrayList<Bytes32> logTopics = new ArrayList<>(topics);
             o.writeList(logTopics, (bytes32, rlpOutput) -> rlpOutput.writeBytes(bytes32));
+
             o.writeList(
                 receipts,
                 (transactionReceipt, rlpOutput) ->
-                    transactionReceipt.writeToWithRevertReason(rlpOutput, true, logTopics));
+                    transactionReceipt.writeToWithRevertReason(
+                        rlpOutput, true, logTopics, logAddresses));
             o.endList();
           });
     }

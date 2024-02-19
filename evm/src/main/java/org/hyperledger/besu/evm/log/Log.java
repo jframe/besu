@@ -58,13 +58,20 @@ public class Log {
   }
 
   public void writeTo(final RLPOutput out) {
-    writeTo(out, false, new ArrayList<>());
+    writeTo(out, false, new ArrayList<>(), new ArrayList<>());
   }
 
   public void writeTo(
-      final RLPOutput out, final boolean isCompacted, final List<Bytes32> logTopics) {
+      final RLPOutput out,
+      final boolean isCompacted,
+      final List<Bytes32> logTopics,
+      final List<Address> addresses) {
     out.startList();
-    out.writeBytes(logger);
+    if (isCompacted) {
+      out.writeIntScalar(addresses.indexOf(logger));
+    } else {
+      out.writeBytes(logger);
+    }
     out.writeList(
         topics,
         (topic, listOut) -> {
@@ -86,7 +93,7 @@ public class Log {
   }
 
   public static Log readFrom(final RLPInput in) {
-    return readFrom(in, false, new ArrayList<>());
+    return readFrom(in, false, new ArrayList<>(), new ArrayList<>());
   }
   /**
    * Reads the log entry from the provided RLP input.
@@ -95,9 +102,19 @@ public class Log {
    * @return the read log entry.
    */
   public static Log readFrom(
-      final RLPInput in, final boolean isCompacted, final List<Bytes32> logTopics) {
+      final RLPInput in,
+      final boolean isCompacted,
+      final List<Bytes32> logTopics,
+      final List<Address> addresses) {
     in.enterList();
-    final Address logger = Address.wrap(in.readBytes());
+
+    final Address logger;
+    if (isCompacted) {
+      logger = addresses.get(in.readIntScalar());
+    } else {
+      logger = Address.wrap(in.readBytes());
+    }
+
     final List<LogTopic> topics =
         in.readList(
             listIn -> {

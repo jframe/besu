@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.core;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.ethereum.mainnet.TransactionReceiptType;
@@ -172,40 +173,47 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
    * @param out The RLP output to write to
    */
   public void writeTo(final RLPOutput out) {
-    writeTo(out, false, false, new ArrayList<>());
+    writeTo(out, false, false, new ArrayList<>(), new ArrayList<>());
   }
 
   public void writeToWithRevertReason(final RLPOutput out) {
-    writeToWithRevertReason(out, false, new ArrayList<>());
+    writeToWithRevertReason(out, false, new ArrayList<>(), new ArrayList<>());
   }
 
   public void writeToWithRevertReason(
-      final RLPOutput out, final boolean isCompressed, final List<Bytes32> topics) {
-    writeTo(out, true, isCompressed, topics);
+      final RLPOutput out,
+      final boolean isCompressed,
+      final List<Bytes32> topics,
+      final List<Address> addresses) {
+    writeTo(out, true, isCompressed, topics, addresses);
   }
 
   private void writeTo(
       final RLPOutput rlpOutput,
       final boolean withRevertReason,
       final boolean isCompressed,
-      final List<Bytes32> topics) {
+      final List<Bytes32> topics,
+      final List<Address> addresses) {
     if (transactionType.equals(TransactionType.FRONTIER)) {
-      writeToForReceiptTrie(rlpOutput, withRevertReason, isCompressed, topics);
+      writeToForReceiptTrie(rlpOutput, withRevertReason, isCompressed, topics, addresses);
     } else {
       rlpOutput.writeBytes(
-          RLP.encode(out -> writeToForReceiptTrie(out, withRevertReason, isCompressed, topics)));
+          RLP.encode(
+              out ->
+                  writeToForReceiptTrie(out, withRevertReason, isCompressed, topics, addresses)));
     }
   }
 
   public void writeToForReceiptTrie(final RLPOutput rlpOutput, final boolean withRevertReason) {
-    writeToForReceiptTrie(rlpOutput, withRevertReason, false, new ArrayList<>());
+    writeToForReceiptTrie(rlpOutput, withRevertReason, false, new ArrayList<>(), new ArrayList<>());
   }
 
   public void writeToForReceiptTrie(
       final RLPOutput rlpOutput,
       final boolean withRevertReason,
       final boolean isCompressed,
-      final List<Bytes32> topics) {
+      final List<Bytes32> topics,
+      final List<Address> addresses) {
     if (!transactionType.equals(TransactionType.FRONTIER)) {
       rlpOutput.writeIntScalar(transactionType.getSerializedType());
     }
@@ -221,9 +229,10 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
     }
     rlpOutput.writeLongScalar(cumulativeGasUsed);
     if (isCompressed) {
-      rlpOutput.writeList(logs, (log, out) -> log.writeTo(out, true, topics));
+      rlpOutput.writeList(logs, (log, out) -> log.writeTo(out, true, topics, addresses));
     } else {
-      rlpOutput.writeList(logs, (log, out) -> log.writeTo(out, false, new ArrayList<>()));
+      rlpOutput.writeList(
+          logs, (log, out) -> log.writeTo(out, false, new ArrayList<>(), new ArrayList<>()));
     }
     if (withRevertReason && revertReason.isPresent()) {
       rlpOutput.writeBytes(revertReason.get());
@@ -243,7 +252,7 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
 
   public static TransactionReceipt readFrom(
       final RLPInput rlpInput, final boolean revertReasonAllowed) {
-    return readFrom(rlpInput, revertReasonAllowed, false, new ArrayList<>());
+    return readFrom(rlpInput, revertReasonAllowed, false, new ArrayList<>(), new ArrayList<>());
   }
 
   /**
@@ -258,7 +267,8 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
       final RLPInput rlpInput,
       final boolean revertReasonAllowed,
       final boolean isCompressed,
-      final List<Bytes32> topics) {
+      final List<Bytes32> topics,
+      final List<Address> addresses) {
     RLPInput input = rlpInput;
     TransactionType transactionType = TransactionType.FRONTIER;
     if (!rlpInput.nextIsList()) {
@@ -278,7 +288,7 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
     if (!isCompressed) {
       bloomFilter = LogsBloomFilter.readFrom(input);
     }
-    final List<Log> logs = input.readList(in -> Log.readFrom(in, isCompressed, topics));
+    final List<Log> logs = input.readList(in -> Log.readFrom(in, isCompressed, topics, addresses));
 
     if (bloomFilter == null) {
       bloomFilter = LogsBloomFilter.builder().insertLogs(logs).build();

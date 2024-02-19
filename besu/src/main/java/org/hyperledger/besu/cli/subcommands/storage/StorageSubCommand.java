@@ -25,12 +25,10 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRANSACTION_RECEIPT;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRANSACTION_RECEIPT_COMPRESSED;
 
-import com.google.common.util.concurrent.AtomicDouble;
 import org.hyperledger.besu.cli.BesuCommand;
 import org.hyperledger.besu.cli.util.VersionProvider;
 import org.hyperledger.besu.controller.BesuController;
 import org.hyperledger.besu.ethereum.chain.BlockchainStorage;
-import org.hyperledger.besu.ethereum.chain.GenesisState;
 import org.hyperledger.besu.ethereum.chain.VariablesStorage;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
@@ -38,7 +36,6 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
-import org.hyperledger.besu.ethereum.worldstate.WorldStateStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
@@ -212,7 +209,8 @@ public class StorageSubCommand implements Runnable {
       final BesuController besuController = parentCommand.parentCommand.buildController();
       final ProtocolSchedule protocolSchedule = besuController.getProtocolSchedule();
       final VariablesStorage variablesStorage = storageProvider.createVariablesStorage();
-      final BlockchainStorage blockchainStorage = storageProvider.createBlockchainStorage(protocolSchedule, variablesStorage);
+      final BlockchainStorage blockchainStorage =
+          storageProvider.createBlockchainStorage(protocolSchedule, variablesStorage);
 
       compare(storageProvider, blockchainStorage);
     }
@@ -223,7 +221,8 @@ public class StorageSubCommand implements Runnable {
       return parentCommand.parentCommand.buildController().getStorageProvider();
     }
 
-    private void compare(final StorageProvider storageProvider, final BlockchainStorage blockchain) {
+    private void compare(
+        final StorageProvider storageProvider, final BlockchainStorage blockchain) {
       final var blockchainStorage = storageProvider.getStorageBySegmentIdentifier(BLOCKCHAIN);
       final var txReceipt =
           storageProvider.getStorageBySegmentIdentifiers(
@@ -240,7 +239,12 @@ public class StorageSubCommand implements Runnable {
 
       LOG.info("Starting receipt compression comparison");
 
-      final long estimatedCount = blockchain.getChainHead().flatMap(blockchain::getBlockHeader).map(ProcessableBlockHeader::getNumber).get();
+      final long estimatedCount =
+          blockchain
+              .getChainHead()
+              .flatMap(blockchain::getBlockHeader)
+              .map(ProcessableBlockHeader::getNumber)
+              .get();
       LOG.info("Receipt estimated count = {}", estimatedCount);
 
       final AtomicLong receiptCount = new AtomicLong();
@@ -255,7 +259,9 @@ public class StorageSubCommand implements Runnable {
                 try {
                   final List<TransactionReceipt> txReceipts =
                       RLP.input(Bytes.wrap(txReceiptsRlp)).readList(TransactionReceipt::readFrom);
-                  final byte[] txReceiptsRlpCompressed = KeyValueStoragePrefixedKeyBlockchainStorage.Updater.rlpEncode(txReceipts).toArrayUnsafe();
+                  final byte[] txReceiptsRlpCompressed =
+                      KeyValueStoragePrefixedKeyBlockchainStorage.Updater.rlpEncode(txReceipts)
+                          .toArrayUnsafe();
                   receiptTx.put(
                       TRANSACTION_RECEIPT_COMPRESSED,
                       receiptKeyPair.getKey(),
