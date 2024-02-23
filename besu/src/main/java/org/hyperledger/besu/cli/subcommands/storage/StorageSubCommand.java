@@ -204,8 +204,8 @@ public class StorageSubCommand implements Runnable {
 
     private StorageProvider getStorageProvider() {
       // init collection of ignorable segments
-      parentCommand.parentCommand.setIgnorableStorageSegments();
-      return parentCommand.parentCommand.getStorageProvider();
+      parentCommand.besuCommand.setIgnorableStorageSegments();
+      return parentCommand.besuCommand.getStorageProvider();
     }
 
     private void compare(final StorageProvider storageProvider) {
@@ -238,9 +238,7 @@ public class StorageSubCommand implements Runnable {
                             o ->
                                 o.writeList(
                                     txReceipts,
-                                    (transactionReceipt, rlpOutput) ->
-                                        transactionReceipt.writeToWithRevertReason(
-                                            rlpOutput, true)))
+                                    TransactionReceipt::writeToCompactedWithRevertReason))
                         .toArrayUnsafe();
                 receiptTx.put(
                     TRANSACTION_RECEIPT_COMPRESSED,
