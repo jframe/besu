@@ -52,7 +52,7 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
 
   private static final Bytes BLOCK_HEADER_PREFIX = Bytes.of(2);
   private static final Bytes BLOCK_BODY_PREFIX = Bytes.of(3);
-  private static final Bytes TRANSACTION_RECEIPTS_PREFIX = Bytes.of(4);
+  public static final Bytes TRANSACTION_RECEIPTS_PREFIX = Bytes.of(4);
   private static final Bytes BLOCK_HASH_PREFIX = Bytes.of(5);
   private static final Bytes TOTAL_DIFFICULTY_PREFIX = Bytes.of(6);
   private static final Bytes TRANSACTION_LOCATION_PREFIX = Bytes.of(7);
