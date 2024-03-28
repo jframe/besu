@@ -134,6 +134,10 @@ public class TransactionBroadcaster implements TransactionBatchAddedListener {
 
   private void sendToFullTransactionsPeers(
       final List<Transaction> fullBroadcastTransactions, final List<EthPeer> fullTransactionPeers) {
+    LOG.trace(
+        "Sending to full transaction peers transactions {} peers {}",
+        fullBroadcastTransactions,
+        fullTransactionPeers);
     sendFullTransactions(fullBroadcastTransactions, fullTransactionPeers);
   }
 
@@ -142,6 +146,8 @@ public class TransactionBroadcaster implements TransactionBatchAddedListener {
       final List<EthPeer> hashOnlyPeers) {
     final List<Transaction> allTransactions =
         txsByHashOnlyBroadcast.values().stream().flatMap(List::stream).collect(Collectors.toList());
+    LOG.trace(
+        "Sending to hash only peers transactions {} peers {}", allTransactions, hashOnlyPeers);
 
     sendTransactionHashes(allTransactions, hashOnlyPeers);
   }

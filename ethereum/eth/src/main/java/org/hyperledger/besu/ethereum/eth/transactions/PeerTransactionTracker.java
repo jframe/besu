@@ -28,7 +28,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class PeerTransactionTracker implements EthPeer.DisconnectCallback {
+  private static final Logger LOG = LoggerFactory.getLogger(PeerTransactionTracker.class);
   private static final int MAX_TRACKED_SEEN_TRANSACTIONS = 100_000;
   private final Map<EthPeer, Set<Hash>> seenTransactions = new ConcurrentHashMap<>();
   private final Map<EthPeer, Set<Transaction>> transactionsToSend = new ConcurrentHashMap<>();
@@ -51,6 +55,7 @@ public class PeerTransactionTracker implements EthPeer.DisconnectCallback {
 
   public synchronized void addToPeerSendQueue(final EthPeer peer, final Transaction transaction) {
     if (!hasPeerSeenTransaction(peer, transaction)) {
+      LOG.trace("Add transaction to send queue peer {}, transaction {}", peer, transaction);
       transactionsToSend.computeIfAbsent(peer, key -> createTransactionsSet()).add(transaction);
     }
   }
