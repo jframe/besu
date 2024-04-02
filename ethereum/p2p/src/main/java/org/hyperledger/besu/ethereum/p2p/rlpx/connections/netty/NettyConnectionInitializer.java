@@ -61,7 +61,7 @@ import io.netty.util.concurrent.SingleThreadEventExecutor;
 public class NettyConnectionInitializer
     implements ConnectionInitializer, HandshakerProvider, FramerProvider {
 
-  private static final int TIMEOUT_SECONDS = 30;
+  private static final int TIMEOUT_SECONDS = 5;
 
   private final NodeKey nodeKey;
   private final RlpxConfiguration config;
