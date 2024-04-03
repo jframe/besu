@@ -86,7 +86,8 @@ public class EthProtocolManagerTestUtil {
             Bytes.random(64),
             25,
             25,
-            false);
+            false,
+            3);
     final EthMessages messages = new EthMessages();
     final EthScheduler ethScheduler = new DeterministicEthScheduler(TimeoutPolicy.NEVER_TIMEOUT);
     final EthContext ethContext = new EthContext(peers, messages, ethScheduler);
@@ -205,7 +206,8 @@ public class EthProtocolManagerTestUtil {
             Bytes.random(64),
             25,
             25,
-            false);
+            false,
+            3);
     final EthMessages messages = new EthMessages();
 
     return create(
@@ -239,7 +241,8 @@ public class EthProtocolManagerTestUtil {
             Bytes.random(64),
             25,
             25,
-            false);
+            false,
+            3);
     final EthMessages messages = new EthMessages();
 
     return create(
@@ -269,7 +272,8 @@ public class EthProtocolManagerTestUtil {
             Bytes.random(64),
             25,
             25,
-            false);
+            false,
+            3);
     final EthMessages messages = new EthMessages();
 
     return create(

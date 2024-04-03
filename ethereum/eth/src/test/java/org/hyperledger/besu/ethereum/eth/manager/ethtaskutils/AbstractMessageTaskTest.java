@@ -121,7 +121,8 @@ public abstract class AbstractMessageTaskTest<T, R> {
                 Bytes.random(64),
                 MAX_PEERS,
                 MAX_PEERS,
-                false));
+                false,
+                3));
 
     final EthMessages ethMessages = new EthMessages();
     final EthScheduler ethScheduler =

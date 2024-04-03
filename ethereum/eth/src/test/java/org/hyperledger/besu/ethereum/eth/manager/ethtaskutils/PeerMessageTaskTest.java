@@ -168,6 +168,7 @@ public abstract class PeerMessageTaskTest<T>
         EthProtocolConfiguration.DEFAULT_MAX_MESSAGE_SIZE,
         TestClock.fixed(),
         Collections.emptyList(),
-        Bytes.random(64));
+        Bytes.random(64),
+        peerTimeoutThreshold);
   }
 }

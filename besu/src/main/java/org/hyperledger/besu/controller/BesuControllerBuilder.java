@@ -592,7 +592,8 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             nodeKey.getPublicKey().getEncodedBytes(),
             maxPeers,
             maxRemotelyInitiatedPeers,
-            randomPeerPriority);
+            randomPeerPriority,
+            networkingConfiguration.getPeerTimeoutThreshold());
 
     final EthMessages ethMessages = new EthMessages();
     final EthMessages snapMessages = new EthMessages();

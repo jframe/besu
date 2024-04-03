@@ -126,7 +126,8 @@ public class AdminPeersTest {
             EthProtocolConfiguration.DEFAULT_MAX_MESSAGE_SIZE,
             TestClock.fixed(),
             Collections.emptyList(),
-            Bytes.random(64));
+            Bytes.random(64),
+            3);
     return Lists.newArrayList(ethPeer);
   }
 

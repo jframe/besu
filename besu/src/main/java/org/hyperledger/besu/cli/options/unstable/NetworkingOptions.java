@@ -39,6 +39,9 @@ public class NetworkingOptions implements CLIOptions<NetworkingConfiguration> {
   /** The constant FILTER_ON_ENR_FORK_ID. */
   public static final String FILTER_ON_ENR_FORK_ID = "--filter-on-enr-fork-id";
 
+  /** The constant PEER_TIMEOUT_THRESHOLD. */
+  public static final String PEER_TIMEOUT_THRESHOLD = "--peer-timeout-threshold";
+
   @CommandLine.Option(
       names = INITIATE_CONNECTIONS_FREQUENCY_FLAG,
       hidden = true,
@@ -83,6 +86,12 @@ public class NetworkingOptions implements CLIOptions<NetworkingConfiguration> {
           "(Deprecated) Lower bound on the target number of P2P connections (default: ${DEFAULT-VALUE})")
   private final Integer peerLowerBoundConfig = DefaultCommandValues.DEFAULT_MAX_PEERS;
 
+  @CommandLine.Option(
+      hidden = true,
+      names = PEER_TIMEOUT_THRESHOLD,
+      description = "Peer reputation timeout threshold (default: ${DEFAULT-VALUE})")
+  private Integer peerTimeoutThreshold = NetworkingConfiguration.DEFAULT_PEER_TIMEOUT_THRESHOLD;
+
   private NetworkingOptions() {}
 
   /**
@@ -107,6 +116,7 @@ public class NetworkingOptions implements CLIOptions<NetworkingConfiguration> {
     cliOptions.initiateConnectionsFrequencySec =
         networkingConfig.getInitiateConnectionsFrequencySec();
     cliOptions.dnsDiscoveryServerOverride = networkingConfig.getDnsDiscoveryServerOverride();
+    cliOptions.peerTimeoutThreshold = networkingConfig.getPeerTimeoutThreshold();
 
     return cliOptions;
   }
@@ -119,6 +129,7 @@ public class NetworkingOptions implements CLIOptions<NetworkingConfiguration> {
     config.setDnsDiscoveryServerOverride(dnsDiscoveryServerOverride);
     config.getDiscovery().setDiscoveryV5Enabled(isPeerDiscoveryV5Enabled);
     config.getDiscovery().setFilterOnEnrForkId(filterOnEnrForkId);
+    config.setPeerTimeoutThreshold(peerTimeoutThreshold);
     return config;
   }
 
@@ -131,7 +142,9 @@ public class NetworkingOptions implements CLIOptions<NetworkingConfiguration> {
             INITIATE_CONNECTIONS_FREQUENCY_FLAG,
             OptionParser.format(initiateConnectionsFrequencySec),
             PEER_LOWER_BOUND_FLAG,
-            OptionParser.format((peerLowerBoundConfig)));
+            OptionParser.format((peerLowerBoundConfig)),
+            PEER_TIMEOUT_THRESHOLD,
+            OptionParser.format(peerTimeoutThreshold));
 
     if (dnsDiscoveryServerOverride.isPresent()) {
       retval.add(DNS_DISCOVERY_SERVER_OVERRIDE_FLAG);

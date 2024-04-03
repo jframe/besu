@@ -24,6 +24,7 @@ public class NetworkingConfiguration {
   public static final int DEFAULT_CHECK_MAINTAINED_CONNECTIONS_FREQUENCY_SEC = 60;
   public static final int DEFAULT_PEER_LOWER_BOUND = 25;
   public static final boolean DEFAULT_FILTER_ON_ENR_FORK_ID = true;
+  public static final int DEFAULT_PEER_TIMEOUT_THRESHOLD = 3;
 
   private DiscoveryConfiguration discovery = new DiscoveryConfiguration();
   private RlpxConfiguration rlpx = new RlpxConfiguration();
@@ -31,6 +32,7 @@ public class NetworkingConfiguration {
   private int checkMaintainedConnectionsFrequencySec =
       DEFAULT_CHECK_MAINTAINED_CONNECTIONS_FREQUENCY_SEC;
   private Optional<String> dnsDiscoveryServerOverride = Optional.empty();
+  private int peerTimeoutThreshold = DEFAULT_PEER_TIMEOUT_THRESHOLD;
 
   public static NetworkingConfiguration create() {
     return new NetworkingConfiguration();
@@ -83,6 +85,15 @@ public class NetworkingConfiguration {
       final int checkMaintainedConnectionsFrequency) {
     checkArgument(checkMaintainedConnectionsFrequency > 0);
     this.checkMaintainedConnectionsFrequencySec = checkMaintainedConnectionsFrequency;
+    return this;
+  }
+
+  public int getPeerTimeoutThreshold() {
+    return peerTimeoutThreshold;
+  }
+
+  public NetworkingConfiguration setPeerTimeoutThreshold(final int peerTimeoutThreshold) {
+    this.peerTimeoutThreshold = peerTimeoutThreshold;
     return this;
   }
 

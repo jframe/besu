@@ -37,7 +37,6 @@ public class PeerReputation implements Comparable<PeerReputation> {
   static final int DEFAULT_MAX_SCORE = 150;
   static final int DEFAULT_INITIAL_SCORE = 100;
   private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
-  private static final int TIMEOUT_THRESHOLD = 3;
   private static final int USELESS_RESPONSE_THRESHOLD = 5;
 
   private final ConcurrentMap<Integer, AtomicInteger> timeoutCountByRequestType =
@@ -50,21 +49,23 @@ public class PeerReputation implements Comparable<PeerReputation> {
   private int score;
 
   private final int maxScore;
+  private final int timeoutThreshold;
 
-  public PeerReputation() {
-    this(DEFAULT_INITIAL_SCORE, DEFAULT_MAX_SCORE);
+  public PeerReputation(final int peerTimeoutThreshold) {
+    this(DEFAULT_INITIAL_SCORE, DEFAULT_MAX_SCORE, peerTimeoutThreshold);
   }
 
-  public PeerReputation(final int initialScore, final int maxScore) {
+  public PeerReputation(final int initialScore, final int maxScore, final int timeoutThreshold) {
     checkArgument(
         initialScore <= maxScore, "Initial score must be less than or equal to max score");
     this.maxScore = maxScore;
     this.score = initialScore;
+    this.timeoutThreshold = timeoutThreshold;
   }
 
   public Optional<DisconnectReason> recordRequestTimeout(final int requestCode) {
     final int newTimeoutCount = getOrCreateTimeoutCount(requestCode).incrementAndGet();
-    if (newTimeoutCount >= TIMEOUT_THRESHOLD) {
+    if (newTimeoutCount >= timeoutThreshold) {
       LOG.debug(
           "Disconnection triggered by {} repeated timeouts for requestCode {}",
           newTimeoutCount,

@@ -237,7 +237,8 @@ public class RetestethContext {
             localNodeKey,
             MAX_PEERS,
             MAX_PEERS,
-            false);
+            false,
+            3);
     final SyncState syncState = new SyncState(blockchain, ethPeers);
 
     ethScheduler = new EthScheduler(1, 1, 1, 1, metricsSystem);

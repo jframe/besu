@@ -629,7 +629,8 @@ public abstract class AbstractBlockPropagationManagerTest {
                 Bytes.random(64),
                 25,
                 25,
-                false),
+                false,
+                3),
             new EthMessages(),
             ethScheduler);
     final BlockPropagationManager blockPropagationManager =
@@ -767,7 +768,8 @@ public abstract class AbstractBlockPropagationManagerTest {
                 Bytes.random(64),
                 25,
                 25,
-                false),
+                false,
+                3),
             new EthMessages(),
             ethScheduler);
     final BlockPropagationManager blockPropagationManager =
