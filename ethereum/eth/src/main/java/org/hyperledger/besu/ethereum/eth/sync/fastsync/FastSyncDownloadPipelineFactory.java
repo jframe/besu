@@ -162,12 +162,66 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
                 "action"),
             true,
             "fastSync")
-        .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
-        .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
+        .thenProcessAsyncOrdered(
+            "downloadHeaders",
+            syncTargetRange -> {
+              try {
+                return downloadHeadersStep.apply(syncTargetRange);
+              } catch (RuntimeException e) {
+                LOG.info("Sync exception detected", e);
+                e.printStackTrace();
+                throw e;
+              }
+            },
+            downloaderParallelism)
+        .thenFlatMap(
+            "validateHeadersJoin",
+            rangeHeaders -> {
+              try {
+                return validateHeadersJoinUpStep.apply(rangeHeaders);
+              } catch (RuntimeException e) {
+                LOG.info("Sync exception detected", e);
+                e.printStackTrace();
+                throw e;
+              }
+            },
+            singleHeaderBufferSize)
         .inBatches(headerRequestSize)
-        .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
-        .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
-        .andFinishWith("importBlock", importBlockStep);
+        .thenProcessAsyncOrdered(
+            "downloadBodies",
+            blockHeaders -> {
+              try {
+                return downloadBodiesStep.apply(blockHeaders);
+              } catch (RuntimeException e) {
+                LOG.info("Sync exception detected", e);
+                e.printStackTrace();
+                throw e;
+              }
+            },
+            downloaderParallelism)
+        .thenProcessAsyncOrdered(
+            "downloadReceipts",
+            blocks -> {
+              try {
+                return downloadReceiptsStep.apply(blocks);
+              } catch (RuntimeException e) {
+                LOG.info("Sync exception detected", e);
+                e.printStackTrace();
+                throw e;
+              }
+            },
+            downloaderParallelism)
+        .andFinishWith(
+            "importBlock",
+            blockWithReceipts -> {
+              try {
+                importBlockStep.accept(blockWithReceipts);
+              } catch (RuntimeException e) {
+                LOG.info("Sync exception detected", e);
+                e.printStackTrace();
+                throw e;
+              }
+            });
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget syncTarget) {
