@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.AccountRangeDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.TrieNodeHealingRequest;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
@@ -21,7 +22,11 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.services.tasks.Task;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class CompleteTaskStep {
+  private static final Logger LOG = LoggerFactory.getLogger(AccountRangeDataRequest.class);
   private final SnapSyncProcessState snapSyncState;
   private final Counter completedRequestsCounter;
   private final Counter retriedRequestsCounter;
@@ -50,6 +55,7 @@ public class CompleteTaskStep {
       task.markCompleted();
       downloadState.checkCompletion(snapSyncState.getPivotBlockHeader().orElseThrow());
     } else {
+      LOG.info("Task failed");
       retriedRequestsCounter.inc();
       task.markFailed();
     }

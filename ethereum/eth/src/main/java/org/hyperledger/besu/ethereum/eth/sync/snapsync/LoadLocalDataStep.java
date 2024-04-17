@@ -87,7 +87,11 @@ public class LoadLocalDataStep {
               request.getRootStorageRequests(worldStateStorageCoordinator));
           completedTasks.put(task);
           return Stream.empty();
+        } else {
+          LOG.info("Has existing data");
         }
+      } else {
+        LOG.info("No pivot block header");
       }
     } catch (StorageException storageException) {
       if (canRetryOnError(storageException)) {
@@ -106,6 +110,9 @@ public class LoadLocalDataStep {
     } catch (MerkleTrieException merkleTrieException) {
       LOG.info("Encountered merkleTrieException triggering trie heal", merkleTrieException);
       downloadState.reloadTrieHeal();
+    } catch (RuntimeException e) {
+      LOG.info("Failed with exception", e);
+      throw e;
     }
     return Stream.of(task);
   }

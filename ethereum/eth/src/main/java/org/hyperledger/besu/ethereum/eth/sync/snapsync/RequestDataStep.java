@@ -102,6 +102,10 @@ public class RequestDataStep {
                 accountDataRequest.setRootHash(blockHeader.getStateRoot());
                 accountDataRequest.addResponse(
                     worldStateProofProvider, response.accounts(), response.proofs());
+              } else {
+                LOG.info(
+                    "Null response received for request {}",
+                    requestTask.getData().getRequestType());
               }
               if (error != null) {
                 LOG.atInfo()

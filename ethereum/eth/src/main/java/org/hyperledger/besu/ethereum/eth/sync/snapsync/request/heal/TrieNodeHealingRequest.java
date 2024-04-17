@@ -36,10 +36,12 @@ import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class TrieNodeHealingRequest extends SnapDataRequest
     implements TasksPriorityProvider {
-
+  private static final Logger LOG = LoggerFactory.getLogger(TrieNodeHealingRequest.class);
   private final Bytes32 nodeHash;
   private final Bytes location;
   protected Bytes data;
@@ -129,7 +131,15 @@ public abstract class TrieNodeHealingRequest extends SnapDataRequest
 
   @Override
   public boolean isResponseReceived() {
-    return !data.isEmpty() && Hash.hash(data).equals(getNodeHash());
+    boolean responseReceived = !data.isEmpty() && Hash.hash(data).equals(getNodeHash());
+    if (!responseReceived) {
+      LOG.info(
+          "No response received data={} Hash.hash(data)={} nodeHash={}",
+          data,
+          Hash.hash(data),
+          getNodeHash());
+    }
+    return responseReceived;
   }
 
   @Override

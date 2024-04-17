@@ -161,7 +161,7 @@ public class AccountRangeDataRequest extends SnapDataRequest {
       if (!worldStateProofProvider.isValidRangeProof(
           startKeyHash, endKeyHash, getRootHash(), proofs, accounts)) {
         // this happens on repivot and on bad proofs
-        LOG.atTrace()
+        LOG.atInfo()
             .setMessage("invalid range proof received for account range {} {}")
             .addArgument(accounts.firstKey())
             .addArgument(accounts.lastKey())
@@ -176,7 +176,11 @@ public class AccountRangeDataRequest extends SnapDataRequest {
 
   @Override
   public boolean isResponseReceived() {
-    return isProofValid.orElse(false);
+    boolean responseReceived = isProofValid.orElse(false);
+    if (!responseReceived) {
+      LOG.info("No response received");
+    }
+    return responseReceived;
   }
 
   @Override

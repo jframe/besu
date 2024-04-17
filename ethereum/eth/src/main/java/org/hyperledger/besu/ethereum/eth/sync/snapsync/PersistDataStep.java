@@ -67,6 +67,7 @@ public class PersistDataStep {
             if (!task.getData().isExpired(snapSyncState)) {
               enqueueChildren(childRequests);
             } else {
+              LOG.info("Expired data for request type {}", task.getData().getRequestType());
               continue;
             }
           }
@@ -86,7 +87,11 @@ public class PersistDataStep {
             } else {
               downloadState.getMetricsManager().notifyNodesGenerated(persistedNodes);
             }
+          } else {
+            LOG.info("No persisted nodes for request type {}", task.getData().getRequestType());
           }
+        } else {
+          LOG.info("No response received for request type {}", task.getData().getRequestType());
         }
       }
       updater.commit();

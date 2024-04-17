@@ -82,7 +82,11 @@ public class BytecodeRequest extends SnapDataRequest {
 
   @Override
   public boolean isResponseReceived() {
-    return !code.isEmpty();
+    boolean responseReceived = !code.isEmpty();
+    if (!responseReceived) {
+      LOG.info("Response not received for {} with root hash {}", accountHash, getRootHash());
+    }
+    return responseReceived;
   }
 
   @Override

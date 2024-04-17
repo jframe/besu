@@ -136,7 +136,7 @@ public class StorageRangeDataRequest extends SnapDataRequest {
           startKeyHash, endKeyHash, storageRoot, proofs, slots)) {
         // If the proof is invalid, it means that the storage will be a mix of several blocks.
         // Therefore, it will be necessary to heal the account's storage subsequently
-        LOG.atDebug()
+        LOG.atInfo()
             .setMessage("invalid storage range proof received for account hash {} range {} {}")
             .addArgument(() -> accountHash)
             .addArgument(() -> slots.isEmpty() ? "none" : slots.firstKey())
