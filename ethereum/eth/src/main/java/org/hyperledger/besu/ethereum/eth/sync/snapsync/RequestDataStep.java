@@ -98,6 +98,7 @@ public class RequestDataStep {
         .handle(
             (response, error) -> {
               if (response != null) {
+                LOG.info("account response = {}", response);
                 downloadState.removeOutstandingTask(getAccountTask);
                 accountDataRequest.setRootHash(blockHeader.getStateRoot());
                 accountDataRequest.addResponse(
@@ -145,6 +146,7 @@ public class RequestDataStep {
         .handle(
             (response, error) -> {
               if (response != null) {
+                LOG.info("storage response = {}", response);
                 downloadState.removeOutstandingTask(getStorageRangeTask);
                 final ArrayDeque<NavigableMap<Bytes32, Bytes>> slots = new ArrayDeque<>();
                 // Check if we have an empty range
@@ -207,6 +209,7 @@ public class RequestDataStep {
         .handle(
             (response, error) -> {
               if (response != null) {
+                LOG.info("code response = {}", response);
                 downloadState.removeOutstandingTask(getByteCodeTask);
                 for (Task<SnapDataRequest> requestTask : requestTasks) {
                   final BytecodeRequest request = (BytecodeRequest) requestTask.getData();
@@ -252,6 +255,7 @@ public class RequestDataStep {
         .handle(
             (response, error) -> {
               if (response != null) {
+                LOG.info("trieNode response = {}", response);
                 downloadState.removeOutstandingTask(getTrieNodeFromPeerTask);
                 for (final Task<SnapDataRequest> task : requestTasks) {
                   final TrieNodeHealingRequest request = (TrieNodeHealingRequest) task.getData();
