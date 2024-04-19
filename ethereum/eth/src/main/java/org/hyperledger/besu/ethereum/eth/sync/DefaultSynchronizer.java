@@ -38,7 +38,6 @@ import org.hyperledger.besu.ethereum.trie.diffbased.bonsai.BonsaiWorldStateProvi
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.data.SyncStatus;
-import org.hyperledger.besu.plugin.services.BesuEvents;
 import org.hyperledger.besu.plugin.services.BesuEvents.SyncStatusListener;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.util.log.FramedLogMessage;
@@ -361,14 +360,6 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
   @Override
   public boolean unsubscribeInSync(final long listenerId) {
     return syncState.unsubscribeSyncStatus(listenerId);
-  }
-
-  public long subscribeInitialSync(final BesuEvents.InitialSyncCompletionListener listener) {
-    return syncState.subscribeCompletionReached(listener);
-  }
-
-  public boolean unsubscribeInitialSync(final long listenerId) {
-    return syncState.unsubscribeInitialConditionReached(listenerId);
   }
 
   private Void finalizeSync(final Void unused) {

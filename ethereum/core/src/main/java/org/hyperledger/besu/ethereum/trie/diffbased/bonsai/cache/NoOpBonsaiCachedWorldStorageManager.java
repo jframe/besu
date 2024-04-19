@@ -38,7 +38,7 @@ public class NoOpBonsaiCachedWorldStorageManager extends BonsaiCachedWorldStorag
   }
 
   @Override
-  public boolean contains(final Hash blockHash) {
+  public boolean containWorldStateStorage(final Hash blockHash) {
     return false;
   }
 

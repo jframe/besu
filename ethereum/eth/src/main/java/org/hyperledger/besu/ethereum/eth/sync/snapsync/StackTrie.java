@@ -123,41 +123,38 @@ public class StackTrie {
         proofsEntries.put(Hash.hash(proof), proof);
       }
 
-      if (!keys.isEmpty()) {
-        final InnerNodeDiscoveryManager<Bytes> snapStoredNodeFactory =
-            new InnerNodeDiscoveryManager<>(
-                (location, hash) -> Optional.ofNullable(proofsEntries.get(hash)),
-                Function.identity(),
-                Function.identity(),
-                startKeyHash,
-                proofs.isEmpty() ? RangeManager.MAX_RANGE : keys.lastKey(),
-                true);
+      final InnerNodeDiscoveryManager<Bytes> snapStoredNodeFactory =
+          new InnerNodeDiscoveryManager<>(
+              (location, hash) -> Optional.ofNullable(proofsEntries.get(hash)),
+              Function.identity(),
+              Function.identity(),
+              startKeyHash,
+              proofs.isEmpty() ? RangeManager.MAX_RANGE : keys.lastKey(),
+              true);
 
-        final MerkleTrie<Bytes, Bytes> trie =
-            new StoredMerklePatriciaTrie<>(
-                snapStoredNodeFactory,
-                proofs.isEmpty() ? MerkleTrie.EMPTY_TRIE_NODE_HASH : rootHash);
+      final MerkleTrie<Bytes, Bytes> trie =
+          new StoredMerklePatriciaTrie<>(
+              snapStoredNodeFactory, proofs.isEmpty() ? MerkleTrie.EMPTY_TRIE_NODE_HASH : rootHash);
 
-        for (Map.Entry<Bytes32, Bytes> entry : keys.entrySet()) {
-          trie.put(entry.getKey(), entry.getValue());
-        }
-
-        keys.forEach(flatDatabaseUpdater::update);
-
-        trie.commit(
-            nodeUpdater,
-            (new SnapCommitVisitor<>(
-                nodeUpdater,
-                startKeyHash,
-                proofs.isEmpty() ? RangeManager.MAX_RANGE : keys.lastKey()) {
-              @Override
-              public void maybeStoreNode(final Bytes location, final Node<Bytes> node) {
-                if (!node.isHealNeeded()) {
-                  super.maybeStoreNode(location, node);
-                }
-              }
-            }));
+      for (Map.Entry<Bytes32, Bytes> entry : keys.entrySet()) {
+        trie.put(entry.getKey(), entry.getValue());
       }
+
+      keys.forEach(flatDatabaseUpdater::update);
+
+      trie.commit(
+          nodeUpdater,
+          (new SnapCommitVisitor<>(
+              nodeUpdater,
+              startKeyHash,
+              proofs.isEmpty() ? RangeManager.MAX_RANGE : keys.lastKey()) {
+            @Override
+            public void maybeStoreNode(final Bytes location, final Node<Bytes> node) {
+              if (!node.isHealNeeded()) {
+                super.maybeStoreNode(location, node);
+              }
+            }
+          }));
     }
   }
 

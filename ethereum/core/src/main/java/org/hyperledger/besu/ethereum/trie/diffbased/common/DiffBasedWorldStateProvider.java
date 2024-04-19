@@ -117,7 +117,7 @@ public abstract class DiffBasedWorldStateProvider implements WorldStateArchive {
 
   @Override
   public boolean isWorldStateAvailable(final Hash rootHash, final Hash blockHash) {
-    return cachedWorldStorageManager.contains(blockHash)
+    return cachedWorldStorageManager.containWorldStateStorage(blockHash)
         || persistedState.blockHash().equals(blockHash)
         || worldStateKeyValueStorage.isWorldStateAvailable(rootHash, blockHash);
   }
