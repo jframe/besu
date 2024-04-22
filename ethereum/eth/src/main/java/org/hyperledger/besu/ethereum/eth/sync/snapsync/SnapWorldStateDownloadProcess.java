@@ -158,7 +158,6 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
     private SnapSyncProcessState snapSyncState;
     private PersistDataStep persistDataStep;
     private CompleteTaskStep completeTaskStep;
-    private DynamicPivotBlockSelector pivotBlockManager;
 
     public Builder configuration(final SnapSyncConfiguration snapSyncConfiguration) {
       this.snapSyncConfiguration = snapSyncConfiguration;
@@ -167,7 +166,6 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
 
     public Builder dynamicPivotBlockSelector(
         final DynamicPivotBlockSelector dynamicPivotBlockSelector) {
-      this.pivotBlockManager = dynamicPivotBlockSelector;
       return this;
     }
 
