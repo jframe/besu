@@ -123,14 +123,16 @@ public class PivotSelectorFromSafeBlock implements PivotBlockSelector {
                             LOG.debug(
                                 "Downloading chain head block header by hash {}", headBlockHash);
                             try {
-                              return waitForPeers(1)
-                                  .thenCompose(unused -> downloadBlockHeader(headBlockHash))
-                                  .thenApply(
-                                      blockHeader -> {
-                                        maybeCachedHeadBlockHeader = Optional.of(blockHeader);
-                                        return blockHeader.getNumber();
-                                      })
-                                  .get();
+                              long bn =
+                                  waitForPeers(1)
+                                      .thenCompose(unused -> downloadBlockHeader(headBlockHash))
+                                      .thenApply(
+                                          blockHeader -> {
+                                            maybeCachedHeadBlockHeader = Optional.of(blockHeader);
+                                            return blockHeader.getNumber();
+                                          })
+                                      .get();
+                              return bn;
                             } catch (Throwable t) {
                               LOG.debug(
                                   "Error trying to download chain head block header by hash {}",
