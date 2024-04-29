@@ -28,6 +28,7 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -104,38 +105,41 @@ public class PivotSelectorFromSafeBlock implements PivotBlockSelector {
   @Override
   public long getBestChainHeight() {
     final long localChainHeight = protocolContext.getBlockchain().getChainHeadBlockNumber();
+    LOG.info("Local chain height {}", localChainHeight);
 
     return Math.max(
         forkchoiceStateSupplier
             .get()
             .map(ForkchoiceEvent::getHeadBlockHash)
             .map(
-                headBlockHash ->
-                    maybeCachedHeadBlockHeader
-                        .filter(
-                            cachedBlockHeader -> cachedBlockHeader.getHash().equals(headBlockHash))
-                        .map(BlockHeader::getNumber)
-                        .orElseGet(
-                            () -> {
+                headBlockHash -> {
+                  LOG.info("Forkchoice event head blockhash {}", headBlockHash);
+                  return maybeCachedHeadBlockHeader
+                      .filter(
+                          cachedBlockHeader -> cachedBlockHeader.getHash().equals(headBlockHash))
+                      .map(BlockHeader::getNumber)
+                      .orElseGet(
+                          () -> {
+                            LOG.debug(
+                                "Downloading chain head block header by hash {}", headBlockHash);
+                            try {
+                              return waitForPeers(1)
+                                  .thenCompose(unused -> downloadBlockHeader(headBlockHash))
+                                  .thenApply(
+                                      blockHeader -> {
+                                        maybeCachedHeadBlockHeader = Optional.of(blockHeader);
+                                        return blockHeader.getNumber();
+                                      })
+                                  .get();
+                            } catch (Throwable t) {
                               LOG.debug(
-                                  "Downloading chain head block header by hash {}", headBlockHash);
-                              try {
-                                return waitForPeers(1)
-                                    .thenCompose(unused -> downloadBlockHeader(headBlockHash))
-                                    .thenApply(
-                                        blockHeader -> {
-                                          maybeCachedHeadBlockHeader = Optional.of(blockHeader);
-                                          return blockHeader.getNumber();
-                                        })
-                                    .get();
-                              } catch (Throwable t) {
-                                LOG.debug(
-                                    "Error trying to download chain head block header by hash {}",
-                                    headBlockHash,
-                                    t);
-                              }
-                              return null;
-                            }))
+                                  "Error trying to download chain head block header by hash {}",
+                                  headBlockHash,
+                                  t);
+                            }
+                            return null;
+                          });
+                })
             .orElse(0L),
         localChainHeight);
   }
@@ -144,6 +148,7 @@ public class PivotSelectorFromSafeBlock implements PivotBlockSelector {
     return RetryingGetHeaderFromPeerByHashTask.byHash(
             protocolSchedule, ethContext, hash, 0, metricsSystem)
         .getHeader()
+        .orTimeout(5, TimeUnit.SECONDS)
         .whenComplete(
             (blockHeader, throwable) -> {
               if (throwable != null) {

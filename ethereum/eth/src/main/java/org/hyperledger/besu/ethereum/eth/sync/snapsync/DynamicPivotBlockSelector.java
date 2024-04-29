@@ -72,11 +72,13 @@ public class DynamicPivotBlockSelector {
     if (isTimeToCheckAgain.compareAndSet(true, false)) {
       AtomicBoolean delayNextCheck = new AtomicBoolean(false);
 
+      LOG.info("Checking pivot block");
       syncState
           .getPivotBlockNumber()
           .ifPresent(
               currentPivotBlockNumber -> {
                 final long bestChainHeight = syncActions.getBestChainHeight();
+                LOG.info("Best chain height {}", bestChainHeight);
                 final long distanceNextPivotBlock =
                     bestChainHeight
                         - lastPivotBlockFound
@@ -161,7 +163,7 @@ public class DynamicPivotBlockSelector {
                   .addArgument(this::logLastPivotBlockFound)
                   .log();
             })
-        .orTimeout(5, TimeUnit.MINUTES);
+        .orTimeout(5, TimeUnit.SECONDS);
   }
 
   private boolean isSamePivotBlock(final FastSyncState fss) {
