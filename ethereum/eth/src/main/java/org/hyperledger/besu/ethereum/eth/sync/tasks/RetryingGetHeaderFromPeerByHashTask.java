@@ -85,12 +85,13 @@ public class RetryingGetHeaderFromPeerByHashTask
     return executeSubTask(task::run)
         .thenApply(
             peerResult -> {
-              LOG.debug(
+              LOG.info(
                   "Get block header by hash {} from peer {} has result {}",
                   referenceHash,
                   peer,
                   peerResult.getResult());
               if (peerResult.getResult().isEmpty()) {
+                LOG.info("Empty block header for hash {} from peer {}", referenceHash, peer);
                 throw new IncompleteResultsException(
                     "No block header for hash "
                         + referenceHash

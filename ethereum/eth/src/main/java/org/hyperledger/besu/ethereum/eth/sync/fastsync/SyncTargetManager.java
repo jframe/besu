@@ -34,6 +34,7 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
@@ -127,7 +128,7 @@ public class SyncTargetManager extends AbstractSyncTargetManager {
               if (peerHasDifferentPivotBlock(result)) {
                 if (!hasPivotChanged(pivotBlockHeader)) {
                   // if the pivot block has not changed, then warn and disconnect this peer
-                  LOG.warn(
+                  LOG.info(
                       "Best peer has wrong pivot block (#{}) expecting {} but received {}.  Disconnect: {}",
                       pivotBlockHeader.getNumber(),
                       pivotBlockHeader.getHash(),
@@ -136,7 +137,7 @@ public class SyncTargetManager extends AbstractSyncTargetManager {
                   bestPeer.disconnect(DisconnectReason.USELESS_PEER_MISMATCHED_PIVOT_BLOCK);
                   return CompletableFuture.completedFuture(Optional.<EthPeer>empty());
                 }
-                LOG.debug(
+                LOG.info(
                     "Retrying best peer {} with new pivot block {}",
                     bestPeer.getLoggableId(),
                     pivotBlockHeader.toLogString());
@@ -147,7 +148,17 @@ public class SyncTargetManager extends AbstractSyncTargetManager {
             })
         .exceptionally(
             error -> {
-              LOG.debug("Could not confirm best peer had pivot block", error);
+              if (error instanceof TimeoutException) {
+                LOG.info(
+                    "Could not confirm best peer {} had pivot block",
+                    bestPeer.getLoggableId(),
+                    error.getCause());
+              } else {
+                LOG.debug(
+                    "Could not confirm best peer {} had pivot block",
+                    bestPeer.getLoggableId(),
+                    error);
+              }
               return Optional.empty();
             });
   }

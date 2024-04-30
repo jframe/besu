@@ -120,7 +120,7 @@ public class PivotSelectorFromSafeBlock implements PivotBlockSelector {
                       .map(BlockHeader::getNumber)
                       .orElseGet(
                           () -> {
-                            LOG.debug(
+                            LOG.info(
                                 "Downloading chain head block header by hash {}", headBlockHash);
                             try {
                               long bn =
@@ -128,13 +128,16 @@ public class PivotSelectorFromSafeBlock implements PivotBlockSelector {
                                       .thenCompose(unused -> downloadBlockHeader(headBlockHash))
                                       .thenApply(
                                           blockHeader -> {
+                                            LOG.info(
+                                                "Downloaded block header for hash {}",
+                                                headBlockHash);
                                             maybeCachedHeadBlockHeader = Optional.of(blockHeader);
                                             return blockHeader.getNumber();
                                           })
                                       .get();
                               return bn;
                             } catch (Throwable t) {
-                              LOG.debug(
+                              LOG.info(
                                   "Error trying to download chain head block header by hash {}",
                                   headBlockHash,
                                   t);
@@ -154,9 +157,9 @@ public class PivotSelectorFromSafeBlock implements PivotBlockSelector {
         .whenComplete(
             (blockHeader, throwable) -> {
               if (throwable != null) {
-                LOG.debug("Error downloading block header by hash {}", hash);
+                LOG.info("Error downloading block header by hash {}", hash);
               } else {
-                LOG.atDebug()
+                LOG.atInfo()
                     .setMessage("Successfully downloaded pivot block header by hash {}")
                     .addArgument(blockHeader::toLogString)
                     .log();
