@@ -19,7 +19,6 @@ import static org.hyperledger.besu.util.FutureUtils.propagateResult;
 import org.hyperledger.besu.ethereum.eth.manager.task.EthTask;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.services.pipeline.Pipeline;
-import org.hyperledger.besu.util.ExceptionUtils;
 
 import java.time.Duration;
 import java.util.Collection;
@@ -38,7 +37,6 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -224,26 +222,7 @@ public class EthScheduler {
   }
 
   public <T> CompletableFuture<T> timeout(final EthTask<T> task, final Duration timeout) {
-    final CompletableFuture<T> future = task.run();
-    final CompletableFuture<T> result = timeout(future, timeout);
-    result.whenComplete(
-        (r, error) -> {
-          if (errorIsTimeoutOrCancellation(error)) {
-            task.cancel();
-          }
-        });
-    return result;
-  }
-
-  private boolean errorIsTimeoutOrCancellation(final Throwable error) {
-    final Throwable cause = ExceptionUtils.rootCause(error);
-    return cause instanceof TimeoutException || cause instanceof CancellationException;
-  }
-
-  private <T> CompletableFuture<T> timeout(
-      final CompletableFuture<T> future, final Duration delay) {
-    final CompletableFuture<T> timeout = failAfterTimeout(delay);
-    return future.applyToEither(timeout, Function.identity());
+    return task.run().orTimeout(timeout.toSeconds(), TimeUnit.SECONDS);
   }
 
   public void stop() {
@@ -283,12 +262,6 @@ public class EthScheduler {
           "{} computation executor did not shutdown cleanly.", this.getClass().getSimpleName());
     }
     LOG.trace("{} stopped.", this.getClass().getSimpleName());
-  }
-
-  private <T> CompletableFuture<T> failAfterTimeout(final Duration timeout) {
-    final CompletableFuture<T> promise = new CompletableFuture<>();
-    failAfterTimeout(promise, timeout);
-    return promise;
   }
 
   public <T> void failAfterTimeout(final CompletableFuture<T> promise, final Duration timeout) {

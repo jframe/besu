@@ -29,6 +29,7 @@ import org.hyperledger.besu.util.ExceptionUtils;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import org.slf4j.Logger;
@@ -58,31 +59,34 @@ public abstract class AbstractPeerRequestTask<R> extends AbstractPeerTask<R> {
     final CompletableFuture<R> promise = new CompletableFuture<>();
     responseStream = sendRequest();
     responseStream.then(
-        stream -> {
-          // Start the timeout now that the request has actually been sent
-          ethContext.getScheduler().failAfterTimeout(promise, timeout);
-
-          stream.then(
-              (streamClosed, message, peer1) ->
-                  handleMessage(promise, streamClosed, message, peer1));
-        },
+        stream ->
+            stream.then(
+                (streamClosed, message, peer1) ->
+                    handleMessage(promise, streamClosed, message, peer1)),
         promise::completeExceptionally);
 
-    promise.whenComplete(
-        (r, t) -> {
-          final Optional<RequestManager.ResponseStream> responseStream =
-              this.responseStream.abort();
-          if (t != null) {
-            t = ExceptionUtils.rootCause(t);
-            if (t instanceof TimeoutException && responseStream.isPresent()) {
-              responseStream.get().getPeer().recordRequestTimeout(requestCode);
-            }
-            result.completeExceptionally(t);
-          } else if (r != null) {
-            // If we got a response we must have had a response stream...
-            result.complete(new PeerTaskResult<>(responseStream.get().getPeer(), r));
-          }
-        });
+    promise
+        .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
+        .whenComplete(
+            (r, t) -> {
+              final Optional<RequestManager.ResponseStream> responseStream =
+                  this.responseStream.abort();
+              if (t != null) {
+                t = ExceptionUtils.rootCause(t);
+                if (t instanceof TimeoutException && responseStream.isPresent()) {
+                  final EthPeer peer = responseStream.get().getPeer();
+                  LOG.info(
+                      "Timed out for request code {} on peer {} recording peer timeout",
+                      requestCode,
+                      peer.getLoggableId());
+                  peer.recordRequestTimeout(requestCode);
+                }
+                result.completeExceptionally(t);
+              } else if (r != null) {
+                // If we got a response we must have had a response stream...
+                result.complete(new PeerTaskResult<>(responseStream.get().getPeer(), r));
+              }
+            });
   }
 
   public PendingPeerRequest sendRequestToPeer(
