@@ -210,7 +210,7 @@ public class EthPeer implements Comparable<EthPeer> {
   }
 
   public void recordRequestTimeout(final int requestCode) {
-    LOG.atDebug()
+    LOG.atInfo()
         .setMessage("Timed out while waiting for response from peer {}")
         .addArgument(this::getLoggableId)
         .log();
