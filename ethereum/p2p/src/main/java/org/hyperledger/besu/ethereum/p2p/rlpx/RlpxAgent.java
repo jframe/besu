@@ -313,7 +313,7 @@ public class RlpxAgent {
     final Peer peer = peerConnection.getPeer();
     // Deny connection if our local node isn't ready
     if (!localNode.isReady()) {
-      LOG.debug("Node is not ready. Disconnect incoming connection: {}", peerConnection);
+      LOG.debug("Local node is not ready. Disconnect incoming connection: {}", peerConnection);
       peerConnection.disconnect(DisconnectReason.UNKNOWN);
       return;
     }
@@ -321,7 +321,7 @@ public class RlpxAgent {
     // Disconnect if not permitted
     if (!peerPermissions.allowNewInboundConnectionFrom(peer)) {
       LOG.debug(
-          "Node is not permitted to connect. Disconnect incoming connection: {}", peerConnection);
+          "Peer {} is not permitted to connect. Disconnect incoming connection: {}", peer.getLoggableId(), peerConnection);
       peerConnection.disconnect(DisconnectReason.UNKNOWN);
       return;
     }
