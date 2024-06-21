@@ -329,6 +329,7 @@ public class RlpxAgent {
     if (checkWhetherToConnect(peer, true)) {
       dispatchConnect(peerConnection);
     } else {
+      LOG.debug("No protocol manager wants to connect to peer. Disconnecting: {}", peerConnection);
       peerConnection.disconnect(DisconnectReason.UNKNOWN);
     }
   }

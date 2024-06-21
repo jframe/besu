@@ -145,6 +145,7 @@ public class SnapProtocolManager implements ProtocolManager {
 
   @Override
   public boolean shouldConnect(final Peer peer, final boolean incoming) {
+    LOG.debug("Peer {} rejected", peer.getLoggableId());
     return false; // EthManager is taking care of this for now
   }
 

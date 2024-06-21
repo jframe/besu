@@ -415,8 +415,10 @@ public class EthProtocolManager implements ProtocolManager, MinedBlockObserver {
           .addArgument(forkIdManager.getForkIdForChainHead())
           .addArgument(peer.getForkId())
           .log();
+      LOG.debug("Peer {} rejected", peer.getLoggableId());
       return false;
     }
+    LOG.debug("Peer {} rejected", peer.getLoggableId());
     return false;
   }
 
