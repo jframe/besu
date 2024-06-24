@@ -47,8 +47,11 @@ import java.util.List;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 class EthServer {
+  private static final Logger LOG = LoggerFactory.getLogger(EthServer.class);
   private final Blockchain blockchain;
   private final WorldStateArchive worldStateArchive;
   private final TransactionPool transactionPool;
@@ -152,6 +155,7 @@ class EthServer {
     rlp.writeRaw(firstEncodedHeader);
     // Collect and encode the remaining headers
     final long numberDelta = reversed ? -(skip + 1) : (skip + 1);
+    int headerCount = 0;
     for (int i = 1; i < maxHeaders; i++) {
       final long blockNumber = firstHeader.getNumber() + i * numberDelta;
       if (blockNumber < BlockHeader.GENESIS_BLOCK_NUMBER) {
@@ -159,12 +163,17 @@ class EthServer {
       }
       final Optional<BlockHeader> maybeHeader = blockchain.getBlockHeader(blockNumber);
       if (maybeHeader.isEmpty()) {
+        LOG.debug("Skipping empty block header for block number {}", blockNumber);
         break;
       }
       final BytesValueRLPOutput headerRlp = new BytesValueRLPOutput();
       maybeHeader.get().writeTo(headerRlp);
+      headerCount++;
       final int encodedSize = headerRlp.encodedSize();
       if (responseSizeEstimate + encodedSize > maxMessageSize) {
+        LOG.debug(
+            "Reached max message size limit while encoding block header for block number {}",
+            blockNumber);
         break;
       }
       responseSizeEstimate += encodedSize;
@@ -172,6 +181,7 @@ class EthServer {
     }
     rlp.endList();
 
+    LOG.debug("Returning {} block headers", headerCount);
     return BlockHeadersMessage.createUnsafe(rlp.encoded());
   }
 

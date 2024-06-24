@@ -321,7 +321,9 @@ public class RlpxAgent {
     // Disconnect if not permitted
     if (!peerPermissions.allowNewInboundConnectionFrom(peer)) {
       LOG.debug(
-          "Peer {} is not permitted to connect. Disconnect incoming connection: {}", peer.getLoggableId(), peerConnection);
+          "Peer {} is not permitted to connect. Disconnect incoming connection: {}",
+          peer.getLoggableId(),
+          peerConnection);
       peerConnection.disconnect(DisconnectReason.UNKNOWN);
       return;
     }
