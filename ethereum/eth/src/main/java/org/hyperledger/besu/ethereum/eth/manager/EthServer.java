@@ -128,6 +128,7 @@ class EthServer {
     final int skip = getHeaders.skip();
     final int maxHeaders = Math.min(requestLimit, getHeaders.maxHeaders());
     final boolean reversed = getHeaders.reverse();
+    LOG.debug("Processing GetBlockHeaders request: hash {}, blockNumber {}, skip {}, maxHeaders {}, reversed {}", hash, getHeaders.blockNumber(), skip, getHeaders.maxHeaders(), reversed);
     final BlockHeader firstHeader;
     // Query first header by hash or number depending on request arguments
     if (hash.isPresent()) {
