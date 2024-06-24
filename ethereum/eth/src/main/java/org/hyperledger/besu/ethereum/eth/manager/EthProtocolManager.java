@@ -429,7 +429,7 @@ public class EthProtocolManager implements ProtocolManager, MinedBlockObserver {
       final boolean initiatedByPeer) {
     final boolean wasActiveConnection = ethPeers.registerDisconnect(connection);
     LOG.atDebug()
-        .setMessage("Disconnect - active Connection? {} - {} - {} {} - {} {} - {} peers left, stack {}")
+        .setMessage("Disconnect - active Connection? {} - {} - {} {} - {} {} - {} peers left")
         .addArgument(wasActiveConnection)
         .addArgument(initiatedByPeer ? "Inbound" : "Outbound")
         .addArgument(reason::getValue)
@@ -437,7 +437,6 @@ public class EthProtocolManager implements ProtocolManager, MinedBlockObserver {
         .addArgument(() -> connection.getPeer().getLoggableId())
         .addArgument(() -> connection.getPeerInfo().getClientId())
         .addArgument(ethPeers::peerCount)
-        .addArgument(Thread.currentThread().getStackTrace())
         .log();
     LOG.atTrace().setMessage("{}").addArgument(ethPeers::toString).log();
   }
