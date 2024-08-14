@@ -98,7 +98,7 @@ public class FastSyncDownloader<REQUEST> {
     return findPivotBlock(fastSyncState, fss -> downloadChainAndWorldState(fastSyncActions, fss));
   }
 
-  public CompletableFuture<FastSyncState> findPivotBlock(
+  protected CompletableFuture<FastSyncState> findPivotBlock(
       final FastSyncState fastSyncState,
       final Function<FastSyncState, CompletableFuture<FastSyncState>> onNewPivotBlock) {
     return exceptionallyCompose(
