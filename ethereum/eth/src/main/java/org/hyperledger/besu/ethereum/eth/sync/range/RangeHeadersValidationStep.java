@@ -42,7 +42,7 @@ public class RangeHeadersValidationStep implements Function<RangeHeaders, Stream
 
   @Override
   public Stream<BlockHeader> apply(final RangeHeaders rangeHeaders) {
-    final BlockHeader rangeStart = rangeHeaders.getRange().getStart();
+    final BlockHeader rangeStart = rangeHeaders.getRange().start();
 
     return rangeHeaders
         .getFirstHeaderToImport()
@@ -52,8 +52,8 @@ public class RangeHeadersValidationStep implements Function<RangeHeaders, Stream
                 return rangeHeaders.getHeadersToImport().stream();
               } else {
                 final String rangeEndDescription;
-                if (rangeHeaders.getRange().hasEnd()) {
-                  final BlockHeader rangeEnd = rangeHeaders.getRange().getEnd();
+                if (rangeHeaders.getRange().end().isPresent()) {
+                  final BlockHeader rangeEnd = rangeHeaders.getRange().end().get();
                   rangeEndDescription =
                       String.format("#%d (%s)", rangeEnd.getNumber(), rangeEnd.getBlockHash());
                 } else {

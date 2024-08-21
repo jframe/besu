@@ -110,13 +110,13 @@ public class DownloadHeadersStep
     if (checkpointRange.hasEnd()) {
       final List<BlockHeader> headersToImport = new ArrayList<>(headers);
       headersToImport.add(checkpointRange.getEnd());
-      return new RangeHeaders(checkpointRange, headersToImport);
+      return new RangeHeaders(checkpointRange.targetRange(), headersToImport);
     } else {
       List<BlockHeader> headersToImport = headers;
       if (!headers.isEmpty() && headers.get(0).equals(checkpointRange.getStart())) {
         headersToImport = headers.subList(1, headers.size());
       }
-      return new RangeHeaders(checkpointRange, headersToImport);
+      return new RangeHeaders(checkpointRange.targetRange(), headersToImport);
     }
   }
 }

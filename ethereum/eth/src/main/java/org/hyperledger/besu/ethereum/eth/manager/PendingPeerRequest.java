@@ -53,7 +53,7 @@ public class PendingPeerRequest {
       return true;
     }
     final Optional<EthPeer> maybePeer = getPeerToUse();
-    if (maybePeer.isEmpty()) {
+     if (maybePeer.isEmpty()) {
       // No peers have the required height.
       result.completeExceptionally(new NoAvailablePeersException());
       return true;

@@ -24,16 +24,15 @@ import com.google.common.base.MoreObjects;
 
 public class RangeHeaders {
 
-  private final SyncTargetRange range;
+  private final TargetRange range;
   private final List<BlockHeader> headersToImport;
 
-  public RangeHeaders(
-      final SyncTargetRange checkpointRange, final List<BlockHeader> headersToImport) {
-    this.range = checkpointRange;
+  public RangeHeaders(final TargetRange targetRange, final List<BlockHeader> headersToImport) {
+    this.range = targetRange;
     this.headersToImport = headersToImport;
   }
 
-  public SyncTargetRange getRange() {
+  public TargetRange getRange() {
     return range;
   }
 

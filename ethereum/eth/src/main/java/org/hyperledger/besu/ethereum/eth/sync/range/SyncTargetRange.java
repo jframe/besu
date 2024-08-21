@@ -19,27 +19,16 @@ import static java.lang.Math.toIntExact;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 
-import java.util.Objects;
 import java.util.Optional;
 
-import com.google.common.base.MoreObjects;
-
-public class SyncTargetRange {
-
-  private final EthPeer syncTarget;
-  private final BlockHeader start;
-  private final Optional<BlockHeader> end;
+public record SyncTargetRange(EthPeer syncTarget, TargetRange targetRange) {
 
   public SyncTargetRange(final EthPeer syncTarget, final BlockHeader start) {
-    this.syncTarget = syncTarget;
-    this.start = start;
-    this.end = Optional.empty();
+    this(syncTarget, new TargetRange(start, Optional.empty()));
   }
 
   public SyncTargetRange(final EthPeer syncTarget, final BlockHeader start, final BlockHeader end) {
-    this.syncTarget = syncTarget;
-    this.start = start;
-    this.end = Optional.of(end);
+    this(syncTarget, new TargetRange(start, Optional.of(end)));
   }
 
   public EthPeer getSyncTarget() {
@@ -47,46 +36,18 @@ public class SyncTargetRange {
   }
 
   public BlockHeader getStart() {
-    return start;
+    return targetRange.start();
   }
 
   public boolean hasEnd() {
-    return end.isPresent();
+    return targetRange.end().isPresent();
   }
 
   public BlockHeader getEnd() {
-    return end.get();
+    return targetRange.end().get();
   }
 
   public int getSegmentLengthExclusive() {
-    return toIntExact(end.get().getNumber() - start.getNumber() - 1);
-  }
-
-  @Override
-  public boolean equals(final Object o) {
-    if (this == o) {
-      return true;
-    }
-    if (o == null || getClass() != o.getClass()) {
-      return false;
-    }
-    final SyncTargetRange that = (SyncTargetRange) o;
-    return Objects.equals(syncTarget, that.syncTarget)
-        && Objects.equals(start, that.start)
-        && Objects.equals(end, that.end);
-  }
-
-  @Override
-  public int hashCode() {
-    return Objects.hash(syncTarget, start, end);
-  }
-
-  @Override
-  public String toString() {
-    return MoreObjects.toStringHelper(this)
-        .add("syncTarget", syncTarget)
-        .add("start", start)
-        .add("end", end)
-        .toString();
+    return toIntExact(targetRange.end().get().getNumber() - targetRange.start().getNumber() - 1);
   }
 }
