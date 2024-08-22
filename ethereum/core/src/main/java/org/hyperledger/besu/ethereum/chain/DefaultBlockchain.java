@@ -404,6 +404,7 @@ public class DefaultBlockchain implements MutableBlockchain {
   public void storeHeader(final BlockHeader blockHeader) {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
     updater.putBlockHeader(blockHeader.getHash(), blockHeader);
+    updater.putBlockHash(blockHeader.getNumber(), blockHeader.getBlockHash());
     updater.commit();
   }
 

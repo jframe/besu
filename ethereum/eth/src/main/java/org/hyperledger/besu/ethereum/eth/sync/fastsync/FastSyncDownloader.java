@@ -195,11 +195,13 @@ public class FastSyncDownloader<REQUEST> {
       // If either download fails, cancel the other one.
       chainFuture.exceptionally(
           error -> {
+            LOG.info("Cancelling world state download due to chain download failure", error);
             worldStateFuture.cancel(true);
             return null;
           });
       worldStateFuture.exceptionally(
           error -> {
+            LOG.info("Cancelling chain download due to world state download failure", error);
             chainDownloader.cancel();
             return null;
           });

@@ -18,15 +18,22 @@ import java.util.Iterator;
 import java.util.Optional;
 
 public class ValidatorSyncSource implements Iterator<ValidatorSyncRange> {
-  public static final int HEADER_DOWNLOAD_SIZE = 512;
   private final long checkpointTarget;
   private final long syncTarget;
+  private final boolean backwards;
+  private final int headerRequestSize;
 
   private Optional<ValidatorSyncRange> maybeLastRange = Optional.empty();
 
-  public ValidatorSyncSource(final long checkpointTarget, final long syncTarget) {
+  public ValidatorSyncSource(
+      final long checkpointTarget,
+      final long syncTarget,
+      final boolean backwards,
+      final int headerRequestSize) {
     this.checkpointTarget = checkpointTarget;
     this.syncTarget = syncTarget;
+    this.backwards = backwards;
+    this.headerRequestSize = headerRequestSize;
   }
 
   @Override
@@ -37,23 +44,43 @@ public class ValidatorSyncSource implements Iterator<ValidatorSyncRange> {
   @Override
   public ValidatorSyncRange next() {
     if (maybeLastRange.isEmpty()) {
-      maybeLastRange =
-          Optional.of(new ValidatorSyncRange(syncTarget - HEADER_DOWNLOAD_SIZE, syncTarget));
-      return maybeLastRange.get();
+      final ValidatorSyncRange firstRange = createFirstRange();
+      maybeLastRange = Optional.of(firstRange);
+      return firstRange;
     } else if (hasReachedCheckpointTarget()) {
       return null;
     } else {
       final ValidatorSyncRange lastRange = maybeLastRange.get();
-      final long lowerBlockNumber =
-          Math.max(lastRange.lowerBlockNumber() - HEADER_DOWNLOAD_SIZE, 0);
-      final ValidatorSyncRange nextRange =
-          new ValidatorSyncRange(lowerBlockNumber, lastRange.lowerBlockNumber());
+      final ValidatorSyncRange nextRange = createNextRange(lastRange);
       maybeLastRange = Optional.of(nextRange);
       return nextRange;
     }
   }
 
+  private ValidatorSyncRange createFirstRange() {
+    if (backwards) {
+      return new ValidatorSyncRange(syncTarget - headerRequestSize, syncTarget);
+    } else {
+      final long startBlockNumber = Math.max(checkpointTarget, 1);
+      return new ValidatorSyncRange(startBlockNumber, startBlockNumber + headerRequestSize);
+    }
+  }
+
+  private ValidatorSyncRange createNextRange(final ValidatorSyncRange lastRange) {
+    if (backwards) {
+      final long lowerBlockNumber = Math.max(lastRange.lowerBlockNumber() - headerRequestSize, 0);
+      return new ValidatorSyncRange(lowerBlockNumber, lastRange.lowerBlockNumber());
+    } else {
+      return new ValidatorSyncRange(
+          lastRange.upperBlockNumber(), lastRange.upperBlockNumber() + headerRequestSize);
+    }
+  }
+
   private boolean hasReachedCheckpointTarget() {
-    return maybeLastRange.map(r -> r.lowerBlockNumber() <= checkpointTarget).orElse(false);
+    if (backwards) {
+      return maybeLastRange.map(r -> r.lowerBlockNumber() <= checkpointTarget).orElse(false);
+    } else {
+      return maybeLastRange.map(r -> r.upperBlockNumber() >= syncTarget).orElse(false);
+    }
   }
 }
