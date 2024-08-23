@@ -160,6 +160,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   public Pipeline<ValidatorSyncRange> createDownloadPipelineForSyncTarget(final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
+    final int singleHeaderBufferSize = headerRequestSize * downloaderParallelism;
 
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
@@ -198,7 +199,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             true,
             "validatorSyncHeaderDownload")
         .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
-        .thenFlatMap("validateHeaders", validateHeadersJoinUpStep, downloaderParallelism)
+        .thenFlatMap("validateHeaders", validateHeadersJoinUpStep, singleHeaderBufferSize)
         .inBatches(headerRequestSize)
         .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
         .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
