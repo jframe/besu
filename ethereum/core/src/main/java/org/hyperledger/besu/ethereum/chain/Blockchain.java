@@ -136,7 +136,7 @@ public interface Blockchain {
    * @return true if the block is tracked.
    */
   default boolean contains(final Hash blockHash) {
-    return getBlockHeader(blockHash).isPresent();
+    return getBlockHeader(blockHash).isPresent() && getBlockBody(blockHash).isPresent();
   }
 
   /**
