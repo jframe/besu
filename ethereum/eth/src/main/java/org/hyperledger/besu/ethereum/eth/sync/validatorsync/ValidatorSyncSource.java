@@ -23,8 +23,7 @@ public class ValidatorSyncSource implements Iterator<ValidatorSyncRange> {
   private final long syncTarget;
   private final boolean backwards;
   private final int headerRequestSize;
-
-  private AtomicReference<Optional<ValidatorSyncRange>> maybeLastRange =
+  private final AtomicReference<Optional<ValidatorSyncRange>> maybeLastRange =
       new AtomicReference<>(Optional.empty());
 
   public ValidatorSyncSource(
