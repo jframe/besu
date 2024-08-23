@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.eth.sync.validatorsync;
 
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class ValidatorSyncSource implements Iterator<ValidatorSyncRange> {
   private final long checkpointTarget;
@@ -23,7 +24,8 @@ public class ValidatorSyncSource implements Iterator<ValidatorSyncRange> {
   private final boolean backwards;
   private final int headerRequestSize;
 
-  private Optional<ValidatorSyncRange> maybeLastRange = Optional.empty();
+  private AtomicReference<Optional<ValidatorSyncRange>> maybeLastRange =
+      new AtomicReference<>(Optional.empty());
 
   public ValidatorSyncSource(
       final long checkpointTarget,
@@ -43,16 +45,16 @@ public class ValidatorSyncSource implements Iterator<ValidatorSyncRange> {
 
   @Override
   public ValidatorSyncRange next() {
-    if (maybeLastRange.isEmpty()) {
+    if (maybeLastRange.get().isEmpty()) {
       final ValidatorSyncRange firstRange = createFirstRange();
-      maybeLastRange = Optional.of(firstRange);
+      maybeLastRange.set(Optional.of(firstRange));
       return firstRange;
     } else if (hasReachedCheckpointTarget()) {
       return null;
     } else {
-      final ValidatorSyncRange lastRange = maybeLastRange.get();
+      final ValidatorSyncRange lastRange = maybeLastRange.get().get();
       final ValidatorSyncRange nextRange = createNextRange(lastRange);
-      maybeLastRange = Optional.of(nextRange);
+      maybeLastRange.set(Optional.of(nextRange));
       return nextRange;
     }
   }
@@ -78,9 +80,9 @@ public class ValidatorSyncSource implements Iterator<ValidatorSyncRange> {
 
   private boolean hasReachedCheckpointTarget() {
     if (backwards) {
-      return maybeLastRange.map(r -> r.lowerBlockNumber() <= checkpointTarget).orElse(false);
+      return maybeLastRange.get().map(r -> r.lowerBlockNumber() <= checkpointTarget).orElse(false);
     } else {
-      return maybeLastRange.map(r -> r.upperBlockNumber() >= syncTarget).orElse(false);
+      return maybeLastRange.get().map(r -> r.upperBlockNumber() >= syncTarget).orElse(false);
     }
   }
 }
