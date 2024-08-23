@@ -62,7 +62,7 @@ public class ValidatorSyncSource implements Iterator<ValidatorSyncRange> {
     if (backwards) {
       return new ValidatorSyncRange(syncTarget - headerRequestSize, syncTarget);
     } else {
-      final long startBlockNumber = Math.max(checkpointTarget, 1);
+      final long startBlockNumber = checkpointTarget;
       return new ValidatorSyncRange(startBlockNumber, startBlockNumber + headerRequestSize);
     }
   }

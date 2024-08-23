@@ -107,17 +107,14 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
       final SyncState syncState,
       final SyncTarget syncTarget,
       final Pipeline<?> pipeline) {
-    final CompletableFuture<Void> downloadHeadersFuture =
-        scheduler.startPipeline(createDownloadHeadersPipeline(syncTarget));
+
     final CompletableFuture<Void> importBlocksFuture = scheduler.startPipeline(pipeline);
     if (syncState.getCheckpoint().isPresent()) {
       final CompletableFuture<Void> downloadCheckPointPipeline =
           scheduler.startPipeline(createDownloadCheckPointPipeline(syncState, syncTarget));
-      return downloadCheckPointPipeline
-          .thenCompose(unused -> downloadHeadersFuture)
-          .thenCompose(unused -> importBlocksFuture);
+      return downloadCheckPointPipeline.thenCompose(unused -> importBlocksFuture);
     } else {
-      return downloadHeadersFuture.thenCompose(unused -> importBlocksFuture);
+      return importBlocksFuture;
     }
   }
 
@@ -159,40 +156,6 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .andFinishWith("importBlock", checkPointBlockImportStep);
   }
 
-  protected Pipeline<ValidatorSyncRange> createDownloadHeadersPipeline(final SyncTarget target) {
-    final int downloaderParallelism = syncConfig.getDownloaderParallelism();
-    final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
-
-    final ValidatorSyncSource validatorSyncSource =
-        new ValidatorSyncSource(
-            getCommonAncestor(target).getNumber(),
-            fastSyncState.getPivotBlockNumber().getAsLong(),
-            true,
-            headerRequestSize);
-    final DownloadHeadersBackwardsStep downloadHeadersStep =
-        new DownloadHeadersBackwardsStep(
-            protocolSchedule, protocolContext, detachedValidationPolicy, ethContext, metricsSystem);
-    final RangeHeadersValidationStep validateHeadersJoinUpStep =
-        new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
-    final SaveHeadersStep saveHeadersStep = new SaveHeadersStep(protocolContext.getBlockchain());
-
-    return PipelineBuilder.createPipelineFrom(
-            "posPivot",
-            validatorSyncSource,
-            downloaderParallelism,
-            metricsSystem.createLabelledCounter(
-                BesuMetricCategory.SYNCHRONIZER,
-                "chain_download_pipeline_processed_total",
-                "Number of entries process by each chain download pipeline stage",
-                "step",
-                "action"),
-            true,
-            "validatorSyncHeaderDownload")
-        .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
-        .thenFlatMap("validateHeaders", validateHeadersJoinUpStep, downloaderParallelism)
-        .andFinishWith("saveHeader", saveHeadersStep);
-  }
-
   @Override
   public Pipeline<ValidatorSyncRange> createDownloadPipelineForSyncTarget(final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
@@ -204,7 +167,11 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             fastSyncState.getPivotBlockNumber().getAsLong(),
             false,
             headerRequestSize);
-    final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
+    final DownloadHeadersBackwardsStep downloadHeadersStep =
+        new DownloadHeadersBackwardsStep(
+            protocolSchedule, protocolContext, detachedValidationPolicy, ethContext, metricsSystem);
+    final RangeHeadersValidationStep validateHeadersJoinUpStep =
+        new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
     final DownloadReceiptsStep downloadReceiptsStep =
@@ -229,8 +196,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
                 "step",
                 "action"),
             true,
-            "validatorSyncBlockImport")
-        .thenFlatMap("loadHeaders", loadHeadersStep, downloaderParallelism)
+            "validatorSyncHeaderDownload")
+        .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
+        .thenFlatMap("validateHeaders", validateHeadersJoinUpStep, downloaderParallelism)
         .inBatches(headerRequestSize)
         .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
         .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
