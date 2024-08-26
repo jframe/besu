@@ -173,10 +173,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             protocolSchedule, protocolContext, detachedValidationPolicy, ethContext, metricsSystem);
     final RangeHeadersValidationStep validateHeadersJoinUpStep =
         new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
-    final DownloadBodiesStep downloadBodiesStep =
-        new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
-    final DownloadReceiptsStep downloadReceiptsStep =
-        new DownloadReceiptsStep(ethContext, metricsSystem);
+    final DownloadBodiesAndReceiptsStep downloadBodiesAndReceiptsStep =
+            new DownloadBodiesAndReceiptsStep(protocolSchedule, ethContext, metricsSystem);
     final ImportBlocksStep importBlockStep =
         new ImportBlocksStep(
             protocolSchedule,
@@ -201,8 +199,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
         .thenFlatMap("validateHeaders", validateHeadersJoinUpStep, singleHeaderBufferSize)
         .inBatches(headerRequestSize)
-        .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
-        .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
+        .thenProcessAsyncOrdered("downloadBodiesAndReceipts", downloadBodiesAndReceiptsStep, downloaderParallelism)
         .andFinishWith("importBlock", importBlockStep);
   }
 
