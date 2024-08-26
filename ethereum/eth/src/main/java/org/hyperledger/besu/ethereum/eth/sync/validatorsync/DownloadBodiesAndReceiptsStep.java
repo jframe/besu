@@ -64,7 +64,10 @@ public class DownloadBodiesAndReceiptsStep
     return downloadBlocks.thenCombine(
         downloadReceipts,
         (blockList, receiptsMap) -> {
-          LOG.info("Downloaded {} blocks and receipts for headers starting from {}", blockHeaders.size(), blockHeaders.getFirst());
+          LOG.info(
+              "Downloaded {} blocks and receipts for headers starting from {}",
+              blockHeaders.size(),
+              blockHeaders.getFirst());
 
           // Combine the results of both tasks
           return blockList.stream()
