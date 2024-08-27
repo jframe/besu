@@ -26,14 +26,15 @@ import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
+import org.hyperledger.besu.ethereum.eth.sync.DownloadBodiesStep;
 import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointBlockImportStep;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointDownloadBlockStep;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointSource;
+import org.hyperledger.besu.ethereum.eth.sync.fastsync.DownloadReceiptsStep;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.ImportBlocksStep;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.checkpoint.Checkpoint;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeadersValidationStep;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
@@ -171,16 +172,18 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             protocolSchedule, protocolContext, detachedValidationPolicy, ethContext, metricsSystem);
     final RangeHeadersValidationStep validateHeadersJoinUpStep =
         new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
-    final DownloadBodiesAndReceiptsStep downloadBodiesAndReceiptsStep =
-        new DownloadBodiesAndReceiptsStep(protocolSchedule, ethContext, metricsSystem);
-    final ImportBlocksStep importBlockStep =
-        new ImportBlocksStep(
-            protocolSchedule,
-            protocolContext,
-            attachedValidationPolicy,
-            ommerValidationPolicy,
-            ethContext,
-            fastSyncState.getPivotBlockHeader().get());
+    final DownloadBodiesStep downloadBodiesStep =
+        new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
+    final DownloadReceiptsStep downloadReceiptsStep =
+        new DownloadReceiptsStep(ethContext, metricsSystem);
+    //    final ImportBlocksStep importBlockStep =
+    //        new ImportBlocksStep(
+    //            protocolSchedule,
+    //            protocolContext,
+    //            attachedValidationPolicy,
+    //            ommerValidationPolicy,
+    //            ethContext,
+    //            fastSyncState.getPivotBlockHeader().get());
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
@@ -197,9 +200,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
         .thenFlatMap("validateHeaders", validateHeadersJoinUpStep, singleHeaderBufferSize)
         .inBatches(headerRequestSize)
-        .thenProcessAsyncOrdered(
-            "downloadBodiesAndReceipts", downloadBodiesAndReceiptsStep, downloaderParallelism)
-        .andFinishWith("importBlock", importBlockStep);
+        .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
+        .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
+        .andFinishWith("importBlock", (ignore) -> {});
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {
