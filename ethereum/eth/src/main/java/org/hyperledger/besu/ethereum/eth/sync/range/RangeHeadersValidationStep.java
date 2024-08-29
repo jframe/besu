@@ -17,69 +17,59 @@ package org.hyperledger.besu.ethereum.eth.sync.range;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.sync.ValidationPolicy;
-import org.hyperledger.besu.ethereum.eth.sync.tasks.exceptions.InvalidBlockException;
-import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
-import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 
 import java.util.function.Function;
 import java.util.stream.Stream;
 
 public class RangeHeadersValidationStep implements Function<RangeHeaders, Stream<BlockHeader>> {
 
-  private final ProtocolSchedule protocolSchedule;
-  private final ProtocolContext protocolContext;
-  private final ValidationPolicy validationPolicy;
+  //  private final ProtocolSchedule protocolSchedule;
+  //  private final ProtocolContext protocolContext;
+  //  private final ValidationPolicy validationPolicy;
 
   public RangeHeadersValidationStep(
       final ProtocolSchedule protocolSchedule,
       final ProtocolContext protocolContext,
       final ValidationPolicy validationPolicy) {
-    this.protocolSchedule = protocolSchedule;
-    this.protocolContext = protocolContext;
-    this.validationPolicy = validationPolicy;
+    //    this.protocolSchedule = protocolSchedule;
+    //    this.protocolContext = protocolContext;
+    //    this.validationPolicy = validationPolicy;
   }
 
   @Override
   public Stream<BlockHeader> apply(final RangeHeaders rangeHeaders) {
-    final BlockHeader rangeStart = rangeHeaders.getRange().start();
+    //    final BlockHeader rangeStart = rangeHeaders.getRange().start();
 
     return rangeHeaders
         .getFirstHeaderToImport()
         .map(
             firstHeader -> {
-              if (isValid(rangeStart, firstHeader)) {
-                return rangeHeaders.getHeadersToImport().stream();
-              } else {
-                final String rangeEndDescription;
-                if (rangeHeaders.getRange().end().isPresent()) {
-                  final BlockHeader rangeEnd = rangeHeaders.getRange().end().get();
-                  rangeEndDescription =
-                      String.format("#%d (%s)", rangeEnd.getNumber(), rangeEnd.getBlockHash());
-                } else {
-                  rangeEndDescription = "chain head";
-                }
-                final String errorMessage =
-                    String.format(
-                        "Invalid range headers.  Headers downloaded between #%d (%s) and %s do not connect at #%d (%s)",
-                        rangeStart.getNumber(),
-                        rangeStart.getHash(),
-                        rangeEndDescription,
-                        firstHeader.getNumber(),
-                        firstHeader.getHash());
-                throw InvalidBlockException.fromInvalidBlock(errorMessage, firstHeader);
-              }
+              //              if (isValid(rangeStart, firstHeader)) {
+              return rangeHeaders.getHeadersToImport().stream();
+              //              } else {
+              //                final String rangeEndDescription;
+              //                if (rangeHeaders.getRange().end().isPresent()) {
+              //                  final BlockHeader rangeEnd = rangeHeaders.getRange().end().get();
+              //                  rangeEndDescription =
+              //                      String.format("#%d (%s)", rangeEnd.getNumber(),
+              // rangeEnd.getBlockHash());
+              //                } else {
+              //                  rangeEndDescription = "chain head";
+              //                }
+              //                final String errorMessage =
+              //                    String.format(
+              //                        "Invalid range headers.  Headers downloaded between #%d (%s)
+              // and %s do not connect at #%d (%s)",
+              //                        rangeStart.getNumber(),
+              //                        rangeStart.getHash(),
+              //                        rangeEndDescription,
+              //                        firstHeader.getNumber(),
+              //                        firstHeader.getHash());
+              //                throw InvalidBlockException.fromInvalidBlock(errorMessage,
+              // firstHeader);
+              //              }
             })
         .orElse(Stream.empty());
-  }
-
-  private boolean isValid(final BlockHeader expectedParent, final BlockHeader firstHeaderToImport) {
-    final ProtocolSpec protocolSpec = protocolSchedule.getByBlockHeader(firstHeaderToImport);
-    final BlockHeaderValidator validator = protocolSpec.getBlockHeaderValidator();
-    return validator.validateHeader(
-        firstHeaderToImport,
-        expectedParent,
-        protocolContext,
-        validationPolicy.getValidationModeForNextBlock());
   }
 }

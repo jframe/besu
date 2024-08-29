@@ -14,19 +14,16 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.validatorsync;
 
-import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 
-import java.util.HashSet;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
-import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
-public class LoadHeadersStep implements Function<ValidatorSyncRange, Stream<BlockHeader>> {
+public class LoadHeadersStep
+    implements Function<ValidatorSyncRange, CompletableFuture<List<BlockHeader>>> {
 
   private final Blockchain blockchain;
 
@@ -35,26 +32,17 @@ public class LoadHeadersStep implements Function<ValidatorSyncRange, Stream<Bloc
   }
 
   @Override
-  public Stream<BlockHeader> apply(final ValidatorSyncRange validatorSyncRange) {
+  public CompletableFuture<List<BlockHeader>> apply(final ValidatorSyncRange validatorSyncRange) {
     long startBlockNumber = validatorSyncRange.lowerBlockNumber();
     long endBlockNumber = validatorSyncRange.upperBlockNumber();
 
-    List<BlockHeader> headers =
-        Stream.iterate(startBlockNumber, n -> n + 1)
-            .limit(endBlockNumber - startBlockNumber)
-            .map(blockchain::getBlockHeader)
-            .flatMap(Optional::stream)
-            .collect(Collectors.toList());
-    checkForDuplicateHeaders(headers);
-    return headers.stream();
-  }
-
-  private void checkForDuplicateHeaders(final List<BlockHeader> headers) {
-    final Set<Hash> uniqueHeaders = new HashSet<>();
-    for (BlockHeader header : headers) {
-      if (!uniqueHeaders.add(header.getHash())) {
-        throw new IllegalArgumentException("Duplicate headers found: " + header.getHash());
-      }
-    }
+    return CompletableFuture.supplyAsync(
+        () -> {
+          List<BlockHeader> headers = new ArrayList<>();
+          for (long blockNumber = startBlockNumber; blockNumber <= endBlockNumber; blockNumber++) {
+            blockchain.getBlockHeader(blockNumber).ifPresent(headers::add);
+          }
+          return headers;
+        });
   }
 }

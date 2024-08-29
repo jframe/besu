@@ -32,10 +32,8 @@ import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointBlockImportStep;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointDownloadBlockStep;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointSource;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.DownloadReceiptsStep;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.ImportBlocksStep;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.checkpoint.Checkpoint;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeadersValidationStep;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
@@ -48,7 +46,6 @@ import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFactory {
@@ -107,17 +104,15 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
       final SyncState syncState,
       final SyncTarget syncTarget,
       final Pipeline<?> pipeline) {
-    final CompletableFuture<Void> downloadHeadersFuture =
-        scheduler.startPipeline(createDownloadHeadersPipeline(syncTarget));
-    final CompletableFuture<Void> importBlocksFuture = scheduler.startPipeline(pipeline);
     if (syncState.getCheckpoint().isPresent()) {
-      final CompletableFuture<Void> downloadCheckPointPipeline =
-          scheduler.startPipeline(createDownloadCheckPointPipeline(syncState, syncTarget));
-      return downloadCheckPointPipeline
-          .thenCompose(unused -> downloadHeadersFuture)
-          .thenCompose(unused -> importBlocksFuture);
+      return scheduler
+          .startPipeline(createDownloadCheckPointPipeline(syncState, syncTarget))
+          .thenCompose(unused -> scheduler.startPipeline(createDownloadHeadersPipeline(syncTarget)))
+          .thenCompose(unused -> scheduler.startPipeline(pipeline));
     } else {
-      return downloadHeadersFuture.thenCompose(unused -> importBlocksFuture);
+      return scheduler
+          .startPipeline(createDownloadHeadersPipeline(syncTarget))
+          .thenCompose(unused -> scheduler.startPipeline(pipeline));
     }
   }
 
@@ -207,16 +202,16 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
-    final DownloadReceiptsStep downloadReceiptsStep =
-        new DownloadReceiptsStep(ethContext, metricsSystem);
-    final ImportBlocksStep importBlockStep =
-        new ImportBlocksStep(
-            protocolSchedule,
-            protocolContext,
-            attachedValidationPolicy,
-            ommerValidationPolicy,
-            ethContext,
-            fastSyncState.getPivotBlockHeader().get());
+    //    final DownloadReceiptsStep downloadReceiptsStep =
+    //        new DownloadReceiptsStep(ethContext, metricsSystem);
+    //    final ImportBlocksStep importBlockStep =
+    //        new ImportBlocksStep(
+    //            protocolSchedule,
+    //            protocolContext,
+    //            attachedValidationPolicy,
+    //            ommerValidationPolicy,
+    //            ethContext,
+    //            fastSyncState.getPivotBlockHeader().get());
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
@@ -230,11 +225,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
                 "action"),
             true,
             "validatorSyncBlockImport")
-        .thenFlatMap("loadHeaders", loadHeadersStep, downloaderParallelism)
-        .inBatches(headerRequestSize)
-        .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
-        .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
-        .andFinishWith("importBlock", importBlockStep);
+        .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
+        .thenProcessAsync("downloadBodies", downloadBodiesStep, downloaderParallelism)
+        .andFinishWith("importBlock", (ignore) -> {});
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {

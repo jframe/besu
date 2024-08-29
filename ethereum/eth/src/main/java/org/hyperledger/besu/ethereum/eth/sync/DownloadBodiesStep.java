@@ -25,8 +25,12 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class DownloadBodiesStep
     implements Function<List<BlockHeader>, CompletableFuture<List<Block>>> {
+  private static final Logger LOG = LoggerFactory.getLogger(DownloadBodiesStep.class);
 
   private final ProtocolSchedule protocolSchedule;
   private final EthContext ethContext;
@@ -43,6 +47,10 @@ public class DownloadBodiesStep
 
   @Override
   public CompletableFuture<List<Block>> apply(final List<BlockHeader> blockHeaders) {
+    LOG.info(
+        "Download {} bodies starting from {}",
+        blockHeaders.size(),
+        blockHeaders.getFirst() == null ? null : blockHeaders.getFirst().getNumber());
     return CompleteBlocksTask.forHeaders(protocolSchedule, ethContext, blockHeaders, metricsSystem)
         .run();
   }

@@ -141,7 +141,7 @@ public class PipelineChainDownloader implements ChainDownloader {
         || rootCause instanceof InterruptedException
         || rootCause instanceof EthTaskException
         || rootCause instanceof IllegalArgumentException) {
-      LOG.debug(message, error);
+      LOG.info(message, error);
     } else if (rootCause instanceof InvalidBlockException) {
       LOG.warn(message, error);
     } else {

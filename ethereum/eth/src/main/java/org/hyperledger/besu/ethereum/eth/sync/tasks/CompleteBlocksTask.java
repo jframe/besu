@@ -27,7 +27,7 @@ import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.eth.manager.task.AbstractPeerTask.PeerTaskResult;
 import org.hyperledger.besu.ethereum.eth.manager.task.AbstractRetryingPeerTask;
-import org.hyperledger.besu.ethereum.eth.manager.task.GetBodiesFromPeerTask;
+import org.hyperledger.besu.ethereum.eth.manager.task.RetryingGetBlocksFromPeersTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
@@ -145,9 +145,13 @@ public class CompleteBlocksTask extends AbstractRetryingPeerTask<List<Block>> {
         incompleteHeaders.get(0).getNumber());
     return executeSubTask(
         () -> {
-          final GetBodiesFromPeerTask task =
-              GetBodiesFromPeerTask.forHeaders(
-                  protocolSchedule, ethContext, incompleteHeaders, metricsSystem);
+          final RetryingGetBlocksFromPeersTask task =
+              RetryingGetBlocksFromPeersTask.forHeaders(
+                  protocolSchedule,
+                  ethContext,
+                  metricsSystem,
+                  ethContext.getEthPeers().peerCount(),
+                  incompleteHeaders);
           assignedPeer.ifPresent(task::assignPeer);
           return task.run().thenApply(PeerTaskResult::getResult);
         });
