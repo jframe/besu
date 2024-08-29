@@ -112,7 +112,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     } else {
       return scheduler
           .startPipeline(createDownloadHeadersPipeline(syncTarget))
-          .thenCompose(unused -> scheduler.startPipeline(pipeline));
+          .thenCompose(unused -> scheduler.startPipeline(pipeline))
+          .thenCompose(
+              unused -> scheduler.startPipeline(createDownloadReceiptsPipeline(syncTarget)));
     }
   }
 
@@ -202,16 +204,6 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
-    //    final DownloadReceiptsStep downloadReceiptsStep =
-    //        new DownloadReceiptsStep(ethContext, metricsSystem);
-    //    final ImportBlocksStep importBlockStep =
-    //        new ImportBlocksStep(
-    //            protocolSchedule,
-    //            protocolContext,
-    //            attachedValidationPolicy,
-    //            ommerValidationPolicy,
-    //            ethContext,
-    //            fastSyncState.getPivotBlockHeader().get());
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
@@ -227,6 +219,37 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             "validatorSyncBlockImport")
         .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
         .thenProcessAsync("downloadBodies", downloadBodiesStep, downloaderParallelism)
+        .andFinishWith("importBlock", (ignore) -> {});
+  }
+
+  public Pipeline<ValidatorSyncRange> createDownloadReceiptsPipeline(final SyncTarget target) {
+    final int downloaderParallelism = syncConfig.getDownloaderParallelism();
+    final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
+
+    final ValidatorSyncSource validatorSyncSource =
+        new ValidatorSyncSource(
+            getCommonAncestor(target).getNumber(),
+            fastSyncState.getPivotBlockNumber().getAsLong(),
+            false,
+            headerRequestSize);
+    final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
+    final DownloadReceiptsFromHeadersStep downloadReceiptsStep =
+        new DownloadReceiptsFromHeadersStep(ethContext, metricsSystem);
+
+    return PipelineBuilder.createPipelineFrom(
+            "posPivot",
+            validatorSyncSource,
+            downloaderParallelism,
+            metricsSystem.createLabelledCounter(
+                BesuMetricCategory.SYNCHRONIZER,
+                "chain_download_pipeline_processed_total",
+                "Number of entries process by each chain download pipeline stage",
+                "step",
+                "action"),
+            true,
+            "validatorSyncBlockImport")
+        .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
+        .thenProcessAsync("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
         .andFinishWith("importBlock", (ignore) -> {});
   }
 
