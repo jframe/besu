@@ -20,19 +20,14 @@ import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_S
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.NONE;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DETACHED;
 
-import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
-import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointBlockImportStep;
-import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointDownloadBlockStep;
-import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointSource;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.checkpoint.Checkpoint;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeadersValidationStep;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncTarget;
@@ -99,54 +94,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
       final SyncState syncState,
       final SyncTarget syncTarget,
       final Pipeline<?> pipeline) {
-    if (syncState.getCheckpoint().isPresent()) {
-      return scheduler
-          .startPipeline(createDownloadCheckPointPipeline(syncState, syncTarget))
-          .thenCompose(unused -> scheduler.startPipeline(createDownloadHeadersPipeline(syncTarget)))
-          .thenCompose(unused -> scheduler.startPipeline(pipeline));
-    } else {
-      return scheduler
-          .startPipeline(createDownloadHeadersPipeline(syncTarget))
-          .thenCompose(unused -> scheduler.startPipeline(pipeline));
-    }
-  }
-
-  protected Pipeline<Hash> createDownloadCheckPointPipeline(
-      final SyncState syncState, final SyncTarget target) {
-
-    final Checkpoint checkpoint = syncState.getCheckpoint().orElseThrow();
-
-    final BlockHeader checkpointBlockHeader = target.peer().getCheckpointHeader().orElseThrow();
-    final CheckpointSource checkPointSource =
-        new CheckpointSource(
-            syncState,
-            checkpointBlockHeader,
-            protocolSchedule
-                .getByBlockHeader(checkpointBlockHeader)
-                .getBlockHeaderFunctions()
-                .getCheckPointWindowSize(checkpointBlockHeader));
-
-    final CheckpointBlockImportStep checkPointBlockImportStep =
-        new CheckpointBlockImportStep(
-            checkPointSource, checkpoint, protocolContext.getBlockchain());
-
-    final CheckpointDownloadBlockStep checkPointDownloadBlockStep =
-        new CheckpointDownloadBlockStep(protocolSchedule, ethContext, checkpoint, metricsSystem);
-
-    return PipelineBuilder.createPipelineFrom(
-            "fetchCheckpoints",
-            checkPointSource,
-            1,
-            metricsSystem.createLabelledCounter(
-                BesuMetricCategory.SYNCHRONIZER,
-                "chain_download_pipeline_processed_total",
-                "Number of header process by each chain download pipeline stage",
-                "step",
-                "action"),
-            true,
-            "checkpointSync")
-        .thenProcessAsyncOrdered("downloadBlock", checkPointDownloadBlockStep::downloadBlock, 1)
-        .andFinishWith("importBlock", checkPointBlockImportStep);
+    return scheduler
+        .startPipeline(createDownloadHeadersPipeline(syncTarget))
+        .thenCompose(unused -> scheduler.startPipeline(pipeline));
   }
 
   protected Pipeline<ValidatorSyncRange> createDownloadHeadersPipeline(final SyncTarget target) {
