@@ -22,7 +22,9 @@ import org.hyperledger.besu.ethereum.eth.sync.ValidationPolicy;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeaders;
 import org.hyperledger.besu.ethereum.eth.sync.range.TargetRange;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.RetryingGetHeaderFromPeerByNumberTask;
+import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
+import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.util.FutureUtils;
 
@@ -41,8 +43,8 @@ public class DownloadHeadersBackwardsStep
     implements Function<ValidatorSyncRange, CompletableFuture<RangeHeaders>> {
   private static final Logger LOG = LoggerFactory.getLogger(DownloadHeadersBackwardsStep.class);
   private final ProtocolSchedule protocolSchedule;
-  //  private final ProtocolContext protocolContext;
-  //  private final ValidationPolicy validationPolicy;
+  private final ProtocolContext protocolContext;
+  private final ValidationPolicy validationPolicy;
   private final EthContext ethContext;
   private final MetricsSystem metricsSystem;
   private static final int DEFAULT_RETRIES = 5;
@@ -54,8 +56,8 @@ public class DownloadHeadersBackwardsStep
       final EthContext ethContext,
       final MetricsSystem metricsSystem) {
     this.protocolSchedule = protocolSchedule;
-    //    this.protocolContext = protocolContext;
-    //    this.validationPolicy = validationPolicy;
+    this.protocolContext = protocolContext;
+    this.validationPolicy = validationPolicy;
     this.ethContext = ethContext;
     this.metricsSystem = metricsSystem;
   }
@@ -103,13 +105,11 @@ public class DownloadHeadersBackwardsStep
             return;
           }
 
-          //          long parentBlockNumber =
-          //              header.getNumber() > 0 ? header.getNumber() - 1 : 0; // TODO is this
-          // necessary?
-          //          if (!validateHeader(header, headersByBlockNumber.get(parentBlockNumber))) {
-          //            throw new IllegalStateException("Received invalid header: " +
-          // header.getNumber());
-          //          }
+          long parentBlockNumber =
+              header.getNumber() > 0 ? header.getNumber() - 1 : 0; // TODO is this necessary?
+          if (!validateHeader(header, headersByBlockNumber.get(parentBlockNumber))) {
+            throw new IllegalStateException("Received invalid header: " + header.getNumber());
+          }
         });
 
     final BlockHeader startHeader = headersByBlockNumber.get(validatorSyncRange.lowerBlockNumber());
@@ -133,10 +133,10 @@ public class DownloadHeadersBackwardsStep
         && header.getNumber() <= validatorSyncRange.upperBlockNumber();
   }
 
-  //  private boolean validateHeader(final BlockHeader header, final BlockHeader parent) {
-  //    final ProtocolSpec protocolSpec = protocolSchedule.getByBlockHeader(header);
-  //    final BlockHeaderValidator blockHeaderValidator = protocolSpec.getBlockHeaderValidator();
-  //    return blockHeaderValidator.validateHeader(
-  //        header, parent, protocolContext, validationPolicy.getValidationModeForNextBlock());
-  //  }
+  private boolean validateHeader(final BlockHeader header, final BlockHeader parent) {
+    final ProtocolSpec protocolSpec = protocolSchedule.getByBlockHeader(header);
+    final BlockHeaderValidator blockHeaderValidator = protocolSpec.getBlockHeaderValidator();
+    return blockHeaderValidator.validateHeader(
+        header, parent, protocolContext, validationPolicy.getValidationModeForNextBlock());
+  }
 }
