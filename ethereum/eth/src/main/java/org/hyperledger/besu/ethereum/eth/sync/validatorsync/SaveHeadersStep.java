@@ -15,11 +15,11 @@
 package org.hyperledger.besu.ethereum.eth.sync.validatorsync;
 
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeaders;
 
 import java.util.function.Consumer;
 
-public class SaveHeadersStep implements Consumer<BlockHeader> {
+public class SaveHeadersStep implements Consumer<RangeHeaders> {
 
   private final MutableBlockchain blockchainStorage;
 
@@ -28,7 +28,7 @@ public class SaveHeadersStep implements Consumer<BlockHeader> {
   }
 
   @Override
-  public void accept(final BlockHeader blockHeader) {
-    blockchainStorage.storeHeader(blockHeader);
+  public void accept(final RangeHeaders rangeHeaders) {
+    rangeHeaders.getHeadersToImport().forEach(blockchainStorage::storeHeader);
   }
 }

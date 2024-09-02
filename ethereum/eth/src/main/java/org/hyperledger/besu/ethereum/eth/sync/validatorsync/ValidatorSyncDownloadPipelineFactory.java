@@ -29,7 +29,6 @@ import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.ImportBlocksStep;
-import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeadersValidationStep;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncTarget;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
@@ -113,8 +112,6 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     final DownloadHeadersBackwardsStep downloadHeadersStep =
         new DownloadHeadersBackwardsStep(
             protocolSchedule, protocolContext, detachedValidationPolicy, ethContext, metricsSystem);
-    final RangeHeadersValidationStep validateHeadersJoinUpStep =
-        new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
     final SaveHeadersStep saveHeadersStep = new SaveHeadersStep(protocolContext.getBlockchain());
 
     return PipelineBuilder.createPipelineFrom(
@@ -130,7 +127,6 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             true,
             "validatorSyncHeaderDownload")
         .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
-        .thenFlatMap("validateHeaders", validateHeadersJoinUpStep, downloaderParallelism)
         .andFinishWith("saveHeader", saveHeadersStep);
   }
 

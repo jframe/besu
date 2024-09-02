@@ -99,20 +99,22 @@ public class DownloadHeadersBackwardsStep
                 "Received header outside of expected range: " + header.getNumber());
           }
 
+          long parentBlockNumber =
+              header.getNumber() > 0 ? header.getNumber() - 1 : 0; // TODO is this necessary?
+
           // skip the first header for validation as we don't have the parent header, this will be
           // validated by RangeHeadersValidationStep
-          if (header.getNumber() == validatorSyncRange.lowerBlockNumber()) {
+          if (parentBlockNumber <= validatorSyncRange.lowerBlockNumber()) {
             return;
           }
 
-          long parentBlockNumber =
-              header.getNumber() > 0 ? header.getNumber() - 1 : 0; // TODO is this necessary?
           if (!validateHeader(header, headersByBlockNumber.get(parentBlockNumber))) {
             throw new IllegalStateException("Received invalid header: " + header.getNumber());
           }
         });
 
-    final BlockHeader startHeader = headersByBlockNumber.get(validatorSyncRange.lowerBlockNumber());
+    final BlockHeader startHeader =
+        headersByBlockNumber.get(validatorSyncRange.lowerBlockNumber() + 1);
     final Optional<BlockHeader> endHeader =
         Optional.ofNullable(headersByBlockNumber.get(validatorSyncRange.upperBlockNumber()));
 
@@ -121,8 +123,8 @@ public class DownloadHeadersBackwardsStep
     final List<BlockHeader> headersToImport =
         headers.stream()
             .sorted(Comparator.comparing(ProcessableBlockHeader::getNumber))
-            .collect(Collectors.toList())
-            .subList(1, headers.size());
+            .collect(Collectors.toList());
+    //            .subList(1, headers.size());
 
     return new RangeHeaders(new TargetRange(startHeader, endHeader), headersToImport);
   }
