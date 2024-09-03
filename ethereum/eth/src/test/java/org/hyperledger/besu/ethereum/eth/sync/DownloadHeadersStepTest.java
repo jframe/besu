@@ -28,6 +28,7 @@ import org.hyperledger.besu.ethereum.eth.manager.EthProtocolManagerTestUtil;
 import org.hyperledger.besu.ethereum.eth.manager.RespondingEthPeer;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeaders;
 import org.hyperledger.besu.ethereum.eth.sync.range.SyncTargetRange;
+import org.hyperledger.besu.ethereum.eth.sync.range.TargetRange;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
@@ -36,6 +37,7 @@ import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.BeforeAll;
@@ -52,7 +54,7 @@ public class DownloadHeadersStepTest {
   private final EthPeer syncTarget = mock(EthPeer.class);
   private EthProtocolManager ethProtocolManager;
   private DownloadHeadersStep downloader;
-  private SyncTargetRange checkpointRange;
+  private TargetRange checkpointRange;
 
   @BeforeAll
   public static void setUpClass() {
@@ -76,14 +78,14 @@ public class DownloadHeadersStepTest {
             new NoOpMetricsSystem());
 
     checkpointRange =
-        new SyncTargetRange(
-            syncTarget, blockchain.getBlockHeader(1).get(), blockchain.getBlockHeader(10).get());
+        new TargetRange(
+           blockchain.getBlockHeader(1).get(), Optional.of(blockchain.getBlockHeader(10).get()));
   }
 
   @Test
   public void shouldRetrieveHeadersForCheckpointRange() {
     final RespondingEthPeer peer = EthProtocolManagerTestUtil.createPeer(ethProtocolManager, 1000);
-    final CompletableFuture<RangeHeaders> result = downloader.apply(checkpointRange);
+    final CompletableFuture<RangeHeaders> result = downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
 
     peer.respond(blockchainResponder(blockchain));
 
@@ -96,7 +98,7 @@ public class DownloadHeadersStepTest {
   public void shouldCancelRequestToPeerWhenReturnedFutureIsCancelled() {
     final RespondingEthPeer peer = EthProtocolManagerTestUtil.createPeer(ethProtocolManager, 1000);
 
-    final CompletableFuture<RangeHeaders> result = this.downloader.apply(checkpointRange);
+    final CompletableFuture<RangeHeaders> result = this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
 
     result.cancel(true);
 
@@ -109,11 +111,11 @@ public class DownloadHeadersStepTest {
 
   @Test
   public void shouldReturnOnlyEndHeaderWhenCheckpointRangeHasLengthOfOne() {
-    final SyncTargetRange checkpointRange =
-        new SyncTargetRange(
-            syncTarget, blockchain.getBlockHeader(3).get(), blockchain.getBlockHeader(4).get());
+    final TargetRange checkpointRange =
+        new TargetRange(
+            blockchain.getBlockHeader(3).get(), Optional.of(blockchain.getBlockHeader(4).get()));
 
-    final CompletableFuture<RangeHeaders> result = this.downloader.apply(checkpointRange);
+    final CompletableFuture<RangeHeaders> result = this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
 
     assertThat(result)
         .isCompletedWithValue(new RangeHeaders(checkpointRange, headersFromChain(4, 4)));
@@ -122,10 +124,10 @@ public class DownloadHeadersStepTest {
   @Test
   public void shouldGetRemainingHeadersWhenRangeHasNoEnd() {
     final RespondingEthPeer peer = EthProtocolManagerTestUtil.createPeer(ethProtocolManager, 1000);
-    final SyncTargetRange checkpointRange =
-        new SyncTargetRange(peer.getEthPeer(), blockchain.getBlockHeader(3).get());
+    final TargetRange checkpointRange =
+        new TargetRange(blockchain.getBlockHeader(3).get(), Optional.empty());
 
-    final CompletableFuture<RangeHeaders> result = this.downloader.apply(checkpointRange);
+    final CompletableFuture<RangeHeaders> result = this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
 
     peer.respond(blockchainResponder(blockchain));
 

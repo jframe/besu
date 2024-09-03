@@ -22,12 +22,14 @@ import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DE
 
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
+import org.hyperledger.besu.ethereum.eth.sync.fastsync.ImportBlocksStep;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncTarget;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
@@ -35,12 +37,17 @@ import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
+import org.hyperledger.besu.services.pipeline.Pipe;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFactory {
+  private static final Logger LOG = LoggerFactory.getLogger(ValidatorSyncDownloadPipelineFactory.class);
   protected final SynchronizerConfiguration syncConfig;
   protected final ProtocolSchedule protocolSchedule;
   protected final ProtocolContext protocolContext;
@@ -50,6 +57,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   protected final FastSyncValidationPolicy attachedValidationPolicy;
   protected final FastSyncValidationPolicy detachedValidationPolicy;
   protected final FastSyncValidationPolicy ommerValidationPolicy;
+  private final Pipe<BlockWithReceipts> blockImportPipe;
 
   public ValidatorSyncDownloadPipelineFactory(
       final SynchronizerConfiguration syncConfig,
@@ -85,6 +93,16 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             LIGHT_DETACHED_ONLY,
             DETACHED_ONLY,
             fastSyncValidationCounter);
+    blockImportPipe =
+        PipelineBuilder.createPipe(
+            10_000,
+            "blocksDownloaded",
+            metricsSystem.createLabelledCounter(
+                BesuMetricCategory.SYNCHRONIZER,
+                "chain_import_pipeline_processed_total",
+                "Number of entries process by each chain block import pipeline stage",
+                "step",
+                "action"));
   }
 
   @Override
@@ -95,7 +113,11 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
       final Pipeline<?> pipeline) {
     return scheduler
         .startPipeline(createDownloadHeadersPipeline(syncTarget))
-        .thenCompose(unused -> scheduler.startPipeline(pipeline));
+        .thenCompose(
+            unused ->
+                CompletableFuture.allOf(
+                    scheduler.startPipeline(createBlockImportPipeline()),
+                    scheduler.startPipeline(pipeline)));
   }
 
   protected Pipeline<ValidatorSyncRange> createDownloadHeadersPipeline(final SyncTarget target) {
@@ -143,14 +165,6 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesAndReceiptsStep downloadBodiesAndReceiptsStep =
         new DownloadBodiesAndReceiptsStep(protocolSchedule, ethContext, metricsSystem);
-    //    final ImportBlocksStep importBlockStep =
-    //        new ImportBlocksStep(
-    //            protocolSchedule,
-    //            protocolContext,
-    //            attachedValidationPolicy,
-    //            ommerValidationPolicy,
-    //            ethContext,
-    //            fastSyncState.getPivotBlockHeader().get());
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
@@ -163,11 +177,42 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
                 "step",
                 "action"),
             true,
-            "validatorSyncBlockImport")
+            "validatorSyncChainDownload")
         .thenProcessAsyncOrdered("loadHeaders", loadHeadersStep, downloaderParallelism)
         .thenProcessAsyncOrdered(
             "downloadBodiesAndReceipts", downloadBodiesAndReceiptsStep, downloaderParallelism)
-        .andFinishWith("importBlock", (ignore) -> {});
+        .andFinishWith("importBlock", blocks -> blocks.forEach(blockImportPipe::put));
+  }
+
+  private Pipeline<?> createBlockImportPipeline() {
+    final int downloaderParallelism = syncConfig.getDownloaderParallelism();
+
+    final ImportBlocksStep importBlockStep =
+        new ImportBlocksStep(
+            protocolSchedule,
+            protocolContext,
+            attachedValidationPolicy,
+            ommerValidationPolicy,
+            ethContext,
+            fastSyncState.getPivotBlockHeader().get());
+
+    return PipelineBuilder.createPipeline(
+            "blocksDownloaded",
+            blockImportPipe,
+            downloaderParallelism,
+            metricsSystem.createLabelledCounter(
+                BesuMetricCategory.SYNCHRONIZER,
+                "chain_import_pipeline_processed_total",
+                "Number of entries process by each chain block import pipeline stage",
+                "step",
+                "action"),
+            true,
+            "validatorSyncBlockImport")
+            .inBatches(1000)
+        .andFinishWith("importBlock", blockWithReceipts -> {
+          LOG.info("Queue size {}, block list size {}", blockImportPipe.size(), blockWithReceipts.size());
+          importBlockStep.accept(blockWithReceipts);
+        });
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {

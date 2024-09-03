@@ -140,6 +140,38 @@ public class PipelineBuilder<I, T> {
    */
   public static <T> PipelineBuilder<T, T> createPipeline(
       final String sourceName,
+      final Pipe<T> pipe,
+      final int bufferSize,
+      final LabelledMetric<Counter> outputCounter,
+      final boolean tracingEnabled,
+      final String pipelineName) {
+    return new PipelineBuilder<>(
+        pipe,
+        emptyList(),
+        singleton(pipe),
+        sourceName,
+        pipe,
+        bufferSize,
+        outputCounter,
+        tracingEnabled,
+        pipelineName);
+  }
+
+  /**
+   * Create a new pipeline that processes inputs added to <i>pipe</i>. The pipeline completes when
+   * <i>pipe</i> is closed and the last item has been reached the end of the pipeline.
+   *
+   * @param <T> the type of items input into the pipeline.
+   * @param sourceName the name of this stage. Used as the label for the output count metric.
+   * @param bufferSize the number of items to be buffered between each stage in the pipeline.
+   * @param outputCounter the counter to increment for each output of a stage. Must have a single
+   *     label which will be filled with the stage name.
+   * @param tracingEnabled whether this pipeline should be traced
+   * @param pipelineName the name of the pipeline for tracing purposes
+   * @return a {@link PipelineBuilder} ready to extend the pipeline with additional stages.
+   */
+  public static <T> PipelineBuilder<T, T> createPipeline(
+      final String sourceName,
       final int bufferSize,
       final LabelledMetric<Counter> outputCounter,
       final boolean tracingEnabled,
@@ -412,7 +444,7 @@ public class PipelineBuilder<I, T> {
     return newList;
   }
 
-  private static <O> Pipe<O> createPipe(
+  public static <O> Pipe<O> createPipe(
       final int newBufferSize,
       final String stageName,
       final LabelledMetric<Counter> outputCounter) {

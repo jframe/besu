@@ -92,6 +92,10 @@ public class Pipe<T> implements ReadPipe<T>, WritePipe<T> {
     return queue.remainingCapacity() > 0 && isOpen();
   }
 
+  public int size() {
+    return queue.size();
+  }
+
   @Override
   public void close() {
     closed.set(true);

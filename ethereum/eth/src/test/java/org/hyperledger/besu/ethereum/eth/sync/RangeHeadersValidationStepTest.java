@@ -29,13 +29,14 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeaders;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeadersValidationStep;
-import org.hyperledger.besu.ethereum.eth.sync.range.SyncTargetRange;
+import org.hyperledger.besu.ethereum.eth.sync.range.TargetRange;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.exceptions.InvalidBlockException;
 import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
@@ -60,7 +61,7 @@ public class RangeHeadersValidationStepTest {
   private final BlockHeader firstHeader = gen.header(11);
   private final RangeHeaders rangeHeaders =
       new RangeHeaders(
-          new SyncTargetRange(syncTarget, rangeStart, rangeEnd),
+          new TargetRange(rangeStart, Optional.of(rangeEnd)),
           asList(firstHeader, gen.header(12), rangeEnd));
 
   public void setUp() {
@@ -116,7 +117,7 @@ public class RangeHeadersValidationStepTest {
     validationStep =
         new RangeHeadersValidationStep(protocolSchedule, protocolContext, validationPolicy);
     var emptyRangeHeaders =
-        new RangeHeaders(new SyncTargetRange(syncTarget, rangeStart, rangeEnd), List.of());
+        new RangeHeaders(new TargetRange(rangeStart, Optional.of(rangeEnd)), List.of());
 
     final Stream<BlockHeader> result = validationStep.apply(emptyRangeHeaders);
     assertThat(result).isEmpty();
