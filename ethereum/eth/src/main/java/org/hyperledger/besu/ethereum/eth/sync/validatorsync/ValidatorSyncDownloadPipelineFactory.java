@@ -28,7 +28,6 @@ import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.ImportBlocksStep;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncTarget;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
@@ -144,14 +143,14 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesAndReceiptsStep downloadBodiesAndReceiptsStep =
         new DownloadBodiesAndReceiptsStep(protocolSchedule, ethContext, metricsSystem);
-    final ImportBlocksStep importBlockStep =
-        new ImportBlocksStep(
-            protocolSchedule,
-            protocolContext,
-            attachedValidationPolicy,
-            ommerValidationPolicy,
-            ethContext,
-            fastSyncState.getPivotBlockHeader().get());
+    //    final ImportBlocksStep importBlockStep =
+    //        new ImportBlocksStep(
+    //            protocolSchedule,
+    //            protocolContext,
+    //            attachedValidationPolicy,
+    //            ommerValidationPolicy,
+    //            ethContext,
+    //            fastSyncState.getPivotBlockHeader().get());
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
@@ -168,7 +167,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .thenProcessAsyncOrdered("loadHeaders", loadHeadersStep, downloaderParallelism)
         .thenProcessAsyncOrdered(
             "downloadBodiesAndReceipts", downloadBodiesAndReceiptsStep, downloaderParallelism)
-        .andFinishWith("importBlock", importBlockStep);
+        .andFinishWith("importBlock", (ignore) -> {});
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {
