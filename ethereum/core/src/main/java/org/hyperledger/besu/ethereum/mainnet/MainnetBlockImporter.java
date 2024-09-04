@@ -20,15 +20,31 @@ import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockImporter;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult.BlockImportStatus;
+import org.hyperledger.besu.metrics.BesuMetricCategory;
+import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 
 import java.util.List;
 
 public class MainnetBlockImporter implements BlockImporter {
 
   final BlockValidator blockValidator;
+  private final OperationTimer importBlockValidationTimer;
+  private final OperationTimer importBlockAppendTimer;
 
-  public MainnetBlockImporter(final BlockValidator blockValidator) {
+  public MainnetBlockImporter(
+      final BlockValidator blockValidator, final MetricsSystem metricsSystem) {
     this.blockValidator = blockValidator;
+    this.importBlockValidationTimer =
+        metricsSystem.createTimer(
+            BesuMetricCategory.SYNCHRONIZER,
+            "importblock_validation_time",
+            "Time taken to validate block during block import");
+    this.importBlockAppendTimer =
+        metricsSystem.createTimer(
+            BesuMetricCategory.SYNCHRONIZER,
+            "importblock_append_time",
+            "Time taken to append block during block import");
   }
 
   @Override
@@ -63,15 +79,22 @@ public class MainnetBlockImporter implements BlockImporter {
       final List<TransactionReceipt> receipts,
       final HeaderValidationMode headerValidationMode,
       final HeaderValidationMode ommerValidationMode) {
+    final boolean isBlockValid;
+    try (final var ignored = importBlockValidationTimer.startTimer()) {
+      isBlockValid =
+          blockValidator.fastBlockValidation(
+              context,
+              block,
+              receipts,
+              block.getBody().getRequests(),
+              headerValidationMode,
+              ommerValidationMode);
+    }
 
-    if (blockValidator.fastBlockValidation(
-        context,
-        block,
-        receipts,
-        block.getBody().getRequests(),
-        headerValidationMode,
-        ommerValidationMode)) {
-      context.getBlockchain().appendBlock(block, receipts);
+    if (isBlockValid) {
+      try (final var ignored = importBlockAppendTimer.startTimer()) {
+        context.getBlockchain().appendBlock(block, receipts);
+      }
       return new BlockImportResult(true);
     }
 

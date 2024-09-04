@@ -151,7 +151,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             attachedValidationPolicy,
             ommerValidationPolicy,
             ethContext,
-            fastSyncState.getPivotBlockHeader().get());
+            fastSyncState.getPivotBlockHeader().get(),
+            metricsSystem);
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",

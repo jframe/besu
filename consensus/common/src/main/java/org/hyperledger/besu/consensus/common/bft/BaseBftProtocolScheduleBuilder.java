@@ -44,6 +44,7 @@ import java.util.function.Function;
 public abstract class BaseBftProtocolScheduleBuilder {
 
   private static final BigInteger DEFAULT_CHAIN_ID = BigInteger.ONE;
+  private MetricsSystem metricsSystem;
 
   /** Default constructor. */
   protected BaseBftProtocolScheduleBuilder() {}
@@ -75,6 +76,7 @@ public abstract class BaseBftProtocolScheduleBuilder {
       final BadBlockManager badBlockManager,
       final boolean isParallelTxProcessingEnabled,
       final MetricsSystem metricsSystem) {
+    this.metricsSystem = metricsSystem;
     final Map<Long, Function<ProtocolSpecBuilder, ProtocolSpecBuilder>> specMap = new HashMap<>();
 
     forksSchedule
@@ -131,7 +133,8 @@ public abstract class BaseBftProtocolScheduleBuilder {
             feeMarket -> createBlockHeaderRuleset(configOptions, feeMarket))
         .blockBodyValidatorBuilder(MainnetBlockBodyValidator::new)
         .blockValidatorBuilder(MainnetProtocolSpecs.blockValidatorBuilder())
-        .blockImporterBuilder(MainnetBlockImporter::new)
+        .blockImporterBuilder(
+            blockValidator -> new MainnetBlockImporter(blockValidator, metricsSystem))
         .difficultyCalculator((time, parent, protocolContext) -> BigInteger.ONE)
         .skipZeroBlockRewards(true)
         .blockHeaderFunctions(BftBlockHeaderFunctions.forOnchainBlock(bftExtraDataCodec))

@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.BlockValidator;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,7 +45,7 @@ public class MainnetBlockImporterTest {
 
   @BeforeEach
   public void setup() {
-    blockImporter = new MainnetBlockImporter(blockValidator);
+    blockImporter = new MainnetBlockImporter(blockValidator, new NoOpMetricsSystem());
     when(context.getBlockchain()).thenReturn(blockchain);
     when(block.getHash()).thenReturn(hash);
   }

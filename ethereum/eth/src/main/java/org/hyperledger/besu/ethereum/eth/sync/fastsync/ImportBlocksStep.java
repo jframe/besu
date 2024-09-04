@@ -23,6 +23,9 @@ import org.hyperledger.besu.ethereum.eth.sync.ValidationPolicy;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.exceptions.InvalidBlockException;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
+import org.hyperledger.besu.metrics.BesuMetricCategory;
+import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -42,6 +45,7 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   private final ValidationPolicy headerValidationPolicy;
   private final ValidationPolicy ommerValidationPolicy;
   private final EthContext ethContext;
+  private final OperationTimer importBlocksTimer;
   private long accumulatedTime = 0L;
   private OptionalLong logStartBlock = OptionalLong.empty();
   private final BlockHeader pivotHeader;
@@ -52,27 +56,37 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
       final ValidationPolicy headerValidationPolicy,
       final ValidationPolicy ommerValidationPolicy,
       final EthContext ethContext,
-      final BlockHeader pivotHeader) {
+      final BlockHeader pivotHeader,
+      final MetricsSystem metricsSystem) {
     this.protocolSchedule = protocolSchedule;
     this.protocolContext = protocolContext;
     this.headerValidationPolicy = headerValidationPolicy;
     this.ommerValidationPolicy = ommerValidationPolicy;
     this.ethContext = ethContext;
     this.pivotHeader = pivotHeader;
+    importBlocksTimer =
+        metricsSystem.createTimer(
+            BesuMetricCategory.SYNCHRONIZER,
+            "importblock_total_time",
+            "Time taken to import blocks during fast sync");
   }
 
   @Override
   public void accept(final List<BlockWithReceipts> blocksWithReceipts) {
     final long startTime = System.nanoTime();
-    for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
-      if (!importBlock(blockWithReceipts)) {
-        throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
+
+    try (final var ignored = importBlocksTimer.startTimer()) {
+      for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
+        if (!importBlock(blockWithReceipts)) {
+          throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
+        }
+        LOG.atTrace()
+            .setMessage("Imported block {}")
+            .addArgument(blockWithReceipts.getBlock()::toLogString)
+            .log();
       }
-      LOG.atTrace()
-          .setMessage("Imported block {}")
-          .addArgument(blockWithReceipts.getBlock()::toLogString)
-          .log();
     }
+
     if (logStartBlock.isEmpty()) {
       logStartBlock = OptionalLong.of(blocksWithReceipts.get(0).getNumber());
     }

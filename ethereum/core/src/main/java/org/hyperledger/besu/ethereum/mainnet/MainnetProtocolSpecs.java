@@ -163,7 +163,8 @@ public abstract class MainnetProtocolSpecs {
                 ? new MainnetParallelBlockProcessor.ParallelBlockProcessorBuilder(metricsSystem)
                 : MainnetBlockProcessor::new)
         .blockValidatorBuilder(MainnetProtocolSpecs.blockValidatorBuilder())
-        .blockImporterBuilder(MainnetBlockImporter::new)
+        .blockImporterBuilder(
+            blockValidator -> new MainnetBlockImporter(blockValidator, metricsSystem))
         .blockHeaderFunctions(new MainnetBlockHeaderFunctions())
         .miningBeneficiaryCalculator(BlockHeader::getCoinbase)
         .evmConfiguration(evmConfiguration)

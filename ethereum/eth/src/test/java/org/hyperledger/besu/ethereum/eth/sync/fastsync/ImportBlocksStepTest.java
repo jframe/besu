@@ -35,6 +35,7 @@ import org.hyperledger.besu.ethereum.eth.sync.tasks.exceptions.InvalidBlockExcep
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
 import java.util.List;
 
@@ -72,7 +73,8 @@ public class ImportBlocksStepTest {
             validationPolicy,
             ommerValidationPolicy,
             null,
-            pivotHeader);
+            pivotHeader,
+            new NoOpMetricsSystem());
   }
 
   @Test

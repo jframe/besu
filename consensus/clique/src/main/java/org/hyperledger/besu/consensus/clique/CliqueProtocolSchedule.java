@@ -50,6 +50,7 @@ import com.google.common.annotations.VisibleForTesting;
 public class CliqueProtocolSchedule {
 
   private static final BigInteger DEFAULT_CHAIN_ID = BigInteger.valueOf(4);
+  private static MetricsSystem metricsSystem;
 
   /** Default constructor. */
   CliqueProtocolSchedule() {}
@@ -148,6 +149,7 @@ public class CliqueProtocolSchedule {
       final BadBlockManager badBlockManager,
       final boolean isParallelTxProcessingEnabled,
       final MetricsSystem metricsSystem) {
+    CliqueProtocolSchedule.metricsSystem = metricsSystem;
     return create(
         config,
         forksSchedule,
@@ -179,7 +181,8 @@ public class CliqueProtocolSchedule {
                     epochManager, secondsBetweenBlocks, createEmptyBlocks, baseFeeMarket))
         .blockBodyValidatorBuilder(MainnetBlockBodyValidator::new)
         .blockValidatorBuilder(MainnetProtocolSpecs.blockValidatorBuilder())
-        .blockImporterBuilder(MainnetBlockImporter::new)
+        .blockImporterBuilder(
+            blockValidator -> new MainnetBlockImporter(blockValidator, metricsSystem))
         .difficultyCalculator(new CliqueDifficultyCalculator(localNodeAddress))
         .blockReward(Wei.ZERO)
         .skipZeroBlockRewards(true)
