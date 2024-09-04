@@ -64,7 +64,7 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
     this.ommerValidationPolicy = ommerValidationPolicy;
     this.ethContext = ethContext;
     this.pivotHeader = pivotHeader;
-    importBlocksTimer =
+    this.importBlocksTimer =
         metricsSystem.createTimer(
             BesuMetricCategory.SYNCHRONIZER,
             "importblock_total_time",

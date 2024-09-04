@@ -23,7 +23,10 @@ import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteBlocksTask;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.GetReceiptsForHeadersTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
+import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
+import org.hyperledger.besu.plugin.services.metrics.OperationTimer.TimingContext;
 
 import java.util.List;
 import java.util.Map;
@@ -40,6 +43,7 @@ public class DownloadBodiesAndReceiptsStep
   private final ProtocolSchedule protocolSchedule;
   private final EthContext ethContext;
   private final MetricsSystem metricsSystem;
+  private final OperationTimer downloadBlocksTimer;
 
   public DownloadBodiesAndReceiptsStep(
       final ProtocolSchedule protocolSchedule,
@@ -48,6 +52,11 @@ public class DownloadBodiesAndReceiptsStep
     this.protocolSchedule = protocolSchedule;
     this.ethContext = ethContext;
     this.metricsSystem = metricsSystem;
+    this.downloadBlocksTimer =
+        metricsSystem.createTimer(
+            BesuMetricCategory.SYNCHRONIZER,
+            "downloadblock_total_time",
+            "Time taken to download block body and receipts");
   }
 
   @Override
@@ -60,10 +69,11 @@ public class DownloadBodiesAndReceiptsStep
     final CompletableFuture<Map<BlockHeader, List<TransactionReceipt>>> downloadReceipts =
         ethScheduler.scheduleSyncWorkerTask(
             GetReceiptsForHeadersTask.forHeaders(ethContext, blockHeaders, metricsSystem));
-
+    final TimingContext timingContext = downloadBlocksTimer.startTimer();
     return downloadBlocks.thenCombine(
         downloadReceipts,
         (blockList, receiptsMap) -> {
+          timingContext.stopTimer();
           LOG.info(
               "Downloaded {} blocks and receipts for headers starting from {}",
               blockHeaders.size(),
