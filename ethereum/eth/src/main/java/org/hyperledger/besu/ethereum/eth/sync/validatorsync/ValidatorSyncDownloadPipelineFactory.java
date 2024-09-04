@@ -40,14 +40,17 @@ import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.services.pipeline.Pipe;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFactory {
-  private static final Logger LOG = LoggerFactory.getLogger(ValidatorSyncDownloadPipelineFactory.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(ValidatorSyncDownloadPipelineFactory.class);
   protected final SynchronizerConfiguration syncConfig;
   protected final ProtocolSchedule protocolSchedule;
   protected final ProtocolContext protocolContext;
@@ -57,7 +60,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   protected final FastSyncValidationPolicy attachedValidationPolicy;
   protected final FastSyncValidationPolicy detachedValidationPolicy;
   protected final FastSyncValidationPolicy ommerValidationPolicy;
-  private final Pipe<BlockWithReceipts> blockImportPipe;
+  private final Pipe<List<BlockWithReceipts>> blockImportPipe;
 
   public ValidatorSyncDownloadPipelineFactory(
       final SynchronizerConfiguration syncConfig,
@@ -181,7 +184,12 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .thenProcessAsyncOrdered("loadHeaders", loadHeadersStep, downloaderParallelism)
         .thenProcessAsyncOrdered(
             "downloadBodiesAndReceipts", downloadBodiesAndReceiptsStep, downloaderParallelism)
-        .andFinishWith("importBlock", blocks -> blocks.forEach(blockImportPipe::put));
+        .andFinishWith(
+            "importBlock",
+            b -> {
+              LOG.info("blockImport");
+              blockImportPipe.put(b);
+            });
   }
 
   private Pipeline<?> createBlockImportPipeline() {
@@ -208,11 +216,15 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
                 "action"),
             true,
             "validatorSyncBlockImport")
-            .inBatches(1000)
-        .andFinishWith("importBlock", blockWithReceipts -> {
-          LOG.info("Queue size {}, block list size {}", blockImportPipe.size(), blockWithReceipts.size());
-          importBlockStep.accept(blockWithReceipts);
-        });
+        .andFinishWith(
+            "importBlock",
+            blockWithReceipts -> {
+              LOG.info(
+                  "Queue size {}, block list size {}",
+                  blockImportPipe.size(),
+                  blockWithReceipts.size());
+              importBlockStep.accept(blockWithReceipts);
+            });
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {

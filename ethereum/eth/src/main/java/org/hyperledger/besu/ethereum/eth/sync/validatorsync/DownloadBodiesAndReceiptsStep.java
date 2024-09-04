@@ -52,6 +52,10 @@ public class DownloadBodiesAndReceiptsStep
 
   @Override
   public CompletableFuture<List<BlockWithReceipts>> apply(final List<BlockHeader> blockHeaders) {
+    LOG.info(
+        "Downloading {} blocks and receipts for headers starting from {}",
+        blockHeaders.size(),
+        blockHeaders.getFirst());
     final EthScheduler ethScheduler = ethContext.getScheduler();
     final CompletableFuture<List<Block>> downloadBlocks =
         ethScheduler.scheduleSyncWorkerTask(
@@ -64,11 +68,6 @@ public class DownloadBodiesAndReceiptsStep
     return downloadBlocks.thenCombine(
         downloadReceipts,
         (blockList, receiptsMap) -> {
-          LOG.info(
-              "Downloaded {} blocks and receipts for headers starting from {}",
-              blockHeaders.size(),
-              blockHeaders.getFirst());
-
           // Combine the results of both tasks
           return blockList.stream()
               .map(block -> new BlockWithReceipts(block, receiptsMap.get(block.getHeader())))

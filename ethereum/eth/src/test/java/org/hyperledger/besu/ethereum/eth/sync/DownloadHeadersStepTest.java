@@ -79,13 +79,14 @@ public class DownloadHeadersStepTest {
 
     checkpointRange =
         new TargetRange(
-           blockchain.getBlockHeader(1).get(), Optional.of(blockchain.getBlockHeader(10).get()));
+            blockchain.getBlockHeader(1).get(), Optional.of(blockchain.getBlockHeader(10).get()));
   }
 
   @Test
   public void shouldRetrieveHeadersForCheckpointRange() {
     final RespondingEthPeer peer = EthProtocolManagerTestUtil.createPeer(ethProtocolManager, 1000);
-    final CompletableFuture<RangeHeaders> result = downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
+    final CompletableFuture<RangeHeaders> result =
+        downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
 
     peer.respond(blockchainResponder(blockchain));
 
@@ -98,7 +99,8 @@ public class DownloadHeadersStepTest {
   public void shouldCancelRequestToPeerWhenReturnedFutureIsCancelled() {
     final RespondingEthPeer peer = EthProtocolManagerTestUtil.createPeer(ethProtocolManager, 1000);
 
-    final CompletableFuture<RangeHeaders> result = this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
+    final CompletableFuture<RangeHeaders> result =
+        this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
 
     result.cancel(true);
 
@@ -115,7 +117,8 @@ public class DownloadHeadersStepTest {
         new TargetRange(
             blockchain.getBlockHeader(3).get(), Optional.of(blockchain.getBlockHeader(4).get()));
 
-    final CompletableFuture<RangeHeaders> result = this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
+    final CompletableFuture<RangeHeaders> result =
+        this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
 
     assertThat(result)
         .isCompletedWithValue(new RangeHeaders(checkpointRange, headersFromChain(4, 4)));
@@ -127,7 +130,8 @@ public class DownloadHeadersStepTest {
     final TargetRange checkpointRange =
         new TargetRange(blockchain.getBlockHeader(3).get(), Optional.empty());
 
-    final CompletableFuture<RangeHeaders> result = this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
+    final CompletableFuture<RangeHeaders> result =
+        this.downloader.apply(new SyncTargetRange(syncTarget, checkpointRange));
 
     peer.respond(blockchainResponder(blockchain));
 
