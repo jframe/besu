@@ -32,8 +32,11 @@ import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
 import org.hyperledger.besu.evm.log.LogsBloomFilter;
 
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.IntStream;
 
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 
@@ -52,6 +55,11 @@ public final class BodyValidation {
     return new SimpleMerklePatriciaTrie<>(b -> b);
   }
 
+  private static final Cache<Integer, Hash> transactionsRootCache =
+      CacheBuilder.newBuilder().recordStats().maximumSize(1000L).build();
+  private static final Cache<Integer, Hash> receiptsRootCache =
+      CacheBuilder.newBuilder().recordStats().maximumSize(1000L).build();
+
   /**
    * Generates the transaction root for a list of transactions
    *
@@ -59,17 +67,25 @@ public final class BodyValidation {
    * @return the transaction root
    */
   public static Hash transactionsRoot(final List<Transaction> transactions) {
-    final MerkleTrie<Bytes, Bytes> trie = trie();
+    try {
+      return transactionsRootCache.get(
+          transactions.hashCode(),
+          () -> {
+            final MerkleTrie<Bytes, Bytes> trie = trie();
 
-    IntStream.range(0, transactions.size())
-        .forEach(
-            i ->
-                trie.put(
-                    indexKey(i),
-                    TransactionEncoder.encodeOpaqueBytes(
-                        transactions.get(i), EncodingContext.BLOCK_BODY)));
+            IntStream.range(0, transactions.size())
+                .forEach(
+                    i ->
+                        trie.put(
+                            indexKey(i),
+                            TransactionEncoder.encodeOpaqueBytes(
+                                transactions.get(i), EncodingContext.BLOCK_BODY)));
 
-    return Hash.wrap(trie.getRootHash());
+            return Hash.wrap(trie.getRootHash());
+          });
+    } catch (ExecutionException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   /**
@@ -108,18 +124,28 @@ public final class BodyValidation {
    * @return the receipt root
    */
   public static Hash receiptsRoot(final List<TransactionReceipt> receipts) {
-    final MerkleTrie<Bytes, Bytes> trie = trie();
+    try {
+      return receiptsRootCache.get(
+          receipts.hashCode(),
+          () -> {
+            final MerkleTrie<Bytes, Bytes> trie = trie();
 
-    IntStream.range(0, receipts.size())
-        .forEach(
-            i ->
-                trie.put(
-                    indexKey(i),
-                    RLP.encode(
-                        rlpOutput ->
-                            receipts.get(i).writeToForReceiptTrie(rlpOutput, false, false))));
+            IntStream.range(0, receipts.size())
+                .forEach(
+                    i ->
+                        trie.put(
+                            indexKey(i),
+                            RLP.encode(
+                                rlpOutput ->
+                                    receipts
+                                        .get(i)
+                                        .writeToForReceiptTrie(rlpOutput, false, false))));
 
-    return Hash.wrap(trie.getRootHash());
+            return Hash.wrap(trie.getRootHash());
+          });
+    } catch (ExecutionException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   /**
