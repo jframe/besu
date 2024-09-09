@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import static org.hyperledger.besu.crypto.Hash.keccak256;
 
+import io.prometheus.client.guava.cache.CacheMetricsCollector;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
@@ -62,6 +63,12 @@ public final class BodyValidation {
       CacheBuilder.newBuilder().recordStats().maximumSize(1000L).build();
   private static final Cache<Integer, Hash> receiptsRootCache =
       CacheBuilder.newBuilder().recordStats().maximumSize(1000L).build();
+
+  {
+    CacheMetricsCollector cacheMetrics = new CacheMetricsCollector();
+    cacheMetrics.addCache("transactionsRoot", transactionsRootCache);
+    cacheMetrics.addCache("receiptsRootCache", receiptsRootCache);
+  }
 
   /**
    * Generates the transaction root for a list of transactions
@@ -128,29 +135,18 @@ public final class BodyValidation {
    * @return the receipt root
    */
   public static Hash receiptsRoot(final List<TransactionReceipt> receipts) {
-    try {
-      return receiptsRootCache.get(
-          receipts.hashCode(),
-          () -> {
-            final MerkleTrie<Bytes, Bytes> trie = trie();
+    final MerkleTrie<Bytes, Bytes> trie = trie();
 
-            IntStream.range(0, receipts.size())
-                .forEach(
-                    i ->
-                        trie.put(
-                            indexKey(i),
-                            RLP.encode(
-                                rlpOutput ->
-                                    receipts
-                                        .get(i)
-                                        .writeToForReceiptTrie(rlpOutput, false, false))));
+    IntStream.range(0, receipts.size())
+        .forEach(
+            i ->
+                trie.put(
+                    indexKey(i),
+                    RLP.encode(
+                        rlpOutput ->
+                            receipts.get(i).writeToForReceiptTrie(rlpOutput, false, false))));
 
-            return Hash.wrap(trie.getRootHash());
-          });
-    } catch (ExecutionException e) {
-      LOG.info("Error generating receipts root", e);
-      throw new RuntimeException(e);
-    }
+    return Hash.wrap(trie.getRootHash());
   }
 
   /**
