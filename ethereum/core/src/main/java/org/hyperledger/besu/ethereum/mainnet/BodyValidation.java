@@ -16,7 +16,6 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import static org.hyperledger.besu.crypto.Hash.keccak256;
 
-import io.prometheus.client.guava.cache.CacheMetricsCollector;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
@@ -27,6 +26,7 @@ import org.hyperledger.besu.ethereum.core.encoding.EncodingContext;
 import org.hyperledger.besu.ethereum.core.encoding.RequestEncoder;
 import org.hyperledger.besu.ethereum.core.encoding.TransactionEncoder;
 import org.hyperledger.besu.ethereum.core.encoding.WithdrawalEncoder;
+import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
@@ -38,6 +38,7 @@ import java.util.stream.IntStream;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import io.prometheus.client.guava.cache.CacheMetricsCollector;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
@@ -60,9 +61,9 @@ public final class BodyValidation {
   }
 
   private static final Cache<Integer, Hash> transactionsRootCache =
-      CacheBuilder.newBuilder().recordStats().maximumSize(1000L).build();
-  private static final Cache<Integer, Hash> receiptsRootCache =
-      CacheBuilder.newBuilder().recordStats().maximumSize(1000L).build();
+      CacheBuilder.newBuilder().recordStats().maximumSize(10_000L).build();
+  private static final Cache<Hash, Hash> receiptsRootCache =
+      CacheBuilder.newBuilder().recordStats().maximumSize(10_000L).build();
 
   {
     CacheMetricsCollector cacheMetrics = new CacheMetricsCollector();
@@ -77,26 +78,17 @@ public final class BodyValidation {
    * @return the transaction root
    */
   public static Hash transactionsRoot(final List<Transaction> transactions) {
-    try {
-      return transactionsRootCache.get(
-          transactions.hashCode(),
-          () -> {
-            final MerkleTrie<Bytes, Bytes> trie = trie();
+    final MerkleTrie<Bytes, Bytes> trie = trie();
 
-            IntStream.range(0, transactions.size())
-                .forEach(
-                    i ->
-                        trie.put(
-                            indexKey(i),
-                            TransactionEncoder.encodeOpaqueBytes(
-                                transactions.get(i), EncodingContext.BLOCK_BODY)));
+    IntStream.range(0, transactions.size())
+        .forEach(
+            i ->
+                trie.put(
+                    indexKey(i),
+                    TransactionEncoder.encodeOpaqueBytes(
+                        transactions.get(i), EncodingContext.BLOCK_BODY)));
 
-            return Hash.wrap(trie.getRootHash());
-          });
-    } catch (ExecutionException e) {
-      LOG.info("Error generating transactions root", e);
-      throw new RuntimeException(e);
-    }
+    return Hash.wrap(trie.getRootHash());
   }
 
   /**
@@ -135,18 +127,32 @@ public final class BodyValidation {
    * @return the receipt root
    */
   public static Hash receiptsRoot(final List<TransactionReceipt> receipts) {
-    final MerkleTrie<Bytes, Bytes> trie = trie();
+    final BytesValueRLPOutput output = new BytesValueRLPOutput();
+    output.writeList(receipts, TransactionReceipt::writeToForNetwork);
+    final Hash receiptsHash = Hash.hash(output.encoded());
 
-    IntStream.range(0, receipts.size())
-        .forEach(
-            i ->
-                trie.put(
-                    indexKey(i),
-                    RLP.encode(
-                        rlpOutput ->
-                            receipts.get(i).writeToForReceiptTrie(rlpOutput, false, false))));
+    try {
+      return receiptsRootCache.get(
+          receiptsHash,
+          () -> {
+            final MerkleTrie<Bytes, Bytes> trie = trie();
 
-    return Hash.wrap(trie.getRootHash());
+            IntStream.range(0, receipts.size())
+                .forEach(
+                    i ->
+                        trie.put(
+                            indexKey(i),
+                            RLP.encode(
+                                rlpOutput ->
+                                    receipts
+                                        .get(i)
+                                        .writeToForReceiptTrie(rlpOutput, false, false))));
+
+            return Hash.wrap(trie.getRootHash());
+          });
+    } catch (ExecutionException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   /**
