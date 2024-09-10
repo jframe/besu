@@ -57,6 +57,7 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
   private final int status;
   private final TransactionReceiptType transactionReceiptType;
   private final Optional<Bytes> revertReason;
+  private final Optional<Bytes> networkRlpEncoding;
 
   /**
    * Creates an instance of a state root-encoded transaction receipt.
@@ -78,24 +79,8 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
         cumulativeGasUsed,
         logs,
         LogsBloomFilter.builder().insertLogs(logs).build(),
-        revertReason);
-  }
-
-  private TransactionReceipt(
-      final TransactionType transactionType,
-      final Hash stateRoot,
-      final long cumulativeGasUsed,
-      final List<Log> logs,
-      final LogsBloomFilter bloomFilter,
-      final Optional<Bytes> revertReason) {
-    this(
-        transactionType,
-        stateRoot,
-        NONEXISTENT,
-        cumulativeGasUsed,
-        logs,
-        bloomFilter,
-        revertReason);
+        revertReason,
+        Optional.empty());
   }
 
   /**
@@ -118,7 +103,8 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
         cumulativeGasUsed,
         logs,
         LogsBloomFilter.builder().insertLogs(logs).build(),
-        revertReason);
+        revertReason,
+        Optional.empty());
   }
 
   public TransactionReceipt(
@@ -128,7 +114,15 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
       final List<Log> logs,
       final LogsBloomFilter bloomFilter,
       final Optional<Bytes> revertReason) {
-    this(transactionType, null, status, cumulativeGasUsed, logs, bloomFilter, revertReason);
+    this(
+        transactionType,
+        null,
+        status,
+        cumulativeGasUsed,
+        logs,
+        bloomFilter,
+        revertReason,
+        Optional.empty());
   }
 
   public TransactionReceipt(
@@ -153,7 +147,8 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
       final long cumulativeGasUsed,
       final List<Log> logs,
       final LogsBloomFilter bloomFilter,
-      final Optional<Bytes> revertReason) {
+      final Optional<Bytes> revertReason,
+      final Optional<Bytes> networkRlpEncoding) {
     this.transactionType = transactionType;
     this.stateRoot = stateRoot;
     this.cumulativeGasUsed = cumulativeGasUsed;
@@ -163,6 +158,7 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
     this.transactionReceiptType =
         stateRoot == null ? TransactionReceiptType.STATUS : TransactionReceiptType.ROOT;
     this.revertReason = revertReason;
+    this.networkRlpEncoding = networkRlpEncoding;
   }
 
   /**
@@ -171,6 +167,10 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
    * @param out The RLP output to write to
    */
   public void writeToForNetwork(final RLPOutput out) {
+    if (networkRlpEncoding.isPresent()) {
+      out.writeRaw(networkRlpEncoding.get());
+      return;
+    }
     writeTo(out, false, false);
   }
 
@@ -188,7 +188,7 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
     }
   }
 
-  public void writeToForReceiptTrie(
+  protected void writeToForReceiptTrie(
       final RLPOutput rlpOutput, final boolean withRevertReason, final boolean compacted) {
     if (!transactionType.equals(TransactionType.FRONTIER)) {
       rlpOutput.writeIntScalar(transactionType.getSerializedType());
@@ -271,18 +271,36 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
       revertReason = Optional.of(input.readBytes());
     }
 
+    Optional<Bytes> networkEncodedRlp =
+        !compacted && !revertReasonAllowed ? Optional.of(rlpInput.raw()) : Optional.empty();
+
     // Status code-encoded transaction receipts have a single
     // byte for success (0x01) or failure (0x80).
     if (firstElement.raw().size() == 1) {
       final int status = firstElement.readIntScalar();
       input.leaveList();
+
       return new TransactionReceipt(
-          transactionType, status, cumulativeGas, logs, bloomFilter, revertReason);
+          transactionType,
+          null,
+          status,
+          cumulativeGas,
+          logs,
+          bloomFilter,
+          revertReason,
+          networkEncodedRlp);
     } else {
       final Hash stateRoot = Hash.wrap(firstElement.readBytes32());
       input.leaveList();
       return new TransactionReceipt(
-          transactionType, stateRoot, cumulativeGas, logs, bloomFilter, revertReason);
+          transactionType,
+          stateRoot,
+          NONEXISTENT,
+          cumulativeGas,
+          logs,
+          bloomFilter,
+          revertReason,
+          networkEncodedRlp);
     }
   }
 

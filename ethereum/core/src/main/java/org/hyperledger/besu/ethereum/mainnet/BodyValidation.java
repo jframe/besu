@@ -130,11 +130,7 @@ public final class BodyValidation {
                     i ->
                         trie.put(
                             indexKey(i),
-                            RLP.encode(
-                                rlpOutput ->
-                                    receipts
-                                        .get(i)
-                                        .writeToForReceiptTrie(rlpOutput, false, false))));
+                            RLP.encode(rlpOutput -> receipts.get(i).writeToForNetwork(rlpOutput))));
 
             return Hash.wrap(trie.getRootHash());
           });
