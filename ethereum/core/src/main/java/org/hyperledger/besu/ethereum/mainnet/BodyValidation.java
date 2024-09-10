@@ -38,15 +38,11 @@ import java.util.stream.IntStream;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
-import io.prometheus.client.guava.cache.CacheMetricsCollector;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /** A utility class for body validation tasks. */
 public final class BodyValidation {
-  private static final Logger LOG = LoggerFactory.getLogger(BodyValidation.class);
 
   private BodyValidation() {
     // Utility Class
@@ -60,16 +56,8 @@ public final class BodyValidation {
     return new SimpleMerklePatriciaTrie<>(b -> b);
   }
 
-  private static final Cache<Integer, Hash> transactionsRootCache =
-      CacheBuilder.newBuilder().recordStats().maximumSize(10_000L).build();
   private static final Cache<Hash, Hash> receiptsRootCache =
       CacheBuilder.newBuilder().recordStats().maximumSize(10_000L).build();
-
-  {
-    CacheMetricsCollector cacheMetrics = new CacheMetricsCollector();
-    cacheMetrics.addCache("transactionsRoot", transactionsRootCache);
-    cacheMetrics.addCache("receiptsRootCache", receiptsRootCache);
-  }
 
   /**
    * Generates the transaction root for a list of transactions
