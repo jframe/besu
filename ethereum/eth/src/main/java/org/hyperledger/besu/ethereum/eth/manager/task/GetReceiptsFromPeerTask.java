@@ -21,6 +21,7 @@ import static org.hyperledger.besu.ethereum.mainnet.BodyValidation.receiptsRoot;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.core.ValidatedTransactionReceipt;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.eth.manager.PendingPeerRequest;
@@ -35,6 +36,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -119,7 +121,11 @@ public class GetReceiptsFromPeerTask
         // Contains receipts that we didn't request, so mustn't be the response we're looking for.
         return Optional.empty();
       }
-      blockHeaders.forEach(header -> receiptsByHeader.put(header, receiptsInBlock));
+      final List<TransactionReceipt> validatedTransactionReceipts =
+          receiptsInBlock.stream()
+              .map(receipt -> (TransactionReceipt) new ValidatedTransactionReceipt(receipt))
+              .collect(Collectors.toList());
+      blockHeaders.forEach(header -> receiptsByHeader.put(header, validatedTransactionReceipts));
     }
     return Optional.of(receiptsByHeader);
   }

@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.core.ValidatedBlockBody;
 import org.hyperledger.besu.ethereum.core.Withdrawal;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
@@ -133,7 +134,7 @@ public class GetBodiesFromPeerTask extends AbstractPeerRequestTask<List<Block>> 
         LOG.debug("This message contains unrelated bodies. Peer: {}", peer);
         return Optional.empty();
       }
-      headers.forEach(h -> blocks.add(new Block(h, body)));
+      headers.forEach(h -> blocks.add(new Block(h, new ValidatedBlockBody(body))));
       // Clear processed headers
       headers.clear();
     }

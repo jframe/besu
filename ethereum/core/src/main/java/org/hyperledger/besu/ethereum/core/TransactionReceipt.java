@@ -146,7 +146,7 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
         maybeRevertReason);
   }
 
-  private TransactionReceipt(
+  protected TransactionReceipt(
       final TransactionType transactionType,
       final Hash stateRoot,
       final int status,
@@ -351,6 +351,10 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
   @Override
   public Optional<Bytes> getRevertReason() {
     return revertReason;
+  }
+
+  public TransactionType getTransactionType() {
+    return transactionType;
   }
 
   @Override

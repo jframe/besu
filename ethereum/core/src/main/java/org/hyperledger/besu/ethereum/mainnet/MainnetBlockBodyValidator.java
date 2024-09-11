@@ -21,6 +21,8 @@ import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.core.ValidatedBlockBody;
+import org.hyperledger.besu.ethereum.core.ValidatedTransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.requests.RequestsValidatorCoordinator;
 import org.hyperledger.besu.evm.log.LogsBloomFilter;
 
@@ -79,15 +81,16 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
       final Optional<List<Request>> requests,
       final HeaderValidationMode ommerValidationMode) {
     final BlockHeader header = block.getHeader();
-    final BlockBody body = block.getBody();
+    final BlockBody blockBody = block.getBody();
+    final boolean isValidatedBlockBody = blockBody instanceof ValidatedBlockBody;
 
-    final Bytes32 transactionsRoot = BodyValidation.transactionsRoot(body.getTransactions());
-    if (!validateTransactionsRoot(header, header.getTransactionsRoot(), transactionsRoot)) {
+    if (!isValidatedBlockBody && !validateTransactionsRoot(header, blockBody)) {
       return false;
     }
 
-    final Bytes32 receiptsRoot = BodyValidation.receiptsRoot(receipts);
-    if (!validateReceiptsRoot(header, header.getReceiptsRoot(), receiptsRoot)) {
+    final boolean receiptsAreValidated =
+        receipts.stream().allMatch(r -> r instanceof ValidatedTransactionReceipt);
+    if (!receiptsAreValidated && !validateReceiptsRoot(header, receipts)) {
       return false;
     }
 
@@ -105,18 +108,20 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
       return false;
     }
 
-    if (!validateWithdrawals(block)) {
+    if (!isValidatedBlockBody && !validateWithdrawals(block)) {
       return false;
     }
 
-    if (!validateRequests(block, requests, receipts)) {
+    if (!isValidatedBlockBody && !validateRequests(block, requests, receipts)) {
       return false;
     }
     return true;
   }
 
   private static boolean validateTransactionsRoot(
-      final BlockHeader header, final Bytes32 expected, final Bytes32 actual) {
+      final BlockHeader header, final BlockBody blockBody) {
+    final Hash expected = header.getTransactionsRoot();
+    final Hash actual = BodyValidation.transactionsRoot(blockBody.getTransactions());
     if (!expected.equals(actual)) {
       LOG.info(
           "Invalid block {}: transaction root mismatch (expected={}, actual={})",
@@ -158,13 +163,16 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
   }
 
   private static boolean validateReceiptsRoot(
-      final BlockHeader header, final Bytes32 expected, final Bytes32 actual) {
-    if (!expected.equals(actual)) {
+      final BlockHeader header, final List<TransactionReceipt> receipts) {
+    final Bytes32 expectedReceiptsRoot = header.getReceiptsRoot();
+    final Bytes32 actualReceiptsRoot = BodyValidation.receiptsRoot(receipts);
+
+    if (!expectedReceiptsRoot.equals(actualReceiptsRoot)) {
       LOG.warn(
           "Invalid block {}: receipts root mismatch (expected={}, actual={})",
           header.toLogString(),
-          expected,
-          actual);
+          expectedReceiptsRoot,
+          actualReceiptsRoot);
       return false;
     }
 
