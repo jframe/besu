@@ -101,6 +101,10 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
     final boolean isValidatedBlockBody = body instanceof ValidatedBlockBody;
     final boolean receiptsAreValidated =
         receipts.stream().allMatch(r -> r instanceof ValidatedTransactionReceipt);
+    LOG.info(
+        "validateBodyLight isValidatedBlockBody: {}, receiptsAreValidated: {}",
+        isValidatedBlockBody,
+        receiptsAreValidated);
     if (isValidatedBlockBody && receiptsAreValidated) {
       return true;
     }
