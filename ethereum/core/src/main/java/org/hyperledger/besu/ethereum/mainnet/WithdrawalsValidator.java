@@ -18,6 +18,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.Block;
+import org.hyperledger.besu.ethereum.core.ValidatedBlockBody;
 import org.hyperledger.besu.ethereum.core.Withdrawal;
 
 import java.util.List;
@@ -81,6 +82,11 @@ public interface WithdrawalsValidator {
       if (withdrawalsRoot.isEmpty()) {
         LOG.warn("withdrawalsRoot must not be null when Withdrawals are activated");
         return false;
+      }
+
+      // If the block body is a ValidatedBlockBody, then the withdrawalsRoot is already validated
+      if (block.getBody() instanceof ValidatedBlockBody) {
+        return true;
       }
 
       final List<Withdrawal> withdrawals = block.getBody().getWithdrawals().get();

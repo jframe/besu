@@ -82,17 +82,6 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
       final HeaderValidationMode ommerValidationMode) {
     final BlockHeader header = block.getHeader();
     final BlockBody blockBody = block.getBody();
-    final boolean isValidatedBlockBody = blockBody instanceof ValidatedBlockBody;
-
-    if (!isValidatedBlockBody && !validateTransactionsRoot(header, blockBody)) {
-      return false;
-    }
-
-    final boolean receiptsAreValidated =
-        receipts.stream().allMatch(r -> r instanceof ValidatedTransactionReceipt);
-    if (!receiptsAreValidated && !validateReceiptsRoot(header, receipts)) {
-      return false;
-    }
 
     final long gasUsed =
         receipts.isEmpty() ? 0 : receipts.get(receipts.size() - 1).getCumulativeGasUsed();
@@ -100,21 +89,42 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
       return false;
     }
 
+    if (!validateOmmers(context, header, blockBody.getOmmers(), ommerValidationMode)) {
+      return false;
+    }
+
+    if (!validateWithdrawals(block)) {
+      return false;
+    }
+
+    // If the block body and receipts are already validated, we can skip the rest of the validation
+    final boolean isValidatedBlockBody = blockBody instanceof ValidatedBlockBody;
+    final boolean receiptsAreValidated =
+        receipts.stream().allMatch(r -> r instanceof ValidatedTransactionReceipt);
+    if (isValidatedBlockBody && receiptsAreValidated) {
+      return true;
+    }
+
+    if (!validateTransactionsRoot(header, blockBody)) {
+      return false;
+    }
+
+    if (!validateReceiptsRoot(header, receipts)) {
+      return false;
+    }
+
     if (!validateLogsBloom(header, header.getLogsBloom(), BodyValidation.logsBloom(receipts))) {
       return false;
     }
 
-    if (!validateEthHash(context, block, ommerValidationMode)) {
+    if (!validateOmmersHash(header, blockBody)) {
       return false;
     }
 
-    if (!isValidatedBlockBody && !validateWithdrawals(block)) {
+    if (!validateRequests(block, requests, receipts)) {
       return false;
     }
 
-    if (!isValidatedBlockBody && !validateRequests(block, requests, receipts)) {
-      return false;
-    }
     return true;
   }
 
@@ -193,33 +203,16 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
     return true;
   }
 
-  private boolean validateEthHash(
-      final ProtocolContext context,
-      final Block block,
-      final HeaderValidationMode ommerValidationMode) {
-    final BlockHeader header = block.getHeader();
-    final BlockBody body = block.getBody();
+  private static boolean validateOmmersHash(final BlockHeader header, final BlockBody blockBody) {
+    final Bytes32 actualOmmersHash = BodyValidation.ommersHash(blockBody.getOmmers());
+    final Bytes32 expectedOmmersHash = header.getOmmersHash();
 
-    final Bytes32 ommerHash = BodyValidation.ommersHash(body.getOmmers());
-    if (!validateOmmersHash(header, header.getOmmersHash(), ommerHash)) {
-      return false;
-    }
-
-    if (!validateOmmers(context, header, body.getOmmers(), ommerValidationMode)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  private static boolean validateOmmersHash(
-      final BlockHeader header, final Bytes32 expected, final Bytes32 actual) {
-    if (!expected.equals(actual)) {
+    if (!expectedOmmersHash.equals(actualOmmersHash)) {
       LOG.warn(
           "Invalid block {}: ommers hash mismatch (expected={}, actual={})",
           header.toLogString(),
-          expected,
-          actual);
+          expectedOmmersHash,
+          actualOmmersHash);
       return false;
     }
 
