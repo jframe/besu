@@ -14,6 +14,10 @@
  */
 package org.hyperledger.besu.ethereum.core;
 
+/**
+ * Represents a {@link TransactionReceipt} that has been already been validated. This is used during
+ * syncing to avoid double validation of the TransactionReceipt.
+ */
 public class ValidatedTransactionReceipt extends TransactionReceipt {
 
   public ValidatedTransactionReceipt(final TransactionReceipt transactionReceipt) {

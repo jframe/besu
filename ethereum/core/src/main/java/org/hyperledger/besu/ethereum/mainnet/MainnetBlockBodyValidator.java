@@ -81,7 +81,7 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
       final Optional<List<Request>> requests,
       final HeaderValidationMode ommerValidationMode) {
     final BlockHeader header = block.getHeader();
-    final BlockBody blockBody = block.getBody();
+    final BlockBody body = block.getBody();
 
     final long gasUsed =
         receipts.isEmpty() ? 0 : receipts.get(receipts.size() - 1).getCumulativeGasUsed();
@@ -89,7 +89,7 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
       return false;
     }
 
-    if (!validateOmmers(context, header, blockBody.getOmmers(), ommerValidationMode)) {
+    if (!validateOmmers(context, header, body.getOmmers(), ommerValidationMode)) {
       return false;
     }
 
@@ -98,14 +98,14 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
     }
 
     // If the block body and receipts are already validated, we can skip the rest of the validation
-    final boolean isValidatedBlockBody = blockBody instanceof ValidatedBlockBody;
+    final boolean isValidatedBlockBody = body instanceof ValidatedBlockBody;
     final boolean receiptsAreValidated =
         receipts.stream().allMatch(r -> r instanceof ValidatedTransactionReceipt);
     if (isValidatedBlockBody && receiptsAreValidated) {
       return true;
     }
 
-    if (!validateTransactionsRoot(header, blockBody)) {
+    if (!validateTransactionsRoot(header, body)) {
       return false;
     }
 
@@ -117,7 +117,7 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
       return false;
     }
 
-    if (!validateOmmersHash(header, blockBody)) {
+    if (!validateOmmersHash(header, body)) {
       return false;
     }
 
