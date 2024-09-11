@@ -107,6 +107,8 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
         receiptsAreValidated);
     if (isValidatedBlockBody && receiptsAreValidated) {
       return true;
+    } else {
+      LOG.info("block body {}", body);
     }
 
     if (!validateTransactionsRoot(header, body)) {
