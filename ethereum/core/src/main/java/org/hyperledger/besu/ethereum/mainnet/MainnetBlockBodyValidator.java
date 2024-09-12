@@ -97,21 +97,18 @@ public class MainnetBlockBodyValidator implements BlockBodyValidator {
       return false;
     }
 
-    // If the block body and receipts are already validated, we can skip the rest of the validation
-    final boolean isValidatedBlockBody = body instanceof ValidatedBlockBody;
     final boolean receiptsAreValidated =
         receipts.stream().allMatch(r -> r instanceof ValidatedTransactionReceipt);
-    if (isValidatedBlockBody && receiptsAreValidated) {
-      return true;
-    } else {
-      LOG.info("No validated bodies or receipts found");
-    }
-
-    if (!validateTransactionsRoot(header, body)) {
+    if (!receiptsAreValidated && !validateReceiptsRoot(header, receipts)) {
       return false;
     }
 
-    if (!validateReceiptsRoot(header, receipts)) {
+    // If the block body is already validated, we can skip the rest of the validation
+    if (body instanceof ValidatedBlockBody) {
+      return true;
+    }
+
+    if (!validateTransactionsRoot(header, body)) {
       return false;
     }
 
