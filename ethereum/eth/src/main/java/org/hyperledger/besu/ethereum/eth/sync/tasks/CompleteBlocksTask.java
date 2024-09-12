@@ -23,6 +23,7 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.ValidatedBlockBody;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.eth.manager.task.AbstractPeerTask.PeerTaskResult;
@@ -32,7 +33,6 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -88,13 +88,15 @@ public class CompleteBlocksTask extends AbstractRetryingPeerTask<List<Block>> {
   @Nonnull
   private BlockBody createEmptyBodyBasedOnProtocolSchedule(
       final ProtocolSchedule protocolSchedule, final BlockHeader header) {
-    return new BlockBody(
-        Collections.emptyList(),
-        Collections.emptyList(),
-        isWithdrawalsEnabled(protocolSchedule, header)
-            ? Optional.of(Collections.emptyList())
-            : Optional.empty(),
-        Optional.empty());
+    final BlockBody emptyBlockBody =
+        new BlockBody(
+            emptyList(),
+            emptyList(),
+            isWithdrawalsEnabled(protocolSchedule, header)
+                ? Optional.of(emptyList())
+                : Optional.empty(),
+            Optional.empty());
+    return new ValidatedBlockBody(emptyBlockBody);
   }
 
   private boolean isWithdrawalsEnabled(
