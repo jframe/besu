@@ -50,12 +50,12 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
   @Deprecated(since = "23.4.2", forRemoval = true)
   private static final Bytes VARIABLES_PREFIX = Bytes.of(1);
 
-  private static final Bytes BLOCK_HEADER_PREFIX = Bytes.of(2);
-  private static final Bytes BLOCK_BODY_PREFIX = Bytes.of(3);
-  private static final Bytes TRANSACTION_RECEIPTS_PREFIX = Bytes.of(4);
-  private static final Bytes BLOCK_HASH_PREFIX = Bytes.of(5);
-  private static final Bytes TOTAL_DIFFICULTY_PREFIX = Bytes.of(6);
-  private static final Bytes TRANSACTION_LOCATION_PREFIX = Bytes.of(7);
+  public static final Bytes BLOCK_HEADER_PREFIX = Bytes.of(2);
+  public static final Bytes BLOCK_BODY_PREFIX = Bytes.of(3);
+  public static final Bytes TRANSACTION_RECEIPTS_PREFIX = Bytes.of(4);
+  public static final Bytes BLOCK_HASH_PREFIX = Bytes.of(5);
+  public static final Bytes TOTAL_DIFFICULTY_PREFIX = Bytes.of(6);
+  public static final Bytes TRANSACTION_LOCATION_PREFIX = Bytes.of(7);
   final KeyValueStorage blockchainStorage;
   final VariablesStorage variablesStorage;
   final BlockHeaderFunctions blockHeaderFunctions;
@@ -362,9 +362,14 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
       blockchainTransaction.rollback();
     }
 
-    void set(final Bytes prefix, final Bytes key, final Bytes value) {
+    private void set(final Bytes prefix, final Bytes key, final Bytes value) {
       blockchainTransaction.put(
           Bytes.concatenate(prefix, key).toArrayUnsafe(), value.toArrayUnsafe());
+    }
+
+    @Override
+    public void put(final Bytes key, final Bytes value) {
+      blockchainTransaction.put(key.toArrayUnsafe(), value.toArrayUnsafe());
     }
 
     private void remove(final Bytes prefix, final Bytes key) {

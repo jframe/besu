@@ -30,6 +30,8 @@ import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.LogWithMetadata;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.prometheus.PrometheusMetricsSystem;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
@@ -48,6 +50,7 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -56,6 +59,9 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Streams;
 import io.prometheus.client.guava.cache.CacheMetricsCollector;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -484,22 +490,58 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   @Override
   public void unsafeImportBlocks(final List<BlockWithReceipts> blocks) {
+    final List<Pair<Bytes, Bytes>> updates = new ArrayList<>();
+    blocks.parallelStream()
+        .forEach(
+            blockWithReceipts -> {
+              Block block = blockWithReceipts.getBlock();
+              Hash hash = blockWithReceipts.getHash();
+              updates.add(
+                  Pair.of(
+                      Bytes.concatenate(
+                          KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_HEADER_PREFIX, hash),
+                      RLP.encode(blockWithReceipts.getBlock().getHeader()::writeTo)));
+              updates.add(
+                  Pair.of(
+                      Bytes.concatenate(
+                          KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_HASH_PREFIX,
+                          UInt256.valueOf(blockWithReceipts.getBlock().getHeader().getNumber())),
+                      hash));
+              updates.add(
+                  Pair.of(
+                      Bytes.concatenate(
+                          KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_BODY_PREFIX, hash),
+                      RLP.encode(blockWithReceipts.getBlock().getBody()::writeTo)));
+              final int nbTrx = block.getBody().getTransactions().size();
+              IntStream.range(0, nbTrx)
+                  .parallel()
+                  .forEach(
+                      i -> {
+                        final Hash transactionHash =
+                            block.getBody().getTransactions().get(i).getHash();
+                        updates.add(
+                            Pair.of(
+                                Bytes.concatenate(
+                                    KeyValueStoragePrefixedKeyBlockchainStorage
+                                        .TRANSACTION_LOCATION_PREFIX,
+                                    transactionHash),
+                                RLP.encode(new TransactionLocation(transactionHash, i)::writeTo)));
+                      });
+
+              updates.add(
+                  Pair.of(
+                      Bytes.concatenate(
+                          KeyValueStoragePrefixedKeyBlockchainStorage.TRANSACTION_RECEIPTS_PREFIX,
+                          hash),
+                      RLP.encode(
+                          o ->
+                              o.writeList(
+                                  blockWithReceipts.getReceipts(),
+                                  (r, rlpOutput) -> r.writeToForStorage(rlpOutput, true)))));
+            });
+
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
-    blocks.forEach(
-        blockWithReceipts -> {
-          final Block block = blockWithReceipts.getBlock();
-          final Hash hash = block.getHash();
-          updater.putBlockHeader(hash, block.getHeader());
-          updater.putBlockHash(block.getHeader().getNumber(), hash);
-          updater.putBlockBody(hash, block.getBody());
-          final int nbTrx = block.getBody().getTransactions().size();
-          for (int i = 0; i < nbTrx; i++) {
-            final Hash transactionHash = block.getBody().getTransactions().get(i).getHash();
-            updater.putTransactionLocation(
-                transactionHash, new TransactionLocation(transactionHash, i));
-          }
-          updater.putTransactionReceipts(hash, blockWithReceipts.getReceipts());
-        });
+    updates.forEach(update -> updater.put(update.getLeft(), update.getRight()));
     updater.commit();
   }
 
