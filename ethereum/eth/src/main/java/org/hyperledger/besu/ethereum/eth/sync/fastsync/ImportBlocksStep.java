@@ -89,16 +89,16 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
       LOG.info(
           "Block import progress: {} of {} ({}%), Peer count: {}",
           lastBlock, pivotHeader.getNumber(), blocksPercent, peerCount);
-      LOG.debug(
-          "Completed importing chain segment {} to {} ({} blocks in {}ms), Peer count: {}",
-          logStartBlock.getAsLong(),
-          lastBlock,
-          lastBlock - logStartBlock.getAsLong() + 1,
-          accumulatedTime,
-          peerCount);
-      accumulatedTime = 0L;
-      logStartBlock = OptionalLong.empty();
     }
+    LOG.info(
+        "Completed importing chain segment {} to {} ({} blocks in {}ms), Peer count: {}",
+        logStartBlock.getAsLong(),
+        lastBlock,
+        lastBlock - logStartBlock.getAsLong() + 1,
+        accumulatedTime,
+        peerCount);
+    accumulatedTime = 0L;
+    logStartBlock = OptionalLong.empty();
   }
 
   @VisibleForTesting
