@@ -18,7 +18,6 @@ import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
-import org.hyperledger.besu.ethereum.eth.sync.tasks.exceptions.InvalidBlockException;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
@@ -64,15 +63,7 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
     final long startTime = System.nanoTime();
 
     try (final var ignored = importBlocksTimer.startTimer()) {
-      for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
-        if (!importBlock(blockWithReceipts)) {
-          throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
-        }
-        LOG.atTrace()
-            .setMessage("Imported block {}")
-            .addArgument(blockWithReceipts.getBlock()::toLogString)
-            .log();
-      }
+      blocksWithReceipts.parallelStream().forEach(this::importBlock);
     }
 
     if (logStartBlock.isEmpty()) {
