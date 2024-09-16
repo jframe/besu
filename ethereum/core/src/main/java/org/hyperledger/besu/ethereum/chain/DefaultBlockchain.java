@@ -483,7 +483,7 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   @Override
-  public void unsafeImportBlocks(final List<BlockWithReceipts> blocks) {
+  public synchronized void unsafeImportBlocks(final List<BlockWithReceipts> blocks) {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
     blocks.parallelStream()
         .forEach(
