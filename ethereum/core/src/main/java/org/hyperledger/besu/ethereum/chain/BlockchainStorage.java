@@ -24,6 +24,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
+import org.apache.tuweni.bytes.Bytes;
+
 public interface BlockchainStorage {
 
   Optional<Hash> getChainHead();
@@ -85,5 +87,7 @@ public interface BlockchainStorage {
     void commit();
 
     void rollback();
+
+    void put(Bytes key, Bytes value);
   }
 }
