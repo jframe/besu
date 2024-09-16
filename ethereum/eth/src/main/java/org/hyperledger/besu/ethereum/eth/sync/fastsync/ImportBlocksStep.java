@@ -23,7 +23,6 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -63,7 +62,7 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
     final long startTime = System.nanoTime();
 
     try (final var ignored = importBlocksTimer.startTimer()) {
-      blocksWithReceipts.parallelStream().forEach(this::importBlock);
+      importBlock(blocksWithReceipts);
     }
 
     if (logStartBlock.isEmpty()) {
@@ -103,11 +102,8 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
     return blocksPercent;
   }
 
-  protected boolean importBlock(final BlockWithReceipts blockWithReceipts) {
-    protocolContext
-        .getBlockchain()
-        .unsafeImportBlock(
-            blockWithReceipts.getBlock(), blockWithReceipts.getReceipts(), Optional.empty());
+  protected boolean importBlock(final List<BlockWithReceipts> blockWithReceipts) {
+    protocolContext.getBlockchain().unsafeImportBlocks(blockWithReceipts);
     return true;
   }
 }
