@@ -500,7 +500,6 @@ public class DefaultBlockchain implements MutableBlockchain {
                     transactionHash, new TransactionLocation(transactionHash, i));
               }
               updater.putTransactionReceipts(hash, blockWithReceipts.getReceipts());
-              updater.putTotalDifficulty(hash, calculateTotalDifficulty(block.getHeader()));
             });
     updater.commit();
   }
