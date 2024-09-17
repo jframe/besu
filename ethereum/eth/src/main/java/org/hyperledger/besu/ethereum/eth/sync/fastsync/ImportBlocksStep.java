@@ -16,13 +16,8 @@ package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
-import org.hyperledger.besu.ethereum.core.BlockImporter;
 import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
-import org.hyperledger.besu.ethereum.eth.sync.ValidationPolicy;
-import org.hyperledger.besu.ethereum.eth.sync.tasks.exceptions.InvalidBlockException;
-import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
-import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -37,26 +32,17 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   private static final Logger LOG = LoggerFactory.getLogger(ImportBlocksStep.class);
   private static final long PRINT_DELAY = TimeUnit.SECONDS.toMillis(30L);
 
-  private final ProtocolSchedule protocolSchedule;
   protected final ProtocolContext protocolContext;
-  private final ValidationPolicy headerValidationPolicy;
-  private final ValidationPolicy ommerValidationPolicy;
   private final EthContext ethContext;
   private long accumulatedTime = 0L;
   private OptionalLong logStartBlock = OptionalLong.empty();
   private final BlockHeader pivotHeader;
 
   public ImportBlocksStep(
-      final ProtocolSchedule protocolSchedule,
       final ProtocolContext protocolContext,
-      final ValidationPolicy headerValidationPolicy,
-      final ValidationPolicy ommerValidationPolicy,
       final EthContext ethContext,
       final BlockHeader pivotHeader) {
-    this.protocolSchedule = protocolSchedule;
     this.protocolContext = protocolContext;
-    this.headerValidationPolicy = headerValidationPolicy;
-    this.ommerValidationPolicy = ommerValidationPolicy;
     this.ethContext = ethContext;
     this.pivotHeader = pivotHeader;
   }
@@ -64,15 +50,7 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   @Override
   public void accept(final List<BlockWithReceipts> blocksWithReceipts) {
     final long startTime = System.nanoTime();
-    for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
-      if (!importBlock(blockWithReceipts)) {
-        throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
-      }
-      LOG.atTrace()
-          .setMessage("Imported block {}")
-          .addArgument(blockWithReceipts.getBlock()::toLogString)
-          .log();
-    }
+    importBlock(blocksWithReceipts);
     if (logStartBlock.isEmpty()) {
       logStartBlock = OptionalLong.of(blocksWithReceipts.get(0).getNumber());
     }
@@ -110,16 +88,8 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
     return blocksPercent;
   }
 
-  protected boolean importBlock(final BlockWithReceipts blockWithReceipts) {
-    final BlockImporter importer =
-        protocolSchedule.getByBlockHeader(blockWithReceipts.getHeader()).getBlockImporter();
-    final BlockImportResult blockImportResult =
-        importer.fastImportBlock(
-            protocolContext,
-            blockWithReceipts.getBlock(),
-            blockWithReceipts.getReceipts(),
-            headerValidationPolicy.getValidationModeForNextBlock(),
-            ommerValidationPolicy.getValidationModeForNextBlock());
-    return blockImportResult.isImported();
+  protected boolean importBlock(final List<BlockWithReceipts> blockWithReceipts) {
+    protocolContext.getBlockchain().unsafeImportBlocks(blockWithReceipts);
+    return true;
   }
 }

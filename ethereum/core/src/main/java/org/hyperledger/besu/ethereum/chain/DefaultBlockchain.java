@@ -513,7 +513,6 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   @Override
   public void unsafeImportBlocks(final List<BlockWithReceipts> blocks) {
-
     List<BlockValue> blockValues =
         blocks.parallelStream()
             .map(
@@ -572,6 +571,7 @@ public class DefaultBlockchain implements MutableBlockchain {
           updater.set(
               TRANSACTION_RECEIPTS_PREFIX, blockValue.blockHash, blockValue.transactionsReceiptRlp);
         });
+    updater.setChainHead(blockValues.getLast().blockHash);
     updater.commit();
   }
 
