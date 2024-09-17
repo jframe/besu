@@ -571,8 +571,10 @@ public class DefaultBlockchain implements MutableBlockchain {
           updater.set(
               TRANSACTION_RECEIPTS_PREFIX, blockValue.blockHash, blockValue.transactionsReceiptRlp);
         });
+
+    this.chainHeader = blocks.getLast().getHeader();
     updater.setChainHead(blockValues.getLast().blockHash);
-    updateCanonicalChainData(updater, blocks.getLast());
+
     updater.commit();
   }
 
