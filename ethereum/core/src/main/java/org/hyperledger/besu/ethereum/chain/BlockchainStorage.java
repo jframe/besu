@@ -88,6 +88,8 @@ public interface BlockchainStorage {
 
     void rollback();
 
+    void set(Bytes prefix, Bytes key, Bytes value);
+
     void put(Bytes key, Bytes value);
   }
 }
