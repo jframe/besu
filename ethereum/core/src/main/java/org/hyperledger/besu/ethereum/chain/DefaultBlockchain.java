@@ -19,6 +19,11 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Collections.emptyList;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_BODY_PREFIX;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_HASH_PREFIX;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_HEADER_PREFIX;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage.TRANSACTION_LOCATION_PREFIX;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage.TRANSACTION_RECEIPTS_PREFIX;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.BlockchainStorage.Updater;
@@ -31,7 +36,6 @@ import org.hyperledger.besu.ethereum.core.LogWithMetadata;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.rlp.RLP;
-import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.metrics.prometheus.PrometheusMetricsSystem;
@@ -510,60 +514,76 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   @Override
   public void unsafeImportBlocks(final List<BlockWithReceipts> blocks) {
-    final List<Pair<Bytes, Bytes>> updates = new ArrayList<>();
-    blocks.parallelStream()
-        .forEach(
-            blockWithReceipts -> {
-              Block block = blockWithReceipts.getBlock();
-              Hash hash = blockWithReceipts.getHash();
-              updates.add(
-                  Pair.of(
-                      Bytes.concatenate(
-                          KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_HEADER_PREFIX, hash),
-                      RLP.encode(blockWithReceipts.getBlock().getHeader()::writeTo)));
-              updates.add(
-                  Pair.of(
-                      Bytes.concatenate(
-                          KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_HASH_PREFIX,
-                          UInt256.valueOf(blockWithReceipts.getBlock().getHeader().getNumber())),
-                      hash));
-              updates.add(
-                  Pair.of(
-                      Bytes.concatenate(
-                          KeyValueStoragePrefixedKeyBlockchainStorage.BLOCK_BODY_PREFIX, hash),
-                      RLP.encode(blockWithReceipts.getBlock().getBody()::writeTo)));
-              final int nbTrx = block.getBody().getTransactions().size();
-              IntStream.range(0, nbTrx)
-                  .parallel()
-                  .forEach(
-                      i -> {
-                        final Hash transactionHash =
-                            block.getBody().getTransactions().get(i).getHash();
-                        updates.add(
-                            Pair.of(
-                                Bytes.concatenate(
-                                    KeyValueStoragePrefixedKeyBlockchainStorage
-                                        .TRANSACTION_LOCATION_PREFIX,
-                                    transactionHash),
-                                RLP.encode(new TransactionLocation(transactionHash, i)::writeTo)));
-                      });
 
-              updates.add(
-                  Pair.of(
-                      Bytes.concatenate(
-                          KeyValueStoragePrefixedKeyBlockchainStorage.TRANSACTION_RECEIPTS_PREFIX,
-                          hash),
+    List<BlockValue> blockValues =
+        blocks.parallelStream()
+            .map(
+                blockWithReceipts -> {
+                  Block block = blockWithReceipts.getBlock();
+                  Hash hash = blockWithReceipts.getHash();
+                  Bytes blockNumberBytes = UInt256.valueOf(block.getHeader().getNumber()).toBytes();
+                  Bytes blockHeaderRlp =
+                      RLP.encode(blockWithReceipts.getBlock().getHeader()::writeTo);
+                  Bytes blockBodyRlp = RLP.encode(blockWithReceipts.getBlock().getBody()::writeTo);
+                  List<Pair<Bytes, Bytes>> transactionLocationsRlp = new ArrayList<>();
+
+                  final int nbTrx = block.getBody().getTransactions().size();
+                  IntStream.range(0, nbTrx)
+                      .parallel()
+                      .forEach(
+                          i -> {
+                            final Hash transactionHash =
+                                block.getBody().getTransactions().get(i).getHash();
+                            Bytes transactionLocationRlp =
+                                RLP.encode(new TransactionLocation(transactionHash, i)::writeTo);
+
+                            transactionLocationsRlp.add(
+                                Pair.of(transactionHash, transactionLocationRlp));
+                          });
+
+                  Bytes transactionReceiptsRlp =
                       RLP.encode(
                           o ->
                               o.writeList(
                                   blockWithReceipts.getReceipts(),
-                                  (r, rlpOutput) -> r.writeToForStorage(rlpOutput, true)))));
-            });
+                                  (r, rlpOutput) -> r.writeToForStorage(rlpOutput, true)));
+
+                  return new BlockValue(
+                      hash,
+                      blockNumberBytes,
+                      blockHeaderRlp,
+                      blockBodyRlp,
+                      transactionLocationsRlp,
+                      transactionReceiptsRlp);
+                })
+            .toList();
 
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
-    updates.forEach(update -> updater.put(update.getLeft(), update.getRight()));
+    blockValues.forEach(
+        blockValue -> {
+          updater.set(BLOCK_HEADER_PREFIX, blockValue.blockHash, blockValue.blockHeaderRlp);
+          updater.set(BLOCK_HASH_PREFIX, blockValue.blockNumberBytes, blockValue.blockHeaderRlp);
+          updater.set(BLOCK_BODY_PREFIX, blockValue.blockHash, blockValue.blockBodyRlp);
+          blockValue.transactionLocation.forEach(
+              transactionLocation ->
+                  updater.set(
+                      TRANSACTION_LOCATION_PREFIX,
+                      transactionLocation.getLeft(),
+                      transactionLocation.getRight()));
+
+          updater.set(
+              TRANSACTION_RECEIPTS_PREFIX, blockValue.blockHash, blockValue.transactionsReceiptRlp);
+        });
     updater.commit();
   }
+
+  record BlockValue(
+      Hash blockHash,
+      Bytes blockNumberBytes,
+      Bytes blockHeaderRlp,
+      Bytes blockBodyRlp,
+      List<Pair<Bytes, Bytes>> transactionLocation,
+      Bytes transactionsReceiptRlp) {}
 
   @Override
   public synchronized void unsafeSetChainHead(

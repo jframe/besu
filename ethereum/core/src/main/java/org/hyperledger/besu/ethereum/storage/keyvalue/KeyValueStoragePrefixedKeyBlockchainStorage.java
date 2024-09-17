@@ -362,7 +362,8 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
       blockchainTransaction.rollback();
     }
 
-    private void set(final Bytes prefix, final Bytes key, final Bytes value) {
+    @Override
+    public void set(final Bytes prefix, final Bytes key, final Bytes value) {
       blockchainTransaction.put(
           Bytes.concatenate(prefix, key).toArrayUnsafe(), value.toArrayUnsafe());
     }
