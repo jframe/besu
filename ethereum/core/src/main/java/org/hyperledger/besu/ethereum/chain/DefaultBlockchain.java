@@ -55,7 +55,6 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -525,22 +524,21 @@ public class DefaultBlockchain implements MutableBlockchain {
                   Bytes blockHeaderRlp =
                       RLP.encode(blockWithReceipts.getBlock().getHeader()::writeTo);
                   Bytes blockBodyRlp = RLP.encode(blockWithReceipts.getBlock().getBody()::writeTo);
-                  List<Pair<Bytes, Bytes>> transactionLocationsRlp = new ArrayList<>();
-
-                  final int nbTrx = block.getBody().getTransactions().size();
-                  IntStream.range(0, nbTrx)
-                      .parallel()
-                      .forEach(
-                          i -> {
-                            final Hash transactionHash =
-                                block.getBody().getTransactions().get(i).getHash();
-                            Bytes transactionLocationRlp =
-                                RLP.encode(new TransactionLocation(transactionHash, i)::writeTo);
-
-                            transactionLocationsRlp.add(
-                                Pair.of(transactionHash, transactionLocationRlp));
-                          });
-
+                  List<Pair<Hash, Bytes>> transactionLocations =
+                      block.getBody().getTransactions().parallelStream()
+                          .map(
+                              transaction ->
+                                  Pair.of(
+                                      transaction.getHash(),
+                                      RLP.encode(
+                                          new TransactionLocation(
+                                                  transaction.getHash(),
+                                                  block
+                                                      .getBody()
+                                                      .getTransactions()
+                                                      .indexOf(transaction))
+                                              ::writeTo)))
+                          .toList();
                   Bytes transactionReceiptsRlp =
                       RLP.encode(
                           o ->
@@ -553,7 +551,7 @@ public class DefaultBlockchain implements MutableBlockchain {
                       blockNumberBytes,
                       blockHeaderRlp,
                       blockBodyRlp,
-                      transactionLocationsRlp,
+                      transactionLocations,
                       transactionReceiptsRlp);
                 })
             .toList();
@@ -582,7 +580,7 @@ public class DefaultBlockchain implements MutableBlockchain {
       Bytes blockNumberBytes,
       Bytes blockHeaderRlp,
       Bytes blockBodyRlp,
-      List<Pair<Bytes, Bytes>> transactionLocation,
+      List<Pair<Hash, Bytes>> transactionLocation,
       Bytes transactionsReceiptRlp) {}
 
   @Override
