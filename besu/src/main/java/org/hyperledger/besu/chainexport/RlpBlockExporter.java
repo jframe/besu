@@ -16,10 +16,12 @@ package org.hyperledger.besu.chainexport;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.Block;
+import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -39,6 +41,15 @@ public class RlpBlockExporter extends BlockExporter {
   protected void exportBlock(final FileOutputStream outputStream, final Block block)
       throws IOException {
     final Bytes rlp = RLP.encode(block::writeTo);
+    outputStream.write(rlp.toArrayUnsafe());
+  }
+
+  @Override
+  protected void exportReceipts(FileOutputStream outputStream, List<TransactionReceipt> receipts)
+      throws IOException {
+    Bytes rlp =
+        RLP.encode(
+            o -> o.writeList(receipts, (r, rlpOutput) -> r.writeToForStorage(rlpOutput, false)));
     outputStream.write(rlp.toArrayUnsafe());
   }
 }

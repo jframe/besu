@@ -19,10 +19,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.List;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -81,6 +83,12 @@ public abstract class BlockExporter {
         LOG.warn("Unable to export blocks [{} - {}).  Blocks not found.", i, endBlock);
         break;
       }
+      final List<TransactionReceipt> maybeReceipts =
+          blockchain.getTxReceipts(maybeBlock.get().getHash()).get();
+      if (maybeReceipts.isEmpty()) {
+        LOG.warn("Unable to export receipts [{} - {}).  Receipts not found.", i, endBlock);
+        break;
+      }
 
       final Block block = maybeBlock.get();
       blockNumber = block.getHeader().getNumber();
@@ -89,6 +97,7 @@ public abstract class BlockExporter {
       }
 
       exportBlock(outputStream, block);
+      exportReceipts(outputStream, maybeReceipts);
     }
 
     outputStream.close();
@@ -104,4 +113,14 @@ public abstract class BlockExporter {
    */
   protected abstract void exportBlock(final FileOutputStream outputStream, final Block block)
       throws IOException;
+
+  /**
+   * Export receipt.
+   *
+   * @param outputStream The FileOutputStream where the block will be exported
+   * @param receipts The receipts to export
+   * @throws IOException In case of an error while exporting.
+   */
+  protected abstract void exportReceipts(
+      FileOutputStream outputStream, List<TransactionReceipt> receipts) throws IOException;
 }
