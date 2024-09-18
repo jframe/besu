@@ -45,7 +45,7 @@ public class RlpBlockExporter extends BlockExporter {
   }
 
   @Override
-  protected void exportReceipts(FileOutputStream outputStream, List<TransactionReceipt> receipts)
+  protected void exportReceipts(final FileOutputStream outputStream, final List<TransactionReceipt> receipts)
       throws IOException {
     Bytes rlp =
         RLP.encode(
