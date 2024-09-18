@@ -38,18 +38,17 @@ public class RlpBlockExporter extends BlockExporter {
   }
 
   @Override
-  protected void exportBlock(final FileOutputStream outputStream, final Block block)
+  protected void exportBlock(
+      final FileOutputStream outputStream,
+      final Block block,
+      final List<TransactionReceipt> receipts)
       throws IOException {
-    final Bytes rlp = RLP.encode(block::writeTo);
-    outputStream.write(rlp.toArrayUnsafe());
-  }
-
-  @Override
-  protected void exportReceipts(final FileOutputStream outputStream, final List<TransactionReceipt> receipts)
-      throws IOException {
-    Bytes rlp =
+    final Bytes rlp =
         RLP.encode(
-            o -> o.writeList(receipts, (r, rlpOutput) -> r.writeToForStorage(rlpOutput, false)));
+            rlpOutput -> {
+              block.writeTo(rlpOutput);
+              rlpOutput.writeList(receipts, (r, o) -> r.writeToForStorage(o, false));
+            });
     outputStream.write(rlp.toArrayUnsafe());
   }
 }

@@ -83,21 +83,21 @@ public abstract class BlockExporter {
         LOG.warn("Unable to export blocks [{} - {}).  Blocks not found.", i, endBlock);
         break;
       }
-      final List<TransactionReceipt> maybeReceipts =
-          blockchain.getTxReceipts(maybeBlock.get().getHash()).get();
+      final Optional<List<TransactionReceipt>> maybeReceipts =
+          blockchain.getTxReceipts(maybeBlock.get().getHash());
       if (maybeReceipts.isEmpty()) {
         LOG.warn("Unable to export receipts [{} - {}).  Receipts not found.", i, endBlock);
         break;
       }
 
       final Block block = maybeBlock.get();
+      final List<TransactionReceipt> receipts = maybeReceipts.get();
       blockNumber = block.getHeader().getNumber();
       if (blockNumber % 100 == 0) {
         LOG.info("Export at block {}", blockNumber);
       }
 
-      exportBlock(outputStream, block);
-      exportReceipts(outputStream, maybeReceipts);
+      exportBlock(outputStream, block, receipts);
     }
 
     outputStream.close();
@@ -109,18 +109,12 @@ public abstract class BlockExporter {
    *
    * @param outputStream The FileOutputStream where the block will be exported
    * @param block The block to export
-   * @throws IOException In case of an error while exporting.
-   */
-  protected abstract void exportBlock(final FileOutputStream outputStream, final Block block)
-      throws IOException;
-
-  /**
-   * Export receipt.
-   *
-   * @param outputStream The FileOutputStream where the block will be exported
    * @param receipts The receipts to export
    * @throws IOException In case of an error while exporting.
    */
-  protected abstract void exportReceipts(
-      FileOutputStream outputStream, List<TransactionReceipt> receipts) throws IOException;
+  protected abstract void exportBlock(
+      final FileOutputStream outputStream,
+      final Block block,
+      final List<TransactionReceipt> receipts)
+      throws IOException;
 }
