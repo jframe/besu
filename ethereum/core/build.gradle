@@ -78,6 +78,7 @@ dependencies {
   testImplementation project(path: ':ethereum:eth')
   testImplementation project(':testutil')
   testImplementation project(path: ':plugins:rocksdb')
+  testImplementation project(path: ':besu')
 
   testImplementation 'org.apache.logging.log4j:log4j-core'
   testImplementation 'io.tmio:tuweni-bytes'
