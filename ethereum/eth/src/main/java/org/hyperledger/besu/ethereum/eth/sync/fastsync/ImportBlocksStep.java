@@ -100,7 +100,7 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   protected boolean importBlock(final BlockWithReceipts blockWithReceipts) {
     protocolContext
         .getBlockchain()
-        .storeBlock(blockWithReceipts.getBlock(), blockWithReceipts.getReceipts());
+        .storeBlockForSyncing(blockWithReceipts.getBlock(), blockWithReceipts.getReceipts());
     return true;
   }
 }

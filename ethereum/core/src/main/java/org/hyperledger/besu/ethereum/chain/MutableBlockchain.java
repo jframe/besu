@@ -49,6 +49,8 @@ public interface MutableBlockchain extends Blockchain {
    */
   void storeBlock(Block block, List<TransactionReceipt> receipts);
 
+  void storeBlockForSyncing(Block block, List<TransactionReceipt> receipts);
+
   void unsafeImportBlock(
       final Block block,
       final List<TransactionReceipt> receipts,
