@@ -437,6 +437,23 @@ public class DefaultBlockchain implements MutableBlockchain {
     appendBlockHelper(new BlockWithReceipts(block, receipts), true);
   }
 
+  @Override
+  public void storeBlockForSyncing(final Block block, final List<TransactionReceipt> receipts) {
+    if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    final Hash hash = block.getHash();
+    final Difficulty totalDifficulty = calculateTotalDifficulty(block.getHeader());
+    updater.putBlockHeader(hash, block.getHeader());
+    updater.putBlockHash(block.getHeader().getNumber(), hash);
+    updater.putBlockBody(hash, block.getBody());
+    updater.putTransactionReceipts(hash, receipts);
+    updater.putTotalDifficulty(hash, totalDifficulty);
+    updater.setChainHead(hash);
+    updater.commit();
+    this.chainHeader = block.getHeader();
+    this.totalDifficulty = totalDifficulty;
+  }
+
   private void cacheBlockData(final Block block, final List<TransactionReceipt> receipts) {
     blockHeadersCache.ifPresent(cache -> cache.put(block.getHash(), block.getHeader()));
     blockBodiesCache.ifPresent(cache -> cache.put(block.getHash(), block.getBody()));
@@ -510,6 +527,49 @@ public class DefaultBlockchain implements MutableBlockchain {
         totalDifficulty -> updater.putTotalDifficulty(hash, totalDifficulty));
     updater.commit();
   }
+
+  public synchronized void unsafeImportBlockWithoutTxIndexing(
+          final Block block,
+          final List<TransactionReceipt> transactionReceipts,
+          final Optional<Difficulty> maybeTotalDifficulty) {
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    final Hash hash = block.getHash();
+    updater.putBlockHeader(hash, block.getHeader());
+    updater.putBlockHash(block.getHeader().getNumber(), hash);
+    updater.putBlockBody(hash, block.getBody());
+    updater.putTransactionReceipts(hash, transactionReceipts);
+    maybeTotalDifficulty.ifPresent(
+            totalDifficulty -> updater.putTotalDifficulty(hash, totalDifficulty));
+    updater.commit();
+  }
+
+  public synchronized void unsafeImportBlockWithoutTxIndexingOneTx(
+          final List<BlockWithReceipts> blocks) {
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    for (final BlockWithReceipts blockWithReceipts: blocks) {
+      final Hash hash = blockWithReceipts.getHash();
+      updater.putBlockHeader(hash, blockWithReceipts.getHeader());
+      updater.putBlockHash(blockWithReceipts.getHeader().getNumber(), hash);
+      updater.putBlockBody(hash, blockWithReceipts.getBlock().getBody());
+      updater.putTransactionReceipts(hash, blockWithReceipts.getReceipts());
+    }
+    updater.commit();
+  }
+
+  public synchronized void unsafeImportBlockWithoutTxIndexingMultipleParallelTxs(
+          final List<BlockWithReceipts> blocks) {
+    blocks.parallelStream().forEach(
+            blockWithReceipts -> {
+              final BlockchainStorage.Updater updater = blockchainStorage.updater();
+              final Block block = blockWithReceipts.getBlock();
+              final Hash hash = blockWithReceipts.getHash();
+              updater.putBlockHeader(hash, block.getHeader());
+              updater.putBlockHash(block.getHeader().getNumber(), hash);
+              updater.putBlockBody(hash, block.getBody());
+              updater.putTransactionReceipts(hash, blockWithReceipts.getReceipts());
+            });
+  }
+
 
   @Override
   public void unsafeImportBlocks(final List<BlockWithReceipts> blocks) {
