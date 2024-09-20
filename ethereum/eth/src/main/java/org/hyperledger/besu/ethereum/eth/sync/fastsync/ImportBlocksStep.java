@@ -60,6 +60,10 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
           .addArgument(blockWithReceipts.getBlock()::toLogString)
           .log();
     }
+    protocolContext
+        .getBlockchain()
+        .unsafeSetChainHead(blocksWithReceipts.getLast().getBlock().getHeader(), null);
+
     if (logStartBlock.isEmpty()) {
       logStartBlock = OptionalLong.of(blocksWithReceipts.get(0).getNumber());
     }
