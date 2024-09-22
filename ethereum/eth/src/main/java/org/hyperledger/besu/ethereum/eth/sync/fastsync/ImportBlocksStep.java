@@ -16,12 +16,10 @@ package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
-import org.hyperledger.besu.ethereum.core.BlockImporter;
 import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.sync.ValidationPolicy;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.exceptions.InvalidBlockException;
-import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 
@@ -36,17 +34,13 @@ import org.slf4j.LoggerFactory;
 
 public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   private static final Logger LOG = LoggerFactory.getLogger(ImportBlocksStep.class);
-  private static final long PRINT_DELAY = TimeUnit.SECONDS.toMillis(30L);
+  private static final long PRINT_DELAY = TimeUnit.SECONDS.toMillis(1L);
 
-  private final ProtocolSchedule protocolSchedule;
   protected final ProtocolContext protocolContext;
-  private final ValidationPolicy headerValidationPolicy;
-  private final ValidationPolicy ommerValidationPolicy;
   private final EthContext ethContext;
   private long accumulatedTime = 0L;
   private OptionalLong logStartBlock = OptionalLong.empty();
   private final BlockHeader pivotHeader;
-  private final BodyValidationMode bodyValidationMode;
 
   public ImportBlocksStep(
       final ProtocolSchedule protocolSchedule,
@@ -56,13 +50,9 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
       final EthContext ethContext,
       final BlockHeader pivotHeader,
       final BodyValidationMode bodyValidationMode) {
-    this.protocolSchedule = protocolSchedule;
     this.protocolContext = protocolContext;
-    this.headerValidationPolicy = headerValidationPolicy;
-    this.ommerValidationPolicy = ommerValidationPolicy;
     this.ethContext = ethContext;
     this.pivotHeader = pivotHeader;
-    this.bodyValidationMode = bodyValidationMode;
   }
 
   @Override
@@ -114,16 +104,6 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   }
 
   protected boolean importBlock(final BlockWithReceipts blockWithReceipts) {
-    final BlockImporter importer =
-        protocolSchedule.getByBlockHeader(blockWithReceipts.getHeader()).getBlockImporter();
-    final BlockImportResult blockImportResult =
-        importer.importBlockForSyncing(
-            protocolContext,
-            blockWithReceipts.getBlock(),
-            blockWithReceipts.getReceipts(),
-            headerValidationPolicy.getValidationModeForNextBlock(),
-            ommerValidationPolicy.getValidationModeForNextBlock(),
-            bodyValidationMode);
-    return blockImportResult.isImported();
+    return true;
   }
 }
