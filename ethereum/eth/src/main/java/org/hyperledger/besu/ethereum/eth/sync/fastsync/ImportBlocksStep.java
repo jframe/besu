@@ -34,7 +34,6 @@ import org.slf4j.LoggerFactory;
 
 public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   private static final Logger LOG = LoggerFactory.getLogger(ImportBlocksStep.class);
-  private static final long PRINT_DELAY = TimeUnit.SECONDS.toMillis(1L);
 
   protected final ProtocolContext protocolContext;
   private final EthContext ethContext;
@@ -57,7 +56,6 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
 
   @Override
   public void accept(final List<BlockWithReceipts> blocksWithReceipts) {
-    final long startTime = System.nanoTime();
     for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
       if (!importBlock(blockWithReceipts)) {
         throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
@@ -75,24 +73,20 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
     if (ethContext != null && ethContext.getEthPeers().peerCount() >= 0) {
       peerCount = ethContext.getEthPeers().peerCount();
     }
-    final long endTime = System.nanoTime();
 
-    accumulatedTime += TimeUnit.MILLISECONDS.convert(endTime - startTime, TimeUnit.NANOSECONDS);
-    if (accumulatedTime > PRINT_DELAY) {
-      final long blocksPercent = getBlocksPercent(lastBlock, pivotHeader.getNumber());
-      LOG.info(
-          "Block import progress: {} of {} ({}%), Peer count: {}",
-          lastBlock, pivotHeader.getNumber(), blocksPercent, peerCount);
-      LOG.debug(
-          "Completed importing chain segment {} to {} ({} blocks in {}ms), Peer count: {}",
-          logStartBlock.getAsLong(),
-          lastBlock,
-          lastBlock - logStartBlock.getAsLong() + 1,
-          accumulatedTime,
-          peerCount);
-      accumulatedTime = 0L;
-      logStartBlock = OptionalLong.empty();
-    }
+    final long blocksPercent = getBlocksPercent(lastBlock, pivotHeader.getNumber());
+    LOG.info(
+        "Block import progress: {} of {} ({}%), Peer count: {}",
+        lastBlock, pivotHeader.getNumber(), blocksPercent, peerCount);
+    LOG.debug(
+        "Completed importing chain segment {} to {} ({} blocks in {}ms), Peer count: {}",
+        logStartBlock.getAsLong(),
+        lastBlock,
+        lastBlock - logStartBlock.getAsLong() + 1,
+        accumulatedTime,
+        peerCount);
+    accumulatedTime = 0L;
+    logStartBlock = OptionalLong.empty();
   }
 
   @VisibleForTesting
