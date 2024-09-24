@@ -44,7 +44,10 @@ import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFactory {
   protected final SynchronizerConfiguration syncConfig;
@@ -56,6 +59,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   protected final FastSyncValidationPolicy attachedValidationPolicy;
   protected final FastSyncValidationPolicy detachedValidationPolicy;
   protected final FastSyncValidationPolicy ommerValidationPolicy;
+  private final AtomicBoolean downloadedHeaders = new AtomicBoolean(false);
+  private final AtomicLong lastImportedBlock = new AtomicLong(0);
 
   public ValidatorSyncDownloadPipelineFactory(
       final SynchronizerConfiguration syncConfig,
@@ -102,8 +107,18 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     if (syncState.getCheckpoint().isPresent()) {
       return scheduler
           .startPipeline(createDownloadCheckPointPipeline(syncState, syncTarget))
-          .thenCompose(unused -> scheduler.startPipeline(createDownloadHeadersPipeline(syncTarget)))
-          .thenCompose(unused -> scheduler.startPipeline(pipeline));
+          .thenCompose(
+              unused -> {
+                if (!downloadedHeaders.get()) {
+                  return scheduler.startPipeline(createDownloadHeadersPipeline(syncTarget));
+                }
+                return CompletableFuture.completedFuture(null);
+              })
+          .thenCompose(
+              unused -> {
+                downloadedHeaders.set(true);
+                return scheduler.startPipeline(pipeline);
+              });
     } else {
       return scheduler
           .startPipeline(createDownloadHeadersPipeline(syncTarget))
@@ -179,7 +194,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             true,
             "validatorSyncHeaderDownload")
         .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
-        .thenFlatMap("validateHeaders", validateHeadersJoinUpStep, downloaderParallelism)
+        .thenFlatMap(
+            "validateHeaders", validateHeadersJoinUpStep, downloaderParallelism * headerRequestSize)
         .andFinishWith("saveHeader", saveHeadersStep);
   }
 
@@ -188,9 +204,14 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
 
+    long lastImported = lastImportedBlock.get();
+    long checkpointNumber = getCommonAncestor(target).getNumber();
+    long checkpointTarget =
+        lastImported > 0 && lastImported > checkpointNumber ? lastImported : checkpointNumber;
+
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
-            getCommonAncestor(target).getNumber(),
+            checkpointTarget,
             fastSyncState.getPivotBlockNumber().getAsLong(),
             false,
             headerRequestSize);
@@ -213,7 +234,11 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
         .thenProcessAsync(
             "downloadBodiesAndReceipts", downloadBodiesAndReceiptsStep, downloaderParallelism)
-        .andFinishWith("importBlock", (ignore) -> {});
+        .andFinishWith(
+            "importBlock",
+            (blockWithReceipts) -> {
+              lastImportedBlock.set(blockWithReceipts.getFirst().getNumber());
+            });
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {
