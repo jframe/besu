@@ -44,7 +44,6 @@ import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFactory {
@@ -101,9 +100,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
       final SyncTarget syncTarget,
       final Pipeline<?> pipeline) {
     if (syncState.getCheckpoint().isPresent()) {
-      final CompletableFuture<Void> downloadCheckPointPipeline =
-          scheduler.startPipeline(createDownloadCheckPointPipeline(syncState, syncTarget));
-      return downloadCheckPointPipeline
+      return scheduler
+          .startPipeline(createDownloadCheckPointPipeline(syncState, syncTarget))
           .thenCompose(unused -> scheduler.startPipeline(createDownloadHeadersPipeline(syncTarget)))
           .thenCompose(unused -> scheduler.startPipeline(pipeline));
     } else {
