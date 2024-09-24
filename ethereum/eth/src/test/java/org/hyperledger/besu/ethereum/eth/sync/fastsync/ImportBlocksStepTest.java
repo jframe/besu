@@ -65,14 +65,7 @@ public class ImportBlocksStepTest {
     when(validationPolicy.getValidationModeForNextBlock()).thenReturn(FULL);
     when(ommerValidationPolicy.getValidationModeForNextBlock()).thenReturn(LIGHT);
 
-    importBlocksStep =
-        new ImportBlocksStep(
-            protocolSchedule,
-            protocolContext,
-            validationPolicy,
-            ommerValidationPolicy,
-            null,
-            pivotHeader);
+    importBlocksStep = new ImportBlocksStep(protocolContext, null, pivotHeader);
   }
 
   @Test

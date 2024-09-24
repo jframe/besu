@@ -143,12 +143,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
         new DownloadReceiptsStep(ethContext, metricsSystem);
     final ImportBlocksStep importBlockStep =
         new ImportBlocksStep(
-            protocolSchedule,
-            protocolContext,
-            attachedValidationPolicy,
-            ommerValidationPolicy,
-            ethContext,
-            fastSyncState.getPivotBlockHeader().get());
+            protocolContext, ethContext, fastSyncState.getPivotBlockHeader().get());
 
     return PipelineBuilder.createPipelineFrom(
             "fetchCheckpoints",

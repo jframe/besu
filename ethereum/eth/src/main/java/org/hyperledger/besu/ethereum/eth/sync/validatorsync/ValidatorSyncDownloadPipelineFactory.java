@@ -177,12 +177,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         new DownloadReceiptsStep(ethContext, metricsSystem);
     final ImportBlocksStep importBlockStep =
         new ImportBlocksStep(
-            protocolSchedule,
-            protocolContext,
-            attachedValidationPolicy,
-            ommerValidationPolicy,
-            ethContext,
-            fastSyncState.getPivotBlockHeader().get());
+            protocolContext, ethContext, fastSyncState.getPivotBlockHeader().get());
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
