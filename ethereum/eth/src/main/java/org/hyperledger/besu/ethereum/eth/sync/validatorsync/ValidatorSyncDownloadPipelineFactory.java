@@ -34,6 +34,7 @@ import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointSource;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.DownloadReceiptsStep;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
+import org.hyperledger.besu.ethereum.eth.sync.fastsync.ImportBlocksStep;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.checkpoint.Checkpoint;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeadersValidationStep;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
@@ -222,6 +223,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
     final DownloadReceiptsStep downloadReceiptsStep =
         new DownloadReceiptsStep(ethContext, metricsSystem);
+    final ImportBlocksStep importBlockStep =
+        new ImportBlocksStep(
+            protocolContext, ethContext, fastSyncState.getPivotBlockHeader().get());
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
@@ -242,6 +246,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             "importBlock",
             (blockWithReceipts) -> {
               lastImportedBlock.set(blockWithReceipts.getFirst().getNumber());
+              importBlockStep.accept(blockWithReceipts);
             });
   }
 
