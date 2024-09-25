@@ -50,7 +50,7 @@ public class DownloadBodiesStep
     LOG.info(
         "Download {} bodies starting from {}",
         blockHeaders.size(),
-        blockHeaders.getFirst() == null ? null : blockHeaders.getFirst().getNumber());
+        blockHeaders.isEmpty() || blockHeaders.getFirst() == null ? null : blockHeaders.getFirst().getNumber());
     return CompleteBlocksTask.forHeaders(protocolSchedule, ethContext, blockHeaders, metricsSystem)
         .run();
   }
