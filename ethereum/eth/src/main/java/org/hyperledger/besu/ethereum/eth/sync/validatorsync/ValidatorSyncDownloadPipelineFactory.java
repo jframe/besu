@@ -25,11 +25,13 @@ import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
+import org.hyperledger.besu.ethereum.eth.sync.DownloadBodiesStep;
 import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointBlockImportStep;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointDownloadBlockStep;
 import org.hyperledger.besu.ethereum.eth.sync.checkpointsync.CheckpointSource;
+import org.hyperledger.besu.ethereum.eth.sync.fastsync.DownloadReceiptsStep;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.checkpoint.Checkpoint;
@@ -195,7 +197,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             "validatorSyncHeaderDownload")
         .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
         .thenFlatMap(
-            "validateHeaders", validateHeadersJoinUpStep, downloaderParallelism * headerRequestSize)
+            "validateHeadersJoin",
+            validateHeadersJoinUpStep,
+            downloaderParallelism * headerRequestSize)
         .andFinishWith("saveHeader", saveHeadersStep);
   }
 
@@ -216,8 +220,10 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             false,
             headerRequestSize);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
-    final DownloadBodiesAndReceiptsStep downloadBodiesAndReceiptsStep =
-        new DownloadBodiesAndReceiptsStep(protocolSchedule, ethContext, metricsSystem);
+    final DownloadBodiesStep downloadBodiesStep =
+        new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
+    final DownloadReceiptsStep downloadReceiptsStep =
+        new DownloadReceiptsStep(ethContext, metricsSystem);
 
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
@@ -232,8 +238,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             true,
             "validatorSyncBlockImport")
         .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
-        .thenProcessAsync(
-            "downloadBodiesAndReceipts", downloadBodiesAndReceiptsStep, downloaderParallelism)
+        .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
+        .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
         .andFinishWith(
             "importBlock",
             (blockWithReceipts) -> {
