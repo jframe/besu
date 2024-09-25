@@ -203,7 +203,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
 
   @Override
   public Pipeline<ValidatorSyncRange> createDownloadPipelineForSyncTarget(final SyncTarget target) {
-    final int downloaderParallelism = syncConfig.getDownloaderParallelism();
+    final int downloaderParallelism = 8;
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
 
     long lastImported = lastImportedBlock.get();
