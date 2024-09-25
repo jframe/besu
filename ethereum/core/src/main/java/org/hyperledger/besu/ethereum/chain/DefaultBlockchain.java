@@ -414,7 +414,7 @@ public class DefaultBlockchain implements MutableBlockchain {
     updater.setChainHead(hash);
     updater.commit();
     this.chainHeader = block.getHeader();
-    this.totalDifficulty = totalDifficulty;
+    //    this.totalDifficulty = totalDifficulty;
   }
 
   @Override
