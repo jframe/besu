@@ -48,8 +48,9 @@ public class PeerReputation implements Comparable<PeerReputation> {
   private static final int LARGE_ADJUSTMENT = 10;
 
   private int score;
-
   private final int maxScore;
+  private final Queue<Long> lastTenDurations = new ConcurrentLinkedQueue<>();
+  private final Queue<Long> lastTenBytesDownloaded = new ConcurrentLinkedQueue<>();
 
   public PeerReputation() {
     this(DEFAULT_INITIAL_SCORE, DEFAULT_MAX_SCORE);
@@ -120,8 +121,26 @@ public class PeerReputation implements Comparable<PeerReputation> {
   }
 
   public void recordTransferRate(final long duration, final long bytesDownloaded) {
-    final double transferRate = (double) bytesDownloaded / duration;
-    LOG.info("Transfer rate: {}", transferRate);
+    if (lastTenDurations.size() >= 10) {
+      lastTenDurations.poll();
+    }
+    if (lastTenBytesDownloaded.size() >= 10) {
+      lastTenBytesDownloaded.poll();
+    }
+    lastTenDurations.add(duration);
+    lastTenBytesDownloaded.add(bytesDownloaded);
+
+    double meanDuration = lastTenDurations.stream().mapToLong(Long::longValue).average().orElse(0);
+    double meanBytesDownloaded =
+        lastTenBytesDownloaded.stream().mapToLong(Long::longValue).average().orElse(0);
+    int meanTransferRate = (int) (meanBytesDownloaded / meanDuration);
+
+    LOG.info("Mean transfer rate: {}", meanTransferRate);
+
+    // Update score based on mean transfer rate
+    if (meanTransferRate > 0) {
+      score = meanTransferRate;
+    }
   }
 
   @Override
