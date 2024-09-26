@@ -47,6 +47,7 @@ import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +64,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
   protected final FastSyncValidationPolicy attachedValidationPolicy;
   protected final FastSyncValidationPolicy detachedValidationPolicy;
   protected final FastSyncValidationPolicy ommerValidationPolicy;
+  private final AtomicReference<BlockHeader> lastImportedBlock = new AtomicReference<>();
 
   public FastSyncDownloadPipelineFactory(
       final SynchronizerConfiguration syncConfig,
@@ -118,6 +120,9 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
     final int singleHeaderBufferSize = headerRequestSize * downloaderParallelism;
+    final BlockHeader commonAncestor =
+        lastImportedBlock.get() == null ? getCommonAncestor(target) : lastImportedBlock.get();
+
     final BodyValidationMode bodyValidationMode =
         protocolSchedule.anyMatch(scheduledProtocolSpec -> scheduledProtocolSpec.spec().isPoS())
             ? BodyValidationMode.NONE
@@ -129,7 +134,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             this::shouldContinueDownloadingFromPeer,
             ethContext.getScheduler(),
             target.peer(),
-            getCommonAncestor(target),
+            commonAncestor,
             syncConfig.getDownloaderCheckpointRetries(),
             SyncTerminationCondition.never());
     final DownloadHeadersStep downloadHeadersStep =
@@ -173,7 +178,12 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
         .inBatches(headerRequestSize)
         .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
         .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
-        .andFinishWith("importBlock", importBlockStep);
+        .andFinishWith(
+            "importBlock",
+            blockWithReceipts -> {
+              lastImportedBlock.set(blockWithReceipts.getLast().getHeader());
+              importBlockStep.accept(blockWithReceipts);
+            });
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget syncTarget) {
