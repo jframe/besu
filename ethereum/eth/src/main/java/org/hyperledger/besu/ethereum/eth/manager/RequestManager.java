@@ -174,7 +174,9 @@ public class RequestManager {
     private volatile ResponseCallback responseCallback = null;
 
     public ResponseStream(
-        final EthPeer peer, final DeregistrationProcessor deregisterCallback, long startTime) {
+        final EthPeer peer,
+        final DeregistrationProcessor deregisterCallback,
+        final long startTime) {
       this.peer = peer;
       this.deregisterCallback = deregisterCallback;
       this.startTime = startTime;

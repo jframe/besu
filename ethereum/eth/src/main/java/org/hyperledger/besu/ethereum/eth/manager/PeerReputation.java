@@ -119,7 +119,7 @@ public class PeerReputation implements Comparable<PeerReputation> {
     return timestamp != null && timestamp + USELESS_RESPONSE_WINDOW_IN_MILLIS < currentTimestamp;
   }
 
-  public void recordTransferRate(long duration, long bytesDownloaded) {
+  public void recordTransferRate(final long duration, final long bytesDownloaded) {
     final double transferRate = (double) bytesDownloaded / duration;
     LOG.info("Transfer rate: {}", transferRate);
   }

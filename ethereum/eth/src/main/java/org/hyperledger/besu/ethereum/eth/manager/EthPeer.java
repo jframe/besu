@@ -719,7 +719,7 @@ public class EthPeer implements Comparable<EthPeer> {
     return a.getInitiatedAt() < b.getInitiatedAt() ? -1 : 1;
   }
 
-  public void recordTransferRate(long duration, long bytesDownloaded) {
+  public void recordTransferRate(final long duration, final long bytesDownloaded) {
     reputation.recordTransferRate(duration, bytesDownloaded);
   }
 
