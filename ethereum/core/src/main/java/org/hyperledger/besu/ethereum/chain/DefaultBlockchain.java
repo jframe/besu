@@ -437,21 +437,23 @@ public class DefaultBlockchain implements MutableBlockchain {
     appendBlockHelper(new BlockWithReceipts(block, receipts), true);
   }
 
-  @Override
-  public void storeBlockForSyncing(final Block block, final List<TransactionReceipt> receipts) {
-    if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
+  public void storeBlockForSyncing(final BlockWithReceipts block) {
+    if (numberOfBlocksToCache != 0) cacheBlockData(block.getBlock(), block.getReceipts());
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
     final Hash hash = block.getHash();
     final Difficulty totalDifficulty = calculateTotalDifficulty(block.getHeader());
     updater.putBlockHeader(hash, block.getHeader());
     updater.putBlockHash(block.getHeader().getNumber(), hash);
-    updater.putBlockBody(hash, block.getBody());
-    updater.putTransactionReceipts(hash, receipts);
+    updater.putBlockBody(hash, block.getBlock().getBody());
+    updater.putTransactionReceipts(hash, block.getReceipts());
     updater.putTotalDifficulty(hash, totalDifficulty);
     updater.setChainHead(hash);
     updater.commit();
     this.chainHeader = block.getHeader();
     this.totalDifficulty = totalDifficulty;
+
+    final BlockAddedEvent blockAddedEvent = handleStoreOnly(block);
+    blockAddedObservers.forEach(observer -> observer.onBlockAdded(blockAddedEvent));
   }
 
   private void cacheBlockData(final Block block, final List<TransactionReceipt> receipts) {
@@ -529,9 +531,9 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   public synchronized void unsafeImportBlockWithoutTxIndexing(
-          final Block block,
-          final List<TransactionReceipt> transactionReceipts,
-          final Optional<Difficulty> maybeTotalDifficulty) {
+      final Block block,
+      final List<TransactionReceipt> transactionReceipts,
+      final Optional<Difficulty> maybeTotalDifficulty) {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
     final Hash hash = block.getHash();
     updater.putBlockHeader(hash, block.getHeader());
@@ -539,14 +541,14 @@ public class DefaultBlockchain implements MutableBlockchain {
     updater.putBlockBody(hash, block.getBody());
     updater.putTransactionReceipts(hash, transactionReceipts);
     maybeTotalDifficulty.ifPresent(
-            totalDifficulty -> updater.putTotalDifficulty(hash, totalDifficulty));
+        totalDifficulty -> updater.putTotalDifficulty(hash, totalDifficulty));
     updater.commit();
   }
 
   public synchronized void unsafeImportBlockWithoutTxIndexingOneTx(
-          final List<BlockWithReceipts> blocks) {
+      final List<BlockWithReceipts> blocks) {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
-    for (final BlockWithReceipts blockWithReceipts: blocks) {
+    for (final BlockWithReceipts blockWithReceipts : blocks) {
       final Hash hash = blockWithReceipts.getHash();
       updater.putBlockHeader(hash, blockWithReceipts.getHeader());
       updater.putBlockHash(blockWithReceipts.getHeader().getNumber(), hash);
@@ -557,8 +559,9 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   public synchronized void unsafeImportBlockWithoutTxIndexingMultipleParallelTxs(
-          final List<BlockWithReceipts> blocks) {
-    blocks.parallelStream().forEach(
+      final List<BlockWithReceipts> blocks) {
+    blocks.parallelStream()
+        .forEach(
             blockWithReceipts -> {
               final BlockchainStorage.Updater updater = blockchainStorage.updater();
               final Block block = blockWithReceipts.getBlock();
@@ -569,7 +572,6 @@ public class DefaultBlockchain implements MutableBlockchain {
               updater.putTransactionReceipts(hash, blockWithReceipts.getReceipts());
             });
   }
-
 
   @Override
   public void unsafeImportBlocks(final List<BlockWithReceipts> blocks) {
@@ -645,6 +647,56 @@ public class DefaultBlockchain implements MutableBlockchain {
       Bytes blockBodyRlp,
       List<Pair<Hash, Bytes>> transactionLocation,
       Bytes transactionsReceiptRlp) {}
+
+  public void importBlocksWithoutTxIndexing(final List<BlockWithReceipts> blocks) {
+    List<BlockValueWithoutTx> blockValues =
+            blocks.parallelStream()
+                    .map(
+                            blockWithReceipts -> {
+                              Block block = blockWithReceipts.getBlock();
+                              Hash hash = blockWithReceipts.getHash();
+                              Bytes blockNumberBytes = UInt256.valueOf(block.getHeader().getNumber()).toBytes();
+                              Bytes blockHeaderRlp =
+                                      RLP.encode(blockWithReceipts.getBlock().getHeader()::writeTo);
+                              Bytes blockBodyRlp = RLP.encode(blockWithReceipts.getBlock().getBody()::writeTo);
+                              Bytes transactionReceiptsRlp =
+                                      RLP.encode(
+                                              o ->
+                                                      o.writeList(
+                                                              blockWithReceipts.getReceipts(),
+                                                              (r, rlpOutput) -> r.writeToForStorage(rlpOutput, true)));
+                              return new BlockValueWithoutTx(
+                                      hash,
+                                      blockNumberBytes,
+                                      blockHeaderRlp,
+                                      blockBodyRlp,
+                                      transactionReceiptsRlp);
+                            })
+                    .toList();
+
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    blockValues.forEach(
+            blockValue -> {
+              updater.set(BLOCK_HEADER_PREFIX, blockValue.blockHash, blockValue.blockHeaderRlp);
+              updater.set(BLOCK_HASH_PREFIX, blockValue.blockNumberBytes, blockValue.blockHeaderRlp);
+              updater.set(BLOCK_BODY_PREFIX, blockValue.blockHash, blockValue.blockBodyRlp);
+              updater.set(
+                      TRANSACTION_RECEIPTS_PREFIX, blockValue.blockHash, blockValue.transactionsReceiptRlp);
+            });
+
+    this.chainHeader = blocks.getLast().getHeader();
+    updater.setChainHead(blockValues.getLast().blockHash);
+
+    updater.commit();
+  }
+
+  record BlockValueWithoutTx(
+          Hash blockHash,
+          Bytes blockNumberBytes,
+          Bytes blockHeaderRlp,
+          Bytes blockBodyRlp,
+          Bytes transactionsReceiptRlp) {}
+
 
   @Override
   public synchronized void unsafeSetChainHead(

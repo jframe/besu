@@ -61,7 +61,7 @@ public class ImportBlocksTaskPerformanceTest {
   private static final Difficulty DIFFICULTY = Difficulty.fromHexOrDecimalString("58750003716598352816469");
 
   @BeforeAll
-  public static void setup(final @TempDir Path tempDir) {
+  public static void setup() {
     final MainnetBlockHeaderFunctions blockHeaderFunctions = new MainnetBlockHeaderFunctions();
     try {
       final Path file = Path.of(DB_EXPORT_FILE);
@@ -122,7 +122,7 @@ public class ImportBlocksTaskPerformanceTest {
 
   @ParameterizedTest
   @MethodSource("blockImportValues")
-  public void ImportUsingLoopStoreOnly(final int blocksToImport) {
+  public void importUsingLoopStoreOnly(final int blocksToImport) {
     long start = System.nanoTime();
     for (int i = 1; i <= blocksToImport; i++) {
       blockchain.storeBlock(blocks.get(i).getBlock(), blocks.get(i).getReceipts());
@@ -169,8 +169,7 @@ public class ImportBlocksTaskPerformanceTest {
   public void storeBlockForSyncing(final int blocksToImport) {
     long start = System.nanoTime();
     for (int i = 1; i <= blocksToImport; i++) {
-      blockchain.storeBlockForSyncing(
-              blocks.get(i).getBlock(), blocks.get(i).getReceipts());
+      blockchain.storeBlockForSyncing(blocks.get(i));
     }
     long end = System.nanoTime();
     long totalTime = end - start;
@@ -215,6 +214,18 @@ public class ImportBlocksTaskPerformanceTest {
         "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
   }
 
+  @ParameterizedTest
+  @MethodSource("blockImportValues")
+  public void blockImportParallelWithoutTxIndexing(final int blocksToImport) {
+    long start = System.nanoTime();
+    blockchain.importBlocksWithoutTxIndexing(blocks.subList(1, blocksToImport + 1));
+    long end = System.nanoTime();
+    long totalTime = end - start;
+    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
+    System.out.println(
+            "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
+  }
+
   private static StorageProvider createKeyValueStorageProvider(
       final Path dataDir, final Path dbDir) {
     final var besuConfiguration = new BesuConfigurationImpl();
@@ -236,6 +247,6 @@ public class ImportBlocksTaskPerformanceTest {
   }
 
   static Stream<Integer> blockImportValues() {
-    return Stream.of(200);
+    return Stream.of(200, 200, 200);
   }
 }
