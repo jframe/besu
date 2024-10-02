@@ -428,6 +428,26 @@ public class DefaultBlockchain implements MutableBlockchain {
     appendBlockHelper(new BlockWithReceipts(block, receipts), true);
   }
 
+  @Override
+  public void storeBlockForSyncing(final Block block, final List<TransactionReceipt> receipts) {
+    if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    final Hash hash = block.getHash();
+    final Difficulty totalDifficulty = calculateTotalDifficulty(block.getHeader());
+    updater.putBlockHeader(hash, block.getHeader());
+    updater.putBlockHash(block.getHeader().getNumber(), hash);
+    updater.putBlockBody(hash, block.getBody());
+    updater.putTransactionReceipts(hash, receipts);
+    updater.putTotalDifficulty(hash, totalDifficulty);
+    updater.setChainHead(hash);
+    updater.commit();
+    this.chainHeader = block.getHeader();
+    this.totalDifficulty = totalDifficulty;
+
+    final BlockAddedEvent blockAddedEvent = BlockAddedEvent.createForStoredOnly(block);
+    blockAddedObservers.forEach(observer -> observer.onBlockAdded(blockAddedEvent));
+  }
+
   private void cacheBlockData(final Block block, final List<TransactionReceipt> receipts) {
     blockHeadersCache.ifPresent(cache -> cache.put(block.getHash(), block.getHeader()));
     blockBodiesCache.ifPresent(cache -> cache.put(block.getHash(), block.getBody()));
