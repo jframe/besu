@@ -34,8 +34,8 @@ import org.slf4j.LoggerFactory;
 public class PeerReputation implements Comparable<PeerReputation> {
   static final long USELESS_RESPONSE_WINDOW_IN_MILLIS =
       TimeUnit.MILLISECONDS.convert(1, TimeUnit.MINUTES);
-  static final int DEFAULT_MAX_SCORE = 150;
-  static final int DEFAULT_INITIAL_SCORE = 100;
+  static final int DEFAULT_MAX_SCORE = Integer.MAX_VALUE;
+  static final int DEFAULT_INITIAL_SCORE = Integer.MAX_VALUE;
   private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
   public static final int TIMEOUT_THRESHOLD = 5;
   public static final int USELESS_RESPONSE_THRESHOLD = 5;
