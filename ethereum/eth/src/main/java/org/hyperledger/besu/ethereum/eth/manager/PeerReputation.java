@@ -49,8 +49,8 @@ public class PeerReputation implements Comparable<PeerReputation> {
 
   private int score;
   private final int maxScore;
-  private final Queue<Long> lastTenDurations = new ConcurrentLinkedQueue<>();
-  private final Queue<Long> lastTenBytesDownloaded = new ConcurrentLinkedQueue<>();
+  private final Queue<Long> previousDurations = new ConcurrentLinkedQueue<>();
+  private final Queue<Long> previousBytesDownloaded = new ConcurrentLinkedQueue<>();
 
   public PeerReputation() {
     this(DEFAULT_INITIAL_SCORE, DEFAULT_MAX_SCORE);
@@ -121,18 +121,20 @@ public class PeerReputation implements Comparable<PeerReputation> {
   }
 
   public void recordTransferRate(final long duration, final long bytesDownloaded) {
-    if (lastTenDurations.size() >= 10) {
-      lastTenDurations.poll();
-    }
-    if (lastTenBytesDownloaded.size() >= 10) {
-      lastTenBytesDownloaded.poll();
-    }
-    lastTenDurations.add(duration);
-    lastTenBytesDownloaded.add(bytesDownloaded);
+    long currentTime = System.currentTimeMillis();
+    long tenMinutesAgo = currentTime - TimeUnit.MILLISECONDS.convert(10, TimeUnit.MINUTES);
 
-    double meanDuration = lastTenDurations.stream().mapToLong(Long::longValue).average().orElse(0);
+    // Remove entries older than 10 minutes
+    while (!previousDurations.isEmpty() && previousDurations.peek() < tenMinutesAgo) {
+      previousDurations.poll();
+      previousBytesDownloaded.poll();
+    }
+    previousDurations.add(duration);
+    previousBytesDownloaded.add(bytesDownloaded);
+
+    double meanDuration = previousDurations.stream().mapToLong(Long::longValue).average().orElse(0);
     double meanBytesDownloaded =
-        lastTenBytesDownloaded.stream().mapToLong(Long::longValue).average().orElse(0);
+        previousBytesDownloaded.stream().mapToLong(Long::longValue).average().orElse(0);
     int meanTransferRate = (int) (meanBytesDownloaded / meanDuration);
 
     LOG.info("Mean transfer rate: {}", meanTransferRate);
