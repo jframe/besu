@@ -19,13 +19,19 @@ import org.hyperledger.besu.ethereum.eth.manager.exceptions.NoAvailablePeersExce
 import org.hyperledger.besu.ethereum.eth.manager.exceptions.PeerDisconnectedException;
 import org.hyperledger.besu.ethereum.p2p.rlpx.connections.PeerConnection.PeerNotConnected;
 
+import java.util.Comparator;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class PendingPeerRequest {
+  private static final Logger LOG = LoggerFactory.getLogger(PendingPeerRequest.class);
+
   private final EthPeers ethPeers;
   private final PeerRequest request;
   private final CompletableFuture<ResponseStream> result = new CompletableFuture<>();
@@ -81,13 +87,20 @@ public class PendingPeerRequest {
 
   private Optional<EthPeer> getPeerToUse() {
     // return the assigned peer if still valid, otherwise switch to another peer
-    return peer.filter(p -> !p.isDisconnected()).isPresent()
-        ? peer
-        : ethPeers
-            .streamAvailablePeers()
-            .filter(peer -> peer.chainState().getEstimatedHeight() >= minimumBlockNumber)
-            .filter(request::isEthPeerSuitable)
-            .min(EthPeers.LEAST_TO_MOST_BUSY);
+    Optional<EthPeer> ethPeer =
+        peer.filter(p -> !p.isDisconnected()).isPresent()
+            ? peer
+            : ethPeers
+                .streamAvailablePeers()
+                .sorted(Comparator.comparing(EthPeer::getReputation).reversed())
+                .filter(peer -> peer.chainState().getEstimatedHeight() >= minimumBlockNumber)
+                .filter(request::isEthPeerSuitable)
+                .min(EthPeers.LEAST_TO_MOST_BUSY);
+    LOG.info(
+        "Peer selected for request: {}, reputation: {}",
+        ethPeer.map(EthPeer::getLoggableId).orElse("none"),
+        ethPeer.map(EthPeer::getReputation).orElse(null));
+    return ethPeer;
   }
 
   /**
