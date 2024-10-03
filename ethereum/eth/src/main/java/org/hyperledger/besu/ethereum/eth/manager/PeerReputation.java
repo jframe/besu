@@ -45,9 +45,6 @@ public class PeerReputation implements Comparable<PeerReputation> {
       new ConcurrentHashMap<>();
   private final Queue<Long> uselessResponseTimes = new ConcurrentLinkedQueue<>();
 
-  private static final int SMALL_ADJUSTMENT = 1;
-  private static final int LARGE_ADJUSTMENT = 10;
-
   private int score;
   private final int maxScore;
   private final Queue<Long> previousDurations = new ConcurrentLinkedQueue<>();
@@ -73,12 +70,20 @@ public class PeerReputation implements Comparable<PeerReputation> {
           newTimeoutCount,
           requestCode,
           peer.getLoggableId());
-      score -= LARGE_ADJUSTMENT;
+      score -= getLargeAdjustment();
       return Optional.of(DisconnectReason.TIMEOUT);
     } else {
-      score -= SMALL_ADJUSTMENT;
+      score -= getSmallAdjustment();
       return Optional.empty();
     }
+  }
+
+  private int getSmallAdjustment() {
+    return (int) (score * 0.01); // 1% of the current score
+  }
+
+  private int getLargeAdjustment() {
+    return (int) (score * 0.1); // 10% of the current score
   }
 
   public void resetTimeoutCount(final int requestCode) {
@@ -100,20 +105,20 @@ public class PeerReputation implements Comparable<PeerReputation> {
       uselessResponseTimes.poll();
     }
     if (uselessResponseTimes.size() >= USELESS_RESPONSE_THRESHOLD) {
-      score -= LARGE_ADJUSTMENT;
+      score -= getLargeAdjustment();
       LOG.debug(
           "Disconnection triggered by exceeding useless response threshold for peer {}",
           peer.getLoggableId());
       return Optional.of(DisconnectReason.USELESS_PEER_USELESS_RESPONSES);
     } else {
-      score -= SMALL_ADJUSTMENT;
+      score -= getSmallAdjustment();
       return Optional.empty();
     }
   }
 
   public void recordUsefulResponse() {
     if (score < maxScore) {
-      score = Math.min(maxScore, score + SMALL_ADJUSTMENT);
+      score = Math.min(maxScore, score + getSmallAdjustment());
     }
   }
 
@@ -138,7 +143,11 @@ public class PeerReputation implements Comparable<PeerReputation> {
         previousBytesDownloaded.stream().mapToLong(Long::longValue).average().orElse(0);
     int meanTransferRate = (int) (meanBytesDownloaded / meanDuration);
 
-    LOG.info("Mean transfer rate: {}", meanTransferRate);
+    LOG.info(
+        "Mean transfer rate: {}, previous rate: {}, entries {}",
+        meanTransferRate,
+        score,
+        previousDurations.size());
 
     // Update score based on mean transfer rate
     if (meanTransferRate > 0) {
