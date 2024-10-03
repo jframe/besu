@@ -137,9 +137,9 @@ public class PeerReputation implements Comparable<PeerReputation> {
     }
 
     rates.add(new PeerRate(duration.toNanos(), currentTime, bytesDownloaded));
-    double meanDuration = rates.stream().mapToLong(r -> r.duration).sum();
-    double meanBytesDownloaded = rates.stream().mapToLong(r -> r.bytesDownloaded).sum();
-    int meanTransferRate = (int) (meanBytesDownloaded / meanDuration);
+    long sumDuration = rates.stream().mapToLong(r -> r.duration).sum();
+    long sumBytesDownloaded = rates.stream().mapToLong(r -> r.bytesDownloaded).sum();
+    int meanTransferRate = (int) (sumBytesDownloaded / sumDuration);
 
     LOG.info(
         "Mean transfer rate: {}, previous rate: {}, entries {}, id: {}, bytesDownloaded: {}, duration: {}",
