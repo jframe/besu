@@ -117,10 +117,10 @@ public class PendingPeerRequest {
             ? peer
             : ethPeers
                 .streamAvailablePeers()
-                .sorted(Comparator.comparing(EthPeer::getReputation).reversed())
+                .sorted()
                 .filter(peer -> peer.chainState().getEstimatedHeight() >= minimumBlockNumber)
                 .filter(request::isEthPeerSuitable)
-                .min(EthPeers.LEAST_TO_MOST_BUSY);
+                .max(Comparator.comparing(EthPeer::getReputation));
     LOG.info(
         "Peer selected for request: {}, reputation: {}",
         ethPeer.map(EthPeer::getLoggableId).orElse("none"),
