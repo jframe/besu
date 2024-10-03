@@ -142,13 +142,15 @@ public class PeerReputation implements Comparable<PeerReputation> {
     int meanTransferRate = (int) (sumBytesDownloaded / sumDuration);
 
     LOG.info(
-        "Mean transfer rate: {}, previous rate: {}, entries {}, id: {}, bytesDownloaded: {}, duration: {}",
+        "Mean transfer rate: {}, previous rate: {}, entries {}, id: {}, bytesDownloaded: {}, duration: {}, sumDuration: {}, sumBytesDownloaded: {}",
         meanTransferRate,
         score,
         rates.size(),
         id,
         bytesDownloaded,
-        duration);
+        duration,
+        sumDuration,
+        sumBytesDownloaded);
 
     // Update score based on mean transfer rate
     if (meanTransferRate > 0) {
