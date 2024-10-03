@@ -18,6 +18,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage.DisconnectReason;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -120,7 +121,7 @@ public class PeerReputation implements Comparable<PeerReputation> {
     return timestamp != null && timestamp + USELESS_RESPONSE_WINDOW_IN_MILLIS < currentTimestamp;
   }
 
-  public void recordTransferRate(final long duration, final long bytesDownloaded) {
+  public void recordTransferRate(final Duration duration, final long bytesDownloaded) {
     long currentTime = System.currentTimeMillis();
     long tenMinutesAgo = currentTime - TimeUnit.MILLISECONDS.convert(10, TimeUnit.MINUTES);
 
@@ -129,7 +130,7 @@ public class PeerReputation implements Comparable<PeerReputation> {
       previousDurations.poll();
       previousBytesDownloaded.poll();
     }
-    previousDurations.add(duration);
+    previousDurations.add(duration.toMillis());
     previousBytesDownloaded.add(bytesDownloaded);
 
     double meanDuration = previousDurations.stream().mapToLong(Long::longValue).average().orElse(0);

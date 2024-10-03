@@ -43,6 +43,7 @@ import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage.Di
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -719,7 +720,7 @@ public class EthPeer implements Comparable<EthPeer> {
     return a.getInitiatedAt() < b.getInitiatedAt() ? -1 : 1;
   }
 
-  public void recordTransferRate(final long duration, final long bytesDownloaded) {
+  public void recordTransferRate(final Duration duration, final long bytesDownloaded) {
     reputation.recordTransferRate(duration, bytesDownloaded);
   }
 

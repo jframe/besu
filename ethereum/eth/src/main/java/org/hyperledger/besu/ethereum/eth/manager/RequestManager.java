@@ -20,6 +20,8 @@ import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage;
 import org.hyperledger.besu.ethereum.rlp.RLPException;
 
 import java.math.BigInteger;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -80,11 +82,11 @@ public class RequestManager {
         Optional.ofNullable(responseStreams.get(requestIdAndEthMessage.getKey()))
             .ifPresentOrElse(
                 responseStream -> {
-                  long endTime = System.currentTimeMillis();
-                  long duration = endTime - responseStream.getStartTime();
+                  Instant endTime = Instant.now();
+                  Duration duration = Duration.between(responseStream.getStartTime(), endTime);
                   long bytesDownloaded = ethMessage.getData().getSize();
-                  peer.recordTransferRate(duration, bytesDownloaded);
                   responseStream.processMessage(requestIdAndEthMessage.getValue());
+                  peer.recordTransferRate(duration, bytesDownloaded);
                 },
                 // Consider incorrect requestIds to be a useless response; too
                 // many of these and we will disconnect.
@@ -117,7 +119,7 @@ public class RequestManager {
 
   private ResponseStream createStream(final BigInteger requestId) {
     final ResponseStream stream =
-        new ResponseStream(peer, () -> deregisterStream(requestId), System.currentTimeMillis());
+        new ResponseStream(peer, () -> deregisterStream(requestId), Instant.now());
     responseStreams.put(requestId, stream);
     return stream;
   }
@@ -169,14 +171,14 @@ public class RequestManager {
     private final EthPeer peer;
     private final DeregistrationProcessor deregisterCallback;
     private final Queue<Response> bufferedResponses = new ConcurrentLinkedQueue<>();
-    private final long startTime;
+    private final Instant startTime;
     private volatile boolean closed = false;
     private volatile ResponseCallback responseCallback = null;
 
     public ResponseStream(
         final EthPeer peer,
         final DeregistrationProcessor deregisterCallback,
-        final long startTime) {
+        final Instant startTime) {
       this.peer = peer;
       this.deregisterCallback = deregisterCallback;
       this.startTime = startTime;
@@ -226,7 +228,7 @@ public class RequestManager {
       }
     }
 
-    public long getStartTime() {
+    public Instant getStartTime() {
       return startTime;
     }
   }
