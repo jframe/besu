@@ -80,11 +80,11 @@ public class PeerReputation implements Comparable<PeerReputation> {
   }
 
   private int getSmallAdjustment() {
-    return (int) (score * 0.01); // 1% of the current score
+    return 0;
   }
 
   private int getLargeAdjustment() {
-    return (int) (score * 0.1); // 10% of the current score
+    return 0;
   }
 
   public void resetTimeoutCount(final int requestCode) {
