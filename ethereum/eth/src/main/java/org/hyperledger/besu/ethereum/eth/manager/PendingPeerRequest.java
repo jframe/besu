@@ -25,6 +25,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +88,30 @@ public class PendingPeerRequest {
 
   private Optional<EthPeer> getPeerToUse() {
     // return the assigned peer if still valid, otherwise switch to another peer
+    LOG.info(
+        "Current peers {}",
+        ethPeers
+            .streamAvailablePeers()
+            .map(
+                p -> {
+                  boolean greaterEstimatedHeight =
+                      p.chainState().getEstimatedHeight() >= minimumBlockNumber;
+                  boolean peerIsSuitable = request.isEthPeerSuitable(p);
+                  int outstandingRequests = p.outstandingRequests();
+                  return "{ reputation: "
+                      + p.getReputation()
+                      + ", > estimatedHeight: "
+                      + greaterEstimatedHeight
+                      + ", id: "
+                      + p.getLoggableId()
+                      + ", suitable: "
+                      + peerIsSuitable
+                      + ", outstandingRequests: "
+                      + outstandingRequests
+                      + " }";
+                })
+            .collect(Collectors.toList()));
+
     Optional<EthPeer> ethPeer =
         peer.filter(p -> !p.isDisconnected()).isPresent()
             ? peer
