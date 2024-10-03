@@ -101,7 +101,7 @@ public class EthPeer implements Comparable<EthPeer> {
   private final Map<String, Map<Integer, RequestManager>> requestManagers;
 
   private final AtomicReference<Consumer<EthPeer>> onStatusesExchanged = new AtomicReference<>();
-  private final PeerReputation reputation = new PeerReputation();
+  private final PeerReputation reputation;
   private final Map<PeerValidator, Boolean> validationStatus = new ConcurrentHashMap<>();
   private final Bytes id;
   private boolean isServingSnap = false;
@@ -144,6 +144,7 @@ public class EthPeer implements Comparable<EthPeer> {
     this.requestManagers = new ConcurrentHashMap<>();
     this.localNodeId = localNodeId;
     this.id = connection.getPeer().getId();
+    this.reputation = new PeerReputation(getLoggableId());
 
     initEthRequestManagers();
     initSnapRequestManagers();

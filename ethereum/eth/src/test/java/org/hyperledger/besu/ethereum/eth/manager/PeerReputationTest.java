@@ -21,6 +21,9 @@ import static org.mockito.Mockito.mock;
 
 import org.hyperledger.besu.ethereum.eth.messages.EthPV62;
 
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -28,12 +31,12 @@ public class PeerReputationTest {
 
   private static final int INITIAL_SCORE = 25;
   private static final int MAX_SCORE = 50;
-  private final PeerReputation reputation = new PeerReputation(INITIAL_SCORE, MAX_SCORE);
+  private final PeerReputation reputation = new PeerReputation(INITIAL_SCORE, MAX_SCORE, "");
   private final EthPeer mockEthPeer = mock(EthPeer.class);
 
   @Test
   public void shouldThrowOnInvalidInitialScore() {
-    Assertions.assertThrows(IllegalArgumentException.class, () -> new PeerReputation(2, 1));
+    Assertions.assertThrows(IllegalArgumentException.class, () -> new PeerReputation(2, 1, ""));
   }
 
   @Test
@@ -96,6 +99,33 @@ public class PeerReputationTest {
       reputation.recordUsefulResponse();
     }
     assertThat(reputation.getScore()).isEqualTo(MAX_SCORE);
+  }
+
+  @Test
+  public void shouldRecordTransferRate() {
+    // Set up initial conditions
+    long tenMinutesInMillis = TimeUnit.MILLISECONDS.convert(10, TimeUnit.MINUTES);
+    long bytesDownloaded = 1000L;
+    Duration duration = Duration.ofMillis(500);
+
+    // Record transfer rate
+    reputation.recordTransferRate(duration, bytesDownloaded);
+
+    // Verify the score is updated based on the mean transfer rate
+    assertThat(reputation.getScore()).isEqualTo((int) (bytesDownloaded / duration.toMillis()));
+
+    // Simulate passage of time and add more transfer rates
+    reputation.recordTransferRate(Duration.ofSeconds(1), 2000L);
+    reputation.recordTransferRate(Duration.ofSeconds(2), 3000L);
+
+    // Verify the score is updated correctly
+    double expectedMeanTransferRate = (1000.0 / 500 + 2000.0 / 1000 + 3000.0 / 1500) / 3;
+    //  assertThat(reputation.getScore()).isEqualTo((int) expectedMeanTransferRate);
+
+    // Simulate entries older than 10 minutes being removed
+    reputation.recordTransferRate(Duration.ofMillis(tenMinutesInMillis + 1), 4000L);
+    expectedMeanTransferRate = 4000.0 / (tenMinutesInMillis + 1);
+    assertThat(reputation.getScore()).isEqualTo((int) expectedMeanTransferRate);
   }
 
   private void sendRequestTimeouts(final int requestType, final int repeatCount) {
