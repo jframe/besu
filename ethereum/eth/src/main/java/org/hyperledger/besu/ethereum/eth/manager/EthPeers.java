@@ -387,7 +387,7 @@ public class EthPeers {
           streamAvailablePeers()
               .filter(peerFilter)
               .filter(EthPeer::hasAvailableRequestCapacity)
-              .filter(p -> p.getTransferRate().getRate() > 0)
+              .filter(p -> allUnsampled || p.getTransferRate().getRate() > 0)
               .max(
                   Comparator.comparing(EthPeer::getTransferRate)
                       .thenComparing(EthPeer::getReputation)
