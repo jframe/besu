@@ -392,6 +392,9 @@ public class EthPeers {
                         Comparator.comparing(
                                 (final EthPeer p) -> selectedPeerRequests.get(p.getId()))
                             .reversed()));
+    LOG.info("Selected peer for sync: {}", peer);
+    LOG.info("Current selected peer requests: {}", selectedPeerRequests);
+    LOG.info("Current peers: {}", activeConnections);
     peer.ifPresent(p -> selectedPeerRequests.merge(p.getId(), 1, Integer::sum));
     return peer;
   }
