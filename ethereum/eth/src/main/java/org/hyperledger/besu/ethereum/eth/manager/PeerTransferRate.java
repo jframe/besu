@@ -20,7 +20,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,7 +69,7 @@ public class PeerTransferRate implements Comparable<PeerTransferRate> {
   }
 
   @Override
-  public int compareTo(@NotNull PeerTransferRate o) {
+  public int compareTo(final PeerTransferRate o) {
     return Integer.compare(rate, o.rate);
   }
 
