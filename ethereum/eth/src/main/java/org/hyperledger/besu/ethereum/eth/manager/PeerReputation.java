@@ -18,7 +18,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage.DisconnectReason;
 
-import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -33,33 +32,34 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class PeerReputation implements Comparable<PeerReputation> {
-  private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
   static final long USELESS_RESPONSE_WINDOW_IN_MILLIS =
       TimeUnit.MILLISECONDS.convert(1, TimeUnit.MINUTES);
-  static final int DEFAULT_MAX_SCORE = Integer.MAX_VALUE;
-  static final int DEFAULT_INITIAL_SCORE = Integer.MAX_VALUE;
+  static final int DEFAULT_MAX_SCORE = 150;
+  static final int DEFAULT_INITIAL_SCORE = 100;
+  private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
   public static final int TIMEOUT_THRESHOLD = 5;
   public static final int USELESS_RESPONSE_THRESHOLD = 5;
 
   private final ConcurrentMap<Integer, AtomicInteger> timeoutCountByRequestType =
       new ConcurrentHashMap<>();
   private final Queue<Long> uselessResponseTimes = new ConcurrentLinkedQueue<>();
-  private final String id;
+
+  private static final int SMALL_ADJUSTMENT = 1;
+  private static final int LARGE_ADJUSTMENT = 10;
 
   private int score;
-  private final int maxScore;
-  private final Queue<PeerRate> rates = new ConcurrentLinkedQueue<>();
 
-  public PeerReputation(final String id) {
-    this(DEFAULT_INITIAL_SCORE, DEFAULT_MAX_SCORE, id);
+  private final int maxScore;
+
+  public PeerReputation() {
+    this(DEFAULT_INITIAL_SCORE, DEFAULT_MAX_SCORE);
   }
 
-  public PeerReputation(final int initialScore, final int maxScore, final String id) {
+  public PeerReputation(final int initialScore, final int maxScore) {
     checkArgument(
         initialScore <= maxScore, "Initial score must be less than or equal to max score");
     this.maxScore = maxScore;
     this.score = initialScore;
-    this.id = id;
   }
 
   public Optional<DisconnectReason> recordRequestTimeout(
@@ -71,20 +71,12 @@ public class PeerReputation implements Comparable<PeerReputation> {
           newTimeoutCount,
           requestCode,
           peer.getLoggableId());
-      score -= getLargeAdjustment();
+      score -= LARGE_ADJUSTMENT;
       return Optional.of(DisconnectReason.TIMEOUT);
     } else {
-      score -= getSmallAdjustment();
+      score -= SMALL_ADJUSTMENT;
       return Optional.empty();
     }
-  }
-
-  private int getSmallAdjustment() {
-    return 0;
-  }
-
-  private int getLargeAdjustment() {
-    return 0;
   }
 
   public void resetTimeoutCount(final int requestCode) {
@@ -106,67 +98,25 @@ public class PeerReputation implements Comparable<PeerReputation> {
       uselessResponseTimes.poll();
     }
     if (uselessResponseTimes.size() >= USELESS_RESPONSE_THRESHOLD) {
-      score -= getLargeAdjustment();
+      score -= LARGE_ADJUSTMENT;
       LOG.debug(
           "Disconnection triggered by exceeding useless response threshold for peer {}",
           peer.getLoggableId());
       return Optional.of(DisconnectReason.USELESS_PEER_USELESS_RESPONSES);
     } else {
-      score -= getSmallAdjustment();
+      score -= SMALL_ADJUSTMENT;
       return Optional.empty();
     }
   }
 
   public void recordUsefulResponse() {
     if (score < maxScore) {
-      score = Math.min(maxScore, score + getSmallAdjustment());
+      score = Math.min(maxScore, score + SMALL_ADJUSTMENT);
     }
   }
 
   private boolean shouldRemove(final Long timestamp, final long currentTimestamp) {
     return timestamp != null && timestamp + USELESS_RESPONSE_WINDOW_IN_MILLIS < currentTimestamp;
-  }
-
-  public void recordTransferRate(final Duration duration, final long bytesDownloaded) {
-    long currentTime = System.currentTimeMillis();
-    long tenMinutesAgo = currentTime - TimeUnit.MILLISECONDS.convert(10, TimeUnit.MINUTES);
-
-    // Remove entries older than 10 minutes
-    while (!rates.isEmpty() && rates.peek().timestamp < tenMinutesAgo) {
-      rates.poll();
-    }
-
-    rates.add(new PeerRate(duration.toMillis(), currentTime, bytesDownloaded));
-
-    // Wait until we have enough data to calculate a mean transfer rate
-    boolean hasOneMinutePassed =
-        rates.peek() != null
-            && rates.peek().timestamp
-                < currentTime - TimeUnit.MILLISECONDS.convert(1, TimeUnit.MINUTES);
-    if (!hasOneMinutePassed) {
-      LOG.info("Not enough data to calculate mean transfer rate");
-      return;
-    }
-
-    long sumDuration = rates.stream().mapToLong(r -> r.duration).sum();
-    long sumBytesDownloaded = rates.stream().mapToLong(r -> r.bytesDownloaded).sum();
-    int meanTransferRate = (int) (sumBytesDownloaded / sumDuration);
-
-    LOG.info(
-        "Mean transfer rate: {}, previous rate: {}, entries {}, id: {}, bytesDownloaded: {}, duration: {}, sumDuration: {}, sumBytesDownloaded: {}",
-        meanTransferRate,
-        score,
-        rates.size(),
-        id,
-        bytesDownloaded,
-        duration,
-        sumDuration,
-        sumBytesDownloaded);
-
-    // Update score based on mean transfer rate
-    if (meanTransferRate > 0) {
-      score = meanTransferRate;
-    }
   }
 
   @Override
@@ -184,6 +134,4 @@ public class PeerReputation implements Comparable<PeerReputation> {
   public int getScore() {
     return score;
   }
-
-  record PeerRate(long duration, long timestamp, long bytesDownloaded) {}
 }

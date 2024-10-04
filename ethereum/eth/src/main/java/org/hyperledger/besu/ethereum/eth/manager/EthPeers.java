@@ -97,6 +97,7 @@ public class EthPeers {
   private final Subscribers<ConnectCallback> connectCallbacks = Subscribers.create();
   private final Subscribers<DisconnectCallback> disconnectCallbacks = Subscribers.create();
   private final Collection<PendingPeerRequest> pendingRequests = new CopyOnWriteArrayList<>();
+  private final Map<Bytes, Integer> selectedPeerRequests = new ConcurrentHashMap<>();
   private final int peerUpperBound;
   private final int maxRemotelyInitiatedConnections;
   private final Boolean randomPeerPriority;
@@ -278,6 +279,7 @@ public class EthPeers {
     synchronized (this) {
       if (!pendingPeerRequest.attemptExecution()) {
         pendingRequests.add(pendingPeerRequest);
+        selectedPeerRequests.merge(peer.map(EthPeer::getId).orElse(null), 1, (a, b) -> a - b);
       }
     }
     return pendingPeerRequest;
@@ -375,6 +377,23 @@ public class EthPeers {
 
   public Comparator<EthPeer> getBestPeerComparator() {
     return bestPeerComparator;
+  }
+
+  public Optional<EthPeer> selectBestPeerForSync(final Predicate<EthPeer> peerFilter) {
+    Optional<EthPeer> peer =
+        streamAvailablePeers()
+            .filter(peerFilter)
+            .filter(EthPeer::hasAvailableRequestCapacity)
+            .max(
+                Comparator.comparing(EthPeer::getReputation)
+                    .thenComparing(EthPeer::getTransferRate)
+                    .thenComparing(EthPeer::outstandingRequests)
+                    .thenComparing(
+                        Comparator.comparing(
+                                (final EthPeer p) -> selectedPeerRequests.get(p.getId()))
+                            .reversed()));
+    peer.ifPresent(p -> selectedPeerRequests.merge(p.getId(), 1, Integer::sum));
+    return peer;
   }
 
   public void setRlpxAgent(final RlpxAgent rlpxAgent) {
