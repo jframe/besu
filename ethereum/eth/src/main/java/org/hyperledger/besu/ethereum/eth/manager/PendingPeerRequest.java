@@ -112,6 +112,8 @@ public class PendingPeerRequest {
                 })
             .collect(Collectors.toList()));
 
+    // sort by reputation, then by outstanding requests
+
     Optional<EthPeer> ethPeer =
         peer.filter(p -> !p.isDisconnected()).isPresent()
             ? peer
@@ -120,8 +122,11 @@ public class PendingPeerRequest {
                 .filter(peer -> peer.chainState().getEstimatedHeight() >= minimumBlockNumber)
                 .filter(request::isEthPeerSuitable)
                 .filter(EthPeer::hasAvailableRequestCapacity)
-                .sorted(Comparator.comparing(EthPeer::getReputation).reversed())
-                .min(Comparator.comparing(EthPeer::outstandingRequests));
+                .min(
+                    Comparator.comparing(EthPeer::getReputation)
+                        .reversed()
+                        .thenComparing(EthPeer::outstandingRequests)
+                        .thenComparing(EthPeer::getLastRequestTimestamp));
     LOG.info(
         "Peer selected for request: {}, reputation: {}",
         ethPeer.map(EthPeer::getLoggableId).orElse("none"),
