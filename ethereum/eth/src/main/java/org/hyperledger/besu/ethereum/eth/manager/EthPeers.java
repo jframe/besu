@@ -43,6 +43,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -377,17 +378,33 @@ public class EthPeers {
   }
 
   public Optional<EthPeer> selectBestPeerForSync(final Predicate<EthPeer> peerFilter) {
-    Optional<EthPeer> peer =
-        streamAvailablePeers()
-            .filter(peerFilter)
-            .filter(EthPeer::hasAvailableRequestCapacity)
-            .max(
-                Comparator.comparing(EthPeer::getTransferRate)
-                    .thenComparing(EthPeer::getReputation)
-                    .thenComparing(LEAST_TO_MOST_BUSY.reversed()));
-    LOG.info("Selected peer for sync: {}", peer);
+    List<EthPeer> unsampledPeers =
+        streamAvailablePeers().filter(p -> p.getTransferRate().getRate() == 0).toList();
+
+    // If we only have unsampled peers then just return one of them
+    if (unsampledPeers.size() == activeConnections.values().size()) {
+      EthPeer peer = unsampledPeers.get(new Random().nextInt(unsampledPeers.size()));
+      LOG.info("All peers are unsampled selecting peer: {}", peer);
+      return Optional.of(peer);
+    }
+
     LOG.info("Current peers #{} : {}", activeConnections.size(), activeConnections);
-    return peer;
+    if (Math.random() < 0.1) {
+      EthPeer peer = unsampledPeers.get(new Random().nextInt(unsampledPeers.size()));
+      LOG.info("Selected random unsampled peer for sync: {}", unsampledPeers);
+      return Optional.ofNullable(peer);
+    } else {
+      Optional<EthPeer> peer =
+          streamAvailablePeers()
+              .filter(peerFilter)
+              .filter(EthPeer::hasAvailableRequestCapacity)
+              .max(
+                  Comparator.comparing(EthPeer::getTransferRate)
+                      .thenComparing(EthPeer::getReputation)
+                      .thenComparing(LEAST_TO_MOST_BUSY.reversed()));
+      LOG.info("Selected peer for sync: {}", peer);
+      return peer;
+    }
   }
 
   public void setRlpxAgent(final RlpxAgent rlpxAgent) {
