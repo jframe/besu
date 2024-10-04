@@ -378,32 +378,28 @@ public class EthPeers {
   }
 
   public Optional<EthPeer> selectBestPeerForSync(final Predicate<EthPeer> peerFilter) {
-    List<EthPeer> unsampledPeers =
-        streamAvailablePeers().filter(p -> p.getTransferRate().getRate() == 0).toList();
-
-    // If we only have unsampled peers then just return one of them
-    if (unsampledPeers.size() == activeConnections.values().size()) {
-      EthPeer peer = unsampledPeers.get(new Random().nextInt(unsampledPeers.size()));
-      LOG.info("All peers are unsampled selecting peer: {}", peer);
-      return Optional.of(peer);
-    }
-
     LOG.info("Current peers #{} : {}", activeConnections.size(), activeConnections);
-    if (Math.random() < 0.1) {
-      EthPeer peer = unsampledPeers.get(new Random().nextInt(unsampledPeers.size()));
-      LOG.info("Selected random unsampled peer for sync: {}", unsampledPeers);
-      return Optional.ofNullable(peer);
-    } else {
+
+    boolean allUnsampled = streamAvailablePeers().allMatch(p -> p.getTransferRate().getRate() == 0);
+
+    if (allUnsampled || Math.random() > 0.1) {
       Optional<EthPeer> peer =
           streamAvailablePeers()
               .filter(peerFilter)
               .filter(EthPeer::hasAvailableRequestCapacity)
+              .filter(p -> p.getTransferRate().getRate() > 0)
               .max(
                   Comparator.comparing(EthPeer::getTransferRate)
                       .thenComparing(EthPeer::getReputation)
                       .thenComparing(LEAST_TO_MOST_BUSY.reversed()));
       LOG.info("Selected peer for sync: {}", peer);
       return peer;
+    } else {
+      List<EthPeer> unsampledPeers =
+          streamAvailablePeers().filter(p -> p.getTransferRate().getRate() == 0).toList();
+      EthPeer peer = unsampledPeers.get(new Random().nextInt(unsampledPeers.size()));
+      LOG.info("Selected random unsampled peer for sync: {}", unsampledPeers);
+      return Optional.ofNullable(peer);
     }
   }
 
