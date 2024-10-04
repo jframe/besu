@@ -26,7 +26,7 @@ import org.slf4j.LoggerFactory;
 public class PeerTransferRate implements Comparable<PeerTransferRate> {
   private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
   private final Queue<PeerRate> rates = new ConcurrentLinkedQueue<>();
-  private int rate;
+  private int rate = Integer.MAX_VALUE;
 
   public void recordTransferRate(final Duration duration, final long bytesDownloaded) {
     final Instant currentTime = Instant.now();

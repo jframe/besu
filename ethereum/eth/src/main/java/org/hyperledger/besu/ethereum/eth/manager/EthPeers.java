@@ -382,8 +382,8 @@ public class EthPeers {
             .filter(peerFilter)
             .filter(EthPeer::hasAvailableRequestCapacity)
             .max(
-                Comparator.comparing(EthPeer::getReputation)
-                    .thenComparing(EthPeer::getTransferRate)
+                Comparator.comparing(EthPeer::getTransferRate)
+                    .thenComparing(EthPeer::getReputation)
                     .thenComparing(LEAST_TO_MOST_BUSY.reversed()));
     LOG.info("Selected peer for sync: {}", peer);
     LOG.info("Current peers #{} : {}", activeConnections.size(), activeConnections);
