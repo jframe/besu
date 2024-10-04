@@ -130,7 +130,6 @@ public class PeerReputation implements Comparable<PeerReputation> {
   public void recordTransferRate(final Duration duration, final long bytesDownloaded) {
     long currentTime = System.currentTimeMillis();
     long tenMinutesAgo = currentTime - TimeUnit.MILLISECONDS.convert(10, TimeUnit.MINUTES);
-    boolean hasTenMinutesPassed = rates.peek() != null && rates.peek().timestamp < tenMinutesAgo;
 
     // Remove entries older than 10 minutes
     while (!rates.isEmpty() && rates.peek().timestamp < tenMinutesAgo) {
@@ -140,7 +139,11 @@ public class PeerReputation implements Comparable<PeerReputation> {
     rates.add(new PeerRate(duration.toMillis(), currentTime, bytesDownloaded));
 
     // Wait until we have enough data to calculate a mean transfer rate
-    if (!hasTenMinutesPassed) {
+    boolean hasOneMinutePassed =
+        rates.peek() != null
+            && rates.peek().timestamp
+                < currentTime - TimeUnit.MILLISECONDS.convert(1, TimeUnit.MINUTES);
+    if (!hasOneMinutePassed) {
       LOG.info("Not enough data to calculate mean transfer rate");
       return;
     }
