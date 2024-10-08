@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.chain;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 
@@ -56,18 +57,6 @@ public interface MutableBlockchain extends Blockchain {
 
   void unsafeSetChainHead(final BlockHeader blockHeader, final Difficulty totalDifficulty);
 
-  /**
-   * Adds a block to the blockchain, without updating the chain state.
-   *
-   * <p>Block must be connected to the existing blockchain (its parent must already be stored),
-   * otherwise an {@link IllegalArgumentException} is thrown. Blocks representing forks are allowed
-   * as long as they are connected.
-   *
-   * @param block The block to append.
-   * @param receipts The list of receipts associated with this block's transactions.
-   */
-  void updateCanonicalHeadForStoredBlock(Block block, List<TransactionReceipt> receipts);
-
   Difficulty calculateTotalDifficulty(final BlockHeader blockHeader);
 
   /**
@@ -97,6 +86,16 @@ public interface MutableBlockchain extends Blockchain {
    *     {@code blockNumber}
    */
   boolean forwardToBlock(final BlockHeader blockHeader);
+
+  /**
+   * Forward the canonical chainhead to the specified block hash. This does not enforce any
+   * validation on the current chainhead
+   *
+   * @param blockWithReceipts The block and receipts to forward to.
+   * @return {@code true} on success, {@code false} if the block is not a child of the current head
+   *     {@code blockNumber}
+   */
+  boolean unsafeForwardToBlock(final BlockWithReceipts blockWithReceipts);
 
   /**
    * Set the hash of the last finalized block.

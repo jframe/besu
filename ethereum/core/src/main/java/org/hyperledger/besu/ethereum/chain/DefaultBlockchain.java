@@ -482,12 +482,6 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   @Override
-  public void updateCanonicalHeadForStoredBlock(
-      final Block block, final List<TransactionReceipt> receipts) {
-    unsafeForwardToBlock(new BlockWithReceipts(block, receipts));
-  }
-
-  @Override
   public synchronized void unsafeImportBlock(
       final Block block,
       final List<TransactionReceipt> transactionReceipts,
@@ -755,7 +749,8 @@ public class DefaultBlockchain implements MutableBlockchain {
     return unsafeForwardToBlock(blockWithReceipts);
   }
 
-  private boolean unsafeForwardToBlock(final BlockWithReceipts blockWithReceipts) {
+  @Override
+  public boolean unsafeForwardToBlock(final BlockWithReceipts blockWithReceipts) {
     final Updater updater = blockchainStorage.updater();
 
     try {
