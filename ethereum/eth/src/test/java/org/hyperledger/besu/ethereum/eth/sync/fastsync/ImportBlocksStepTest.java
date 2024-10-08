@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.FULL;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -30,6 +32,9 @@ import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockImporter;
 import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
+import org.hyperledger.besu.ethereum.eth.manager.EthContext;
+import org.hyperledger.besu.ethereum.eth.manager.EthPeers;
+import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.sync.ValidationPolicy;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.exceptions.InvalidBlockException;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
@@ -38,6 +43,7 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 
 import java.util.List;
+import java.util.concurrent.Executor;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,6 +61,9 @@ public class ImportBlocksStepTest {
   @Mock private ValidationPolicy validationPolicy;
   @Mock private ValidationPolicy ommerValidationPolicy;
   @Mock private BlockHeader pivotHeader;
+  @Mock private EthContext ethContext;
+  @Mock private EthScheduler ethScheduler;
+  @Mock private EthPeers ehPeers;
   private final BlockDataGenerator gen = new BlockDataGenerator();
 
   private ImportBlocksStep importBlocksStep;
@@ -65,6 +74,8 @@ public class ImportBlocksStepTest {
     when(protocolSpec.getBlockImporter()).thenReturn(blockImporter);
     when(validationPolicy.getValidationModeForNextBlock()).thenReturn(FULL);
     when(ommerValidationPolicy.getValidationModeForNextBlock()).thenReturn(LIGHT);
+    when(ethContext.getScheduler()).thenReturn(ethScheduler);
+    lenient().when(ethContext.getEthPeers()).thenReturn(ehPeers);
 
     importBlocksStep =
         new ImportBlocksStep(
@@ -72,7 +83,7 @@ public class ImportBlocksStepTest {
             protocolContext,
             validationPolicy,
             ommerValidationPolicy,
-            null,
+            ethContext,
             pivotHeader,
             BodyValidationMode.FULL);
   }
@@ -87,12 +98,13 @@ public class ImportBlocksStepTest {
 
     for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
       when(blockImporter.importBlockForSyncing(
-              protocolContext,
-              blockWithReceipts.getBlock(),
-              blockWithReceipts.getReceipts(),
-              FULL,
-              LIGHT,
-              BodyValidationMode.FULL))
+              eq(protocolContext),
+              any(Executor.class),
+              eq(blockWithReceipts.getBlock()),
+              eq(blockWithReceipts.getReceipts()),
+              eq(FULL),
+              eq(LIGHT),
+              eq(BodyValidationMode.FULL)))
           .thenReturn(new BlockImportResult(true));
     }
     importBlocksStep.accept(blocksWithReceipts);
@@ -109,12 +121,13 @@ public class ImportBlocksStepTest {
     final BlockWithReceipts blockWithReceipts = new BlockWithReceipts(block, gen.receipts(block));
 
     when(blockImporter.importBlockForSyncing(
-            protocolContext,
-            block,
-            blockWithReceipts.getReceipts(),
-            FULL,
-            LIGHT,
-            BodyValidationMode.FULL))
+            eq(protocolContext),
+            any(Executor.class),
+            eq(block),
+            eq(blockWithReceipts.getReceipts()),
+            eq(FULL),
+            eq(LIGHT),
+            eq(BodyValidationMode.FULL)))
         .thenReturn(new BlockImportResult(false));
     assertThatThrownBy(() -> importBlocksStep.accept(singletonList(blockWithReceipts)))
         .isInstanceOf(InvalidBlockException.class);

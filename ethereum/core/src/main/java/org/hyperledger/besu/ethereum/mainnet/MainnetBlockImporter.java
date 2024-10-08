@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult.BlockImportStatus;
 
 import java.util.List;
+import java.util.concurrent.Executor;
 
 public class MainnetBlockImporter implements BlockImporter {
 
@@ -59,6 +60,7 @@ public class MainnetBlockImporter implements BlockImporter {
   @Override
   public BlockImportResult importBlockForSyncing(
       final ProtocolContext context,
+      final Executor syncWorkerExecutor,
       final Block block,
       final List<TransactionReceipt> receipts,
       final HeaderValidationMode headerValidationMode,
@@ -73,7 +75,8 @@ public class MainnetBlockImporter implements BlockImporter {
         headerValidationMode,
         ommerValidationMode,
         bodyValidationMode)) {
-      context.getBlockchain().storeBlockForSyncing(block, receipts);
+      context.getBlockchain().storeBlock(block, receipts);
+      syncWorkerExecutor.execute(() -> context.getBlockchain().forwardToBlock(block.getHeader()));
       return new BlockImportResult(true);
     }
 

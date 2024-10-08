@@ -119,6 +119,7 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
     final BlockImportResult blockImportResult =
         importer.importBlockForSyncing(
             protocolContext,
+            ethContext.getScheduler()::scheduleSyncWorkerTask,
             blockWithReceipts.getBlock(),
             blockWithReceipts.getReceipts(),
             headerValidationPolicy.getValidationModeForNextBlock(),
