@@ -755,7 +755,7 @@ public class DefaultBlockchain implements MutableBlockchain {
     return unsafeForwardToBlock(blockWithReceipts);
   }
 
-  private boolean unsafeForwardToBlock(BlockWithReceipts blockWithReceipts) {
+  private boolean unsafeForwardToBlock(final BlockWithReceipts blockWithReceipts) {
     final Updater updater = blockchainStorage.updater();
 
     try {
