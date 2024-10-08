@@ -484,11 +484,7 @@ public class DefaultBlockchain implements MutableBlockchain {
   @Override
   public void updateCanonicalHeadForStoredBlock(
       final Block block, final List<TransactionReceipt> receipts) {
-    final BlockchainStorage.Updater updater = blockchainStorage.updater();
-    final BlockAddedEvent blockAddedEvent =
-        handleNewHead(updater, new BlockWithReceipts(block, receipts));
-    updater.commit();
-    blockAddedObservers.forEach(observer -> observer.onBlockAdded(blockAddedEvent));
+    unsafeForwardToBlock(new BlockWithReceipts(block, receipts));
   }
 
   @Override
@@ -755,15 +751,18 @@ public class DefaultBlockchain implements MutableBlockchain {
     checkArgument(
         chainHeader.getHash().equals(blockHeader.getParentHash()),
         "Supplied block header is not a child of the current chain head.");
+    final BlockWithReceipts blockWithReceipts = getBlockWithReceipts(blockHeader).get();
+    return unsafeForwardToBlock(blockWithReceipts);
+  }
 
-    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+  private boolean unsafeForwardToBlock(BlockWithReceipts blockWithReceipts) {
+    final Updater updater = blockchainStorage.updater();
 
     try {
-      final BlockWithReceipts blockWithReceipts = getBlockWithReceipts(blockHeader).get();
 
       BlockAddedEvent newHeadEvent = handleNewHead(updater, blockWithReceipts);
       updateCacheForNewCanonicalHead(
-          blockWithReceipts.getBlock(), calculateTotalDifficulty(blockHeader));
+          blockWithReceipts.getBlock(), calculateTotalDifficulty(blockWithReceipts.getHeader()));
       updater.commit();
       blockAddedObservers.forEach(observer -> observer.onBlockAdded(newHeadEvent));
       return true;
