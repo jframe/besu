@@ -481,6 +481,7 @@ public class DefaultBlockchain implements MutableBlockchain {
     blockAddedObservers.forEach(observer -> observer.onBlockAdded(blockAddedEvent));
   }
 
+  @Override
   public void updateCanonicalHeadForStoredBlock(
       final Block block, final List<TransactionReceipt> receipts) {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();

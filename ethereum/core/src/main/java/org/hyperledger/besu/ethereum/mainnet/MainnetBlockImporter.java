@@ -76,7 +76,8 @@ public class MainnetBlockImporter implements BlockImporter {
         ommerValidationMode,
         bodyValidationMode)) {
       context.getBlockchain().storeBlock(block, receipts);
-      syncWorkerExecutor.execute(() -> context.getBlockchain().forwardToBlock(block.getHeader()));
+      syncWorkerExecutor.execute(
+          () -> context.getBlockchain().updateCanonicalHeadForStoredBlock(block, receipts));
       return new BlockImportResult(true);
     }
 
