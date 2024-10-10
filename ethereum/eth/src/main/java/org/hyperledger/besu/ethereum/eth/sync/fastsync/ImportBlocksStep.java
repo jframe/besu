@@ -68,21 +68,26 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   @Override
   public void accept(final List<BlockWithReceipts> blocksWithReceipts) {
     final long startTime = System.nanoTime();
-    for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
-      if (!importBlock(blockWithReceipts)) {
-        throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
-      }
-      LOG.atTrace()
-          .setMessage("Imported block {}")
-          .addArgument(blockWithReceipts.getBlock()::toLogString)
-          .log();
-    }
+    ethContext
+        .getScheduler()
+        .scheduleSyncWorkerTask(
+            () -> {
+              for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
+                if (!importBlock(blockWithReceipts)) {
+                  throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
+                }
+                LOG.atTrace()
+                    .setMessage("Imported block {}")
+                    .addArgument(blockWithReceipts.getBlock()::toLogString)
+                    .log();
+              }
+            });
     if (logStartBlock.isEmpty()) {
       logStartBlock = OptionalLong.of(blocksWithReceipts.get(0).getNumber());
     }
     final long lastBlock = blocksWithReceipts.get(blocksWithReceipts.size() - 1).getNumber();
     int peerCount = -1; // ethContext is not available in tests
-    if (ethContext != null && ethContext.getEthPeers().peerCount() >= 0) {
+    if (ethContext.getEthPeers().peerCount() >= 0) {
       peerCount = ethContext.getEthPeers().peerCount();
     }
     final long endTime = System.nanoTime();
@@ -119,7 +124,6 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
     final BlockImportResult blockImportResult =
         importer.importBlockForSyncing(
             protocolContext,
-            ethContext.getScheduler()::scheduleSyncWorkerTask,
             blockWithReceipts.getBlock(),
             blockWithReceipts.getReceipts(),
             headerValidationPolicy.getValidationModeForNextBlock(),

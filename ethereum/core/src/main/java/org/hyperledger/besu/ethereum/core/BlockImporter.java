@@ -20,7 +20,6 @@ import org.hyperledger.besu.ethereum.mainnet.BodyValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 
 import java.util.List;
-import java.util.concurrent.Executor;
 
 /**
  * An interface for a block importer.
@@ -68,7 +67,6 @@ public interface BlockImporter {
    * block's receipts rather than processing all transactions and fully validating world state.
    *
    * @param context The context to attempt to update
-   * @param syncWorkerExecutor The executor to use for async head update
    * @param block The block
    * @param receipts The receipts associated with this block.
    * @param headerValidationMode Determines the validation to perform on this header.
@@ -78,7 +76,6 @@ public interface BlockImporter {
    */
   BlockImportResult importBlockForSyncing(
       ProtocolContext context,
-      Executor syncWorkerExecutor,
       Block block,
       List<TransactionReceipt> receipts,
       HeaderValidationMode headerValidationMode,

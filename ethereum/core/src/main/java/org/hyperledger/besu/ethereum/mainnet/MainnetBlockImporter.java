@@ -16,15 +16,12 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import org.hyperledger.besu.ethereum.BlockValidator;
 import org.hyperledger.besu.ethereum.ProtocolContext;
-import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockImporter;
-import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult.BlockImportStatus;
 
 import java.util.List;
-import java.util.concurrent.Executor;
 
 public class MainnetBlockImporter implements BlockImporter {
 
@@ -62,7 +59,6 @@ public class MainnetBlockImporter implements BlockImporter {
   @Override
   public BlockImportResult importBlockForSyncing(
       final ProtocolContext context,
-      final Executor syncWorkerExecutor,
       final Block block,
       final List<TransactionReceipt> receipts,
       final HeaderValidationMode headerValidationMode,
@@ -77,10 +73,7 @@ public class MainnetBlockImporter implements BlockImporter {
         headerValidationMode,
         ommerValidationMode,
         bodyValidationMode)) {
-      MutableBlockchain blockchain = context.getBlockchain();
-      blockchain.storeBlock(block, receipts);
-      syncWorkerExecutor.execute(
-          () -> blockchain.unsafeForwardToBlock(new BlockWithReceipts(block, receipts)));
+      context.getBlockchain().appendBlock(block, receipts);
       return new BlockImportResult(true);
     }
 
