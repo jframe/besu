@@ -102,7 +102,7 @@ public class EthPeer implements Comparable<EthPeer> {
 
   private final AtomicReference<Consumer<EthPeer>> onStatusesExchanged = new AtomicReference<>();
   private final PeerReputation reputation = new PeerReputation();
-  private final PeerTransferRate transferRate = new PeerTransferRate();
+  private final PeerTransferRate transferRate;
   private final Map<PeerValidator, Boolean> validationStatus = new ConcurrentHashMap<>();
   private final Bytes id;
   private boolean isServingSnap = false;
@@ -132,7 +132,8 @@ public class EthPeer implements Comparable<EthPeer> {
       final int maxMessageSize,
       final Clock clock,
       final List<NodeMessagePermissioningProvider> permissioningProviders,
-      final Bytes localNodeId) {
+      final Bytes localNodeId,
+      final PeerTransferRate transferRate) {
     this.connection = connection;
     this.protocolName = protocolName;
     this.maxMessageSize = maxMessageSize;
@@ -145,6 +146,7 @@ public class EthPeer implements Comparable<EthPeer> {
     this.requestManagers = new ConcurrentHashMap<>();
     this.localNodeId = localNodeId;
     this.id = connection.getPeer().getId();
+    this.transferRate = transferRate;
 
     initEthRequestManagers();
     initSnapRequestManagers();

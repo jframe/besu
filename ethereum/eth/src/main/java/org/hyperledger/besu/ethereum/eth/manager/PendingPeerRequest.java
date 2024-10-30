@@ -83,10 +83,11 @@ public class PendingPeerRequest {
     // return the assigned peer if still valid, otherwise switch to another peer
     return peer.filter(p -> !p.isDisconnected()).isPresent()
         ? peer
-        : ethPeers.selectBestPeerForSync(
-            ethPeer ->
-                ethPeer.chainState().getEstimatedHeight() >= minimumBlockNumber
-                    && request.isEthPeerSuitable(ethPeer));
+        : ethPeers
+            .streamAvailablePeers()
+            .filter(peer -> peer.chainState().getEstimatedHeight() >= minimumBlockNumber)
+            .filter(request::isEthPeerSuitable)
+            .min(EthPeers.LEAST_TO_MOST_BUSY);
   }
 
   /**

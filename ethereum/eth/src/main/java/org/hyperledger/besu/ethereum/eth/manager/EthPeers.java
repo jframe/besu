@@ -32,6 +32,7 @@ import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
+import org.hyperledger.besu.plugin.services.metrics.LabelledGauge;
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 import org.hyperledger.besu.util.Subscribers;
 
@@ -43,7 +44,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -107,6 +107,7 @@ public class EthPeers {
   private final ForkIdManager forkIdManager;
   private final int snapServerTargetNumber;
   private final boolean shouldLimitRemoteConnections;
+  private final LabelledGauge peerTransferRateGauge;
 
   private Comparator<EthPeer> bestPeerComparator;
   private final Bytes localNodeId;
@@ -173,6 +174,13 @@ public class EthPeers {
     connectedPeersCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.PEERS, "connected_total", "Total number of peers connected");
+
+    peerTransferRateGauge =
+        metricsSystem.createLabelledGauge(
+            BesuMetricCategory.PEERS,
+            "peer_transfer_rate",
+            "The transfer rate for this peer",
+            "peerId");
   }
 
   public void registerNewConnection(
@@ -185,20 +193,27 @@ public class EthPeers {
             incompleteConnections.asMap().values().stream()
                 .filter(p -> p.getId().equals(id))
                 .findFirst();
-        ethPeer =
-            peerInList.orElse(
-                new EthPeer(
-                    newConnection,
-                    protocolName,
-                    this::ethPeerStatusExchanged,
-                    peerValidators,
-                    maxMessageSize,
-                    clock,
-                    permissioningProviders,
-                    localNodeId));
+        ethPeer = peerInList.orElse(createPeer(newConnection, peerValidators));
       }
       incompleteConnections.put(newConnection, ethPeer);
     }
+  }
+
+  private EthPeer createPeer(
+      final PeerConnection newConnection, final List<PeerValidator> peerValidators) {
+    final PeerTransferRate peerTransferRate = new PeerTransferRate();
+    peerTransferRateGauge.labels(
+        peerTransferRate::getRate, newConnection.getPeer().getId().toHexString());
+    return new EthPeer(
+        newConnection,
+        protocolName,
+        this::ethPeerStatusExchanged,
+        peerValidators,
+        maxMessageSize,
+        clock,
+        permissioningProviders,
+        localNodeId,
+        peerTransferRate);
   }
 
   @Nonnull
@@ -377,31 +392,32 @@ public class EthPeers {
     return bestPeerComparator;
   }
 
-  public Optional<EthPeer> selectBestPeerForSync(final Predicate<EthPeer> peerFilter) {
-    LOG.info("Current peers #{} : {}", activeConnections.size(), activeConnections);
-
-    boolean allUnsampled = streamAvailablePeers().allMatch(p -> p.getTransferRate().getRate() == 0);
-
-    if (allUnsampled || Math.random() > 0.1) {
-      Optional<EthPeer> peer =
-          streamAvailablePeers()
-              .filter(peerFilter)
-              .filter(EthPeer::hasAvailableRequestCapacity)
-              .filter(p -> allUnsampled || p.getTransferRate().getRate() > 0)
-              .max(
-                  Comparator.comparing(EthPeer::getTransferRate)
-                      .thenComparing(EthPeer::getReputation)
-                      .thenComparing(LEAST_TO_MOST_BUSY.reversed()));
-      LOG.info("Selected peer for sync: {}", peer);
-      return peer;
-    } else {
-      List<EthPeer> unsampledPeers =
-          streamAvailablePeers().filter(p -> p.getTransferRate().getRate() == 0).toList();
-      EthPeer peer = unsampledPeers.get(new Random().nextInt(unsampledPeers.size()));
-      LOG.info("Selected random unsampled peer for sync: {}", unsampledPeers);
-      return Optional.ofNullable(peer);
-    }
-  }
+  //  public Optional<EthPeer> selectBestPeerForSync(final Predicate<EthPeer> peerFilter) {
+  //    LOG.info("Current peers #{} : {}", activeConnections.size(), activeConnections);
+  //
+  //    boolean allUnsampled = streamAvailablePeers().allMatch(p -> p.getTransferRate().getRate() ==
+  // 0);
+  //
+  //    if (allUnsampled || Math.random() > 0.1) {
+  //      Optional<EthPeer> peer =
+  //          streamAvailablePeers()
+  //              .filter(peerFilter)
+  //              .filter(EthPeer::hasAvailableRequestCapacity)
+  //              .filter(p -> allUnsampled || p.getTransferRate().getRate() > 0)
+  //              .max(
+  //                  Comparator.comparing(EthPeer::getTransferRate)
+  //                      .thenComparing(EthPeer::getReputation)
+  //                      .thenComparing(LEAST_TO_MOST_BUSY.reversed()));
+  //      LOG.info("Selected peer for sync: {}", peer);
+  //      return peer;
+  //    } else {
+  //      List<EthPeer> unsampledPeers =
+  //          streamAvailablePeers().filter(p -> p.getTransferRate().getRate() == 0).toList();
+  //      EthPeer peer = unsampledPeers.get(new Random().nextInt(unsampledPeers.size()));
+  //      LOG.info("Selected random unsampled peer for sync: {}", unsampledPeers);
+  //      return Optional.ofNullable(peer);
+  //    }
+  //  }
 
   public void setRlpxAgent(final RlpxAgent rlpxAgent) {
     this.rlpxAgent = rlpxAgent;
