@@ -32,7 +32,6 @@ import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
-import org.hyperledger.besu.plugin.services.metrics.LabelledGauge;
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 import org.hyperledger.besu.util.Subscribers;
 
@@ -107,7 +106,6 @@ public class EthPeers {
   private final ForkIdManager forkIdManager;
   private final int snapServerTargetNumber;
   private final boolean shouldLimitRemoteConnections;
-  private final LabelledGauge peerTransferRateGauge;
 
   private Comparator<EthPeer> bestPeerComparator;
   private final Bytes localNodeId;
@@ -174,13 +172,6 @@ public class EthPeers {
     connectedPeersCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.PEERS, "connected_total", "Total number of peers connected");
-
-    peerTransferRateGauge =
-        metricsSystem.createLabelledGauge(
-            BesuMetricCategory.PEERS,
-            "peer_transfer_rate",
-            "The transfer rate for this peer",
-            "peerId");
   }
 
   public void registerNewConnection(
@@ -202,8 +193,6 @@ public class EthPeers {
   private EthPeer createPeer(
       final PeerConnection newConnection, final List<PeerValidator> peerValidators) {
     final PeerTransferRate peerTransferRate = new PeerTransferRate();
-    peerTransferRateGauge.labels(
-        peerTransferRate::getRate, newConnection.getPeer().getId().toHexString());
     return new EthPeer(
         newConnection,
         protocolName,

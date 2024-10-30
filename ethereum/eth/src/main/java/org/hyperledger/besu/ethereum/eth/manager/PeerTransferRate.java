@@ -40,13 +40,14 @@ public class PeerTransferRate implements Comparable<PeerTransferRate> {
     rates.add(new PeerRate(duration.toMillis(), currentTime.toEpochMilli(), bytesDownloaded));
 
     // Wait until we have enough data to calculate a mean transfer rate
-    boolean hasOneMinutePassed =
-        rates.peek() != null
-            && rates.peek().timestamp < currentTime.minus(1, ChronoUnit.MINUTES).toEpochMilli();
-    if (!hasOneMinutePassed) {
-      LOG.info("Not enough data to calculate mean transfer rate");
-      return;
-    }
+    //    boolean hasOneMinutePassed =
+    //        rates.peek() != null
+    //            && rates.peek().timestamp < currentTime.minus(1,
+    // ChronoUnit.MINUTES).toEpochMilli();
+    //    if (!hasOneMinutePassed) {
+    //      LOG.info("Not enough data to calculate mean transfer rate");
+    //      return;
+    //    }
 
     final long sumDuration = rates.stream().mapToLong(r -> r.duration).sum();
     final long sumBytesDownloaded = rates.stream().mapToLong(r -> r.bytesDownloaded).sum();
