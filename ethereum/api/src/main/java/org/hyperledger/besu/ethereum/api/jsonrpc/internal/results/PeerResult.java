@@ -38,7 +38,8 @@ import org.immutables.value.Value;
   "id",
   "protocols",
   "enode",
-  "transfer_rate"
+  "transfer_rate",
+  "transfer_count"
 })
 @Value.Immutable
 @Value.Style(allParameters = true)
@@ -65,6 +66,7 @@ public interface PeerResult {
         .protocols(Map.of(peer.getProtocolName(), ProtocolsResult.fromEthPeer(peer)))
         .enode(connection.getRemoteEnode().toString())
         .transferRate(Integer.toString(peer.getTransferRate().getRate()))
+        .transferCount(Integer.toString(peer.getTransferRate().getCount()))
         .build();
   }
 
@@ -94,4 +96,7 @@ public interface PeerResult {
 
   @JsonGetter(value = "transfer_rate")
   String getTransferRate();
+
+  @JsonGetter(value = "transfer_count")
+  String getTransferCount();
 }

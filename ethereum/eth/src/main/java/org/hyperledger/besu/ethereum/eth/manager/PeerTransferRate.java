@@ -25,29 +25,21 @@ import org.slf4j.LoggerFactory;
 
 public class PeerTransferRate implements Comparable<PeerTransferRate> {
   private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
+  private static final int TIME_LIMIT = 1;
   private final Queue<PeerRate> rates = new ConcurrentLinkedQueue<>();
   private int rate;
 
   public void recordTransferRate(final Duration duration, final long bytesDownloaded) {
     final Instant currentTime = Instant.now();
-    final Instant tenMinutesAgo = currentTime.minus(10, ChronoUnit.MINUTES);
 
-    // Remove entries older than 10 minutes
-    while (!rates.isEmpty() && rates.peek().timestamp < tenMinutesAgo.toEpochMilli()) {
+    // Remove entries older than 1 minute
+    while (!rates.isEmpty()
+        && rates.peek().timestamp
+            < currentTime.minus(TIME_LIMIT, ChronoUnit.MINUTES).toEpochMilli()) {
       rates.poll();
     }
 
     rates.add(new PeerRate(duration.toMillis(), currentTime.toEpochMilli(), bytesDownloaded));
-
-    // Wait until we have enough data to calculate a mean transfer rate
-    //    boolean hasOneMinutePassed =
-    //        rates.peek() != null
-    //            && rates.peek().timestamp < currentTime.minus(1,
-    // ChronoUnit.MINUTES).toEpochMilli();
-    //    if (!hasOneMinutePassed) {
-    //      LOG.info("Not enough data to calculate mean transfer rate");
-    //      return;
-    //    }
 
     final long sumDuration = rates.stream().mapToLong(r -> r.duration).sum();
     final long sumBytesDownloaded = rates.stream().mapToLong(r -> r.bytesDownloaded).sum();
@@ -67,6 +59,10 @@ public class PeerTransferRate implements Comparable<PeerTransferRate> {
 
   public int getRate() {
     return rate;
+  }
+
+  public int getCount() {
+    return rates.size();
   }
 
   @Override
