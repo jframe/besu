@@ -40,6 +40,7 @@ import org.immutables.value.Value;
   "enode",
   "transfer_rate",
   "transfer_count",
+  "transfer_bytes_total",
   "reputation"
 })
 @Value.Immutable
@@ -68,6 +69,7 @@ public interface PeerResult {
         .enode(connection.getRemoteEnode().toString())
         .transferRate(Integer.toString(peer.getTransferRate().getRate()))
         .transferCount(Integer.toString(peer.getTransferRate().getCount()))
+        .transferBytesTotal(Integer.toString(peer.getTransferRate().getTotalBytesDownloaded()))
         .reputation(Integer.toString(peer.getReputation().getScore()))
         .build();
   }
@@ -101,6 +103,9 @@ public interface PeerResult {
 
   @JsonGetter(value = "transfer_count")
   String getTransferCount();
+
+  @JsonGetter(value = "transfer_bytes_total")
+  String getTransferBytesTotal();
 
   @JsonGetter(value = "reputation")
   String getReputation();

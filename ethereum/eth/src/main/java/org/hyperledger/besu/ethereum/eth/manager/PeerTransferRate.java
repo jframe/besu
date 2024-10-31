@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
 
 public class PeerTransferRate implements Comparable<PeerTransferRate> {
   private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
-  private static final int TIME_LIMIT = 1;
+  private static final int RATES_EXPIRY_TIME_LIMIT = 60;
   private final Queue<PeerRate> rates = new ConcurrentLinkedQueue<>();
   private int rate;
 
@@ -35,7 +35,7 @@ public class PeerTransferRate implements Comparable<PeerTransferRate> {
     // Remove entries older than 1 minute
     while (!rates.isEmpty()
         && rates.peek().timestamp
-            < currentTime.minus(TIME_LIMIT, ChronoUnit.MINUTES).toEpochMilli()) {
+            < currentTime.minus(RATES_EXPIRY_TIME_LIMIT, ChronoUnit.SECONDS).toEpochMilli()) {
       rates.poll();
     }
 
@@ -45,7 +45,7 @@ public class PeerTransferRate implements Comparable<PeerTransferRate> {
     final long sumBytesDownloaded = rates.stream().mapToLong(r -> r.bytesDownloaded).sum();
     final int meanTransferRate = (int) (sumBytesDownloaded / sumDuration);
 
-    LOG.info(
+    LOG.debug(
         "Mean transfer rate: {}, previous rate: {}, entries {}, bytesDownloaded: {}, duration: {}, sumDuration: {}, sumBytesDownloaded: {}",
         meanTransferRate,
         rate,
@@ -63,6 +63,10 @@ public class PeerTransferRate implements Comparable<PeerTransferRate> {
 
   public int getCount() {
     return rates.size();
+  }
+
+  public int getTotalBytesDownloaded() {
+    return rates.stream().mapToInt(r -> (int) r.bytesDownloaded).sum();
   }
 
   @Override
