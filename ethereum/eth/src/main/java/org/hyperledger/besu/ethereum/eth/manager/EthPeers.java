@@ -87,7 +87,7 @@ public class EthPeers {
 
   public static final Comparator<EthPeer> RANDOMIZED_COMPARATOR =
       (peer1, peer2) -> {
-        if (Math.random() < 0.5) {
+        if (Math.random() < 0.8) {
           return LEAST_BUSY_FASTEST_PEER.compare(peer1, peer2);
         } else {
           return LEAST_TO_MOST_BUSY.compare(peer1, peer2);
