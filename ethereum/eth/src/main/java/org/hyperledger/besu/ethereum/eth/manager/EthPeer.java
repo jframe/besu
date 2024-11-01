@@ -666,7 +666,7 @@ public class EthPeer implements Comparable<EthPeer> {
         "PeerId: %s %s, rate: %s, outstanding reqs: %s, validated? %s, disconnected? %s, client: %s, %s, %s, isServingSnap %s, has height %s, connected for %s ms",
         getLoggableId(),
         reputation,
-        transferRate.getRate(),
+        transferRate.getRates(),
         outstandingRequests(),
         isFullyValidated(),
         isDisconnected(),

@@ -67,8 +67,8 @@ public interface PeerResult {
         .id(peerInfo.getNodeId().toString())
         .protocols(Map.of(peer.getProtocolName(), ProtocolsResult.fromEthPeer(peer)))
         .enode(connection.getRemoteEnode().toString())
-        .transferRate(peer.getTransferRate().getRate())
-        .transferCount(peer.getTransferRate().getCount())
+        .transferRate(peer.getTransferRate().getRates())
+        .transferCount(peer.getTransferRate().getCounts())
         .transferBytesTotal(peer.getTransferRate().getTotalBytesDownloaded())
         .reputation(Integer.toString(peer.getReputation().getScore()))
         .build();

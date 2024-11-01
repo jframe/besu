@@ -76,9 +76,15 @@ public class EthPeers {
   public static final Comparator<EthPeer> HEAVIEST_CHAIN =
       TOTAL_DIFFICULTY.thenComparing(CHAIN_HEIGHT);
 
+  public static final Comparator<EthPeer> FASTEST_PEER =
+      Comparator.comparing(peer -> peer.getTransferRate().getTotalRate());
+
   public static final Comparator<EthPeer> LEAST_TO_MOST_BUSY =
-      Comparator.comparing(EthPeer::outstandingRequests)
-          .thenComparing(EthPeer::getLastRequestTimestamp);
+      Comparator.comparing(peer -> peer.getTransferRate().getTotalRate());
+
+  public static final Comparator<EthPeer> LEAST_BUSY_FASTEST_PEER =
+      FASTEST_PEER.reversed().thenComparing(LEAST_TO_MOST_BUSY);
+
   public static final int NODE_ID_LENGTH = 64;
   public static final int USEFULL_PEER_SCORE_THRESHOLD = 102;
 

@@ -64,11 +64,15 @@ public class PeerTransferRate {
     rate.put(messageName, meanTransferRate);
   }
 
-  public Map<String, Integer> getRate() {
+  public Map<String, Integer> getRates() {
     return rate;
   }
 
-  public Map<String, Integer> getCount() {
+  public int getTotalRate() {
+    return rate.values().stream().mapToInt(Integer::intValue).sum();
+  }
+
+  public Map<String, Integer> getCounts() {
     return rates.entrySet().stream()
         .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().size()));
   }
