@@ -85,6 +85,15 @@ public class EthPeers {
   public static final Comparator<EthPeer> LEAST_BUSY_FASTEST_PEER =
       FASTEST_PEER.reversed().thenComparing(LEAST_TO_MOST_BUSY);
 
+  public static final Comparator<EthPeer> RANDOMIZED_COMPARATOR =
+      (peer1, peer2) -> {
+        if (Math.random() < 0.5) {
+          return LEAST_BUSY_FASTEST_PEER.compare(peer1, peer2);
+        } else {
+          return LEAST_TO_MOST_BUSY.compare(peer1, peer2);
+        }
+      };
+
   public static final int NODE_ID_LENGTH = 64;
   public static final int USEFULL_PEER_SCORE_THRESHOLD = 102;
 

@@ -132,7 +132,7 @@ public abstract class AbstractRetryingSwitchingPeerTask<T> extends AbstractRetry
         .streamBestPeers()
         .filter(this::isSuitablePeer)
         .filter(peer -> !triedPeers.contains(peer))
-        .sorted(EthPeers.LEAST_BUSY_FASTEST_PEER);
+        .sorted(EthPeers.RANDOMIZED_COMPARATOR);
   }
 
   private void refreshPeers() {
