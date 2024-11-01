@@ -67,9 +67,9 @@ public interface PeerResult {
         .id(peerInfo.getNodeId().toString())
         .protocols(Map.of(peer.getProtocolName(), ProtocolsResult.fromEthPeer(peer)))
         .enode(connection.getRemoteEnode().toString())
-        .transferRate(Integer.toString(peer.getTransferRate().getRate()))
-        .transferCount(Integer.toString(peer.getTransferRate().getCount()))
-        .transferBytesTotal(Integer.toString(peer.getTransferRate().getTotalBytesDownloaded()))
+        .transferRate(peer.getTransferRate().getRate())
+        .transferCount(peer.getTransferRate().getCount())
+        .transferBytesTotal(peer.getTransferRate().getTotalBytesDownloaded())
         .reputation(Integer.toString(peer.getReputation().getScore()))
         .build();
   }
@@ -99,13 +99,13 @@ public interface PeerResult {
   String getEnode();
 
   @JsonGetter(value = "transfer_rate")
-  String getTransferRate();
+  Map<String, Integer> getTransferRate();
 
   @JsonGetter(value = "transfer_count")
-  String getTransferCount();
+  Map<String, Integer> getTransferCount();
 
   @JsonGetter(value = "transfer_bytes_total")
-  String getTransferBytesTotal();
+  Map<String, Long> getTransferBytesTotal();
 
   @JsonGetter(value = "reputation")
   String getReputation();

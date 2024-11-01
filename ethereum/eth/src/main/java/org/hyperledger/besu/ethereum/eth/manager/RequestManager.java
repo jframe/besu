@@ -44,14 +44,19 @@ public class RequestManager {
   private final EthPeer peer;
   private final boolean supportsRequestId;
   private final String protocolName;
+  private final String messageName;
 
   private final AtomicInteger outstandingRequests = new AtomicInteger(0);
 
   public RequestManager(
-      final EthPeer peer, final boolean supportsRequestId, final String protocolName) {
+      final EthPeer peer,
+      final boolean supportsRequestId,
+      final String protocolName,
+      final String messageName) {
     this.peer = peer;
     this.supportsRequestId = supportsRequestId;
     this.protocolName = protocolName;
+    this.messageName = messageName;
   }
 
   public int outstandingRequests() {
@@ -86,7 +91,7 @@ public class RequestManager {
                   Duration duration = Duration.between(responseStream.getStartTime(), endTime);
                   long bytesDownloaded = ethMessage.getData().getSize();
                   responseStream.processMessage(requestIdAndEthMessage.getValue());
-                  peer.recordTransferRate(duration, bytesDownloaded);
+                  peer.recordTransferRate(duration, bytesDownloaded, messageName);
                 },
                 // Consider incorrect requestIds to be a useless response; too
                 // many of these and we will disconnect.

@@ -17,32 +17,39 @@ package org.hyperledger.besu.ethereum.eth.manager;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class PeerTransferRate implements Comparable<PeerTransferRate> {
+public class PeerTransferRate {
   private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
   private static final int RATES_EXPIRY_TIME_LIMIT = 60;
-  private final Queue<PeerRate> rates = new ConcurrentLinkedQueue<>();
-  private int rate;
+  private final Map<String, Queue<PeerRate>> rates = new ConcurrentHashMap<>();
+  private final Map<String, Integer> rate = new ConcurrentHashMap<>();
 
-  public void recordTransferRate(final Duration duration, final long bytesDownloaded) {
+  public void recordTransferRate(
+      final Duration duration, final long bytesDownloaded, final String messageName) {
     final Instant currentTime = Instant.now();
 
+    final Queue<PeerRate> peerRates =
+        rates.computeIfAbsent(messageName, k -> new ConcurrentLinkedQueue<>());
+
     // Remove entries older than 1 minute
-    while (!rates.isEmpty()
-        && rates.peek().timestamp
+    while (!peerRates.isEmpty()
+        && peerRates.peek().timestamp
             < currentTime.minus(RATES_EXPIRY_TIME_LIMIT, ChronoUnit.SECONDS).toEpochMilli()) {
-      rates.poll();
+      peerRates.poll();
     }
 
-    rates.add(new PeerRate(duration.toMillis(), currentTime.toEpochMilli(), bytesDownloaded));
+    peerRates.add(new PeerRate(duration.toMillis(), currentTime.toEpochMilli(), bytesDownloaded));
 
-    final long sumDuration = rates.stream().mapToLong(r -> r.duration).sum();
-    final long sumBytesDownloaded = rates.stream().mapToLong(r -> r.bytesDownloaded).sum();
+    final long sumDuration = peerRates.stream().mapToLong(r -> r.duration).sum();
+    final long sumBytesDownloaded = peerRates.stream().mapToLong(r -> r.bytesDownloaded).sum();
     final int meanTransferRate = (int) (sumBytesDownloaded / sumDuration);
 
     LOG.debug(
@@ -54,24 +61,24 @@ public class PeerTransferRate implements Comparable<PeerTransferRate> {
         duration,
         sumDuration,
         sumBytesDownloaded);
-    rate = meanTransferRate;
+    rate.put(messageName, meanTransferRate);
   }
 
-  public int getRate() {
+  public Map<String, Integer> getRate() {
     return rate;
   }
 
-  public int getCount() {
-    return rates.size();
+  public Map<String, Integer> getCount() {
+    return rates.entrySet().stream()
+        .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().size()));
   }
 
-  public int getTotalBytesDownloaded() {
-    return rates.stream().mapToInt(r -> (int) r.bytesDownloaded).sum();
-  }
-
-  @Override
-  public int compareTo(final PeerTransferRate o) {
-    return Integer.compare(rate, o.rate);
+  public Map<String, Long> getTotalBytesDownloaded() {
+    return rates.entrySet().stream()
+        .collect(
+            Collectors.toMap(
+                Map.Entry::getKey,
+                entry -> entry.getValue().stream().mapToLong(PeerRate::bytesDownloaded).sum()));
   }
 
   record PeerRate(long duration, long timestamp, long bytesDownloaded) {}

@@ -161,17 +161,20 @@ public class EthPeer implements Comparable<EthPeer> {
         Map.ofEntries(
             Map.entry(
                 EthPV62.GET_BLOCK_HEADERS,
-                new RequestManager(this, supportsRequestId, protocolName)),
+                new RequestManager(this, supportsRequestId, protocolName, "get_block_headers")),
             Map.entry(
                 EthPV62.GET_BLOCK_BODIES,
-                new RequestManager(this, supportsRequestId, protocolName)),
+                new RequestManager(this, supportsRequestId, protocolName, "get_block_bodies")),
             Map.entry(
-                EthPV63.GET_RECEIPTS, new RequestManager(this, supportsRequestId, protocolName)),
+                EthPV63.GET_RECEIPTS,
+                new RequestManager(this, supportsRequestId, protocolName, "get_receipts")),
             Map.entry(
-                EthPV63.GET_NODE_DATA, new RequestManager(this, supportsRequestId, protocolName)),
+                EthPV63.GET_NODE_DATA,
+                new RequestManager(this, supportsRequestId, protocolName, "get_node_data")),
             Map.entry(
                 EthPV65.GET_POOLED_TRANSACTIONS,
-                new RequestManager(this, supportsRequestId, protocolName))));
+                new RequestManager(
+                    this, supportsRequestId, protocolName, "get_pooled_transactions"))));
   }
 
   private void initSnapRequestManagers() {
@@ -179,10 +182,18 @@ public class EthPeer implements Comparable<EthPeer> {
     requestManagers.put(
         SnapProtocol.NAME,
         Map.ofEntries(
-            Map.entry(SnapV1.GET_ACCOUNT_RANGE, new RequestManager(this, true, SnapProtocol.NAME)),
-            Map.entry(SnapV1.GET_STORAGE_RANGE, new RequestManager(this, true, SnapProtocol.NAME)),
-            Map.entry(SnapV1.GET_BYTECODES, new RequestManager(this, true, SnapProtocol.NAME)),
-            Map.entry(SnapV1.GET_TRIE_NODES, new RequestManager(this, true, SnapProtocol.NAME))));
+            Map.entry(
+                SnapV1.GET_ACCOUNT_RANGE,
+                new RequestManager(this, true, SnapProtocol.NAME, "get_account_range")),
+            Map.entry(
+                SnapV1.GET_STORAGE_RANGE,
+                new RequestManager(this, true, SnapProtocol.NAME, "get_storage_range")),
+            Map.entry(
+                SnapV1.GET_BYTECODES,
+                new RequestManager(this, true, SnapProtocol.NAME, "get_bytecodes")),
+            Map.entry(
+                SnapV1.GET_TRIE_NODES,
+                new RequestManager(this, true, SnapProtocol.NAME, "get_trie_nodes"))));
   }
 
   public void markValidated(final PeerValidator validator) {
@@ -232,8 +243,9 @@ public class EthPeer implements Comparable<EthPeer> {
     reputation.recordUselessResponse(System.currentTimeMillis(), this).ifPresent(this::disconnect);
   }
 
-  public void recordTransferRate(final Duration duration, final long bytesDownloaded) {
-    transferRate.recordTransferRate(duration, bytesDownloaded);
+  public void recordTransferRate(
+      final Duration duration, final long bytesDownloaded, final String messageName) {
+    transferRate.recordTransferRate(duration, bytesDownloaded, messageName);
   }
 
   public void recordUsefulResponse() {
