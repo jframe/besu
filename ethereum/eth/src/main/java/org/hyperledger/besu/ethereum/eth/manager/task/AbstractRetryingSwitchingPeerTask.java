@@ -131,7 +131,8 @@ public abstract class AbstractRetryingSwitchingPeerTask<T> extends AbstractRetry
         .getEthPeers()
         .streamBestPeers()
         .filter(this::isSuitablePeer)
-        .filter(peer -> !triedPeers.contains(peer));
+        .filter(peer -> !triedPeers.contains(peer))
+        .sorted(EthPeers.LEAST_TO_MOST_BUSY);
   }
 
   private void refreshPeers() {
