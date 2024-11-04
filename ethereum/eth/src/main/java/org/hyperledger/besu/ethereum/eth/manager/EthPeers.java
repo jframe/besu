@@ -80,14 +80,15 @@ public class EthPeers {
       Comparator.comparing(peer -> peer.getTransferRate().getTotalRate());
 
   public static final Comparator<EthPeer> LEAST_TO_MOST_BUSY =
-      Comparator.comparing(peer -> peer.getTransferRate().getTotalRate());
+      Comparator.comparing(EthPeer::outstandingRequests)
+          .thenComparing(EthPeer::getLastRequestTimestamp);
 
   public static final Comparator<EthPeer> LEAST_BUSY_FASTEST_PEER =
       FASTEST_PEER.reversed().thenComparing(LEAST_TO_MOST_BUSY);
 
   public static final Comparator<EthPeer> RANDOMIZED_COMPARATOR =
       (peer1, peer2) -> {
-        if (Math.random() < 0.8) {
+        if (Math.random() < 0.9) {
           return LEAST_BUSY_FASTEST_PEER.compare(peer1, peer2);
         } else {
           return LEAST_TO_MOST_BUSY.compare(peer1, peer2);
