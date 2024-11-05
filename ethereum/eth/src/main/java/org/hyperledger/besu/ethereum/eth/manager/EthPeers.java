@@ -77,7 +77,7 @@ public class EthPeers {
       TOTAL_DIFFICULTY.thenComparing(CHAIN_HEIGHT);
 
   public static final Comparator<EthPeer> FASTEST_PEER =
-      Comparator.comparing(peer -> peer.getTransferRate().getTotalRate());
+      Comparator.comparing(peer -> peer.getPeerMetrics().getTransferRate());
 
   public static final Comparator<EthPeer> LEAST_TO_MOST_BUSY =
       Comparator.comparing(EthPeer::outstandingRequests)
@@ -208,7 +208,7 @@ public class EthPeers {
 
   private EthPeer createPeer(
       final PeerConnection newConnection, final List<PeerValidator> peerValidators) {
-    final PeerTransferRate peerTransferRate = new PeerTransferRate();
+    final PeerMetrics peerMetrics = new PeerMetrics();
     return new EthPeer(
         newConnection,
         protocolName,
@@ -218,7 +218,7 @@ public class EthPeers {
         clock,
         permissioningProviders,
         localNodeId,
-        peerTransferRate);
+        peerMetrics);
   }
 
   @Nonnull

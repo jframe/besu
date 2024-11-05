@@ -310,7 +310,7 @@ public class RequestManagerTest {
         TestClock.fixed(),
         Collections.emptyList(),
         Bytes.random(64),
-        new PeerTransferRate());
+        new PeerMetrics());
   }
 
   @Test

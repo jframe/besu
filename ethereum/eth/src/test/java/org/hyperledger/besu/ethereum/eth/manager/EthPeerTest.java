@@ -484,7 +484,7 @@ public class EthPeerTest {
         clock,
         Collections.emptyList(),
         Bytes.random(64),
-        new PeerTransferRate());
+        new PeerMetrics());
   }
 
   private MockPeerConnection.PeerSendHandler getFailOnSend() {
@@ -521,7 +521,7 @@ public class EthPeerTest {
         clock,
         permissioningProviders,
         Bytes.random(64),
-        new PeerTransferRate());
+        new PeerMetrics());
   }
 
   private PeerConnection getPeerConnection(final MockPeerConnection.PeerSendHandler onSend) {

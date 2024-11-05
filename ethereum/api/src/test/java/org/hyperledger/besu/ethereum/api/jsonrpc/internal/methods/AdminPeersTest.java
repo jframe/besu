@@ -28,7 +28,7 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.results.PeerResult;
 import org.hyperledger.besu.ethereum.eth.EthProtocolConfiguration;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeers;
-import org.hyperledger.besu.ethereum.eth.manager.PeerTransferRate;
+import org.hyperledger.besu.ethereum.eth.manager.PeerMetrics;
 import org.hyperledger.besu.ethereum.p2p.network.exceptions.P2PDisabledException;
 import org.hyperledger.besu.ethereum.p2p.rlpx.connections.PeerConnection;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.PeerInfo;
@@ -128,7 +128,7 @@ public class AdminPeersTest {
             TestClock.fixed(),
             Collections.emptyList(),
             Bytes.random(64),
-            new PeerTransferRate());
+            new PeerMetrics());
     return Lists.newArrayList(ethPeer);
   }
 

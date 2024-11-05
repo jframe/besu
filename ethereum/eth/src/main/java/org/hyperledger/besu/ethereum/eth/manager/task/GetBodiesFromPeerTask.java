@@ -138,7 +138,7 @@ public class GetBodiesFromPeerTask extends AbstractPeerRequestTask<List<Block>> 
       headers.clear();
     }
 
-    peer.recordResponseSize(bodies.size());
+    peer.recordResponseCount(bodies.size());
     LOG.atTrace()
         .setMessage("Associated {} bodies with {} headers to get {} blocks with these hashes: {}")
         .addArgument(bodies.size())

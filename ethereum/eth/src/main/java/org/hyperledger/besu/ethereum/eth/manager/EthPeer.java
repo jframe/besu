@@ -50,10 +50,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -104,9 +102,8 @@ public class EthPeer implements Comparable<EthPeer> {
 
   private final AtomicReference<Consumer<EthPeer>> onStatusesExchanged = new AtomicReference<>();
   private final PeerReputation reputation = new PeerReputation();
-  private final PeerTransferRate transferRate;
+  private final PeerMetrics peerMetrics;
   private final Map<PeerValidator, Boolean> validationStatus = new ConcurrentHashMap<>();
-  private final Queue<Integer> responseSize = new ConcurrentLinkedQueue<>();
   private final Bytes id;
   private boolean isServingSnap = false;
 
@@ -136,7 +133,7 @@ public class EthPeer implements Comparable<EthPeer> {
       final Clock clock,
       final List<NodeMessagePermissioningProvider> permissioningProviders,
       final Bytes localNodeId,
-      final PeerTransferRate transferRate) {
+      final PeerMetrics peerMetrics) {
     this.connection = connection;
     this.protocolName = protocolName;
     this.maxMessageSize = maxMessageSize;
@@ -149,7 +146,7 @@ public class EthPeer implements Comparable<EthPeer> {
     this.requestManagers = new ConcurrentHashMap<>();
     this.localNodeId = localNodeId;
     this.id = connection.getPeer().getId();
-    this.transferRate = transferRate;
+    this.peerMetrics = peerMetrics;
 
     initEthRequestManagers();
     initSnapRequestManagers();
@@ -248,15 +245,15 @@ public class EthPeer implements Comparable<EthPeer> {
 
   public void recordTransferRate(
       final Duration duration, final long bytesDownloaded, final String messageName) {
-    transferRate.recordTransferRate(duration, bytesDownloaded, messageName);
+    peerMetrics.recordTransferRate(duration, bytesDownloaded, messageName);
   }
 
   public void recordUsefulResponse() {
     reputation.recordUsefulResponse();
   }
 
-  public void recordResponseSize(final int size) {
-    responseSize.add(size);
+  public void recordResponseCount(final int count) {
+    peerMetrics.recordResponseCount(count);
   }
 
   public void disconnect(final DisconnectReason reason) {
@@ -520,12 +517,12 @@ public class EthPeer implements Comparable<EthPeer> {
     return reputation;
   }
 
-  public PeerTransferRate getTransferRate() {
-    return transferRate;
+  public PeerMetrics getPeerMetrics() {
+    return peerMetrics;
   }
 
   public double getResponseSize() {
-    return responseSize.stream().mapToInt(Integer::intValue).average().orElse(0);
+    return peerMetrics.getResponseCount();
   }
 
   void handleDisconnect() {
@@ -677,7 +674,7 @@ public class EthPeer implements Comparable<EthPeer> {
         "PeerId: %s %s, rate: %s, outstanding reqs: %s, validated? %s, disconnected? %s, client: %s, %s, %s, isServingSnap %s, has height %s, connected for %s ms",
         getLoggableId(),
         reputation,
-        transferRate.getRates(),
+        peerMetrics.getRates(),
         outstandingRequests(),
         isFullyValidated(),
         isDisconnected(),

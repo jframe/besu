@@ -19,7 +19,7 @@ import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.ethereum.eth.EthProtocolConfiguration;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
-import org.hyperledger.besu.ethereum.eth.manager.PeerTransferRate;
+import org.hyperledger.besu.ethereum.eth.manager.PeerMetrics;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.Capability;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.PeerInfo;
 import org.hyperledger.besu.testutil.TestClock;
@@ -82,7 +82,7 @@ public class AdminJsonRpcHttpServiceTest extends JsonRpcHttpServiceTestBase {
             TestClock.fixed(),
             Collections.emptyList(),
             Bytes.random(64),
-            new PeerTransferRate()));
+            new PeerMetrics()));
     peerList.add(
         new EthPeer(
             MockPeerConnection.create(info2, addr30301, addr60302),
@@ -93,7 +93,7 @@ public class AdminJsonRpcHttpServiceTest extends JsonRpcHttpServiceTestBase {
             TestClock.fixed(),
             Collections.emptyList(),
             Bytes.random(64),
-            new PeerTransferRate()));
+            new PeerMetrics()));
     peerList.add(
         new EthPeer(
             MockPeerConnection.create(info3, addr30301, addr60303),
@@ -104,7 +104,7 @@ public class AdminJsonRpcHttpServiceTest extends JsonRpcHttpServiceTestBase {
             TestClock.fixed(),
             Collections.emptyList(),
             Bytes.random(64),
-            new PeerTransferRate()));
+            new PeerMetrics()));
 
     when(ethPeersMock.streamAllPeers()).thenReturn(peerList.stream());
     when(peerDiscoveryMock.getPeerCount()).thenReturn(peerList.size());

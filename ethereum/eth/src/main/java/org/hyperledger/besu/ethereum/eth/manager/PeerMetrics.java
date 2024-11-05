@@ -26,11 +26,12 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class PeerTransferRate {
+public class PeerMetrics {
   private static final Logger LOG = LoggerFactory.getLogger(PeerReputation.class);
   private static final int RATES_EXPIRY_TIME_LIMIT = 60;
   private final Map<String, Queue<PeerRate>> rates = new ConcurrentHashMap<>();
   private final Map<String, Integer> rate = new ConcurrentHashMap<>();
+  private final Queue<ResponseCount> responseCounts = new ConcurrentLinkedQueue<>();
 
   public void recordTransferRate(
       final Duration duration, final long bytesDownloaded, final String messageName) {
@@ -64,15 +65,28 @@ public class PeerTransferRate {
     rate.put(messageName, meanTransferRate);
   }
 
+  public void recordResponseCount(final int count) {
+    final Instant currentTime = Instant.now();
+
+    // Remove entries older than 1 minute
+    while (!responseCounts.isEmpty()
+        && responseCounts.peek().timestamp
+            < currentTime.minus(RATES_EXPIRY_TIME_LIMIT, ChronoUnit.SECONDS).toEpochMilli()) {
+      responseCounts.poll();
+    }
+
+    responseCounts.add(new ResponseCount(currentTime.toEpochMilli(), count));
+  }
+
   public Map<String, Integer> getRates() {
     return rate;
   }
 
-  public int getTotalRate() {
+  public int getTransferRate() {
     return rate.values().stream().mapToInt(Integer::intValue).sum();
   }
 
-  public Map<String, Integer> getCounts() {
+  public Map<String, Integer> getRequestCounts() {
     return rates.entrySet().stream()
         .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().size()));
   }
@@ -85,5 +99,11 @@ public class PeerTransferRate {
                 entry -> entry.getValue().stream().mapToLong(PeerRate::bytesDownloaded).sum()));
   }
 
+  public double getResponseCount() {
+    return responseCounts.stream().mapToInt(ResponseCount::count).average().orElse(0);
+  }
+
   record PeerRate(long duration, long timestamp, long bytesDownloaded) {}
+
+  record ResponseCount(long timestamp, int count) {}
 }
