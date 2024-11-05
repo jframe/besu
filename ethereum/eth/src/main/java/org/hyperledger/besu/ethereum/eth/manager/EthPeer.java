@@ -50,8 +50,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -104,6 +106,7 @@ public class EthPeer implements Comparable<EthPeer> {
   private final PeerReputation reputation = new PeerReputation();
   private final PeerTransferRate transferRate;
   private final Map<PeerValidator, Boolean> validationStatus = new ConcurrentHashMap<>();
+  private final Queue<Integer> responseSize = new ConcurrentLinkedQueue<>();
   private final Bytes id;
   private boolean isServingSnap = false;
 
@@ -250,6 +253,10 @@ public class EthPeer implements Comparable<EthPeer> {
 
   public void recordUsefulResponse() {
     reputation.recordUsefulResponse();
+  }
+
+  public void recordResponseSize(final int size) {
+    responseSize.add(size);
   }
 
   public void disconnect(final DisconnectReason reason) {
@@ -515,6 +522,10 @@ public class EthPeer implements Comparable<EthPeer> {
 
   public PeerTransferRate getTransferRate() {
     return transferRate;
+  }
+
+  public double getResponseSize() {
+    return responseSize.stream().mapToInt(Integer::intValue).average().orElse(0);
   }
 
   void handleDisconnect() {

@@ -42,7 +42,8 @@ import org.immutables.value.Value;
   "transfer_count",
   "transfer_bytes_total",
   "reputation",
-  "requests"
+  "requests",
+  "responseSize"
 })
 @Value.Immutable
 @Value.Style(allParameters = true)
@@ -73,6 +74,7 @@ public interface PeerResult {
         .transferBytesTotal(peer.getTransferRate().getTotalBytesDownloaded())
         .reputation(Integer.toString(peer.getReputation().getScore()))
         .requests(peer.outstandingRequests())
+        .responseSize(peer.getResponseSize())
         .build();
   }
 
@@ -114,4 +116,7 @@ public interface PeerResult {
 
   @JsonGetter(value = "requests")
   int getRequests();
+
+  @JsonGetter(value = "responseSize")
+  double getResponseSize();
 }
