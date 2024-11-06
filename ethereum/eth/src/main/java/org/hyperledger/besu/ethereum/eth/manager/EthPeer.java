@@ -43,6 +43,7 @@ import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage.Di
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -101,6 +102,7 @@ public class EthPeer implements Comparable<EthPeer> {
 
   private final AtomicReference<Consumer<EthPeer>> onStatusesExchanged = new AtomicReference<>();
   private final PeerReputation reputation = new PeerReputation();
+  private final PeerMetrics peerMetrics;
   private final Map<PeerValidator, Boolean> validationStatus = new ConcurrentHashMap<>();
   private final Bytes id;
   private boolean isServingSnap = false;
@@ -130,7 +132,8 @@ public class EthPeer implements Comparable<EthPeer> {
       final int maxMessageSize,
       final Clock clock,
       final List<NodeMessagePermissioningProvider> permissioningProviders,
-      final Bytes localNodeId) {
+      final Bytes localNodeId,
+      final PeerMetrics peerMetrics) {
     this.connection = connection;
     this.protocolName = protocolName;
     this.maxMessageSize = maxMessageSize;
@@ -143,6 +146,7 @@ public class EthPeer implements Comparable<EthPeer> {
     this.requestManagers = new ConcurrentHashMap<>();
     this.localNodeId = localNodeId;
     this.id = connection.getPeer().getId();
+    this.peerMetrics = peerMetrics;
 
     initEthRequestManagers();
     initSnapRequestManagers();
@@ -157,17 +161,20 @@ public class EthPeer implements Comparable<EthPeer> {
         Map.ofEntries(
             Map.entry(
                 EthPV62.GET_BLOCK_HEADERS,
-                new RequestManager(this, supportsRequestId, protocolName)),
+                new RequestManager(this, supportsRequestId, protocolName, "get_block_headers")),
             Map.entry(
                 EthPV62.GET_BLOCK_BODIES,
-                new RequestManager(this, supportsRequestId, protocolName)),
+                new RequestManager(this, supportsRequestId, protocolName, "get_block_bodies")),
             Map.entry(
-                EthPV63.GET_RECEIPTS, new RequestManager(this, supportsRequestId, protocolName)),
+                EthPV63.GET_RECEIPTS,
+                new RequestManager(this, supportsRequestId, protocolName, "get_receipts")),
             Map.entry(
-                EthPV63.GET_NODE_DATA, new RequestManager(this, supportsRequestId, protocolName)),
+                EthPV63.GET_NODE_DATA,
+                new RequestManager(this, supportsRequestId, protocolName, "get_node_data")),
             Map.entry(
                 EthPV65.GET_POOLED_TRANSACTIONS,
-                new RequestManager(this, supportsRequestId, protocolName))));
+                new RequestManager(
+                    this, supportsRequestId, protocolName, "get_pooled_transactions"))));
   }
 
   private void initSnapRequestManagers() {
@@ -175,10 +182,18 @@ public class EthPeer implements Comparable<EthPeer> {
     requestManagers.put(
         SnapProtocol.NAME,
         Map.ofEntries(
-            Map.entry(SnapV1.GET_ACCOUNT_RANGE, new RequestManager(this, true, SnapProtocol.NAME)),
-            Map.entry(SnapV1.GET_STORAGE_RANGE, new RequestManager(this, true, SnapProtocol.NAME)),
-            Map.entry(SnapV1.GET_BYTECODES, new RequestManager(this, true, SnapProtocol.NAME)),
-            Map.entry(SnapV1.GET_TRIE_NODES, new RequestManager(this, true, SnapProtocol.NAME))));
+            Map.entry(
+                SnapV1.GET_ACCOUNT_RANGE,
+                new RequestManager(this, true, SnapProtocol.NAME, "get_account_range")),
+            Map.entry(
+                SnapV1.GET_STORAGE_RANGE,
+                new RequestManager(this, true, SnapProtocol.NAME, "get_storage_range")),
+            Map.entry(
+                SnapV1.GET_BYTECODES,
+                new RequestManager(this, true, SnapProtocol.NAME, "get_bytecodes")),
+            Map.entry(
+                SnapV1.GET_TRIE_NODES,
+                new RequestManager(this, true, SnapProtocol.NAME, "get_trie_nodes"))));
   }
 
   public void markValidated(final PeerValidator validator) {
@@ -228,8 +243,17 @@ public class EthPeer implements Comparable<EthPeer> {
     reputation.recordUselessResponse(System.currentTimeMillis(), this).ifPresent(this::disconnect);
   }
 
+  public void recordTransferRate(
+      final Duration duration, final long bytesDownloaded, final String messageName) {
+    peerMetrics.recordTransferRate(duration, bytesDownloaded, messageName);
+  }
+
   public void recordUsefulResponse() {
     reputation.recordUsefulResponse();
+  }
+
+  public void recordResponseCount(final int count) {
+    peerMetrics.recordResponseCount(count);
   }
 
   public void disconnect(final DisconnectReason reason) {
@@ -493,6 +517,14 @@ public class EthPeer implements Comparable<EthPeer> {
     return reputation;
   }
 
+  public PeerMetrics getPeerMetrics() {
+    return peerMetrics;
+  }
+
+  public double getResponseSize() {
+    return peerMetrics.getResponseCount();
+  }
+
   void handleDisconnect() {
     LOG.trace("handleDisconnect - EthPeer {}", this);
 
@@ -639,9 +671,11 @@ public class EthPeer implements Comparable<EthPeer> {
   @Override
   public String toString() {
     return String.format(
-        "PeerId: %s %s, validated? %s, disconnected? %s, client: %s, %s, %s, isServingSnap %s, has height %s, connected for %s ms",
+        "PeerId: %s %s, rate: %s, outstanding reqs: %s, validated? %s, disconnected? %s, client: %s, %s, %s, isServingSnap %s, has height %s, connected for %s ms",
         getLoggableId(),
         reputation,
+        peerMetrics.getRates(),
+        outstandingRequests(),
         isFullyValidated(),
         isDisconnected(),
         connection.getPeerInfo().getClientId(),

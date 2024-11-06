@@ -47,7 +47,7 @@ public class RequestManagerTest {
     for (final boolean supportsRequestId : List.of(true, false)) {
       final EthPeer peer = createPeer();
       final RequestManager requestManager =
-          new RequestManager(peer, supportsRequestId, EthProtocol.NAME);
+          new RequestManager(peer, supportsRequestId, EthProtocol.NAME, "");
 
       final AtomicInteger sendCount = new AtomicInteger(0);
       final RequestManager.RequestSender sender = __ -> sendCount.incrementAndGet();
@@ -84,7 +84,7 @@ public class RequestManagerTest {
     for (final boolean supportsRequestId : List.of(true, false)) {
       final EthPeer peer = createPeer();
       final RequestManager requestManager =
-          new RequestManager(peer, supportsRequestId, EthProtocol.NAME);
+          new RequestManager(peer, supportsRequestId, EthProtocol.NAME, "");
 
       final AtomicInteger sendCount = new AtomicInteger(0);
       final RequestManager.RequestSender sender = __ -> sendCount.incrementAndGet();
@@ -119,7 +119,7 @@ public class RequestManagerTest {
   @Test
   public void dispatchesMessagesReceivedBeforeAndAfterRegisteringCallback() throws Exception {
     final EthPeer peer = createPeer();
-    final RequestManager requestManager = new RequestManager(peer, false, EthProtocol.NAME);
+    final RequestManager requestManager = new RequestManager(peer, false, EthProtocol.NAME, "");
 
     final AtomicInteger sendCount = new AtomicInteger(0);
     final RequestManager.RequestSender sender = __ -> sendCount.incrementAndGet();
@@ -164,7 +164,7 @@ public class RequestManagerTest {
   @Test
   public void dispatchesMessagesToMultipleStreamsIfNoRequestId() throws Exception {
     final EthPeer peer = createPeer();
-    final RequestManager requestManager = new RequestManager(peer, false, EthProtocol.NAME);
+    final RequestManager requestManager = new RequestManager(peer, false, EthProtocol.NAME, "");
 
     final AtomicInteger sendCount = new AtomicInteger(0);
     final RequestManager.RequestSender sender = __ -> sendCount.incrementAndGet();
@@ -231,7 +231,7 @@ public class RequestManagerTest {
   @Test
   public void dispatchesMessagesToSingleStreamIfRequestId() throws Exception {
     final EthPeer peer = createPeer();
-    final RequestManager requestManager = new RequestManager(peer, true, EthProtocol.NAME);
+    final RequestManager requestManager = new RequestManager(peer, true, EthProtocol.NAME, "");
 
     final AtomicInteger sendCount = new AtomicInteger(0);
     final RequestManager.RequestSender sender = __ -> sendCount.incrementAndGet();
@@ -309,7 +309,8 @@ public class RequestManagerTest {
         EthProtocolConfiguration.DEFAULT_MAX_MESSAGE_SIZE,
         TestClock.fixed(),
         Collections.emptyList(),
-        Bytes.random(64));
+        Bytes.random(64),
+        new PeerMetrics());
   }
 
   @Test
@@ -317,7 +318,7 @@ public class RequestManagerTest {
     for (final boolean supportsRequestId : List.of(true, false)) {
       final EthPeer peer = createPeer();
       final RequestManager requestManager =
-          new RequestManager(peer, supportsRequestId, EthProtocol.NAME);
+          new RequestManager(peer, supportsRequestId, EthProtocol.NAME, "");
 
       requestManager
           .dispatchRequest(

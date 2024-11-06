@@ -78,9 +78,25 @@ public class EthPeers implements PeerSelector {
   public static final Comparator<EthPeer> HEAVIEST_CHAIN =
       TOTAL_DIFFICULTY.thenComparing(CHAIN_HEIGHT);
 
+  public static final Comparator<EthPeer> FASTEST_PEER =
+      Comparator.comparing(peer -> peer.getPeerMetrics().getTransferRate());
+
   public static final Comparator<EthPeer> LEAST_TO_MOST_BUSY =
       Comparator.comparing(EthPeer::outstandingRequests)
           .thenComparing(EthPeer::getLastRequestTimestamp);
+
+  public static final Comparator<EthPeer> LEAST_BUSY_FASTEST_PEER =
+      FASTEST_PEER.reversed().thenComparing(LEAST_TO_MOST_BUSY);
+
+  public static final Comparator<EthPeer> RANDOMIZED_COMPARATOR =
+      (peer1, peer2) -> {
+        if (Math.random() < 0.9) {
+          return LEAST_BUSY_FASTEST_PEER.compare(peer1, peer2);
+        } else {
+          return LEAST_TO_MOST_BUSY.compare(peer1, peer2);
+        }
+      };
+
   public static final int NODE_ID_LENGTH = 64;
   public static final int USEFULL_PEER_SCORE_THRESHOLD = 102;
 
@@ -114,7 +130,6 @@ public class EthPeers implements PeerSelector {
   private RlpxAgent rlpxAgent;
 
   private final Counter connectedPeersCounter;
-  //  private List<ProtocolManager> protocolManagers;
   private ChainHeadTracker tracker;
   private SnapServerChecker snapServerChecker;
   private boolean snapServerPeersNeeded = false;
@@ -187,20 +202,25 @@ public class EthPeers implements PeerSelector {
             incompleteConnections.asMap().values().stream()
                 .filter(p -> p.getId().equals(id))
                 .findFirst();
-        ethPeer =
-            peerInList.orElse(
-                new EthPeer(
-                    newConnection,
-                    protocolName,
-                    this::ethPeerStatusExchanged,
-                    peerValidators,
-                    maxMessageSize,
-                    clock,
-                    permissioningProviders,
-                    localNodeId));
+        ethPeer = peerInList.orElse(createPeer(newConnection, peerValidators));
       }
       incompleteConnections.put(newConnection, ethPeer);
     }
+  }
+
+  private EthPeer createPeer(
+      final PeerConnection newConnection, final List<PeerValidator> peerValidators) {
+    final PeerMetrics peerMetrics = new PeerMetrics();
+    return new EthPeer(
+        newConnection,
+        protocolName,
+        this::ethPeerStatusExchanged,
+        peerValidators,
+        maxMessageSize,
+        clock,
+        permissioningProviders,
+        localNodeId,
+        peerMetrics);
   }
 
   @Nonnull
@@ -378,6 +398,33 @@ public class EthPeers implements PeerSelector {
   public Comparator<EthPeer> getBestPeerComparator() {
     return bestPeerComparator;
   }
+
+  //  public Optional<EthPeer> selectBestPeerForSync(final Predicate<EthPeer> peerFilter) {
+  //    LOG.info("Current peers #{} : {}", activeConnections.size(), activeConnections);
+  //
+  //    boolean allUnsampled = streamAvailablePeers().allMatch(p -> p.getTransferRate().getRate() ==
+  // 0);
+  //
+  //    if (allUnsampled || Math.random() > 0.1) {
+  //      Optional<EthPeer> peer =
+  //          streamAvailablePeers()
+  //              .filter(peerFilter)
+  //              .filter(EthPeer::hasAvailableRequestCapacity)
+  //              .filter(p -> allUnsampled || p.getTransferRate().getRate() > 0)
+  //              .max(
+  //                  Comparator.comparing(EthPeer::getTransferRate)
+  //                      .thenComparing(EthPeer::getReputation)
+  //                      .thenComparing(LEAST_TO_MOST_BUSY.reversed()));
+  //      LOG.info("Selected peer for sync: {}", peer);
+  //      return peer;
+  //    } else {
+  //      List<EthPeer> unsampledPeers =
+  //          streamAvailablePeers().filter(p -> p.getTransferRate().getRate() == 0).toList();
+  //      EthPeer peer = unsampledPeers.get(new Random().nextInt(unsampledPeers.size()));
+  //      LOG.info("Selected random unsampled peer for sync: {}", unsampledPeers);
+  //      return Optional.ofNullable(peer);
+  //    }
+  //  }
 
   public void setRlpxAgent(final RlpxAgent rlpxAgent) {
     this.rlpxAgent = rlpxAgent;

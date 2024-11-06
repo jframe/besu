@@ -21,6 +21,7 @@ import org.hyperledger.besu.ethereum.eth.EthProtocolConfiguration;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.eth.manager.EthProtocolManagerTestUtil;
 import org.hyperledger.besu.ethereum.eth.manager.MockPeerConnection;
+import org.hyperledger.besu.ethereum.eth.manager.PeerMetrics;
 import org.hyperledger.besu.ethereum.eth.manager.RespondingEthPeer;
 import org.hyperledger.besu.ethereum.eth.manager.exceptions.EthTaskException;
 import org.hyperledger.besu.ethereum.eth.manager.task.AbstractPeerTask;
@@ -168,6 +169,7 @@ public abstract class PeerMessageTaskTest<T>
         EthProtocolConfiguration.DEFAULT_MAX_MESSAGE_SIZE,
         TestClock.fixed(),
         Collections.emptyList(),
-        Bytes.random(64));
+        Bytes.random(64),
+        new PeerMetrics());
   }
 }

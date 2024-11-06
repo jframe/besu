@@ -20,6 +20,8 @@ import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage;
 import org.hyperledger.besu.ethereum.rlp.RLPException;
 
 import java.math.BigInteger;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -42,14 +44,19 @@ public class RequestManager {
   private final EthPeer peer;
   private final boolean supportsRequestId;
   private final String protocolName;
+  private final String messageName;
 
   private final AtomicInteger outstandingRequests = new AtomicInteger(0);
 
   public RequestManager(
-      final EthPeer peer, final boolean supportsRequestId, final String protocolName) {
+      final EthPeer peer,
+      final boolean supportsRequestId,
+      final String protocolName,
+      final String messageName) {
     this.peer = peer;
     this.supportsRequestId = supportsRequestId;
     this.protocolName = protocolName;
+    this.messageName = messageName;
   }
 
   public int outstandingRequests() {
@@ -79,7 +86,13 @@ public class RequestManager {
             ethMessage.getData().unwrapMessageData();
         Optional.ofNullable(responseStreams.get(requestIdAndEthMessage.getKey()))
             .ifPresentOrElse(
-                responseStream -> responseStream.processMessage(requestIdAndEthMessage.getValue()),
+                responseStream -> {
+                  Instant endTime = Instant.now();
+                  Duration duration = Duration.between(responseStream.getStartTime(), endTime);
+                  long bytesDownloaded = ethMessage.getData().getSize();
+                  responseStream.processMessage(requestIdAndEthMessage.getValue());
+                  peer.recordTransferRate(duration, bytesDownloaded, messageName);
+                },
                 // Consider incorrect requestIds to be a useless response; too
                 // many of these and we will disconnect.
                 () -> peer.recordUselessResponse("Request ID incorrect"));
@@ -110,7 +123,8 @@ public class RequestManager {
   }
 
   private ResponseStream createStream(final BigInteger requestId) {
-    final ResponseStream stream = new ResponseStream(peer, () -> deregisterStream(requestId));
+    final ResponseStream stream =
+        new ResponseStream(peer, () -> deregisterStream(requestId), Instant.now());
     responseStreams.put(requestId, stream);
     return stream;
   }
@@ -162,12 +176,17 @@ public class RequestManager {
     private final EthPeer peer;
     private final DeregistrationProcessor deregisterCallback;
     private final Queue<Response> bufferedResponses = new ConcurrentLinkedQueue<>();
+    private final Instant startTime;
     private volatile boolean closed = false;
     private volatile ResponseCallback responseCallback = null;
 
-    public ResponseStream(final EthPeer peer, final DeregistrationProcessor deregisterCallback) {
+    public ResponseStream(
+        final EthPeer peer,
+        final DeregistrationProcessor deregisterCallback,
+        final Instant startTime) {
       this.peer = peer;
       this.deregisterCallback = deregisterCallback;
+      this.startTime = startTime;
     }
 
     public ResponseStream then(final ResponseCallback callback) {
@@ -212,6 +231,10 @@ public class RequestManager {
         responseCallback.exec(response.closed, response.message, peer);
         response = bufferedResponses.poll();
       }
+    }
+
+    public Instant getStartTime() {
+      return startTime;
     }
   }
 }
