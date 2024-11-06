@@ -34,6 +34,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapDownloaderFactory;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.context.SnapSyncStatePersistenceManager;
 import org.hyperledger.besu.ethereum.eth.sync.state.PendingBlocksManager;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
+import org.hyperledger.besu.ethereum.eth.sync.validatorsync.ValidatorDownloaderFactory;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.trie.diffbased.bonsai.BonsaiWorldStateProvider;
@@ -104,7 +105,8 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
         metricsSystem);
 
     if (syncConfig.getSyncMode() == SyncMode.SNAP
-        || syncConfig.getSyncMode() == SyncMode.CHECKPOINT) {
+        || syncConfig.getSyncMode() == SyncMode.CHECKPOINT
+        || syncConfig.getSyncMode() == SyncMode.X_VALIDATOR) {
       SnapServerChecker.createAndSetSnapServerChecker(ethContext, metricsSystem);
     }
 
@@ -158,6 +160,23 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
       this.fastSyncFactory =
           () ->
               CheckpointDownloaderFactory.createCheckpointDownloader(
+                  new SnapSyncStatePersistenceManager(storageProvider),
+                  pivotBlockSelector,
+                  syncConfig,
+                  dataDirectory,
+                  protocolSchedule,
+                  protocolContext,
+                  metricsSystem,
+                  ethContext,
+                  peerTaskExecutor,
+                  worldStateStorageCoordinator,
+                  syncState,
+                  clock,
+                  syncDurationMetrics);
+    } else if (syncConfig.getSyncMode() == SyncMode.X_VALIDATOR) {
+      this.fastSyncFactory =
+          () ->
+              ValidatorDownloaderFactory.createValidatorDownloader(
                   new SnapSyncStatePersistenceManager(storageProvider),
                   pivotBlockSelector,
                   syncConfig,

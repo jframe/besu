@@ -32,19 +32,22 @@ public class RetryingGetHeaderFromPeerByNumberTask
     extends AbstractRetryingPeerTask<List<BlockHeader>> {
   private final ProtocolSchedule protocolSchedule;
   private final EthContext ethContext;
-  private final long pivotBlockNumber;
+  private final long blockNumber;
+  private final int count;
   private final MetricsSystem metricsSystem;
 
   private RetryingGetHeaderFromPeerByNumberTask(
       final ProtocolSchedule protocolSchedule,
       final EthContext ethContext,
       final MetricsSystem metricsSystem,
-      final long pivotBlockNumber,
+      final long blockNumber,
+      final int count,
       final int maxRetries) {
     super(ethContext, maxRetries, Collection::isEmpty, metricsSystem);
     this.protocolSchedule = protocolSchedule;
     this.ethContext = ethContext;
-    this.pivotBlockNumber = pivotBlockNumber;
+    this.blockNumber = blockNumber;
+    this.count = count;
     this.metricsSystem = metricsSystem;
   }
 
@@ -55,15 +58,29 @@ public class RetryingGetHeaderFromPeerByNumberTask
       final long pivotBlockNumber,
       final int maxRetries) {
     return new RetryingGetHeaderFromPeerByNumberTask(
-        protocolSchedule, ethContext, metricsSystem, pivotBlockNumber, maxRetries);
+        protocolSchedule, ethContext, metricsSystem, pivotBlockNumber, 1, maxRetries);
+  }
+
+  public static RetryingGetHeaderFromPeerByNumberTask endingAtNumber(
+      final ProtocolSchedule protocolSchedule,
+      final EthContext ethContext,
+      final MetricsSystem metricsSystem,
+      final long blockNumber,
+      final int count,
+      final int maxRetries) {
+    return new RetryingGetHeaderFromPeerByNumberTask(
+        protocolSchedule, ethContext, metricsSystem, blockNumber, count, maxRetries);
   }
 
   @Override
   protected CompletableFuture<List<BlockHeader>> executePeerTask(
       final Optional<EthPeer> assignedPeer) {
     final AbstractGetHeadersFromPeerTask getHeadersTask =
-        GetHeadersFromPeerByNumberTask.forSingleNumber(
-            protocolSchedule, ethContext, pivotBlockNumber, metricsSystem);
+        count == 1
+            ? GetHeadersFromPeerByNumberTask.forSingleNumber(
+                protocolSchedule, ethContext, blockNumber, metricsSystem)
+            : GetHeadersFromPeerByNumberTask.endingAtNumber(
+                protocolSchedule, ethContext, blockNumber, count, 0, metricsSystem);
     assignedPeer.ifPresent(getHeadersTask::assignPeer);
     return executeSubTask(getHeadersTask::run)
         .thenApply(
