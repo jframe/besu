@@ -90,11 +90,11 @@ public class EthPeers implements PeerSelector {
 
   public static final Comparator<EthPeer> RANDOMIZED_COMPARATOR =
       (peer1, peer2) -> {
-        //        if (Math.random() < 0.9) {
-        //          return LEAST_BUSY_FASTEST_PEER.compare(peer1, peer2);
-        //        } else {
-        return LEAST_TO_MOST_BUSY.compare(peer1, peer2);
-        //        }
+        if (Math.random() < 0.9) {
+          return LEAST_BUSY_FASTEST_PEER.compare(peer1, peer2);
+        } else {
+          return LEAST_TO_MOST_BUSY.compare(peer1, peer2);
+        }
       };
 
   public static final int NODE_ID_LENGTH = 64;
