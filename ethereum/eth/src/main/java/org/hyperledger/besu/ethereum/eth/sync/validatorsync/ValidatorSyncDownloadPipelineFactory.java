@@ -126,7 +126,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
                 "action"),
             true,
             "validatorSyncHeaderDownload")
-        .thenProcessInParallel("downloadHeaders", downloadHeadersStep, downloaderParallelism)
+        .thenProcessAsync("downloadHeaders", downloadHeadersStep, downloaderParallelism)
         .andFinishWith("saveHeader", ignore -> {});
   }
 
