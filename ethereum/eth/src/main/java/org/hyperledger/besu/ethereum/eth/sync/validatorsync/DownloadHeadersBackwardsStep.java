@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.sync.ValidationPolicy;
 import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeaders;
+import org.hyperledger.besu.ethereum.eth.sync.range.SyncTargetRange;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.DownloadHeaderSequenceTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
@@ -86,6 +87,12 @@ public class DownloadHeadersBackwardsStep
   }
 
   private RangeHeaders processHeaders(final List<BlockHeader> headers) {
-    return new RangeHeaders(null, headers);
+    final SyncTargetRange syncTargetRange =
+        new SyncTargetRange(null, headers.getFirst(), headers.getLast());
+    List<BlockHeader> headersToImport = headers;
+    if (!headers.isEmpty() && headers.get(0).equals(syncTargetRange.getStart())) {
+      headersToImport = headers.subList(1, headers.size());
+    }
+    return new RangeHeaders(syncTargetRange, headersToImport);
   }
 }

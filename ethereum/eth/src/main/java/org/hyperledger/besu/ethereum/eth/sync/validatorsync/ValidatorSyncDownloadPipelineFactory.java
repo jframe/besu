@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Hyperledger Besu.
+ * Copyright contributors to Besu.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -30,6 +30,7 @@ import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
+import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeadersValidationStep;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncTarget;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
@@ -105,6 +106,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   protected Pipeline<SyncTargetNumberRange> createDownloadHeadersPipeline(final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
+    final int singleHeaderBufferSize = headerRequestSize * downloaderParallelism;
 
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
@@ -114,6 +116,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     final DownloadHeadersBackwardsStep downloadHeadersStep =
         new DownloadHeadersBackwardsStep(
             protocolSchedule, protocolContext, detachedValidationPolicy, ethContext, metricsSystem);
+    final RangeHeadersValidationStep validateHeadersJoinUpStep =
+        new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
+    final SaveHeadersStep saveHeadersStep = new SaveHeadersStep(protocolContext.getBlockchain());
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
             validatorSyncSource,
@@ -126,8 +131,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
                 "action"),
             true,
             "validatorSyncHeaderDownload")
-        .thenProcessAsync("downloadHeaders", downloadHeadersStep, downloaderParallelism)
-        .andFinishWith("saveHeader", ignore -> {});
+        .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
+        .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
+        .andFinishWith("saveHeader", saveHeadersStep);
   }
 
   // Included just to satisfy the interface, not used in this implementation

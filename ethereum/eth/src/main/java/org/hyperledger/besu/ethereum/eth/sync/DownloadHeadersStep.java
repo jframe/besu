@@ -99,6 +99,7 @@ public class DownloadHeadersStep
               range.getStart().getNumber(),
               headerRequestSize,
               metricsSystem)
+          // TODO could this be removed for POS?
           .assignPeer(range.getSyncTarget())
           .run()
           .thenApply(PeerTaskResult::getResult);
