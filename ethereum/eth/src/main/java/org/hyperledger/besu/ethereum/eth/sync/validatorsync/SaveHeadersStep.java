@@ -17,10 +17,9 @@ package org.hyperledger.besu.ethereum.eth.sync.validatorsync;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 
-import java.util.List;
 import java.util.function.Consumer;
 
-public class SaveHeadersStep implements Consumer<List<BlockHeader>> {
+public class SaveHeadersStep implements Consumer<BlockHeader> {
 
   private final MutableBlockchain blockchainStorage;
 
@@ -29,7 +28,7 @@ public class SaveHeadersStep implements Consumer<List<BlockHeader>> {
   }
 
   @Override
-  public void accept(final List<BlockHeader> blockHeader) {
-    blockchainStorage.storeHeaders(blockHeader);
+  public void accept(final BlockHeader blockHeader) {
+    blockchainStorage.storeHeader(blockHeader);
   }
 }

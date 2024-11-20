@@ -129,7 +129,6 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             "validatorSyncHeaderDownload")
         .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
         .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
-        .inBatches(headerRequestSize * 10)
         .andFinishWith("saveHeader", saveHeadersStep);
   }
 

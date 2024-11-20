@@ -429,13 +429,10 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   @Override
-  public void storeHeaders(final List<BlockHeader> blockHeaders) {
+  public void storeHeader(final BlockHeader blockHeader) {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
-    blockHeaders.forEach(
-        blockHeader -> {
-          updater.putBlockHeader(blockHeader.getHash(), blockHeader);
-          updater.putBlockHash(blockHeader.getNumber(), blockHeader.getBlockHash());
-        });
+    updater.putBlockHeader(blockHeader.getHash(), blockHeader);
+    updater.putBlockHash(blockHeader.getNumber(), blockHeader.getBlockHash());
     updater.commit();
   }
 
