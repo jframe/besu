@@ -14,11 +14,10 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.validatorsync;
 
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.DETACHED_ONLY;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.FULL;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_DETACHED_ONLY;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_SKIP_DETACHED;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.NONE;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DETACHED;
 
 import org.hyperledger.besu.ethereum.ProtocolContext;
@@ -88,10 +87,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             fastSyncValidationCounter);
     detachedValidationPolicy =
         new FastSyncValidationPolicy(
-            this.syncConfig.getFastSyncFullValidationRate(),
-            LIGHT_DETACHED_ONLY,
-            DETACHED_ONLY,
-            fastSyncValidationCounter);
+            this.syncConfig.getFastSyncFullValidationRate(), NONE, NONE, fastSyncValidationCounter);
   }
 
   @Override
