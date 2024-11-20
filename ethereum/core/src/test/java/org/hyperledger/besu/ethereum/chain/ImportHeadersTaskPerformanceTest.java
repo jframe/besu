@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration.
 import org.hyperledger.besu.cli.config.NetworkName;
 import org.hyperledger.besu.config.GenesisConfigFile;
 import org.hyperledger.besu.ethereum.core.Block;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
@@ -51,11 +52,11 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
-public class ImportBlocksTaskPerformanceTest {
+public class ImportHeadersTaskPerformanceTest {
   private static final List<BlockWithReceipts> blocks = new ArrayList<>();
   private static DefaultBlockchain blockchain;
 
-  private static final int BLOCK_LIMIT = 501; // includes genesis block
+  private static final int BLOCK_LIMIT = 1001; // includes genesis block
   private static final String DB_EXPORT_FILE = "/Users/jframe/db_export_10k.rlp";
   private static final NetworkName NETWORK = NetworkName.MAINNET;
   private static final Difficulty DIFFICULTY =
@@ -111,124 +112,35 @@ public class ImportBlocksTaskPerformanceTest {
 
   @ParameterizedTest
   @MethodSource("blockImportValues")
-  public void blockImportUsingLoop(final int blocksToImport) {
+  public void headerImportUsingLoop(final int blocksToImport) {
     long start = System.nanoTime();
     for (int i = 1; i <= blocksToImport; i++) {
-      blockchain.appendBlock(blocks.get(i).getBlock(), blocks.get(i).getReceipts());
+      blockchain.storeHeader(blocks.get(i).getHeader());
     }
     long end = System.nanoTime();
     long totalTime = end - start;
     System.out.println(
         "Imported " + blocksToImport + " in " + (double) totalTime / 1_000_000 + "ms");
     System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
+        "Imported time per header " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
   }
 
   @ParameterizedTest
   @MethodSource("blockImportValues")
-  public void importUsingLoopStoreOnly(final int blocksToImport) {
-    long start = System.nanoTime();
+  public void headerImportUsingSingleTx(final int blocksToImport) {
+    final List<BlockHeader> headers = new ArrayList<>();
     for (int i = 1; i <= blocksToImport; i++) {
-      blockchain.storeBlock(blocks.get(i).getBlock(), blocks.get(i).getReceipts());
+      headers.add(blocks.get(i).getHeader());
     }
-    long end = System.nanoTime();
-    long totalTime = end - start;
-    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
-    System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
-  }
 
-  @ParameterizedTest
-  @MethodSource("blockImportValues")
-  public void unsafeBlockImportUsingLoop(final int blocksToImport) {
     long start = System.nanoTime();
-    for (int i = 1; i <= blocksToImport; i++) {
-      blockchain.unsafeImportBlock(
-          blocks.get(i).getBlock(), blocks.get(i).getReceipts(), Optional.empty());
-    }
+    blockchain.storeHeaders(headers);
     long end = System.nanoTime();
     long totalTime = end - start;
-    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
     System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
-  }
-
-  @ParameterizedTest
-  @MethodSource("blockImportValues")
-  public void unsafeBlockImportWithoutTxIndexing(final int blocksToImport) {
-    long start = System.nanoTime();
-    for (int i = 1; i <= blocksToImport; i++) {
-      blockchain.unsafeImportBlockWithoutTxIndexing(
-          blocks.get(i).getBlock(), blocks.get(i).getReceipts(), Optional.empty());
-    }
-    long end = System.nanoTime();
-    long totalTime = end - start;
-    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
+        "Imported " + blocksToImport + " in " + (double) totalTime / 1_000_000 + "ms");
     System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
-  }
-
-  @ParameterizedTest
-  @MethodSource("blockImportValues")
-  public void storeBlockForSyncing(final int blocksToImport) {
-    long start = System.nanoTime();
-    for (int i = 1; i <= blocksToImport; i++) {
-      blockchain.storeBlockForSyncing(blocks.get(i));
-    }
-    long end = System.nanoTime();
-    long totalTime = end - start;
-    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
-    System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
-  }
-
-  @ParameterizedTest
-  @MethodSource("blockImportValues")
-  public void unsafeBlockImportWithoutTxIndexingOneTx(final int blocksToImport) {
-    long start = System.nanoTime();
-    blockchain.unsafeImportBlockWithoutTxIndexingOneTx(blocks.subList(1, blocksToImport + 1));
-    long end = System.nanoTime();
-    long totalTime = end - start;
-    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
-    System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
-  }
-
-  @ParameterizedTest
-  @MethodSource("blockImportValues")
-  public void unsafeBlockImportWithoutTxIndexingParallelTxs(final int blocksToImport) {
-    long start = System.nanoTime();
-    blockchain.unsafeImportBlockWithoutTxIndexingMultipleParallelTxs(
-        blocks.subList(1, blocksToImport + 1));
-    long end = System.nanoTime();
-    long totalTime = end - start;
-    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
-    System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
-  }
-
-  @ParameterizedTest
-  @MethodSource("blockImportValues")
-  public void unsafeBlockImportParallel(final int blocksToImport) {
-    long start = System.nanoTime();
-    blockchain.unsafeImportBlocks(blocks.subList(1, blocksToImport + 1));
-    long end = System.nanoTime();
-    long totalTime = end - start;
-    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
-    System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
-  }
-
-  @ParameterizedTest
-  @MethodSource("blockImportValues")
-  public void blockImportParallelWithoutTxIndexing(final int blocksToImport) {
-    long start = System.nanoTime();
-    blockchain.importBlocksWithoutTxIndexing(blocks.subList(1, blocksToImport + 1));
-    long end = System.nanoTime();
-    long totalTime = end - start;
-    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
-    System.out.println(
-        "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
+        "Imported time per header " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
   }
 
   private static StorageProvider createKeyValueStorageProvider(
@@ -252,6 +164,6 @@ public class ImportBlocksTaskPerformanceTest {
   }
 
   static Stream<Integer> blockImportValues() {
-    return Stream.of(200, 200, 200);
+    return Stream.of(100, 200, 400, 800, 100, 200, 400, 800);
   }
 }

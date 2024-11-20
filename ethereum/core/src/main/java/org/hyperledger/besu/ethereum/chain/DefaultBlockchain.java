@@ -650,39 +650,35 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   public void importBlocksWithoutTxIndexing(final List<BlockWithReceipts> blocks) {
     List<BlockValueWithoutTx> blockValues =
-            blocks.parallelStream()
-                    .map(
-                            blockWithReceipts -> {
-                              Block block = blockWithReceipts.getBlock();
-                              Hash hash = blockWithReceipts.getHash();
-                              Bytes blockNumberBytes = UInt256.valueOf(block.getHeader().getNumber()).toBytes();
-                              Bytes blockHeaderRlp =
-                                      RLP.encode(blockWithReceipts.getBlock().getHeader()::writeTo);
-                              Bytes blockBodyRlp = RLP.encode(blockWithReceipts.getBlock().getBody()::writeTo);
-                              Bytes transactionReceiptsRlp =
-                                      RLP.encode(
-                                              o ->
-                                                      o.writeList(
-                                                              blockWithReceipts.getReceipts(),
-                                                              (r, rlpOutput) -> r.writeToForStorage(rlpOutput, true)));
-                              return new BlockValueWithoutTx(
-                                      hash,
-                                      blockNumberBytes,
-                                      blockHeaderRlp,
-                                      blockBodyRlp,
-                                      transactionReceiptsRlp);
-                            })
-                    .toList();
+        blocks.parallelStream()
+            .map(
+                blockWithReceipts -> {
+                  Block block = blockWithReceipts.getBlock();
+                  Hash hash = blockWithReceipts.getHash();
+                  Bytes blockNumberBytes = UInt256.valueOf(block.getHeader().getNumber()).toBytes();
+                  Bytes blockHeaderRlp =
+                      RLP.encode(blockWithReceipts.getBlock().getHeader()::writeTo);
+                  Bytes blockBodyRlp = RLP.encode(blockWithReceipts.getBlock().getBody()::writeTo);
+                  Bytes transactionReceiptsRlp =
+                      RLP.encode(
+                          o ->
+                              o.writeList(
+                                  blockWithReceipts.getReceipts(),
+                                  (r, rlpOutput) -> r.writeToForStorage(rlpOutput, true)));
+                  return new BlockValueWithoutTx(
+                      hash, blockNumberBytes, blockHeaderRlp, blockBodyRlp, transactionReceiptsRlp);
+                })
+            .toList();
 
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
     blockValues.forEach(
-            blockValue -> {
-              updater.set(BLOCK_HEADER_PREFIX, blockValue.blockHash, blockValue.blockHeaderRlp);
-              updater.set(BLOCK_HASH_PREFIX, blockValue.blockNumberBytes, blockValue.blockHeaderRlp);
-              updater.set(BLOCK_BODY_PREFIX, blockValue.blockHash, blockValue.blockBodyRlp);
-              updater.set(
-                      TRANSACTION_RECEIPTS_PREFIX, blockValue.blockHash, blockValue.transactionsReceiptRlp);
-            });
+        blockValue -> {
+          updater.set(BLOCK_HEADER_PREFIX, blockValue.blockHash, blockValue.blockHeaderRlp);
+          updater.set(BLOCK_HASH_PREFIX, blockValue.blockNumberBytes, blockValue.blockHeaderRlp);
+          updater.set(BLOCK_BODY_PREFIX, blockValue.blockHash, blockValue.blockBodyRlp);
+          updater.set(
+              TRANSACTION_RECEIPTS_PREFIX, blockValue.blockHash, blockValue.transactionsReceiptRlp);
+        });
 
     this.chainHeader = blocks.getLast().getHeader();
     updater.setChainHead(blockValues.getLast().blockHash);
@@ -691,12 +687,28 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   record BlockValueWithoutTx(
-          Hash blockHash,
-          Bytes blockNumberBytes,
-          Bytes blockHeaderRlp,
-          Bytes blockBodyRlp,
-          Bytes transactionsReceiptRlp) {}
+      Hash blockHash,
+      Bytes blockNumberBytes,
+      Bytes blockHeaderRlp,
+      Bytes blockBodyRlp,
+      Bytes transactionsReceiptRlp) {}
 
+  public void storeHeader(final BlockHeader blockHeader) {
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    updater.putBlockHeader(blockHeader.getHash(), blockHeader);
+    updater.putBlockHash(blockHeader.getNumber(), blockHeader.getBlockHash());
+    updater.commit();
+  }
+
+  public void storeHeaders(final List<BlockHeader> headers) {
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    headers.forEach(
+        header -> {
+          updater.putBlockHeader(header.getHash(), header);
+          updater.putBlockHash(header.getNumber(), header.getBlockHash());
+        });
+    updater.commit();
+  }
 
   @Override
   public synchronized void unsafeSetChainHead(
