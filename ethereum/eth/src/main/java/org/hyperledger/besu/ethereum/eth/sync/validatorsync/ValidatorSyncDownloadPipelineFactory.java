@@ -133,7 +133,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             "validatorSyncHeaderDownload")
         .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
         .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
-        .andFinishWith("saveHeader", saveHeadersStep);
+        .andFinishWith("saveHeader", ignore -> {});
   }
 
   // Included just to satisfy the interface, not used in this implementation
