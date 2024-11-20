@@ -118,7 +118,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             protocolSchedule, protocolContext, detachedValidationPolicy, ethContext, metricsSystem);
     final RangeHeadersValidationStep validateHeadersJoinUpStep =
         new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
-    final SaveHeadersStep saveHeadersStep = new SaveHeadersStep(protocolContext.getBlockchain());
+    //    final SaveHeadersStep saveHeadersStep = new
+    // SaveHeadersStep(protocolContext.getBlockchain());
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
             validatorSyncSource,
