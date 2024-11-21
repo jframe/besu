@@ -136,7 +136,29 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   @Override
   public Pipeline<SyncTargetNumberRange> createDownloadPipelineForSyncTarget(
       final SyncTarget target) {
-    return null;
+    final int downloaderParallelism = syncConfig.getDownloaderParallelism();
+    final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
+
+    final ValidatorSyncSource validatorSyncSource =
+        new ValidatorSyncSource(
+            getCommonAncestor(target).getNumber(),
+            fastSyncState.getPivotBlockNumber().getAsLong(),
+            headerRequestSize);
+    final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
+    return PipelineBuilder.createPipelineFrom(
+            "posPivot",
+            validatorSyncSource,
+            downloaderParallelism,
+            metricsSystem.createLabelledCounter(
+                BesuMetricCategory.SYNCHRONIZER,
+                "chain_download_pipeline_processed_total",
+                "Number of entries process by each chain download pipeline stage",
+                "step",
+                "action"),
+            true,
+            "validatorSyncHeaderDownload")
+        .thenProcessAsyncOrdered("loadHeaders", loadHeadersStep, downloaderParallelism)
+        .andFinishWith("importBlock", ignore -> {});
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {
