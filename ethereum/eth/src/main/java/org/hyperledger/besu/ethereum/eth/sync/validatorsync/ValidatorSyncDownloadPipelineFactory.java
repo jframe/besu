@@ -96,7 +96,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
       final SyncState syncState,
       final SyncTarget syncTarget,
       final Pipeline<?> pipeline) {
-    return scheduler.startPipeline(createDownloadHeadersPipeline(syncTarget));
+    return scheduler
+        .startPipeline(createDownloadHeadersPipeline(syncTarget))
+        .thenCompose(ignore -> scheduler.startPipeline(pipeline));
   }
 
   protected Pipeline<SyncTargetNumberRange> createDownloadHeadersPipeline(final SyncTarget target) {
