@@ -65,18 +65,18 @@ public class PeerReputation implements Comparable<PeerReputation> {
   public Optional<DisconnectReason> recordRequestTimeout(
       final int requestCode, final EthPeer peer) {
     final int newTimeoutCount = getOrCreateTimeoutCount(requestCode).incrementAndGet();
-    if (newTimeoutCount >= TIMEOUT_THRESHOLD) {
-      LOG.debug(
-          "Disconnection triggered by {} repeated timeouts for requestCode {} for peer {}",
-          newTimeoutCount,
-          requestCode,
-          peer.getLoggableId());
-      score -= LARGE_ADJUSTMENT;
-      return Optional.of(DisconnectReason.TIMEOUT);
-    } else {
-      score -= SMALL_ADJUSTMENT;
-      return Optional.empty();
-    }
+    //    if (newTimeoutCount >= TIMEOUT_THRESHOLD) {
+    //      LOG.debug(
+    //          "Disconnection triggered by {} repeated timeouts for requestCode {} for peer {}",
+    //          newTimeoutCount,
+    //          requestCode,
+    //          peer.getLoggableId());
+    //      score -= LARGE_ADJUSTMENT;
+    //      return Optional.of(DisconnectReason.TIMEOUT);
+    //    } else {
+    //      score -= SMALL_ADJUSTMENT;
+    return Optional.empty();
+    //    }
   }
 
   public void resetTimeoutCount(final int requestCode) {
