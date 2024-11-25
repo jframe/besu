@@ -128,7 +128,7 @@ public class CompleteBlocksTask extends AbstractRetryingPeerTask<List<Block>> {
     if (incompleteHeaders.isEmpty()) {
       return completedFuture(emptyList());
     }
-    LOG.debug(
+    LOG.info(
         "Requesting bodies to complete {} blocks, starting with {}.",
         incompleteHeaders.size(),
         incompleteHeaders.get(0).getNumber());
