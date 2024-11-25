@@ -19,9 +19,6 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
-import org.hyperledger.besu.ethereum.eth.sync.range.RangeHeaders;
-import org.hyperledger.besu.ethereum.eth.sync.range.SyncTargetRange;
-import org.hyperledger.besu.util.FutureUtils;
 
 import java.util.List;
 import java.util.Optional;
@@ -34,7 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class LoadHeadersStep
-    implements Function<SyncTargetNumberRange, CompletableFuture<RangeHeaders>> {
+    implements Function<SyncTargetNumberRange, CompletableFuture<List<BlockHeader>>> {
   private static final Logger LOG = LoggerFactory.getLogger(DownloadHeadersBackwardsStep.class);
   private final Blockchain blockchain;
 
@@ -43,12 +40,8 @@ public class LoadHeadersStep
   }
 
   @Override
-  public CompletableFuture<RangeHeaders> apply(final SyncTargetNumberRange checkpointRange) {
-    final CompletableFuture<List<BlockHeader>> taskFuture = loadHeaders(checkpointRange);
-    final CompletableFuture<RangeHeaders> processedFuture =
-        taskFuture.thenApply(headers -> processHeaders(headers));
-    FutureUtils.propagateCancellation(processedFuture, taskFuture);
-    return processedFuture;
+  public CompletableFuture<List<BlockHeader>> apply(final SyncTargetNumberRange checkpointRange) {
+    return loadHeaders(checkpointRange);
   }
 
   private CompletableFuture<List<BlockHeader>> loadHeaders(final SyncTargetNumberRange range) {
@@ -68,15 +61,5 @@ public class LoadHeadersStep
             .flatMap(Optional::stream)
             .collect(Collectors.toList());
     return CompletableFuture.completedFuture(headers);
-  }
-
-  private RangeHeaders processHeaders(final List<BlockHeader> headers) {
-    final SyncTargetRange syncTargetRange =
-        new SyncTargetRange(null, headers.getFirst(), headers.getLast());
-    List<BlockHeader> headersToImport = headers;
-    if (!headers.isEmpty() && headers.get(0).equals(syncTargetRange.getStart())) {
-      headersToImport = headers.subList(1, headers.size());
-    }
-    return new RangeHeaders(syncTargetRange, headersToImport);
   }
 }

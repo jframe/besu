@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutor;
+import org.hyperledger.besu.ethereum.eth.sync.DownloadBodiesStep;
 import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
@@ -147,6 +148,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             fastSyncState.getPivotBlockNumber().getAsLong(),
             headerRequestSize);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
+    final DownloadBodiesStep downloadBodiesStep =
+        new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
             validatorSyncSource,
@@ -160,6 +163,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             true,
             "validatorSyncHeaderDownload")
         .thenProcessAsyncOrdered("loadHeaders", loadHeadersStep, downloaderParallelism)
+        .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
         .andFinishWith("importBlock", ignore -> {});
   }
 
