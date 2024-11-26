@@ -39,7 +39,8 @@ public class SynchronizerConfiguration {
   public static final long DEFAULT_DOWNLOADER_CHANGE_TARGET_THRESHOLD_BY_HEIGHT = 200L;
   public static final UInt256 DEFAULT_DOWNLOADER_CHANGE_TARGET_THRESHOLD_BY_TD =
       UInt256.valueOf(1_000_000_000_000_000_000L);
-  public static final int DEFAULT_DOWNLOADER_HEADER_REQUEST_SIZE = 200;
+  public static final int DEFAULT_DOWNLOADER_HEADER_REQUEST_SIZE = 192;
+  public static final int DEFAULT_DOWNLOADER_BODY_REQUEST_SIZE = 64;
   public static final int DEFAULT_DOWNLOADER_CHECKPOINT_TIMEOUTS_PERMITTED = 5;
   public static final int DEFAULT_DOWNLOADER_CHAIN_SEGMENT_SIZE = 200;
   public static final int DEFAULT_DOWNLOADER_PARALLELISM = 4;
@@ -77,6 +78,7 @@ public class SynchronizerConfiguration {
   private final long downloaderChangeTargetThresholdByHeight;
   private final UInt256 downloaderChangeTargetThresholdByTd;
   private final int downloaderHeaderRequestSize;
+  private final int downloaderBodyRequestSize;
   private final int downloaderCheckpointRetries;
   private final int downloaderChainSegmentSize;
   private final int downloaderParallelism;
@@ -102,6 +104,7 @@ public class SynchronizerConfiguration {
       final long downloaderChangeTargetThresholdByHeight,
       final UInt256 downloaderChangeTargetThresholdByTd,
       final int downloaderHeaderRequestSize,
+      final int downloaderBodyRequestSize,
       final int downloaderCheckpointRetries,
       final int downloaderChainSegmentSize,
       final int downloaderParallelism,
@@ -125,6 +128,7 @@ public class SynchronizerConfiguration {
     this.downloaderChangeTargetThresholdByHeight = downloaderChangeTargetThresholdByHeight;
     this.downloaderChangeTargetThresholdByTd = downloaderChangeTargetThresholdByTd;
     this.downloaderHeaderRequestSize = downloaderHeaderRequestSize;
+    this.downloaderBodyRequestSize = downloaderBodyRequestSize;
     this.downloaderCheckpointRetries = downloaderCheckpointRetries;
     this.downloaderChainSegmentSize = downloaderChainSegmentSize;
     this.downloaderParallelism = downloaderParallelism;
@@ -194,6 +198,10 @@ public class SynchronizerConfiguration {
 
   public int getDownloaderHeaderRequestSize() {
     return downloaderHeaderRequestSize;
+  }
+
+  public int getDownloaderBodyRequestSize() {
+    return downloaderBodyRequestSize;
   }
 
   public int getDownloaderCheckpointRetries() {
@@ -273,6 +281,7 @@ public class SynchronizerConfiguration {
     private UInt256 downloaderChangeTargetThresholdByTd =
         DEFAULT_DOWNLOADER_CHANGE_TARGET_THRESHOLD_BY_TD;
     private int downloaderHeaderRequestSize = DEFAULT_DOWNLOADER_HEADER_REQUEST_SIZE;
+    private int downloaderBodyRequestSize = DEFAULT_DOWNLOADER_BODY_REQUEST_SIZE;
     private int downloaderCheckpointRetries = DEFAULT_DOWNLOADER_CHECKPOINT_TIMEOUTS_PERMITTED;
     private SnapSyncConfiguration snapSyncConfiguration = SnapSyncConfiguration.getDefault();
     private int downloaderChainSegmentSize = DEFAULT_DOWNLOADER_CHAIN_SEGMENT_SIZE;
@@ -333,6 +342,11 @@ public class SynchronizerConfiguration {
 
     public Builder downloaderHeadersRequestSize(final int downloaderHeaderRequestSize) {
       this.downloaderHeaderRequestSize = downloaderHeaderRequestSize;
+      return this;
+    }
+
+    public Builder downloaderBodiesRequestSize(final int downloaderBodiesRequestSize) {
+      this.downloaderBodyRequestSize = downloaderBodiesRequestSize;
       return this;
     }
 
@@ -435,6 +449,7 @@ public class SynchronizerConfiguration {
           downloaderChangeTargetThresholdByHeight,
           downloaderChangeTargetThresholdByTd,
           downloaderHeaderRequestSize,
+          downloaderBodyRequestSize,
           downloaderCheckpointRetries,
           downloaderChainSegmentSize,
           downloaderParallelism,

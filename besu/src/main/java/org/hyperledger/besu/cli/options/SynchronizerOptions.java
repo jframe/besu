@@ -35,6 +35,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       "--Xsynchronizer-downloader-change-target-threshold-by-td";
   private static final String DOWNLOADER_HEADER_REQUEST_SIZE_FLAG =
       "--Xsynchronizer-downloader-header-request-size";
+  private static final String DOWNLOADER_BODY_REQUEST_SIZE_FLAG =
+      "--Xsynchronizer-downloader-body-request-size";
   private static final String DOWNLOADER_CHECKPOINT_TIMEOUTS_PERMITTED_FLAG =
       "--Xsynchronizer-downloader-checkpoint-timeouts-permitted";
   private static final String DOWNLOADER_CHECKPOINT_RETRIES_FLAG =
@@ -129,6 +131,14 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       description = "Number of headers to request per packet (default: ${DEFAULT-VALUE})")
   private int downloaderHeaderRequestSize =
       SynchronizerConfiguration.DEFAULT_DOWNLOADER_HEADER_REQUEST_SIZE;
+
+  @CommandLine.Option(
+      names = DOWNLOADER_BODY_REQUEST_SIZE_FLAG,
+      hidden = true,
+      paramLabel = "<INTEGER>",
+      description = "Number of headers to request per packet (default: ${DEFAULT-VALUE})")
+  private int downloaderBodyRequestSize =
+      SynchronizerConfiguration.DEFAULT_DOWNLOADER_BODY_REQUEST_SIZE;
 
   @CommandLine.Option(
       names = {DOWNLOADER_CHECKPOINT_RETRIES_FLAG, DOWNLOADER_CHECKPOINT_TIMEOUTS_PERMITTED_FLAG},
@@ -409,6 +419,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     builder.downloaderChangeTargetThresholdByHeight(downloaderChangeTargetThresholdByHeight);
     builder.downloaderChangeTargetThresholdByTd(downloaderChangeTargetThresholdByTd);
     builder.downloaderHeadersRequestSize(downloaderHeaderRequestSize);
+    builder.downloaderBodiesRequestSize(downloaderHeaderRequestSize);
     builder.downloaderCheckpointRetries(downloaderCheckpointRetries);
     builder.downloaderChainSegmentSize(downloaderChainSegmentSize);
     builder.downloaderParallelism(downloaderParallelism);

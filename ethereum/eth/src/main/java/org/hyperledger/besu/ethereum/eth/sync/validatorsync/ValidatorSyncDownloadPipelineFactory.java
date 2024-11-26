@@ -135,12 +135,11 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .andFinishWith("saveHeader", saveHeadersStep);
   }
 
-  // Included just to satisfy the interface, not used in this implementation
   @Override
   public Pipeline<SyncTargetNumberRange> createDownloadPipelineForSyncTarget(
       final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
-    final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
+    final int headerRequestSize = syncConfig.getDownloaderBodyRequestSize();
 
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
