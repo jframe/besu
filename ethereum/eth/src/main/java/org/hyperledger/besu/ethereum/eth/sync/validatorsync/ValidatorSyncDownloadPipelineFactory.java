@@ -139,13 +139,13 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   public Pipeline<SyncTargetNumberRange> createDownloadPipelineForSyncTarget(
       final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
-    final int headerRequestSize = syncConfig.getDownloaderBodyRequestSize();
+    final int bodyRequestSize = syncConfig.getDownloaderBodyRequestSize();
 
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
             getCommonAncestor(target).getNumber(),
             fastSyncState.getPivotBlockNumber().getAsLong(),
-            headerRequestSize);
+            bodyRequestSize);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
