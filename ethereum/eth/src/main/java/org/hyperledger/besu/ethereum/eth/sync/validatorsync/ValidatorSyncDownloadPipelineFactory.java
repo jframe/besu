@@ -149,6 +149,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
+    final ImportBlocksStep importBlocksStep =
+        new ImportBlocksStep(
+            protocolContext, ethContext, fastSyncState.getPivotBlockHeader().get());
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
             validatorSyncSource,
@@ -163,7 +166,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             "validatorSyncHeaderDownload")
         .thenProcessAsyncOrdered("loadHeaders", loadHeadersStep, downloaderParallelism)
         .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
-        .andFinishWith("importBlock", ignore -> {});
+        .andFinishWith("importBlock", importBlocksStep);
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {
