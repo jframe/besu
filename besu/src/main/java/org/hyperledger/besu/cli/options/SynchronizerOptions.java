@@ -380,6 +380,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
         config.getDownloaderChangeTargetThresholdByHeight();
     options.downloaderChangeTargetThresholdByTd = config.getDownloaderChangeTargetThresholdByTd();
     options.downloaderHeaderRequestSize = config.getDownloaderHeaderRequestSize();
+    options.downloaderBodyRequestSize = config.getDownloaderBodyRequestSize();
     options.downloaderCheckpointRetries = config.getDownloaderCheckpointRetries();
     options.downloaderChainSegmentSize = config.getDownloaderChainSegmentSize();
     options.downloaderParallelism = config.getDownloaderParallelism();
@@ -419,7 +420,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     builder.downloaderChangeTargetThresholdByHeight(downloaderChangeTargetThresholdByHeight);
     builder.downloaderChangeTargetThresholdByTd(downloaderChangeTargetThresholdByTd);
     builder.downloaderHeadersRequestSize(downloaderHeaderRequestSize);
-    builder.downloaderBodiesRequestSize(downloaderHeaderRequestSize);
+    builder.downloaderBodiesRequestSize(downloaderBodyRequestSize);
     builder.downloaderCheckpointRetries(downloaderCheckpointRetries);
     builder.downloaderChainSegmentSize(downloaderChainSegmentSize);
     builder.downloaderParallelism(downloaderParallelism);
@@ -461,6 +462,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             OptionParser.format(downloaderChangeTargetThresholdByTd),
             DOWNLOADER_HEADER_REQUEST_SIZE_FLAG,
             OptionParser.format(downloaderHeaderRequestSize),
+            DOWNLOADER_BODY_REQUEST_SIZE_FLAG,
+            OptionParser.format(downloaderBodyRequestSize),
             DOWNLOADER_CHECKPOINT_TIMEOUTS_PERMITTED_FLAG,
             OptionParser.format(downloaderCheckpointRetries),
             DOWNLOADER_CHAIN_SEGMENT_SIZE_FLAG,
