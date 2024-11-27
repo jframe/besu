@@ -32,7 +32,7 @@ import org.slf4j.LoggerFactory;
 
 public class LoadHeadersStep
     implements Function<SyncTargetNumberRange, CompletableFuture<List<BlockHeader>>> {
-  private static final Logger LOG = LoggerFactory.getLogger(DownloadHeadersBackwardsStep.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LoadHeadersStep.class);
   private final Blockchain blockchain;
 
   public LoadHeadersStep(final Blockchain blockchain) {
