@@ -515,11 +515,6 @@ public class DefaultBlockchain implements MutableBlockchain {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
     final Hash hash = block.getHash();
     updater.putBlockBody(hash, block.getBody());
-    final int nbTrx = block.getBody().getTransactions().size();
-    for (int i = 0; i < nbTrx; i++) {
-      final Hash transactionHash = block.getBody().getTransactions().get(i).getHash();
-      updater.putTransactionLocation(transactionHash, new TransactionLocation(transactionHash, i));
-    }
     updater.commit();
   }
 
