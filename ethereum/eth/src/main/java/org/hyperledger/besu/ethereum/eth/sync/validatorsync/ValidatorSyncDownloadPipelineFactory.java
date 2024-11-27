@@ -129,7 +129,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
                 "action"),
             true,
             "validatorSyncHeaderDownload")
-        .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
+        .thenProcessAsync("downloadHeaders", downloadHeadersStep, downloaderParallelism)
         .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
         .andFinishWith("saveHeader", saveHeadersStep);
   }
@@ -161,8 +161,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
                 "action"),
             true,
             "validatorSyncHeaderDownload")
-        .thenProcessAsyncOrdered("loadHeaders", loadHeadersStep, downloaderParallelism)
-        .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
+        .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
+        .thenProcessAsync("downloadBodies", downloadBodiesStep, downloaderParallelism)
         .andFinishWith("importBlock", importBlocksStep);
   }
 
