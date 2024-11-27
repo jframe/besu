@@ -231,6 +231,34 @@ public class ImportBlocksTaskPerformanceTest {
         "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
   }
 
+  @ParameterizedTest
+  @MethodSource("blockImportValues")
+  public void unsafeImportBlock(final int blocksToImport) {
+    long start = System.nanoTime();
+    for (int i = 1; i <= blocksToImport; i++) {
+      blockchain.unsafeImportBlock(blocks.get(i).getBlock());
+    }
+    long end = System.nanoTime();
+    long totalTime = end - start;
+    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
+    System.out.println(
+            "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
+  }
+
+  @ParameterizedTest
+  @MethodSource("blockImportValues")
+  public void unsafeImportBlockNoTxIndexing(final int blocksToImport) {
+    long start = System.nanoTime();
+    for (int i = 1; i <= blocksToImport; i++) {
+      blockchain.unsafeImportBlockNoTxIndexing(blocks.get(i).getBlock());
+    }
+    long end = System.nanoTime();
+    long totalTime = end - start;
+    System.out.println("Imported blocks in " + (double) totalTime / 1_000_000 + "ms");
+    System.out.println(
+            "Imported time per block " + (double) totalTime / blocksToImport / 1_000_000 + "ms");
+  }
+
   private static StorageProvider createKeyValueStorageProvider(
       final Path dataDir, final Path dbDir) {
     final var besuConfiguration = new BesuConfigurationImpl();
