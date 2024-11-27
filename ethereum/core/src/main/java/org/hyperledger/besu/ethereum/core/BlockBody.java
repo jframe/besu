@@ -14,7 +14,6 @@
  */
 package org.hyperledger.besu.ethereum.core;
 
-import org.hyperledger.besu.ethereum.rlp.BytesValueRLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
@@ -22,8 +21,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-
-import org.apache.tuweni.bytes.Bytes;
 
 public class BlockBody implements org.hyperledger.besu.plugin.data.BlockBody {
 
@@ -40,13 +37,11 @@ public class BlockBody implements org.hyperledger.besu.plugin.data.BlockBody {
 
   private final List<BlockHeader> ommers;
   private final Optional<List<Withdrawal>> withdrawals;
-  private Bytes rlpEncoding;
 
   public BlockBody(final List<Transaction> transactions, final List<BlockHeader> ommers) {
     this.transactions = transactions;
     this.ommers = ommers;
     this.withdrawals = Optional.empty();
-    this.rlpEncoding = null;
   }
 
   public BlockBody(
@@ -56,7 +51,6 @@ public class BlockBody implements org.hyperledger.besu.plugin.data.BlockBody {
     this.transactions = transactions;
     this.ommers = ommers;
     this.withdrawals = withdrawals;
-    this.rlpEncoding = null;
   }
 
   public static BlockBody empty() {
@@ -101,11 +95,6 @@ public class BlockBody implements org.hyperledger.besu.plugin.data.BlockBody {
   }
 
   public void writeTo(final RLPOutput output) {
-    if (rlpEncoding != null) {
-      output.writeBytes(rlpEncoding);
-      return;
-    }
-
     output.writeList(getTransactions(), Transaction::writeTo);
     output.writeList(getOmmers(), BlockHeader::writeTo);
     withdrawals.ifPresent(withdrawals -> output.writeList(withdrawals, Withdrawal::writeTo));
@@ -130,17 +119,14 @@ public class BlockBody implements org.hyperledger.besu.plugin.data.BlockBody {
       final RLPInput input,
       final BlockHeaderFunctions blockHeaderFunctions,
       final boolean allowEmptyBody) {
-    final Bytes rlpEncoding = input.raw();
-    final BytesValueRLPInput cachedInput = new BytesValueRLPInput(rlpEncoding, false);
-    cachedInput.enterList();
-    if (cachedInput.isEndOfCurrentList() && allowEmptyBody) {
+    input.enterList();
+    if (input.isEndOfCurrentList() && allowEmptyBody) {
       // empty block [] -> Return empty body.
-      cachedInput.leaveList();
+      input.leaveList();
       return empty();
     }
-    final BlockBody body = readFrom(cachedInput, blockHeaderFunctions);
-    cachedInput.leaveList();
-    body.rlpEncoding = rlpEncoding;
+    final BlockBody body = readFrom(input, blockHeaderFunctions);
+    input.leaveList();
     return body;
   }
 
@@ -155,11 +141,10 @@ public class BlockBody implements org.hyperledger.besu.plugin.data.BlockBody {
    */
   public static BlockBody readFrom(
       final RLPInput input, final BlockHeaderFunctions blockHeaderFunctions) {
-
     return new BlockBody(
-            input.readList(Transaction::readFrom),
-            input.readList(rlp -> BlockHeader.readFrom(rlp, blockHeaderFunctions)),
-            input.isEndOfCurrentList()
+        input.readList(Transaction::readFrom),
+        input.readList(rlp -> BlockHeader.readFrom(rlp, blockHeaderFunctions)),
+        input.isEndOfCurrentList()
             ? Optional.empty()
             : Optional.of(input.readList(Withdrawal::readFrom)));
   }
