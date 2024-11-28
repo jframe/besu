@@ -22,7 +22,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class ImportReceiptsStep implements Consumer<Map<BlockHeader, List<TransactionReceipt>>> {
+  private static final Logger LOG = LoggerFactory.getLogger(ImportReceiptsStep.class);
   protected final ProtocolContext protocolContext;
 
   public ImportReceiptsStep(final ProtocolContext protocolContext) {
@@ -36,5 +40,8 @@ public class ImportReceiptsStep implements Consumer<Map<BlockHeader, List<Transa
           .getBlockchain()
           .unsafeImportReceipts(entry.getKey().getHash(), entry.getValue());
     }
+    LOG.info(
+        "Imported receipts starting from {}",
+        receiptsByBlock.keySet().iterator().next().getNumber());
   }
 }
