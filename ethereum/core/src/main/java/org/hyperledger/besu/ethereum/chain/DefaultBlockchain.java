@@ -519,6 +519,13 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   @Override
+  public void unsafeImportReceipts(final Hash blockHash, final List<TransactionReceipt> receipts) {
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    updater.putTransactionReceipts(blockHash, receipts);
+    updater.commit();
+  }
+
+  @Override
   public synchronized void unsafeSetChainHead(
       final BlockHeader blockHeader, final Difficulty totalDifficulty) {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();

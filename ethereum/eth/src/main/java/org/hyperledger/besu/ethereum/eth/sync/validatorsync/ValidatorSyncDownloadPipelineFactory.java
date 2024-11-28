@@ -48,6 +48,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   protected final ProtocolSchedule protocolSchedule;
   protected final ProtocolContext protocolContext;
   protected final EthContext ethContext;
+  private final PeerTaskExecutor peerTaskExecutor;
   protected final FastSyncState fastSyncState;
   protected final MetricsSystem metricsSystem;
   protected final FastSyncValidationPolicy attachedValidationPolicy;
@@ -66,6 +67,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     this.protocolSchedule = protocolSchedule;
     this.protocolContext = protocolContext;
     this.ethContext = ethContext;
+    this.peerTaskExecutor = peerTaskExecutor;
     this.fastSyncState = fastSyncState;
     this.metricsSystem = metricsSystem;
     final LabelledMetric<Counter> fastSyncValidationCounter =
@@ -99,7 +101,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
       final Pipeline<?> pipeline) {
     return scheduler
         .startPipeline(createDownloadHeadersPipeline(syncTarget))
-        .thenCompose(ignore -> scheduler.startPipeline(pipeline));
+        .thenCompose(ignore -> scheduler.startPipeline(createDownloadReceiptsPipeline(syncTarget)));
   }
 
   protected Pipeline<SyncTargetNumberRange> createDownloadHeadersPipeline(final SyncTarget target) {
@@ -135,9 +137,15 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .andFinishWith("saveHeader", saveHeadersStep);
   }
 
+  // Implemented to satisfy interface, but not used in ValidatorSync
   @Override
   public Pipeline<SyncTargetNumberRange> createDownloadPipelineForSyncTarget(
       final SyncTarget target) {
+    return null;
+  }
+
+  @SuppressWarnings("unused")
+  private Pipeline<SyncTargetNumberRange> createDownloadBodiesPipeline(final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
     final int bodyRequestSize = syncConfig.getDownloaderBodyRequestSize();
 
@@ -167,6 +175,37 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
         .thenProcessAsync("downloadBodies", downloadBodiesStep, downloaderParallelism)
         .andFinishWith("importBlock", importBlocksStep);
+  }
+
+  private Pipeline<SyncTargetNumberRange> createDownloadReceiptsPipeline(final SyncTarget target) {
+    final int downloaderParallelism = syncConfig.getDownloaderParallelism();
+    final int bodyRequestSize = syncConfig.getDownloaderBodyRequestSize();
+
+    final ValidatorSyncSource validatorSyncSource =
+        new ValidatorSyncSource(
+            getCommonAncestor(target).getNumber(),
+            fastSyncState.getPivotBlockNumber().getAsLong(),
+            bodyRequestSize);
+    final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
+    final DownloadReceiptsStep downloadReceiptsStep =
+        new DownloadReceiptsStep(
+            protocolSchedule, ethContext, peerTaskExecutor, syncConfig, metricsSystem);
+    final ImportReceiptsStep importReceiptsStep = new ImportReceiptsStep(protocolContext);
+    return PipelineBuilder.createPipelineFrom(
+            "posPivot",
+            validatorSyncSource,
+            downloaderParallelism,
+            metricsSystem.createLabelledCounter(
+                BesuMetricCategory.SYNCHRONIZER,
+                "chain_download_pipeline_processed_total",
+                "Number of entries process by each chain download pipeline stage",
+                "step",
+                "action"),
+            true,
+            "validatorSyncHeaderDownload")
+        .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
+        .thenProcessAsync("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
+        .andFinishWith("importBlock", importReceiptsStep);
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {
