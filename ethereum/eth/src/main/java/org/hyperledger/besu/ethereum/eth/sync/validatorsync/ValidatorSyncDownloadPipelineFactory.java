@@ -44,7 +44,6 @@ import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 import java.util.concurrent.CompletionStage;
 
 public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFactory {
-  public static final int CHECKPOINT_TARGET = 20_000_000;
   protected final SynchronizerConfiguration syncConfig;
   protected final ProtocolSchedule protocolSchedule;
   protected final ProtocolContext protocolContext;
@@ -110,7 +109,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
 
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
-            CHECKPOINT_TARGET, fastSyncState.getPivotBlockNumber().getAsLong(), headerRequestSize);
+            getCommonAncestor(target).getNumber(),
+            fastSyncState.getPivotBlockNumber().getAsLong(),
+            headerRequestSize);
     final DownloadHeadersBackwardsStep downloadHeadersStep =
         new DownloadHeadersBackwardsStep(
             protocolSchedule, protocolContext, detachedValidationPolicy, ethContext, metricsSystem);
@@ -142,7 +143,9 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
 
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
-            CHECKPOINT_TARGET, fastSyncState.getPivotBlockNumber().getAsLong(), bodyRequestSize);
+            getCommonAncestor(target).getNumber(),
+            fastSyncState.getPivotBlockNumber().getAsLong(),
+            bodyRequestSize);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
