@@ -41,6 +41,7 @@ import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFactory {
@@ -101,7 +102,11 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
       final Pipeline<?> pipeline) {
     return scheduler
         .startPipeline(createDownloadHeadersPipeline(syncTarget))
-        .thenCompose(ignore -> scheduler.startPipeline(createDownloadReceiptsPipeline(syncTarget)));
+        .thenCompose(
+            ignore ->
+                CompletableFuture.allOf(
+                    scheduler.startPipeline(createDownloadBodiesPipeline(syncTarget)),
+                    scheduler.startPipeline(createDownloadReceiptsPipeline(syncTarget))));
   }
 
   protected Pipeline<SyncTargetNumberRange> createDownloadHeadersPipeline(final SyncTarget target) {
