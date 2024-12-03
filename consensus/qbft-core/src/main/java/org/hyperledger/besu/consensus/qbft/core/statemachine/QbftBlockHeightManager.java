@@ -1,5 +1,5 @@
 /*
- * Copyright ConsenSys AG.
+ * Copyright contributors to Besu.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -12,24 +12,24 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package org.hyperledger.besu.consensus.qbft.statemachine;
+package org.hyperledger.besu.consensus.qbft.core.statemachine;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.events.RoundExpiry;
 import org.hyperledger.besu.consensus.common.bft.messagewrappers.BftMessage;
 import org.hyperledger.besu.consensus.common.bft.payload.Payload;
 import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
-import org.hyperledger.besu.consensus.qbft.messagewrappers.Commit;
-import org.hyperledger.besu.consensus.qbft.messagewrappers.Prepare;
-import org.hyperledger.besu.consensus.qbft.messagewrappers.Proposal;
-import org.hyperledger.besu.consensus.qbft.messagewrappers.RoundChange;
-import org.hyperledger.besu.consensus.qbft.network.QbftMessageTransmitter;
-import org.hyperledger.besu.consensus.qbft.payload.MessageFactory;
-import org.hyperledger.besu.consensus.qbft.validation.FutureRoundProposalMessageValidator;
-import org.hyperledger.besu.consensus.qbft.validation.MessageValidatorFactory;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
+import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
+import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
+import org.hyperledger.besu.consensus.qbft.core.messagewrappers.RoundChange;
+import org.hyperledger.besu.consensus.qbft.core.network.QbftMessageTransmitter;
+import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
+import org.hyperledger.besu.consensus.qbft.core.validation.FutureRoundProposalMessageValidator;
+import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidatorFactory;
 import org.hyperledger.besu.datatypes.Address;
-import org.hyperledger.besu.ethereum.core.Block;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.plugin.services.securitymodule.SecurityModuleException;
 
 import java.time.Clock;
@@ -48,8 +48,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Responsible for starting/clearing Consensus rounds at a given block height. One of these is
  * created when a new block is imported to the chain. It immediately then creates a Round-0 object,
- * and sends a Proposal message. If the round times out prior to importing a block, this class is
- * responsible for creating a RoundChange message and transmitting it.
+ * and sends a Proposal errorMessage. If the round times out prior to importing a block, this class
+ * is responsible for creating a RoundChange errorMessage and transmitting it.
  */
 public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
 
@@ -77,8 +77,8 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
    * @param roundChangeManager the round change manager
    * @param qbftRoundFactory the qbft round factory
    * @param clock the clock
-   * @param messageValidatorFactory the message validator factory
-   * @param messageFactory the message factory
+   * @param messageValidatorFactory the errorMessage validator factory
+   * @param messageFactory the errorMessage factory
    */
   public QbftBlockHeightManager(
       final BlockHeader parentHeader,
@@ -156,10 +156,10 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
 
     final long headerTimeStampSeconds = Math.round(clock.millis() / 1000D);
     final Block block = qbftRound.createBlock(headerTimeStampSeconds);
-    final boolean blockHasTransactions = !block.getBody().getTransactions().isEmpty();
+    final boolean blockHasTransactions = !block.isEmpty();
     if (blockHasTransactions) {
       LOG.trace(
-          "Block has transactions and this node is a proposer so it will send a proposal: "
+          "Block has is not empty this node is a proposer so it will send a proposal: "
               + roundIdentifier);
       qbftRound.updateStateWithProposalAndTransmit(block);
 
@@ -249,10 +249,10 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
               qbftRound.getRoundIdentifier(), latestPreparedCertificate);
 
       // Its possible the locally created RoundChange triggers the transmission of a NewRound
-      // message - so it must be handled accordingly.
+      // errorMessage - so it must be handled accordingly.
       handleRoundChangePayload(localRoundChange);
     } catch (final SecurityModuleException e) {
-      LOG.warn("Failed to create signed RoundChange message.", e);
+      LOG.warn("Failed to create signed RoundChange errorMessage.", e);
     }
 
     transmitter.multicastRoundChange(qbftRound.getRoundIdentifier(), latestPreparedCertificate);
@@ -396,11 +396,11 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
 
   /** The enum Message age. */
   public enum MessageAge {
-    /** Prior round message age. */
+    /** Prior round errorMessage age. */
     PRIOR_ROUND,
-    /** Current round message age. */
+    /** Current round errorMessage age. */
     CURRENT_ROUND,
-    /** Future round message age. */
+    /** Future round errorMessage age. */
     FUTURE_ROUND
   }
 }
