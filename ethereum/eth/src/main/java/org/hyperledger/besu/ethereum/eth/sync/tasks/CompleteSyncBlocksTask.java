@@ -19,14 +19,14 @@ import static java.util.Collections.emptyList;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.stream.Collectors.toMap;
 
-import org.hyperledger.besu.ethereum.core.Block;
-import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.SyncBlock;
+import org.hyperledger.besu.ethereum.core.SyncBlockBody;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.eth.manager.task.AbstractPeerTask.PeerTaskResult;
 import org.hyperledger.besu.ethereum.eth.manager.task.AbstractRetryingPeerTask;
-import org.hyperledger.besu.ethereum.eth.manager.task.GetBodiesFromPeerTask;
+import org.hyperledger.besu.ethereum.eth.manager.task.GetSyncBlocksFromPeerTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
@@ -39,6 +39,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,17 +47,28 @@ import org.slf4j.LoggerFactory;
  * Given a set of headers, "completes" them by repeatedly requesting additional data (bodies) needed
  * to create the blocks that correspond to the supplied headers.
  */
-public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<Block>> {
+public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<SyncBlock>> {
   private static final Logger LOG = LoggerFactory.getLogger(CompleteSyncBlocksTask.class);
 
   private static final int MIN_SIZE_INCOMPLETE_LIST = 1;
   private static final int DEFAULT_RETRIES = 5;
+  public static final SyncBlockBody EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_ENABLED =
+      new SyncBlockBody(
+          Bytes.fromHexString("0xc3c0c0c0"),
+          Collections.emptyList(),
+          Bytes.EMPTY,
+          Collections.emptyList());
+  public static final SyncBlockBody EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_DISABLED =
+      new SyncBlockBody(
+          Bytes.fromHexString("0xc2c0c0"),
+          Collections.emptyList(),
+          Bytes.EMPTY,
+          Collections.emptyList());
 
   private final EthContext ethContext;
-  private final ProtocolSchedule protocolSchedule;
 
   private final List<BlockHeader> headers;
-  private final Map<Long, Block> blocks;
+  private final Map<Long, SyncBlock> blocks;
   private final MetricsSystem metricsSystem;
 
   private CompleteSyncBlocksTask(
@@ -66,8 +78,7 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<Block>
       final int maxRetries,
       final MetricsSystem metricsSystem) {
     super(ethContext, maxRetries, Collection::isEmpty, metricsSystem);
-    checkArgument(headers.size() > 0, "Must supply a non-empty headers list");
-    this.protocolSchedule = protocolSchedule;
+    checkArgument(!headers.isEmpty(), "Must supply a non-empty headers list");
     this.ethContext = ethContext;
     this.metricsSystem = metricsSystem;
 
@@ -79,20 +90,19 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<Block>
                 toMap(
                     BlockHeader::getNumber,
                     header ->
-                        new Block(
+                        new SyncBlock(
                             header,
                             createEmptyBodyBasedOnProtocolSchedule(protocolSchedule, header))));
   }
 
   @Nonnull
-  private BlockBody createEmptyBodyBasedOnProtocolSchedule(
+  private SyncBlockBody createEmptyBodyBasedOnProtocolSchedule(
       final ProtocolSchedule protocolSchedule, final BlockHeader header) {
-    return new BlockBody(
-        Collections.emptyList(),
-        Collections.emptyList(),
-        isWithdrawalsEnabled(protocolSchedule, header)
-            ? Optional.of(Collections.emptyList())
-            : Optional.empty());
+    if (isWithdrawalsEnabled(protocolSchedule, header)) {
+      return EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_ENABLED;
+    } else {
+      return EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_DISABLED;
+    }
   }
 
   private boolean isWithdrawalsEnabled(
@@ -120,11 +130,12 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<Block>
   }
 
   @Override
-  protected CompletableFuture<List<Block>> executePeerTask(final Optional<EthPeer> assignedPeer) {
+  protected CompletableFuture<List<SyncBlock>> executePeerTask(
+      final Optional<EthPeer> assignedPeer) {
     return requestBodies(assignedPeer).thenCompose(this::processBodiesResult);
   }
 
-  private CompletableFuture<List<Block>> requestBodies(final Optional<EthPeer> assignedPeer) {
+  private CompletableFuture<List<SyncBlock>> requestBodies(final Optional<EthPeer> assignedPeer) {
     final List<BlockHeader> incompleteHeaders = incompleteHeaders();
     if (incompleteHeaders.isEmpty()) {
       return completedFuture(emptyList());
@@ -132,19 +143,20 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<Block>
     LOG.info(
         "Requesting bodies to complete {} blocks, starting with {}.",
         incompleteHeaders.size(),
-        incompleteHeaders.get(0).getNumber());
+        incompleteHeaders.getFirst().getNumber());
     return executeSubTask(
         () -> {
-          final GetBodiesFromPeerTask task =
-              GetBodiesFromPeerTask.forHeaders(
-                  protocolSchedule, ethContext, incompleteHeaders, metricsSystem);
+          final GetSyncBlocksFromPeerTask task =
+              GetSyncBlocksFromPeerTask.forHeaders(ethContext, incompleteHeaders, metricsSystem);
           assignedPeer.ifPresent(task::assignPeer);
           return task.run().thenApply(PeerTaskResult::getResult);
         });
   }
 
-  private CompletableFuture<List<Block>> processBodiesResult(final List<Block> blocksResult) {
-    blocksResult.forEach((block) -> blocks.put(block.getHeader().getNumber(), block));
+  private CompletableFuture<List<SyncBlock>> processBodiesResult(
+      final List<SyncBlock> blocksResult) {
+    blocksResult.forEach(
+        (syncBlockBody) -> blocks.put(syncBlockBody.getHeader().getNumber(), syncBlockBody));
 
     if (incompleteHeaders().isEmpty()) {
       result.complete(

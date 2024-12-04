@@ -581,7 +581,10 @@ abstract class AbstractRLPInput implements RLPInput {
   }
 
   @Override
-  public Bytes currentListAsBytes() {
+  public Bytes
+      currentListAsBytes() { // TODO: this is not used anymore, but we might want to use it with
+    // copy do make sure the underlying byte array is not referenced by the
+    // Bytes that are returned.
     if (currentItem >= size) {
       throw error("Cannot read list, input is fully consumed");
     }
@@ -599,7 +602,7 @@ abstract class AbstractRLPInput implements RLPInput {
   }
 
   @Override
-  public Bytes currentListAsBytesNoCopy() {
+  public Bytes currentListAsBytesNoCopy(final boolean moveToNextItem) {
     if (currentItem >= size) {
       throw error("Cannot read list, input is fully consumed");
     }
@@ -616,7 +619,9 @@ abstract class AbstractRLPInput implements RLPInput {
     final Bytes res =
         inputSlice((int) currentPayloadOffset - headerLength, currentPayloadSize + headerLength);
 
-    setTo(nextItem());
+    if (moveToNextItem) {
+      setTo(nextItem());
+    }
     return res;
   }
 }

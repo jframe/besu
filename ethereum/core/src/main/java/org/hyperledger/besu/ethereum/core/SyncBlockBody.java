@@ -33,24 +33,24 @@ public class SyncBlockBody {
 
   private static final SyncBlockBody EMPTY = new SyncBlockBody();
 
-  private final Bytes rawBytesOfWrappedRlpInput;
+  private final Bytes bytesOfWrappedRlpInput;
   private final List<Bytes> transactionBytes;
   private final Bytes ommersListBytes;
   private final Optional<List<Bytes>> withdrawalBytes;
 
   public SyncBlockBody(
-      final RLPInput wrappedBodyRlpInput,
+      final Bytes bytesOfWrappedRlpInput,
       final List<Bytes> transactionBytes,
       final Bytes ommersListBytes,
       final List<Bytes> withdrawalBytes) {
-    this.rawBytesOfWrappedRlpInput = wrappedBodyRlpInput.raw();
+    this.bytesOfWrappedRlpInput = bytesOfWrappedRlpInput;
     this.transactionBytes = transactionBytes;
     this.ommersListBytes = ommersListBytes;
     this.withdrawalBytes = Optional.ofNullable(withdrawalBytes);
   }
 
   private SyncBlockBody() {
-    this.rawBytesOfWrappedRlpInput = null;
+    this.bytesOfWrappedRlpInput = null;
     this.transactionBytes = null;
     this.ommersListBytes = null;
     this.withdrawalBytes = null;
@@ -62,7 +62,7 @@ public class SyncBlockBody {
 
   public static SyncBlockBody readWrappedBodyFrom(
       final RLPInput input, final BlockHeaderFunctions blockHeaderFunctions) {
-    return readWrappedBodyFrom(input, blockHeaderFunctions, false);
+    return readWrappedBodyFrom(input, false);
   }
 
   /**
@@ -71,56 +71,41 @@ public class SyncBlockBody {
    * used for decoding list of bodies
    *
    * @param input The RLP-encoded input
-   * @param blockHeaderFunctions The block header functions used for parsing block headers
    * @param allowEmptyBody A flag indicating whether an empty body is allowed
    * @return the decoded BlockBody from the RLP
    */
   public static SyncBlockBody readWrappedBodyFrom(
-      final RLPInput input,
-      final BlockHeaderFunctions blockHeaderFunctions,
-      final boolean allowEmptyBody) {
+      final RLPInput input, final boolean allowEmptyBody) {
+    final Bytes bytesCurrentBody = input.currentListAsBytesNoCopy(false);
     input.enterList();
     if (input.isEndOfCurrentList() && allowEmptyBody) {
       // empty block [] -> Return empty body.
       input.leaveList();
       return empty();
     }
-    final SyncBlockBody body = readFrom(input, blockHeaderFunctions);
-    input.leaveList();
-    return body;
-  }
-
-  /**
-   * Read all fields from the block body expecting no list wrapping them. An example of a valid body
-   * would be: [txs],[ommers],[withdrawals],[requests] this method is called directly when importing
-   * a single block
-   *
-   * @param input The RLP-encoded input
-   * @param blockHeaderFunctions The block header functions used for parsing block headers
-   * @return the BlockBody decoded from the RLP
-   */
-  public static SyncBlockBody readFrom(
-      final RLPInput input, final BlockHeaderFunctions blockHeaderFunctions) {
     // get a list of Bytes for the transactions
-    final ArrayList<Bytes> transactionBytes = new ArrayList<>();
+    final ArrayList<Bytes> transactionBytes1 = new ArrayList<>();
     input.enterList();
     while (!input.isEndOfCurrentList()) {
-      transactionBytes.add(input.currentListAsBytesNoCopy());
+      transactionBytes1.add(input.currentListAsBytesNoCopy(true));
     }
     input.leaveList();
     // get the Bytes for the ommers
-    Bytes ommersListBytes = input.currentListAsBytesNoCopy();
+    Bytes ommersListBytes1 = input.currentListAsBytesNoCopy(true);
     // get a list of Bytes for the withdrawals
-    ArrayList<Bytes> withdrawalBytes = null;
+    ArrayList<Bytes> withdrawalBytes1 = null;
     if (!input.isEndOfCurrentList()) {
-      withdrawalBytes = new ArrayList<>();
+      withdrawalBytes1 = new ArrayList<>();
       input.enterList();
       while (!input.isEndOfCurrentList()) {
-        withdrawalBytes.add(input.currentListAsBytesNoCopy());
+        withdrawalBytes1.add(input.currentListAsBytesNoCopy(true));
       }
       input.leaveList();
     }
-    return new SyncBlockBody(input, transactionBytes, ommersListBytes, withdrawalBytes);
+    final SyncBlockBody body =
+        new SyncBlockBody(bytesCurrentBody, transactionBytes1, ommersListBytes1, withdrawalBytes1);
+    input.leaveList();
+    return body;
   }
 
   @Override
@@ -128,12 +113,12 @@ public class SyncBlockBody {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     SyncBlockBody blockBody = (SyncBlockBody) o;
-    return Objects.equals(rawBytesOfWrappedRlpInput, blockBody.rawBytesOfWrappedRlpInput);
+    return Objects.equals(bytesOfWrappedRlpInput, blockBody.bytesOfWrappedRlpInput);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(rawBytesOfWrappedRlpInput);
+    return Objects.hash(bytesOfWrappedRlpInput);
   }
 
   public Hash getTransactionsRoot() {
@@ -165,5 +150,23 @@ public class SyncBlockBody {
 
   private static Bytes indexKey(final int i) {
     return RLP.encodeOne(UInt256.valueOf(i).trimLeadingZeros());
+  }
+
+  @Override
+  public String toString() {
+    return "SyncBlockBody{"
+        + "bytesOfWrappedRlpInput="
+        + bytesOfWrappedRlpInput
+        + ", transactionBytes="
+        + transactionBytes
+        + ", ommersListBytes="
+        + ommersListBytes
+        + ", withdrawalBytes="
+        + withdrawalBytes
+        + '}';
+  }
+
+  public Bytes getRlp() {
+    return bytesOfWrappedRlpInput;
   }
 }

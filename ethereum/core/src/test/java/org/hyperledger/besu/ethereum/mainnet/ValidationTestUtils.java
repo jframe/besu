@@ -67,7 +67,7 @@ public final class ValidationTestUtils {
     final BytesValueRLPOutput output = new BytesValueRLPOutput();
     body.writeWrappedBodyTo(output);
     return SyncBlockBody.readWrappedBodyFrom(
-        new BytesValueRLPInput(output.encoded(), false), new MainnetBlockHeaderFunctions(), false);
+        new BytesValueRLPInput(output.encoded(), false), false);
   }
 
   public static Block readBlock(final long num) throws IOException {

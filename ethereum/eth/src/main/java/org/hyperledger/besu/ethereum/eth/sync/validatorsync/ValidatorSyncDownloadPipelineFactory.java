@@ -25,8 +25,8 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutor;
-import org.hyperledger.besu.ethereum.eth.sync.DownloadBodiesStep;
 import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
+import org.hyperledger.besu.ethereum.eth.sync.DownloadSyncBodiesStep;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
@@ -147,10 +147,10 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             fastSyncState.getPivotBlockNumber().getAsLong(),
             bodyRequestSize);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
-    final DownloadBodiesStep downloadBodiesStep =
-        new DownloadBodiesStep(protocolSchedule, ethContext, metricsSystem);
-    final ImportBlocksStep importBlocksStep =
-        new ImportBlocksStep(
+    final DownloadSyncBodiesStep downloadBodiesStep =
+        new DownloadSyncBodiesStep(protocolSchedule, ethContext, metricsSystem);
+    final ImportSyncBlocksStep importBlocksStep =
+        new ImportSyncBlocksStep(
             protocolContext, ethContext, fastSyncState.getPivotBlockHeader().get());
     return PipelineBuilder.createPipelineFrom(
             "posPivot",

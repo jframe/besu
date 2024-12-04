@@ -75,10 +75,8 @@ public final class BlockBodiesMessage extends AbstractMessageData {
         .readList(rlp -> BlockBody.readWrappedBodyFrom(rlp, blockHeaderFunctions, true));
   }
 
-  public List<SyncBlockBody> syncBodies(final ProtocolSchedule protocolSchedule) {
-    final BlockHeaderFunctions blockHeaderFunctions =
-        ScheduleBasedBlockHeaderFunctions.create(protocolSchedule);
+  public List<SyncBlockBody> syncBodies() {
     return new BytesValueRLPInput(data, false)
-        .readList(rlp -> SyncBlockBody.readWrappedBodyFrom(rlp, blockHeaderFunctions, true));
+        .readList(rlp -> SyncBlockBody.readWrappedBodyFrom(rlp, true));
   }
 }

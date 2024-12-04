@@ -19,6 +19,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.SyncBlock;
 import org.hyperledger.besu.ethereum.core.SyncBlockBody;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.Withdrawal;
@@ -28,7 +29,6 @@ import org.hyperledger.besu.ethereum.eth.manager.PendingPeerRequest;
 import org.hyperledger.besu.ethereum.eth.messages.BlockBodiesMessage;
 import org.hyperledger.besu.ethereum.eth.messages.EthPV62;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
-import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.MessageData;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
@@ -46,21 +46,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Requests bodies from a peer by header, matches up headers to bodies, and returns blocks. */
-public class GetSyncBodiesFromPeerTask extends AbstractPeerRequestTask<List<SyncBlockBody>> {
-  private static final Logger LOG = LoggerFactory.getLogger(GetSyncBodiesFromPeerTask.class);
+public class GetSyncBlocksFromPeerTask extends AbstractPeerRequestTask<List<SyncBlock>> {
+  private static final Logger LOG = LoggerFactory.getLogger(GetSyncBlocksFromPeerTask.class);
 
-  private final ProtocolSchedule protocolSchedule;
   private final List<BlockHeader> headers;
   private final Map<BodyIdentifier, List<BlockHeader>> bodyToHeaders = new HashMap<>();
 
-  private GetSyncBodiesFromPeerTask(
-      final ProtocolSchedule protocolSchedule,
+  private GetSyncBlocksFromPeerTask(
       final EthContext ethContext,
       final List<BlockHeader> headers,
       final MetricsSystem metricsSystem) {
     super(ethContext, EthPV62.GET_BLOCK_BODIES, metricsSystem);
     checkArgument(headers.size() > 0);
-    this.protocolSchedule = protocolSchedule;
 
     this.headers = headers;
     headers.forEach(
@@ -71,12 +68,11 @@ public class GetSyncBodiesFromPeerTask extends AbstractPeerRequestTask<List<Sync
         });
   }
 
-  public static GetSyncBodiesFromPeerTask forHeaders(
-      final ProtocolSchedule protocolSchedule,
+  public static GetSyncBlocksFromPeerTask forHeaders(
       final EthContext ethContext,
       final List<BlockHeader> headers,
       final MetricsSystem metricsSystem) {
-    return new GetSyncBodiesFromPeerTask(protocolSchedule, ethContext, headers, metricsSystem);
+    return new GetSyncBlocksFromPeerTask(ethContext, headers, metricsSystem);
   }
 
   @Override
@@ -103,7 +99,7 @@ public class GetSyncBodiesFromPeerTask extends AbstractPeerRequestTask<List<Sync
   }
 
   @Override
-  protected Optional<List<SyncBlockBody>> processResponse(
+  protected Optional<List<SyncBlock>> processResponse(
       final boolean streamClosed, final MessageData message, final EthPeer peer) {
     if (streamClosed) {
       // All outstanding requests have been responded to, and we still haven't found the response
@@ -113,8 +109,8 @@ public class GetSyncBodiesFromPeerTask extends AbstractPeerRequestTask<List<Sync
     }
 
     final BlockBodiesMessage bodiesMessage = BlockBodiesMessage.readFrom(message);
-    final List<SyncBlockBody> bodies = bodiesMessage.syncBodies(protocolSchedule);
-    if (bodies.size() == 0) {
+    final List<SyncBlockBody> bodies = bodiesMessage.syncBodies();
+    if (bodies.isEmpty()) {
       // Message contains no data - nothing to do
       LOG.debug("Message contains no data. Peer: {}", peer);
       return Optional.empty();
@@ -124,8 +120,7 @@ public class GetSyncBodiesFromPeerTask extends AbstractPeerRequestTask<List<Sync
       return Optional.empty();
     }
 
-    // TODO: what do we have to do now?
-    final List<SyncBlockBody> syncBlockBodies = new ArrayList<>(headers.size());
+    final List<SyncBlock> syncBlocks = new ArrayList<>(headers.size());
     for (final SyncBlockBody body : bodies) {
       final List<BlockHeader> headers = bodyToHeaders.get(new BodyIdentifier(body));
       if (headers == null) {
@@ -133,7 +128,7 @@ public class GetSyncBodiesFromPeerTask extends AbstractPeerRequestTask<List<Sync
         LOG.debug("This message contains unrelated bodies. Peer: {}", peer);
         return Optional.empty();
       }
-      headers.forEach(h -> syncBlockBodies.add(body));
+      headers.forEach(h -> syncBlocks.add(new SyncBlock(h, body)));
       // Clear processed headers
       headers.clear();
     }
@@ -141,13 +136,18 @@ public class GetSyncBodiesFromPeerTask extends AbstractPeerRequestTask<List<Sync
     peer.recordResponseCount(bodies.size());
     LOG.atTrace()
         .setMessage(
-            "Associated {} bodies with {} headers to get {} syncBlockBodies with these hashes: {}")
+            "Associated {} bodies with {} headers to get {} syncBlocks with these hashes: {}")
         .addArgument(bodies.size())
         .addArgument(headers.size())
-        .addArgument(syncBlockBodies.size())
-        .addArgument(() -> syncBlockBodies.stream().map(SyncBlockBody::toString).toList())
+        .addArgument(syncBlocks.size())
+        .addArgument(
+            () ->
+                syncBlocks.stream()
+                    .map(SyncBlock::getHeader)
+                    .map(BlockHeader::getBlockHash)
+                    .toList())
         .log();
-    return Optional.of(syncBlockBodies);
+    return Optional.of(syncBlocks);
   }
 
   static class BodyIdentifier {
