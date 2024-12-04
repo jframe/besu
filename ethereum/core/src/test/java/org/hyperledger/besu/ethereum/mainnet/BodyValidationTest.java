@@ -19,6 +19,7 @@ import org.hyperledger.besu.datatypes.RequestType;
 import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
+import org.hyperledger.besu.ethereum.core.SyncBlockBody;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -37,8 +38,10 @@ public final class BodyValidationTest {
     for (final int block : Arrays.asList(300006, 4400002)) {
       final BlockHeader header = ValidationTestUtils.readHeader(block);
       final BlockBody body = ValidationTestUtils.readBody(block);
+      final SyncBlockBody syncBody = ValidationTestUtils.bodyToSyncBody(body);
       final Bytes32 transactionRoot = BodyValidation.transactionsRoot(body.getTransactions());
       Assertions.assertThat(transactionRoot).isEqualTo(header.getTransactionsRoot());
+      Assertions.assertThat(transactionRoot).isEqualTo(syncBody.getTransactionsRoot());
     }
   }
 
@@ -47,7 +50,9 @@ public final class BodyValidationTest {
     for (final int block : Arrays.asList(300006, 4400002)) {
       final BlockHeader header = ValidationTestUtils.readHeader(block);
       final BlockBody body = ValidationTestUtils.readBody(block);
+      final SyncBlockBody syncBody = ValidationTestUtils.bodyToSyncBody(body);
       final Bytes32 ommersHash = BodyValidation.ommersHash(body.getOmmers());
+      Assertions.assertThat(header.getOmmersHash()).isEqualTo(syncBody.getOmmersHash());
       Assertions.assertThat(header.getOmmersHash()).isEqualTo(ommersHash);
     }
   }
@@ -57,8 +62,11 @@ public final class BodyValidationTest {
     for (final int block : Arrays.asList(4156, 12691)) {
       final BlockHeader header = ValidationTestUtils.readHeader(block);
       final BlockBody body = ValidationTestUtils.readBody(block);
+      final SyncBlockBody syncBody = ValidationTestUtils.bodyToSyncBody(body);
       final Bytes32 withdrawalsRoot = BodyValidation.withdrawalsRoot(body.getWithdrawals().get());
       Assertions.assertThat(header.getWithdrawalsRoot()).hasValue(Hash.wrap(withdrawalsRoot));
+      Assertions.assertThat(header.getWithdrawalsRoot())
+          .hasValue(Hash.wrap(syncBody.getWithdrawalsRoot()));
     }
   }
 

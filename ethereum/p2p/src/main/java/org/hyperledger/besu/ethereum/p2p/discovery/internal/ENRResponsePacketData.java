@@ -46,7 +46,7 @@ public class ENRResponsePacketData implements PacketData {
     in.enterList();
     final Bytes requestHash = in.readBytes();
     in.leaveListLenient();
-    final NodeRecord enr = NodeRecordFactory.DEFAULT.fromBytes(in.currentListAsBytes());
+    final NodeRecord enr = NodeRecordFactory.DEFAULT.fromBytes(in.currentListAsBytesNoCopy());
 
     return new ENRResponsePacketData(requestHash, enr);
   }

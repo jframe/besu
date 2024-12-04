@@ -395,4 +395,8 @@ public interface RLPInput {
     leaveList();
     return res;
   }
+
+  default Bytes currentListAsBytesNoCopy() {
+    throw new UnsupportedOperationException("Not supported by this input");
+  }
 }

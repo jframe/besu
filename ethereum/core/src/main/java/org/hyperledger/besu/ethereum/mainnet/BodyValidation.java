@@ -64,11 +64,18 @@ public final class BodyValidation {
 
     IntStream.range(0, transactions.size())
         .forEach(
-            i ->
-                trie.put(
-                    indexKey(i),
-                    TransactionEncoder.encodeOpaqueBytes(
-                        transactions.get(i), EncodingContext.BLOCK_BODY)));
+            i -> {
+              trie.put(
+                  indexKey(i),
+                  TransactionEncoder.encodeOpaqueBytes(
+                      transactions.get(i), EncodingContext.BLOCK_BODY));
+              System.out.println(
+                  "index: "
+                      + indexKey(i)
+                      + "  txBytes: "
+                      + TransactionEncoder.encodeOpaqueBytes(
+                          transactions.get(i), EncodingContext.BLOCK_BODY));
+            });
 
     return Hash.wrap(trie.getRootHash());
   }

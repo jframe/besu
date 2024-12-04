@@ -24,7 +24,7 @@ import org.apache.tuweni.bytes.Bytes48;
 public class BytesValueRLPInput extends AbstractRLPInput {
 
   // The RLP encoded data.
-  private final Bytes value;
+  protected final Bytes value;
 
   public BytesValueRLPInput(final Bytes value, final boolean lenient) {
     this(value, lenient, true);
@@ -43,7 +43,7 @@ public class BytesValueRLPInput extends AbstractRLPInput {
   }
 
   @Override
-  protected Bytes inputSlice(final long offset, final int length) {
+  public Bytes inputSlice(final long offset, final int length) {
     return value.slice(Math.toIntExact(offset), length);
   }
 

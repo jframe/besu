@@ -17,9 +17,11 @@ package org.hyperledger.besu.ethereum.mainnet;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.SyncBlockBody;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.Withdrawal;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPInput;
+import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 
 import java.io.IOException;
@@ -59,6 +61,13 @@ public final class ValidationTestUtils {
             ? Optional.empty()
             : Optional.of(input.readList(Withdrawal::readFrom));
     return new BlockBody(transactions, ommers, withdrawals);
+  }
+
+  public static SyncBlockBody bodyToSyncBody(final BlockBody body) {
+    final BytesValueRLPOutput output = new BytesValueRLPOutput();
+    body.writeWrappedBodyTo(output);
+    return SyncBlockBody.readWrappedBodyFrom(
+        new BytesValueRLPInput(output.encoded(), false), new MainnetBlockHeaderFunctions(), false);
   }
 
   public static Block readBlock(final long num) throws IOException {

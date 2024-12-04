@@ -41,9 +41,9 @@ abstract class AbstractRLPInput implements RLPInput {
   // Information on the item the input currently is at (next thing to read).
   protected long
       currentItem; // Offset in value to the beginning of the item (or value.size() if done)
-  private RLPDecodingHelpers.Kind currentKind; // Kind of the item.
-  private long currentPayloadOffset; // Offset to the beginning of the current item payload.
-  private int currentPayloadSize; // Size of the current item payload.
+  protected RLPDecodingHelpers.Kind currentKind; // Kind of the item.
+  protected long currentPayloadOffset; // Offset to the beginning of the current item payload.
+  protected int currentPayloadSize; // Size of the current item payload.
 
   // Information regarding opened list. The depth is how many list deep we are, and endOfListOffset
   // holds the offset in value at which each list ends (indexed by depth). Allows to know if we're
@@ -173,7 +173,7 @@ abstract class AbstractRLPInput implements RLPInput {
     }
   }
 
-  private long nextItem() {
+  long nextItem() {
     return currentPayloadOffset + currentPayloadSize;
   }
 
@@ -202,7 +202,7 @@ abstract class AbstractRLPInput implements RLPInput {
     throw new CorruptedRLPInputException(errorMsg(msg, params));
   }
 
-  private RLPException error(final String msg, final Object... params) {
+  RLPException error(final String msg, final Object... params) {
     throw new RLPException(errorMsg(msg, params));
   }
 
@@ -593,6 +593,28 @@ abstract class AbstractRLPInput implements RLPInput {
     final int headerSize = RLPEncodingHelpers.writeListHeader(currentPayloadSize, scratch, 0);
     payloadSlice().copyTo(scratch, headerSize);
     final Bytes res = scratch.slice(0, currentPayloadSize + headerSize);
+
+    setTo(nextItem());
+    return res;
+  }
+
+  @Override
+  public Bytes currentListAsBytesNoCopy() {
+    if (currentItem >= size) {
+      throw error("Cannot read list, input is fully consumed");
+    }
+    if (!currentKind.isList()) {
+      throw error("Cannot read list, current item is not a list list");
+    }
+    int headerLength;
+    if (currentPayloadSize <= 55) {
+      // list header is a single byte
+      headerLength = 1;
+    } else {
+      headerLength = RLPEncodingHelpers.sizeLength(currentPayloadSize) + 1;
+    }
+    final Bytes res =
+        inputSlice((int) currentPayloadOffset - headerLength, currentPayloadSize + headerLength);
 
     setTo(nextItem());
     return res;
