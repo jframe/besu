@@ -99,7 +99,11 @@ public class SyncBlockBody {
     final ArrayList<Bytes> transactionBytes1 = new ArrayList<>();
     input.enterList();
     while (!input.isEndOfCurrentList()) {
-      transactionBytes1.add(input.currentListAsBytesNoCopy(true));
+      if (input.nextIsList()) { // legacy transaction
+        transactionBytes1.add(input.currentListAsBytesNoCopy(true));
+      } else { // typed transaction
+        transactionBytes1.add(input.readBytes());
+      }
     }
     input.leaveList();
     // get the Bytes for the ommers
