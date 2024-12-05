@@ -606,14 +606,14 @@ abstract class AbstractRLPInput implements RLPInput {
   }
 
   @Override
-  public Bytes currentListAsBytesNoCopy(final boolean moveToNextItem) {
+  public Bytes currentListOrBytesArrayAsBytesNoCopy(final boolean moveToNextItem) {
     if (currentItem >= size) {
       throw error("Cannot read list, input is fully consumed");
     }
-    if (!currentKind.isList()) {
+    if (currentKind.equals(RLPDecodingHelpers.Kind.BYTE_ELEMENT)) {
       LOG.atDebug()
           .setMessage(
-              "Cannot read list, current item is not a list, it is: {}, raw bytes: {}, offset: {}, size: {}")
+              "Cannot read list, current item is not a list or bytes array, it is: {}, raw bytes: {}, offset: {}, size: {}")
           .addArgument(currentKind)
           .addArgument(inputSlice(0, (int) size))
           .addArgument(currentPayloadOffset)

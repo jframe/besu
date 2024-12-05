@@ -88,7 +88,7 @@ public class SyncBlockBody {
    */
   public static SyncBlockBody readWrappedBodyFrom(
       final RLPInput input, final boolean allowEmptyBody) {
-    final Bytes bytesCurrentBody = input.currentListAsBytesNoCopy(false);
+    final Bytes bytesCurrentBody = input.currentListOrBytesArrayAsBytesNoCopy(false);
     input.enterList();
     if (input.isEndOfCurrentList() && allowEmptyBody) {
       // empty block [] -> Return empty body.
@@ -99,22 +99,18 @@ public class SyncBlockBody {
     final ArrayList<Bytes> transactionBytes1 = new ArrayList<>();
     input.enterList();
     while (!input.isEndOfCurrentList()) {
-      if (input.nextIsList()) { // legacy transaction
-        transactionBytes1.add(input.currentListAsBytesNoCopy(true));
-      } else { // typed transaction
-        transactionBytes1.add(input.readBytes());
-      }
+      transactionBytes1.add(input.currentListOrBytesArrayAsBytesNoCopy(true));
     }
     input.leaveList();
     // get the Bytes for the ommers
-    Bytes ommersListBytes1 = input.currentListAsBytesNoCopy(true);
+    Bytes ommersListBytes1 = input.currentListOrBytesArrayAsBytesNoCopy(true);
     // get a list of Bytes for the withdrawals
     ArrayList<Bytes> withdrawalBytes1 = null;
     if (!input.isEndOfCurrentList()) {
       withdrawalBytes1 = new ArrayList<>();
       input.enterList();
       while (!input.isEndOfCurrentList()) {
-        withdrawalBytes1.add(input.currentListAsBytesNoCopy(true));
+        withdrawalBytes1.add(input.currentListOrBytesArrayAsBytesNoCopy(true));
       }
       input.leaveList();
     }
