@@ -30,6 +30,8 @@ jar {
 }
 
 dependencies {
+  api 'org.slf4j:slf4j-api'
+
   annotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess'
 
   implementation 'io.tmio:tuweni-bytes'

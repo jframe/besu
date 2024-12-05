@@ -31,7 +31,6 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -39,7 +38,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
 
-import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,18 +50,6 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<SyncBl
 
   private static final int MIN_SIZE_INCOMPLETE_LIST = 1;
   private static final int DEFAULT_RETRIES = 5;
-  public static final SyncBlockBody EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_ENABLED =
-      new SyncBlockBody(
-          Bytes.fromHexString("0xc3c0c0c0"),
-          Collections.emptyList(),
-          Bytes.EMPTY,
-          Collections.emptyList());
-  public static final SyncBlockBody EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_DISABLED =
-      new SyncBlockBody(
-          Bytes.fromHexString("0xc2c0c0"),
-          Collections.emptyList(),
-          Bytes.EMPTY,
-          Collections.emptyList());
 
   private final EthContext ethContext;
 
@@ -99,9 +85,9 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<SyncBl
   private SyncBlockBody createEmptyBodyBasedOnProtocolSchedule(
       final ProtocolSchedule protocolSchedule, final BlockHeader header) {
     if (isWithdrawalsEnabled(protocolSchedule, header)) {
-      return EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_ENABLED;
+      return SyncBlockBody.EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_ENABLED;
     } else {
-      return EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_DISABLED;
+      return SyncBlockBody.EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_DISABLED;
     }
   }
 

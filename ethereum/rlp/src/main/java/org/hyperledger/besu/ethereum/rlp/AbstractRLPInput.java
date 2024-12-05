@@ -29,8 +29,12 @@ import org.apache.tuweni.bytes.MutableBytes;
 import org.apache.tuweni.bytes.MutableBytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.apache.tuweni.units.bigints.UInt64;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 abstract class AbstractRLPInput implements RLPInput {
+
+  private static final Logger LOG = LoggerFactory.getLogger(AbstractRLPInput.class);
 
   private static final String errorMessageSuffix = " (at bytes %d-%d: %s%s[%s]%s%s)";
 
@@ -589,7 +593,7 @@ abstract class AbstractRLPInput implements RLPInput {
       throw error("Cannot read list, input is fully consumed");
     }
     if (!currentKind.isList()) {
-      throw error("Cannot read list, current item is not a list list");
+      throw error("Cannot read list, current item is not a list, it is: " + currentKind);
     }
 
     final MutableBytes scratch = MutableBytes.create(currentPayloadSize + 10);
@@ -607,7 +611,15 @@ abstract class AbstractRLPInput implements RLPInput {
       throw error("Cannot read list, input is fully consumed");
     }
     if (!currentKind.isList()) {
-      throw error("Cannot read list, current item is not a list list");
+      LOG.atDebug()
+          .setMessage(
+              "Cannot read list, current item is not a list, it is: {}, raw bytes: {}, offset: {}, size: {}")
+          .addArgument(currentKind)
+          .addArgument(inputSlice(0, (int) size))
+          .addArgument(currentPayloadOffset)
+          .addArgument(currentPayloadSize)
+          .log();
+      throw error("Cannot read list, current item is not a list, it is: " + currentKind);
     }
     int headerLength;
     if (currentPayloadSize <= 55) {

@@ -21,6 +21,7 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -31,7 +32,18 @@ import org.apache.tuweni.units.bigints.UInt256;
 
 public class SyncBlockBody {
 
-  private static final SyncBlockBody EMPTY = new SyncBlockBody();
+  public static final SyncBlockBody EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_ENABLED =
+      new SyncBlockBody(
+          Bytes.fromHexString("0xc3c0c0c0"),
+          Collections.emptyList(),
+          Bytes.EMPTY,
+          Collections.emptyList());
+  public static final SyncBlockBody EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_DISABLED =
+      new SyncBlockBody(
+          Bytes.fromHexString("0xc2c0c0"),
+          Collections.emptyList(),
+          Bytes.EMPTY,
+          Collections.emptyList());
 
   private final Bytes bytesOfWrappedRlpInput;
   private final List<Bytes> transactionBytes;
@@ -57,7 +69,7 @@ public class SyncBlockBody {
   }
 
   public static SyncBlockBody empty() {
-    return SyncBlockBody.EMPTY;
+    return SyncBlockBody.EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_DISABLED;
   }
 
   public static SyncBlockBody readWrappedBodyFrom(
