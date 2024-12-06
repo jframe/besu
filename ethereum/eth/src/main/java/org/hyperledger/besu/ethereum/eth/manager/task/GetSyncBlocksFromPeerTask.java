@@ -30,6 +30,7 @@ import org.hyperledger.besu.ethereum.eth.messages.BlockBodiesMessage;
 import org.hyperledger.besu.ethereum.eth.messages.EthPV62;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.MessageData;
+import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.ArrayList;
@@ -130,6 +131,11 @@ public class GetSyncBlocksFromPeerTask extends AbstractPeerRequestTask<List<Sync
         LOG.debug("Current body id: {}", currentBodyId);
         LOG.debug("Existing BodyIds form headers: ");
         bodyToHeaders.keySet().forEach(k -> LOG.debug("BodyId: {}", k));
+        LOG.debug("Body rlp: {}", body.getRlp());
+        final BytesValueRLPOutput out = new BytesValueRLPOutput();
+        headers.get(0).writeTo(out);
+        LOG.debug("Header rlp: {}", out.encoded());
+
         return Optional.empty();
       }
       headers.forEach(h -> syncBlocks.add(new SyncBlock(h, body)));

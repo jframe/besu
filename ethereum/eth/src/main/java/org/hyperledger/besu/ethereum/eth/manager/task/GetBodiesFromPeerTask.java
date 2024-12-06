@@ -196,5 +196,17 @@ public class GetBodiesFromPeerTask extends AbstractPeerRequestTask<List<Block>> 
     public int hashCode() {
       return Objects.hash(transactionsRoot, ommersHash, withdrawalsRoot);
     }
+
+    @Override
+    public String toString() {
+      return "BodyIdentifier{"
+          + "transactionsRoot="
+          + transactionsRoot
+          + ", ommersHash="
+          + ommersHash
+          + ", withdrawalsRoot="
+          + withdrawalsRoot
+          + '}';
+    }
   }
 }
