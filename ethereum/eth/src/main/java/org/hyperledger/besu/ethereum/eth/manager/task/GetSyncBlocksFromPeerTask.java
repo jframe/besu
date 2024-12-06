@@ -122,10 +122,14 @@ public class GetSyncBlocksFromPeerTask extends AbstractPeerRequestTask<List<Sync
 
     final List<SyncBlock> syncBlocks = new ArrayList<>(headers.size());
     for (final SyncBlockBody body : bodies) {
-      final List<BlockHeader> headers = bodyToHeaders.get(new BodyIdentifier(body));
+      final BodyIdentifier currentBodyId = new BodyIdentifier(body);
+      final List<BlockHeader> headers = bodyToHeaders.get(currentBodyId);
       if (headers == null) {
         // This message contains unrelated bodies - exit
         LOG.debug("This message contains unrelated bodies. Peer: {}", peer);
+        LOG.debug("Current body id: {}", currentBodyId);
+        LOG.debug("Existing BodyIds form headers: ");
+        bodyToHeaders.keySet().forEach(k -> LOG.debug("BodyId: {}", k));
         return Optional.empty();
       }
       headers.forEach(h -> syncBlocks.add(new SyncBlock(h, body)));
