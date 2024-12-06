@@ -145,7 +145,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
         new ValidatorSyncSource(
             getCommonAncestor(target).getNumber(),
             fastSyncState.getPivotBlockNumber().getAsLong(),
-            1);
+            3);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadSyncBodiesStep downloadBodiesStep =
         new DownloadSyncBodiesStep(protocolSchedule, ethContext, metricsSystem);
