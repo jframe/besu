@@ -613,7 +613,7 @@ abstract class AbstractRLPInput implements RLPInput {
     if (currentKind.equals(RLPDecodingHelpers.Kind.BYTE_ELEMENT)) {
       LOG.atDebug()
           .setMessage(
-              "Cannot read list, current item is not a list or bytes array, it is: {}, raw bytes: {}, offset: {}, size: {}")
+              "Cannot read list or bytes, current item is not a list or bytes array, it is: {}, raw bytes: {}, offset: {}, size: {}")
           .addArgument(currentKind)
           .addArgument(inputSlice(0, (int) size))
           .addArgument(currentPayloadOffset)
@@ -621,15 +621,21 @@ abstract class AbstractRLPInput implements RLPInput {
           .log();
       throw error("Cannot read list, current item is not a list, it is: " + currentKind);
     }
-    int headerLength;
-    if (currentPayloadSize <= 55) {
-      // list header is a single byte
-      headerLength = 1;
+    int takeNumPrevBytes;
+    Bytes res;
+    if (!nextIsList()) {
+      res = inputSlice(currentPayloadOffset, currentPayloadSize);
     } else {
-      headerLength = RLPEncodingHelpers.sizeLength(currentPayloadSize) + 1;
+      if (currentPayloadSize <= 55) {
+        // list header is a single byte
+        takeNumPrevBytes = 1;
+      } else {
+        takeNumPrevBytes = RLPEncodingHelpers.sizeLength(currentPayloadSize) + 1;
+      }
+      res =
+          inputSlice(
+              (int) currentPayloadOffset - takeNumPrevBytes, currentPayloadSize + takeNumPrevBytes);
     }
-    final Bytes res =
-        inputSlice((int) currentPayloadOffset - headerLength, currentPayloadSize + headerLength);
 
     if (moveToNextItem) {
       setTo(nextItem());

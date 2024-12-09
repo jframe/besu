@@ -211,5 +211,17 @@ public class GetSyncBlocksFromPeerTask extends AbstractPeerRequestTask<List<Sync
     public int hashCode() {
       return Objects.hash(transactionsRoot, ommersHash, withdrawalsRoot);
     }
+
+    @Override
+    public String toString() {
+      return "BodyIdentifier{"
+          + "transactionsRoot="
+          + transactionsRoot
+          + ", ommersHash="
+          + ommersHash
+          + ", withdrawalsRoot="
+          + withdrawalsRoot
+          + '}';
+    }
   }
 }

@@ -29,8 +29,12 @@ import java.util.stream.IntStream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class SyncBlockBody {
+
+  private static final Logger LOG = LoggerFactory.getLogger(SyncBlockBody.class);
 
   public static final SyncBlockBody EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_ENABLED =
       new SyncBlockBody(
@@ -96,26 +100,27 @@ public class SyncBlockBody {
       return empty();
     }
     // get a list of Bytes for the transactions
-    final ArrayList<Bytes> transactionBytes1 = new ArrayList<>();
+    final ArrayList<Bytes> transactionBytes = new ArrayList<>();
     input.enterList();
     while (!input.isEndOfCurrentList()) {
-      transactionBytes1.add(input.currentListOrBytesArrayAsBytesNoCopy(true));
+      transactionBytes.add(input.currentListOrBytesArrayAsBytesNoCopy(true));
     }
     input.leaveList();
     // get the Bytes for the ommers
     Bytes ommersListBytes1 = input.currentListOrBytesArrayAsBytesNoCopy(true);
     // get a list of Bytes for the withdrawals
-    ArrayList<Bytes> withdrawalBytes1 = null;
+    ArrayList<Bytes> withdrawalBytes = null;
     if (!input.isEndOfCurrentList()) {
-      withdrawalBytes1 = new ArrayList<>();
+      withdrawalBytes = new ArrayList<>();
       input.enterList();
       while (!input.isEndOfCurrentList()) {
-        withdrawalBytes1.add(input.currentListOrBytesArrayAsBytesNoCopy(true));
+        withdrawalBytes.add(input.currentListOrBytesArrayAsBytesNoCopy(true));
       }
       input.leaveList();
     }
     final SyncBlockBody body =
-        new SyncBlockBody(bytesCurrentBody, transactionBytes1, ommersListBytes1, withdrawalBytes1);
+        new SyncBlockBody(bytesCurrentBody, transactionBytes, ommersListBytes1, withdrawalBytes);
+    LOG.info("SyncBlockBody: " + body);
     input.leaveList();
     return body;
   }
