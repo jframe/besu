@@ -45,9 +45,9 @@ abstract class AbstractRLPInput implements RLPInput {
   // Information on the item the input currently is at (next thing to read).
   protected long
       currentItem; // Offset in value to the beginning of the item (or value.size() if done)
-  protected RLPDecodingHelpers.Kind currentKind; // Kind of the item.
-  protected long currentPayloadOffset; // Offset to the beginning of the current item payload.
-  protected int currentPayloadSize; // Size of the current item payload.
+  RLPDecodingHelpers.Kind currentKind; // Kind of the item.
+  long currentPayloadOffset; // Offset to the beginning of the current item payload.
+  int currentPayloadSize; // Size of the current item payload.
 
   // Information regarding opened list. The depth is how many list deep we are, and endOfListOffset
   // holds the offset in value at which each list ends (indexed by depth). Allows to know if we're
@@ -585,8 +585,8 @@ abstract class AbstractRLPInput implements RLPInput {
   }
 
   @Override
-  public Bytes
-      currentListAsBytes() { // TODO: this is not used anymore, but we might want to use it with
+  public Bytes currentListAsBytes() {
+    // TODO: this is not used anymore, but we might want to use it with
     // copy do make sure the underlying byte array is not referenced by the
     // Bytes that are returned.
     if (currentItem >= size) {

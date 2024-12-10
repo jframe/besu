@@ -16,19 +16,13 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.RequestType;
-import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
 import org.hyperledger.besu.ethereum.core.SyncBlockBody;
-import org.hyperledger.besu.ethereum.rlp.BytesValueRLPInput;
-import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -60,33 +54,6 @@ public final class BodyValidationTest {
       final Bytes32 ommersHash = BodyValidation.ommersHash(body.getOmmers());
       Assertions.assertThat(header.getOmmersHash()).isEqualTo(syncBody.getOmmersHash());
       Assertions.assertThat(header.getOmmersHash()).isEqualTo(ommersHash);
-
-      // read a long string from a file
-      String withNewLine = Files.readString(Paths.get("/Users/stefan/rlpDebug/block.rlp"));
-      final String content = withNewLine.substring(0, withNewLine.length() - 2);
-      System.out.println("string length: " + content.length());
-      System.out.println(content);
-      final Bytes bodyRlpBytes = Bytes.fromHexString(content);
-
-      final BytesValueRLPInput rlpInput = new BytesValueRLPInput(bodyRlpBytes, true);
-      final BlockBody blockBody =
-          Block.readFrom(rlpInput, new MainnetBlockHeaderFunctions()).getBody();
-      System.out.println(blockBody);
-      final BytesValueRLPOutput output = new BytesValueRLPOutput();
-      blockBody.writeWrappedBodyTo(output);
-      final Bytes encoded = output.encoded();
-      final BytesValueRLPInput bytesValueRLPInput = new BytesValueRLPInput(encoded, false);
-      final SyncBlockBody syncBlockBody =
-          SyncBlockBody.readWrappedBodyFrom(bytesValueRLPInput, new MainnetBlockHeaderFunctions());
-
-      Assertions.assertThat(BodyValidation.transactionsRoot(blockBody.getTransactions()))
-          .isEqualTo(syncBlockBody.getTransactionsRoot());
-      Assertions.assertThat(
-              BodyValidation.withdrawalsRoot(
-                  blockBody.getWithdrawals().orElseGet(Collections::emptyList)))
-          .isEqualTo(syncBlockBody.getWithdrawalsRoot());
-      Assertions.assertThat(BodyValidation.ommersHash(blockBody.getOmmers()))
-          .isEqualTo(syncBlockBody.getOmmersHash());
     }
   }
 

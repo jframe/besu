@@ -28,7 +28,9 @@ import org.hyperledger.besu.ethereum.eth.manager.task.AbstractPeerTask.PeerTaskR
 import org.hyperledger.besu.ethereum.eth.manager.task.AbstractRetryingPeerTask;
 import org.hyperledger.besu.ethereum.eth.manager.task.GetSyncBlocksFromPeerTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
+import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.Counter;
 
 import java.util.Collection;
 import java.util.List;
@@ -56,6 +58,7 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<SyncBl
   private final List<BlockHeader> headers;
   private final Map<Long, SyncBlock> blocks;
   private final MetricsSystem metricsSystem;
+  private final Counter totalSyncBodiesDownloaded;
 
   private CompleteSyncBlocksTask(
       final ProtocolSchedule protocolSchedule,
@@ -79,6 +82,12 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<SyncBl
                         new SyncBlock(
                             header,
                             createEmptyBodyBasedOnProtocolSchedule(protocolSchedule, header))));
+
+    totalSyncBodiesDownloaded =
+        metricsSystem.createCounter(
+            BesuMetricCategory.SYNCHRONIZER,
+            "total_sync_bodies_downloaded",
+            "Total number of sync bodies downloaded during sync");
   }
 
   @Nonnull
@@ -145,8 +154,8 @@ public class CompleteSyncBlocksTask extends AbstractRetryingPeerTask<List<SyncBl
         (syncBlockBody) -> blocks.put(syncBlockBody.getHeader().getNumber(), syncBlockBody));
 
     if (incompleteHeaders().isEmpty()) {
-      result.complete(
-          headers.stream().map(h -> blocks.get(h.getNumber())).collect(Collectors.toList()));
+      result.complete(headers.stream().map(h -> blocks.get(h.getNumber())).toList());
+      totalSyncBodiesDownloaded.inc(headers.size());
     }
 
     return completedFuture(blocksResult);

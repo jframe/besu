@@ -29,12 +29,8 @@ import java.util.stream.IntStream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class SyncBlockBody {
-
-  private static final Logger LOG = LoggerFactory.getLogger(SyncBlockBody.class);
 
   public static final SyncBlockBody EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_ENABLED =
       new SyncBlockBody(
@@ -65,20 +61,8 @@ public class SyncBlockBody {
     this.withdrawalBytes = Optional.ofNullable(withdrawalBytes);
   }
 
-  private SyncBlockBody() {
-    this.bytesOfWrappedRlpInput = null;
-    this.transactionBytes = null;
-    this.ommersListBytes = null;
-    this.withdrawalBytes = null;
-  }
-
   public static SyncBlockBody empty() {
     return SyncBlockBody.EMPTY_SYNC_BLOCK_BODY_WITH_WITHDRAWLS_DISABLED;
-  }
-
-  public static SyncBlockBody readWrappedBodyFrom(
-      final RLPInput input, final BlockHeaderFunctions blockHeaderFunctions) {
-    return readWrappedBodyFrom(input, false);
   }
 
   /**
@@ -120,7 +104,6 @@ public class SyncBlockBody {
     }
     final SyncBlockBody body =
         new SyncBlockBody(bytesCurrentBody, transactionBytes, ommersListBytes1, withdrawalBytes);
-    LOG.info("SyncBlockBody: " + body);
     input.leaveList();
     return body;
   }
@@ -160,7 +143,6 @@ public class SyncBlockBody {
         .forEach(
             i -> {
               trie.put(indexKey(i), bytes.get(i));
-              System.out.println("index: " + indexKey(i) + "  txBytes: " + bytes.get(i));
             });
     return Hash.wrap(trie.getRootHash());
   }
