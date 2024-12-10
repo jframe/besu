@@ -17,16 +17,22 @@ package org.hyperledger.besu.ethereum.eth.sync;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
-import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteSyncBlocksTask;
+import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteBlocksTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DownloadSyncBodiesStep
     implements Function<List<BlockHeader>, CompletableFuture<List<SyncBlock>>> {
+
+  private static final Logger LOG = LoggerFactory.getLogger(DownloadSyncBodiesStep.class);
 
   private final ProtocolSchedule protocolSchedule;
   private final EthContext ethContext;
@@ -43,8 +49,22 @@ public class DownloadSyncBodiesStep
 
   @Override
   public CompletableFuture<List<SyncBlock>> apply(final List<BlockHeader> blockHeaders) {
-    return CompleteSyncBlocksTask.forHeaders(
-            protocolSchedule, ethContext, blockHeaders, metricsSystem)
-        .run();
+    final AtomicInteger no_of_max_retries_reached = new AtomicInteger();
+    return CompleteBlocksTask.forHeaders(protocolSchedule, ethContext, blockHeaders, metricsSystem)
+        .run()
+        .exceptionally(
+            error -> {
+              if (error.getMessage().contains("MAX_RETRIES_REACHED")) {
+                no_of_max_retries_reached.getAndIncrement();
+                if (no_of_max_retries_reached.get() > 5) {
+                  throw new RuntimeException("Have had 5 times MAX_RETRIES_REACHED", error);
+                }
+                LOG.debug("MAX_RETRIES_REACHED: {}", no_of_max_retries_reached.get());
+                return null;
+              } else {
+                throw new RuntimeException(error);
+              }
+            })
+        .thenCompose(_unused_ -> apply(blockHeaders));
   }
 }

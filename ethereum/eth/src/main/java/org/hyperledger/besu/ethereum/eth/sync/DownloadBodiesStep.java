@@ -23,10 +23,16 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DownloadBodiesStep
     implements Function<List<BlockHeader>, CompletableFuture<List<Block>>> {
+
+  private static final Logger LOG = LoggerFactory.getLogger(DownloadBodiesStep.class);
 
   private final ProtocolSchedule protocolSchedule;
   private final EthContext ethContext;
@@ -43,7 +49,22 @@ public class DownloadBodiesStep
 
   @Override
   public CompletableFuture<List<Block>> apply(final List<BlockHeader> blockHeaders) {
+    final AtomicInteger no_of_max_retries_reached = new AtomicInteger();
     return CompleteBlocksTask.forHeaders(protocolSchedule, ethContext, blockHeaders, metricsSystem)
-        .run();
+        .run()
+        .exceptionally(
+            error -> {
+              if (error.getMessage().contains("MAX_RETRIES_REACHED")) {
+                no_of_max_retries_reached.getAndIncrement();
+                if (no_of_max_retries_reached.get() > 5) {
+                  throw new RuntimeException("Have had 5 times MAX_RETRIES_REACHED", error);
+                }
+                LOG.debug("MAX_RETRIES_REACHED: {}", no_of_max_retries_reached.get());
+                return null;
+              } else {
+                throw new RuntimeException(error);
+              }
+            })
+        .thenCompose(_unused_ -> apply(blockHeaders));
   }
 }
