@@ -192,7 +192,8 @@ public class FastSyncDownloader<REQUEST> {
         return CompletableFuture.failedFuture(
             new CancellationException("FastSyncDownloader stopped"));
       }
-      final CompletableFuture<Void> worldStateFuture = new CompletableFuture<>();
+      final CompletableFuture<Void> worldStateFuture =
+          worldStateDownloader.run(fastSyncActions, currentState);
       final ChainDownloader chainDownloader =
           fastSyncActions.createChainDownloader(currentState, syncDurationMetrics);
       final CompletableFuture<Void> chainFuture = chainDownloader.start();
