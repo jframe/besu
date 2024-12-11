@@ -52,19 +52,18 @@ public class DownloadBodiesStep
     final AtomicInteger no_of_max_retries_reached = new AtomicInteger();
     return CompleteBlocksTask.forHeaders(protocolSchedule, ethContext, blockHeaders, metricsSystem)
         .run()
-        .exceptionally(
-            error -> {
-              if (error.getMessage().contains("MAX_RETRIES_REACHED")) {
+        .handle(
+                (result, error) -> {
+              if (error != null && error.getMessage().contains("MAX_RETRIES_REACHED")) {
                 no_of_max_retries_reached.getAndIncrement();
                 if (no_of_max_retries_reached.get() > 5) {
                   throw new RuntimeException("Have had 5 times MAX_RETRIES_REACHED", error);
                 }
                 LOG.debug("MAX_RETRIES_REACHED: {}", no_of_max_retries_reached.get());
-                return null;
+                return apply(blockHeaders).join();
               } else {
-                throw new RuntimeException(error);
+                return result;
               }
-            })
-        .thenCompose(_unused_ -> apply(blockHeaders));
+            });
   }
 }
