@@ -18,6 +18,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteBlocksTask;
+import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteSyncBlocksTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
@@ -50,21 +51,20 @@ public class DownloadSyncBodiesStep
   @Override
   public CompletableFuture<List<SyncBlock>> apply(final List<BlockHeader> blockHeaders) {
     final AtomicInteger no_of_max_retries_reached = new AtomicInteger();
-    return CompleteBlocksTask.forHeaders(protocolSchedule, ethContext, blockHeaders, metricsSystem)
-        .run()
-        .exceptionally(
-            error -> {
-              if (error.getMessage().contains("MAX_RETRIES_REACHED")) {
-                no_of_max_retries_reached.getAndIncrement();
-                if (no_of_max_retries_reached.get() > 5) {
-                  throw new RuntimeException("Have had 5 times MAX_RETRIES_REACHED", error);
-                }
-                LOG.debug("MAX_RETRIES_REACHED: {}", no_of_max_retries_reached.get());
-                return null;
-              } else {
-                throw new RuntimeException(error);
-              }
-            })
-        .thenCompose(_unused_ -> apply(blockHeaders));
+    return CompleteSyncBlocksTask.forHeaders(protocolSchedule, ethContext, blockHeaders, metricsSystem)
+            .run()
+            .handle(
+                    (result, error) -> {
+                      if (error != null && error.getMessage().contains("MAX_RETRIES_REACHED")) {
+                        no_of_max_retries_reached.getAndIncrement();
+                        if (no_of_max_retries_reached.get() > 5) {
+                          throw new RuntimeException("Have had 5 times MAX_RETRIES_REACHED", error);
+                        }
+                        LOG.debug("MAX_RETRIES_REACHED: {}", no_of_max_retries_reached.get());
+                        return apply(blockHeaders).join();
+                      } else {
+                        return result;
+                      }
+                    });
   }
 }
