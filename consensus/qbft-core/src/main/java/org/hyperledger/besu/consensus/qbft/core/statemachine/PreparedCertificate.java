@@ -35,7 +35,7 @@ public class PreparedCertificate {
    * @param round the round
    */
   public PreparedCertificate(
-          final QbftBlock block, final List<SignedData<PreparePayload>> prepares, final int round) {
+      final QbftBlock block, final List<SignedData<PreparePayload>> prepares, final int round) {
     this.block = block;
     this.prepares = prepares;
     this.round = round;

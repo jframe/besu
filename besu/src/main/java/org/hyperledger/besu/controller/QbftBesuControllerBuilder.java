@@ -14,7 +14,8 @@
  */
 package org.hyperledger.besu.controller;
 
-import com.google.common.base.Suppliers;
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import org.hyperledger.besu.config.BftConfigOptions;
 import org.hyperledger.besu.config.BftFork;
 import org.hyperledger.besu.config.QbftConfigOptions;
@@ -28,22 +29,17 @@ import org.hyperledger.besu.consensus.common.bft.BftExecutors;
 import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
 import org.hyperledger.besu.consensus.common.bft.BftProcessor;
 import org.hyperledger.besu.consensus.common.bft.BftProtocolSchedule;
-import org.hyperledger.besu.consensus.common.bft.BlockTimer;
 import org.hyperledger.besu.consensus.common.bft.EventMultiplexer;
-import org.hyperledger.besu.consensus.common.bft.RoundTimer;
-import org.hyperledger.besu.consensus.common.bft.UniqueMessageMulticaster;
 import org.hyperledger.besu.consensus.common.bft.blockcreation.BftMiningCoordinator;
 import org.hyperledger.besu.consensus.common.bft.blockcreation.ProposerSelector;
 import org.hyperledger.besu.consensus.common.bft.network.ValidatorPeers;
 import org.hyperledger.besu.consensus.common.bft.protocol.BftProtocolManager;
 import org.hyperledger.besu.consensus.common.bft.statemachine.BftEventHandler;
-import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
 import org.hyperledger.besu.consensus.common.validator.ValidatorProvider;
 import org.hyperledger.besu.consensus.common.validator.blockbased.BlockValidatorProvider;
 import org.hyperledger.besu.consensus.qbft.QbftEventHandlerFactory;
 import org.hyperledger.besu.consensus.qbft.QbftExtraDataCodec;
 import org.hyperledger.besu.consensus.qbft.QbftForksSchedulesFactory;
-import org.hyperledger.besu.consensus.qbft.QbftGossip;
 import org.hyperledger.besu.consensus.qbft.QbftProtocolScheduleBuilder;
 import org.hyperledger.besu.consensus.qbft.blockcreation.QbftBlockCreatorFactory;
 import org.hyperledger.besu.consensus.qbft.jsonrpc.QbftJsonRpcMethods;
@@ -71,10 +67,7 @@ import org.hyperledger.besu.ethereum.p2p.config.SubProtocolConfiguration;
 import org.hyperledger.besu.ethereum.transaction.TransactionSimulator;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
 import org.hyperledger.besu.plugin.services.BesuEvents;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -82,7 +75,9 @@ import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import com.google.common.base.Suppliers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** The Qbft Besu controller builder. */
 public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
@@ -196,9 +191,21 @@ public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
     // "only send once" filter applied by the UniqueMessageMulticaster.
     peers = new ValidatorPeers(validatorProvider, Istanbul100SubProtocol.NAME);
 
-
     final QbftEventHandlerFactory qbftEventHandlerFactory = new QbftEventHandlerFactory();
-    final BftEventHandler bftEventHandler = qbftEventHandlerFactory.create(blockchain, protocolContext, bftProtocolSchedule, proposerSelector, qbftConfig, nodeKey, bftEventQueue, bftExecutors, clock, qbftForksSchedule, blockCreatorFactory, ethProtocolManager);
+    final BftEventHandler bftEventHandler =
+        qbftEventHandlerFactory.create(
+            blockchain,
+            protocolContext,
+            bftProtocolSchedule,
+            proposerSelector,
+            qbftConfig,
+            nodeKey,
+            bftEventQueue,
+            bftExecutors,
+            clock,
+            qbftForksSchedule,
+            blockCreatorFactory,
+            ethProtocolManager);
     final EventMultiplexer eventMultiplexer = new EventMultiplexer(bftEventHandler);
     final BftProcessor bftProcessor = new BftProcessor(bftEventQueue, eventMultiplexer);
 
@@ -358,5 +365,4 @@ public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
 
     return new BftValidatorOverrides(result);
   }
-
 }

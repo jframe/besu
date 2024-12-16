@@ -20,5 +20,5 @@ import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 public interface BlockEncoder {
   QbftBlock readFrom(RLPInput rlpInput, HashMode hashMode);
 
-  void writeTo(RLPOutput rlpOutput);
+  void writeTo(QbftBlock pb, RLPOutput rlpOutput);
 }

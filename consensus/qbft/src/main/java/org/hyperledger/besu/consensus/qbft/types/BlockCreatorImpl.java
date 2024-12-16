@@ -1,3 +1,17 @@
+/*
+ * Copyright contributors to Besu.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 package org.hyperledger.besu.consensus.qbft.types;
 
 import org.hyperledger.besu.consensus.common.bft.BftBlockHeaderFunctions;
@@ -15,39 +29,49 @@ import java.util.Collection;
 
 public class BlockCreatorImpl implements BlockCreator {
 
-    private final org.hyperledger.besu.ethereum.blockcreation.BlockCreator besuBlockCreator;
-    private final BftExtraDataCodec bftExtraDataCodec;
+  private final org.hyperledger.besu.ethereum.blockcreation.BlockCreator besuBlockCreator;
+  private final BftExtraDataCodec bftExtraDataCodec;
 
-    public BlockCreatorImpl(final org.hyperledger.besu.ethereum.blockcreation.BlockCreator besuBftBlockCreator, final BftExtraDataCodec bftExtraDataCodec) {
-        this.besuBlockCreator = besuBftBlockCreator;
-        this.bftExtraDataCodec = bftExtraDataCodec;
-    }
+  public BlockCreatorImpl(
+      final org.hyperledger.besu.ethereum.blockcreation.BlockCreator besuBftBlockCreator,
+      final BftExtraDataCodec bftExtraDataCodec) {
+    this.besuBlockCreator = besuBftBlockCreator;
+    this.bftExtraDataCodec = bftExtraDataCodec;
+  }
 
-    @Override
-    public QbftBlock createBlock(final long headerTimeStampSeconds, final QbftBlockHeader parentHeader) {
-        var block = besuBlockCreator.createBlock(headerTimeStampSeconds, BlockWrapper.toBesuBlockHeader(parentHeader));
-        return new QbftBlockImpl(block.getBlock().getHeader(), block.getBlock().getBody());
-    }
+  @Override
+  public QbftBlock createBlock(
+      final long headerTimeStampSeconds, final QbftBlockHeader parentHeader) {
+    var block =
+        besuBlockCreator.createBlock(
+            headerTimeStampSeconds, BlockUtil.toBesuBlockHeader(parentHeader));
+    return new QbftBlockImpl(block.getBlock().getHeader(), block.getBlock().getBody());
+  }
 
-    @Override
-    public QbftBlock createSealedBlock(final ExtraDataProvider bftExtraDataProvider, final QbftBlock block, final int roundNumber, final Collection<SECPSignature> commitSeals) {
-        final BlockHeader initialBesuHeader = BlockWrapper.toBesuBlockHeader(block.getQbftBlockHeader());
-        BftExtraData initialExtraData = bftExtraDataProvider.getExtraData(block.getQbftBlockHeader());
+  @Override
+  public QbftBlock createSealedBlock(
+      final ExtraDataProvider bftExtraDataProvider,
+      final QbftBlock block,
+      final int roundNumber,
+      final Collection<SECPSignature> commitSeals) {
+    final BlockHeader initialBesuHeader =
+        BlockUtil.toBesuBlockHeader(block.getQbftBlockHeader());
+    BftExtraData initialExtraData = bftExtraDataProvider.getExtraData(block.getQbftBlockHeader());
 
-        final BftExtraData sealedExtraData =
-                new BftExtraData(
-                        initialExtraData.getVanityData(),
-                        commitSeals,
-                        initialExtraData.getVote(),
-                        roundNumber,
-                        initialExtraData.getValidators());
+    final BftExtraData sealedExtraData =
+        new BftExtraData(
+            initialExtraData.getVanityData(),
+            commitSeals,
+            initialExtraData.getVote(),
+            roundNumber,
+            initialExtraData.getValidators());
 
-        final BlockHeader sealedHeader =
-                BlockHeaderBuilder.fromHeader(initialBesuHeader)
-                        .extraData(bftExtraDataCodec.encode(sealedExtraData))
-                        .blockHeaderFunctions(BftBlockHeaderFunctions.forOnchainBlock(bftExtraDataCodec))
-                        .buildBlockHeader();
+    final BlockHeader sealedHeader =
+        BlockHeaderBuilder.fromHeader(initialBesuHeader)
+            .extraData(bftExtraDataCodec.encode(sealedExtraData))
+            .blockHeaderFunctions(BftBlockHeaderFunctions.forOnchainBlock(bftExtraDataCodec))
+            .buildBlockHeader();
 
-        return new QbftBlockImpl(sealedHeader, BlockWrapper.toBesuBlock(block).getBody());
-    }
+    return new QbftBlockImpl(sealedHeader, BlockUtil.toBesuBlock(block).getBody());
+  }
 }

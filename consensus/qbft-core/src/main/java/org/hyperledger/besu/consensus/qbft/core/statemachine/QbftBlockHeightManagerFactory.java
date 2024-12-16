@@ -75,11 +75,13 @@ public class QbftBlockHeightManagerFactory {
     }
   }
 
-  private BaseQbftBlockHeightManager createNoOpBlockHeightManager(final QbftBlockHeader parentHeader) {
+  private BaseQbftBlockHeightManager createNoOpBlockHeightManager(
+      final QbftBlockHeader parentHeader) {
     return new NoOpBlockHeightManager(parentHeader);
   }
 
-  private BaseQbftBlockHeightManager createFullBlockHeightManager(final QbftBlockHeader parentHeader) {
+  private BaseQbftBlockHeightManager createFullBlockHeightManager(
+      final QbftBlockHeader parentHeader) {
     return new QbftBlockHeightManager(
         parentHeader,
         finalState,

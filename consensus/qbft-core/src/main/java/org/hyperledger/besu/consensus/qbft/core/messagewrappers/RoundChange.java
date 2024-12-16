@@ -17,9 +17,9 @@ package org.hyperledger.besu.consensus.qbft.core.messagewrappers;
 import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
 import org.hyperledger.besu.consensus.common.bft.messagewrappers.BftMessage;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
 import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
@@ -96,7 +96,7 @@ public class RoundChange extends BftMessage<RoundChangePayload> {
     rlpOut.startList();
     getSignedPayload().writeTo(rlpOut);
     proposedBlock.ifPresentOrElse(
-        pb -> BlockEncoderRegistry.getInstance().getEncoder().writeTo(rlpOut),
+        pb -> BlockEncoderRegistry.getInstance().getEncoder().writeTo(pb, rlpOut),
         rlpOut::writeEmptyList);
     rlpOut.writeList(prepares, SignedData::writeTo);
     rlpOut.endList();

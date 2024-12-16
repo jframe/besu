@@ -52,7 +52,7 @@ public interface BaseQbftBlockHeightManager {
    * @return the parent block header
    */
   QbftBlockHeader getParentBlockHeader();
-  
+
   /**
    * Handle proposal payload.
    *

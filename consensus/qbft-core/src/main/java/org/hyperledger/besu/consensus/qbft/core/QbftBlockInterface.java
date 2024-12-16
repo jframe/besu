@@ -14,8 +14,8 @@
  */
 package org.hyperledger.besu.consensus.qbft.core;
 
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 
 /** The Bft block interface. */
 public interface QbftBlockInterface {

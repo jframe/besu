@@ -14,23 +14,24 @@
  */
 package org.hyperledger.besu.consensus.qbft.types;
 
-import org.hyperledger.besu.consensus.common.bft.BftBlockHashing;
-import org.hyperledger.besu.consensus.common.bft.BftExtraData;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHashing;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
-import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.core.Block;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 
-public class BlockHashingImpl implements BlockHashing {
-  private final BftBlockHashing bftBlockHashing;
+public class BlockUtil {
 
-  public BlockHashingImpl(final BftBlockHashing bftBlockHashing) {
-    this.bftBlockHashing = bftBlockHashing;
+  public static Block toBesuBlock(final QbftBlock block) {
+    if (block instanceof Block) {
+      return (Block) block;
+    }
+    throw new IllegalStateException("Invalid Block type");
   }
 
-  @Override
-  public Hash calculateDataHashForCommittedSeal(
-      final QbftBlockHeader header, final BftExtraData extraData) {
-    return bftBlockHashing.calculateDataHashForCommittedSeal(
-        BlockUtil.toBesuBlockHeader(header), extraData);
+  public static BlockHeader toBesuBlockHeader(final QbftBlockHeader header) {
+    if (header instanceof BlockHeader) {
+      return (BlockHeader) header;
+    }
+    throw new IllegalStateException("Invalid BlockHeader type");
   }
 }

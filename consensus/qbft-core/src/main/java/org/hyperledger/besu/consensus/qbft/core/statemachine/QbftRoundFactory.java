@@ -17,12 +17,12 @@ package org.hyperledger.besu.consensus.qbft.core.statemachine;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockCreator;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHashing;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ExtraDataProvider;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockCreatorFactory;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockCreatorFactory;
 import org.hyperledger.besu.consensus.qbft.core.events.MinedBlockObserver;
 import org.hyperledger.besu.consensus.qbft.core.network.QbftMessageTransmitter;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
@@ -103,7 +103,7 @@ public class QbftRoundFactory {
    * @return the qbft round
    */
   public QbftRound createNewRoundWithState(
-          final QbftBlockHeader parentHeader, final RoundState roundState) {
+      final QbftBlockHeader parentHeader, final RoundState roundState) {
     final BlockCreator blockCreator =
         blockCreatorFactory.create(roundState.getRoundIdentifier().getRoundNumber());
 

@@ -17,5 +17,4 @@ package org.hyperledger.besu.consensus.qbft.core.datatypes;
 public interface QbftBlockImporter {
 
   boolean importBlock(QbftBlock block);
-
 }

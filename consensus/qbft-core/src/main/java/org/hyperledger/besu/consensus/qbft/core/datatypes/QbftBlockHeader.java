@@ -14,7 +14,6 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
-
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 

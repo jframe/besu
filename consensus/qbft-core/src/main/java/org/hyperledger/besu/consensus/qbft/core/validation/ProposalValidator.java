@@ -22,9 +22,9 @@ import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.Payload;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockValidator;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
@@ -55,7 +55,7 @@ public class ProposalValidator {
   private final ConsensusRoundIdentifier roundIdentifier;
   private final Address expectedProposer;
 
-    /**
+  /**
    * Instantiates a new Proposal validator.
    *
    * @param protocolContext the protocol context
@@ -64,7 +64,7 @@ public class ProposalValidator {
    * @param validators the validators
    * @param roundIdentifier the round identifier
    * @param expectedProposer the expected proposer
-     */
+   */
   public ProposalValidator(
       final ProtocolContext protocolContext,
       final QbftProtocolSchedule protocolSchedule,

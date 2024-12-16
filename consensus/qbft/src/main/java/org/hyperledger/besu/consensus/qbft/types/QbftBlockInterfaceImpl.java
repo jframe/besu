@@ -1,6 +1,22 @@
+/*
+ * Copyright contributors to Besu.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 package org.hyperledger.besu.consensus.qbft.types;
 
-import org.hyperledger.besu.consensus.common.bft.BftBlockHeaderFunctions;
+import static org.hyperledger.besu.consensus.qbft.types.BlockHeaderFunctionsUtil.getBlockHeaderFunctions;
+import static org.hyperledger.besu.consensus.qbft.types.BlockUtil.toBesuBlock;
+
 import org.hyperledger.besu.consensus.common.bft.BftBlockInterface;
 import org.hyperledger.besu.consensus.qbft.QbftExtraDataCodec;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
@@ -9,32 +25,24 @@ import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeaderFunctions;
 
-import static org.hyperledger.besu.consensus.qbft.types.BlockWrapper.toBesuBlock;
-
 public class QbftBlockInterfaceImpl implements QbftBlockInterface {
   private final QbftExtraDataCodec bftExtraDataCodec = new QbftExtraDataCodec();
   private final BftBlockInterface bftBlockInterface;
 
-  public QbftBlockInterfaceImpl(
-      final BftBlockInterface bftBlockInterface) {
+  public QbftBlockInterfaceImpl(final BftBlockInterface bftBlockInterface) {
     this.bftBlockInterface = bftBlockInterface;
   }
 
-    @Override
-    public QbftBlock replaceRoundInBlock(final QbftBlock proposalBlock, final int roundNumber, final HashMode hashMode) {
-      final Block besuBlock = toBesuBlock(proposalBlock);
-      final BlockHeaderFunctions blockHeaderFunctions = getBlockHeaderFunctions(hashMode);
-      final Block updatedRoundBlock = bftBlockInterface.replaceRoundInBlock(besuBlock, roundNumber, blockHeaderFunctions);
-      return new QbftBlockWrapper(new QbftBlockHeaderImpl(updatedRoundBlock.getHeader(), blockHeaderFunctions), updatedRoundBlock.getBody());
-    }
-
-  private BlockHeaderFunctions getBlockHeaderFunctions(final HashMode hashMode) {
-    if (hashMode == HashMode.ONCHAIN) {
-      return BftBlockHeaderFunctions.forOnchainBlock(bftExtraDataCodec);
-    } else if (hashMode == HashMode.COMMITTED_SEAL) {
-      return BftBlockHeaderFunctions.forCommittedSeal(bftExtraDataCodec);
-    } else {
-      throw new IllegalStateException("Invalid HashMode");
-    }
+  @Override
+  public QbftBlock replaceRoundInBlock(
+      final QbftBlock proposalBlock, final int roundNumber, final HashMode hashMode) {
+    final Block besuBlock = toBesuBlock(proposalBlock);
+    final BlockHeaderFunctions blockHeaderFunctions = getBlockHeaderFunctions(bftExtraDataCodec, hashMode);
+    final Block updatedRoundBlock =
+        bftBlockInterface.replaceRoundInBlock(besuBlock, roundNumber, blockHeaderFunctions);
+    return new QbftBlockWrapper(
+        new QbftBlockHeaderImpl(updatedRoundBlock.getHeader(), blockHeaderFunctions),
+        updatedRoundBlock.getBody());
   }
+
 }

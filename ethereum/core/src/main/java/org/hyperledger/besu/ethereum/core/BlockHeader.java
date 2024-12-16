@@ -257,6 +257,7 @@ public class BlockHeader extends SealableBlockHeader
 
   /**
    * The block header function used, useful for block headers that extend this class.
+   *
    * @return the block header functions
    */
   public BlockHeaderFunctions getBlockHeaderFunctions() {

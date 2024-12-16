@@ -21,14 +21,14 @@ import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.RoundTimer;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockCreator;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHashing;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockImporter;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ExtraDataProvider;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockImporter;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.events.MinedBlockObserver;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
@@ -169,7 +169,8 @@ public class QbftRound {
               HashMode.COMMITTED_SEAL);
     }
 
-    LOG.debug(" proposal - new/prepared block hash : {}", blockToPublish.getQbftBlockHeader().getHash());
+    LOG.debug(
+        " proposal - new/prepared block hash : {}", blockToPublish.getQbftBlockHeader().getHash());
 
     updateStateWithProposalAndTransmit(
         blockToPublish,
@@ -297,7 +298,8 @@ public class QbftRound {
       // There are times handling a proposed block is enough to enter prepared.
       if (wasPrepared != roundState.isPrepared()) {
         LOG.debug("Sending commit errorMessage. round={}", roundState.getRoundIdentifier());
-        transmitter.multicastCommit(getRoundIdentifier(), block.getQbftBlockHeader().getHash(), commitSeal);
+        transmitter.multicastCommit(
+            getRoundIdentifier(), block.getQbftBlockHeader().getHash(), commitSeal);
       }
 
       // can automatically add _our_ commit errorMessage to the roundState
@@ -307,7 +309,9 @@ public class QbftRound {
       try {
         final Commit localCommitMessage =
             messageFactory.createCommit(
-                roundState.getRoundIdentifier(), msg.getBlock().getQbftBlockHeader().getHash(), commitSeal);
+                roundState.getRoundIdentifier(),
+                msg.getBlock().getQbftBlockHeader().getHash(),
+                commitSeal);
         roundState.addCommitMessage(localCommitMessage);
       } catch (final SecurityModuleException e) {
         LOG.warn("Failed to create signed Commit errorMessage; {}", e.getMessage());
@@ -330,7 +334,8 @@ public class QbftRound {
       LOG.debug("Sending commit errorMessage. round={}", roundState.getRoundIdentifier());
       final QbftBlock block = roundState.getProposedBlock().get();
       try {
-        transmitter.multicastCommit(getRoundIdentifier(), block.getQbftBlockHeader().getHash(), createCommitSeal(block));
+        transmitter.multicastCommit(
+            getRoundIdentifier(), block.getQbftBlockHeader().getHash(), createCommitSeal(block));
         // Note: the local-node's commit errorMessage was added to RoundState on block acceptance
         // and thus does not need to be done again here.
       } catch (final SecurityModuleException e) {
@@ -357,7 +362,8 @@ public class QbftRound {
             roundState.getCommitSeals());
 
     final long blockNumber = blockToImport.getQbftBlockHeader().getNumber();
-    final BftExtraData extraData = extraDataProvider.getExtraData(blockToImport.getQbftBlockHeader());
+    final BftExtraData extraData =
+        extraDataProvider.getExtraData(blockToImport.getQbftBlockHeader());
     if (getRoundIdentifier().getRoundNumber() > 0) {
       LOG.info(
           "Importing proposed block to chain. round={}, hash={}",

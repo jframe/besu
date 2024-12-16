@@ -16,8 +16,8 @@ package org.hyperledger.besu.consensus.qbft.core.validation;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
@@ -56,10 +56,15 @@ public class MessageValidator {
       final QbftBlock commitBlock =
           blockInterface.replaceRoundInBlock(
               proposalBlock, targetRound.getRoundNumber(), HashMode.COMMITTED_SEAL);
-      prepareValidator = new PrepareValidator(validators, targetRound, proposalBlock.getQbftBlockHeader().getHash());
+      prepareValidator =
+          new PrepareValidator(
+              validators, targetRound, proposalBlock.getQbftBlockHeader().getHash());
       commitValidator =
           new CommitValidator(
-              validators, targetRound, proposalBlock.getQbftBlockHeader().getHash(), commitBlock.getQbftBlockHeader().getHash());
+              validators,
+              targetRound,
+              proposalBlock.getQbftBlockHeader().getHash(),
+              commitBlock.getQbftBlockHeader().getHash());
     }
 
     /**

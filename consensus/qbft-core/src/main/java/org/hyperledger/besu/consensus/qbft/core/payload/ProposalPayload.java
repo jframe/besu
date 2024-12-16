@@ -15,9 +15,9 @@
 package org.hyperledger.besu.consensus.qbft.core.payload;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.QbftV1;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
@@ -65,7 +65,7 @@ public class ProposalPayload extends QbftPayload {
   public void writeTo(final RLPOutput rlpOutput) {
     rlpOutput.startList();
     writeConsensusRound(rlpOutput);
-    BlockEncoderRegistry.getInstance().getEncoder().writeTo(rlpOutput);
+    BlockEncoderRegistry.getInstance().getEncoder().writeTo(proposedBlock, rlpOutput);
     rlpOutput.endList();
   }
 

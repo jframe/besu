@@ -18,9 +18,9 @@ import static com.google.common.base.Preconditions.checkState;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockValidator;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.payload.ProposalPayload;
 import org.hyperledger.besu.datatypes.Address;
 
@@ -84,7 +84,8 @@ public class ProposalPayloadValidator {
       return false;
     }
 
-    if (block.getQbftBlockHeader().getNumber() != payload.getRoundIdentifier().getSequenceNumber()) {
+    if (block.getQbftBlockHeader().getNumber()
+        != payload.getRoundIdentifier().getSequenceNumber()) {
       LOG.info("{}: block number does not match sequence number", ERROR_PREFIX);
       return false;
     }

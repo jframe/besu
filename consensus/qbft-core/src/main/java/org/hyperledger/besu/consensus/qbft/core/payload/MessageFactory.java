@@ -113,7 +113,8 @@ public class MessageFactory {
               roundIdentifier,
               Optional.of(
                   new PreparedRoundMetadata(
-                      preparedBlock.getQbftBlockHeader().getHash(), preparedRoundData.get().getRound())));
+                      preparedBlock.getQbftBlockHeader().getHash(),
+                      preparedRoundData.get().getRound())));
 
       return new RoundChange(
           createSignedMessage(payload),
