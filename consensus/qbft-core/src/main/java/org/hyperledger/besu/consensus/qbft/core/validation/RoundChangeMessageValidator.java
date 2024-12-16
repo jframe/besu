@@ -98,7 +98,7 @@ public class RoundChangeMessageValidator {
     final QbftBlockValidator blockValidator =
         protocolSchedule.getByBlockHeader(block.getQbftBlockHeader()).getBlockValidator();
 
-    final var validationResult = blockValidator.validateAndProcessBlock(protocolContext, block);
+    final var validationResult = blockValidator.validateBlock(protocolContext, block);
 
     if (!validationResult.success()) {
       LOG.info(

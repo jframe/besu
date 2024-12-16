@@ -96,7 +96,7 @@ public class ProposalPayloadValidator {
   private boolean validateBlock(final QbftBlock block) {
     checkState(blockValidator != null, "block validation not possible, no block validator.");
 
-    final var validationResult = blockValidator.validateAndProcessBlock(protocolContext, block);
+    final var validationResult = blockValidator.validateBlock(protocolContext, block);
 
     if (!validationResult.success()) {
       LOG.info(

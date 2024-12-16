@@ -34,14 +34,14 @@ public class QbftBlockValidatorImpl implements QbftBlockValidator {
   }
 
   @Override
-  public ValidationResult validateAndProcessBlock(
+  public ValidationResult validateBlock(
       final ProtocolContext protocolContext, final QbftBlock block) {
     final BlockProcessingResult blockProcessingResult =
         blockValidator.validateAndProcessBlock(
             besuProtocolContext,
             BlockUtil.toBesuBlock(block),
+            HeaderValidationMode.LIGHT,
             HeaderValidationMode.FULL,
-            HeaderValidationMode.NONE,
             false);
     return new ValidationResult(
         blockProcessingResult.isSuccessful(), blockProcessingResult.errorMessage);

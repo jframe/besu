@@ -18,7 +18,7 @@ import java.util.Optional;
 
 public interface QbftBlockValidator {
 
-  ValidationResult validateAndProcessBlock(ProtocolContext protocolContext, QbftBlock block);
+  ValidationResult validateBlock(ProtocolContext protocolContext, QbftBlock block);
 
   record ValidationResult(boolean success, Optional<String> errorMessage) {}
 }
