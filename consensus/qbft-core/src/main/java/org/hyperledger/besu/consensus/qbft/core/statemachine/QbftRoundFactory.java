@@ -49,8 +49,8 @@ public class QbftRoundFactory {
    * @param protocolContext the protocol context
    * @param protocolSchedule the protocol schedule
    * @param minedBlockObservers the mined block observers
-   * @param messageValidatorFactory the errorMessage validator factory
-   * @param messageFactory the errorMessage factory
+   * @param messageValidatorFactory the message validator factory
+   * @param messageFactory the message factory
    * @param extraDataProvider the bft extra data codec
    * @param blockHashing the block hashing provider
    */

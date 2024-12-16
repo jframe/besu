@@ -88,7 +88,7 @@ public class QbftRound {
    * @param protocolSchedule the protocol schedule
    * @param observers the observers
    * @param nodeKey the node key
-   * @param messageFactory the errorMessage factory
+   * @param messageFactory the message factory
    * @param transmitter the transmitter
    * @param roundTimer the round timer
    * @param extraDataProvider the bft extra data codec
@@ -217,13 +217,13 @@ public class QbftRound {
   }
 
   /**
-   * Handle proposal errorMessage.
+   * Handle proposal message.
    *
    * @param msg the msg
    */
   public void handleProposalMessage(final Proposal msg) {
     LOG.debug(
-        "Received a proposal errorMessage. round={}. author={}",
+        "Received a proposal message. round={}. author={}",
         roundState.getRoundIdentifier(),
         msg.getAuthor());
     final QbftBlock block = msg.getSignedPayload().getPayload().getProposedBlock();
@@ -233,7 +233,7 @@ public class QbftRound {
   }
 
   private void sendPrepare(final QbftBlock block) {
-    LOG.debug("Sending prepare errorMessage. round={}", roundState.getRoundIdentifier());
+    LOG.debug("Sending prepare message. round={}", roundState.getRoundIdentifier());
     try {
       final Prepare localPrepareMessage =
           messageFactory.createPrepare(getRoundIdentifier(), block.getQbftBlockHeader().getHash());
@@ -246,26 +246,26 @@ public class QbftRound {
   }
 
   /**
-   * Handle prepare errorMessage.
+   * Handle prepare message.
    *
    * @param msg the msg
    */
   public void handlePrepareMessage(final Prepare msg) {
     LOG.debug(
-        "Received a prepare errorMessage. round={}. author={}",
+        "Received a prepare message. round={}. author={}",
         roundState.getRoundIdentifier(),
         msg.getAuthor());
     peerIsPrepared(msg);
   }
 
   /**
-   * Handle commit errorMessage.
+   * Handle commit message.
    *
    * @param msg the msg
    */
   public void handleCommitMessage(final Commit msg) {
     LOG.debug(
-        "Received a commit errorMessage. round={}. author={}",
+        "Received a commit message. round={}. author={}",
         roundState.getRoundIdentifier(),
         msg.getAuthor());
     peerIsCommitted(msg);
@@ -297,13 +297,13 @@ public class QbftRound {
 
       // There are times handling a proposed block is enough to enter prepared.
       if (wasPrepared != roundState.isPrepared()) {
-        LOG.debug("Sending commit errorMessage. round={}", roundState.getRoundIdentifier());
+        LOG.debug("Sending commit message. round={}", roundState.getRoundIdentifier());
         transmitter.multicastCommit(
             getRoundIdentifier(), block.getQbftBlockHeader().getHash(), commitSeal);
       }
 
-      // can automatically add _our_ commit errorMessage to the roundState
-      // cannot create a prepare errorMessage here, as it may be _our_ proposal, and thus we cannot
+      // can automatically add _our_ commit message to the roundState
+      // cannot create a prepare message here, as it may be _our_ proposal, and thus we cannot
       // also
       // prepare
       try {
@@ -314,7 +314,7 @@ public class QbftRound {
                 commitSeal);
         roundState.addCommitMessage(localCommitMessage);
       } catch (final SecurityModuleException e) {
-        LOG.warn("Failed to create signed Commit errorMessage; {}", e.getMessage());
+        LOG.warn("Failed to create signed Commit message; {}", e.getMessage());
         return true;
       }
 
@@ -331,12 +331,12 @@ public class QbftRound {
     final boolean wasPrepared = roundState.isPrepared();
     roundState.addPrepareMessage(msg);
     if (wasPrepared != roundState.isPrepared()) {
-      LOG.debug("Sending commit errorMessage. round={}", roundState.getRoundIdentifier());
+      LOG.debug("Sending commit message. round={}", roundState.getRoundIdentifier());
       final QbftBlock block = roundState.getProposedBlock().get();
       try {
         transmitter.multicastCommit(
             getRoundIdentifier(), block.getQbftBlockHeader().getHash(), createCommitSeal(block));
-        // Note: the local-node's commit errorMessage was added to RoundState on block acceptance
+        // Note: the local-node's commit message was added to RoundState on block acceptance
         // and thus does not need to be done again here.
       } catch (final SecurityModuleException e) {
         LOG.warn("Failed to construct a commit seal: {}", e.getMessage());

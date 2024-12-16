@@ -40,8 +40,8 @@ public class QbftBlockHeightManagerFactory {
    *
    * @param finalState the final state
    * @param roundFactory the round factory
-   * @param messageValidatorFactory the errorMessage validator factory
-   * @param messageFactory the errorMessage factory
+   * @param messageValidatorFactory the message validator factory
+   * @param messageFactory the message factory
    * @param validatorModeTransitionLogger the validator mode transition logger
    */
   public QbftBlockHeightManagerFactory(

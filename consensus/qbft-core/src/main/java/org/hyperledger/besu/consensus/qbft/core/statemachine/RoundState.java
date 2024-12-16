@@ -97,27 +97,27 @@ public class RoundState {
   }
 
   /**
-   * Add prepare errorMessage.
+   * Add prepare message.
    *
    * @param msg the msg
    */
   public void addPrepareMessage(final Prepare msg) {
     if (!proposalMessage.isPresent() || validator.validatePrepare(msg)) {
       prepareMessages.add(msg);
-      LOG.trace("Round state added prepare errorMessage prepare={}", msg);
+      LOG.trace("Round state added prepare message prepare={}", msg);
     }
     updateState();
   }
 
   /**
-   * Add commit errorMessage.
+   * Add commit message.
    *
    * @param msg the msg
    */
   public void addCommitMessage(final Commit msg) {
     if (!proposalMessage.isPresent() || validator.validateCommit(msg)) {
       commitMessages.add(msg);
-      LOG.trace("Round state added commit errorMessage commit={}", msg);
+      LOG.trace("Round state added commit message commit={}", msg);
     }
 
     updateState();

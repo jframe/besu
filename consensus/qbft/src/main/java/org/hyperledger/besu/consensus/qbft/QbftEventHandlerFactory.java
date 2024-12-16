@@ -34,6 +34,7 @@ import org.hyperledger.besu.consensus.common.validator.ValidatorProvider;
 import org.hyperledger.besu.consensus.qbft.blockcreation.QbftBlockCreatorFactory;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
+import org.hyperledger.besu.consensus.qbft.core.events.MinedBlockObserver;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.statemachine.QbftBlockHeightManagerFactory;
 import org.hyperledger.besu.consensus.qbft.core.statemachine.QbftController;
@@ -54,7 +55,6 @@ import org.hyperledger.besu.consensus.qbft.validator.ValidatorModeTransitionLogg
 import org.hyperledger.besu.cryptoservices.NodeKey;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
-import org.hyperledger.besu.ethereum.chain.MinedBlockObserver;
 import org.hyperledger.besu.ethereum.core.Util;
 import org.hyperledger.besu.ethereum.eth.manager.EthProtocolManager;
 import org.hyperledger.besu.util.Subscribers;
@@ -123,8 +123,8 @@ public class QbftEventHandlerFactory {
             clock);
 
     final Subscribers<MinedBlockObserver> minedBlockObservers = Subscribers.create();
-    minedBlockObservers.subscribe(ethProtocolManager);
-    //        minedBlockObservers.subscribe(blockLogger(transactionPool, localAddress));
+    //    minedBlockObservers.subscribe(ethProtocolManager);
+    //    minedBlockObservers.subscribe(blockLogger(transactionPool, localAddress));
     // TODO convert minedBlockObservers
 
     BlockEncoderRegistry.getInstance().setEncoder(new QbftBlockEncoder(qbftExtraDataCodec));
@@ -139,7 +139,7 @@ public class QbftEventHandlerFactory {
                     finalState,
                     new QbftProtocolContextImpl(protocolContext),
                     new QbftProtocolScheduleImpl(bftProtocolSchedule, protocolContext),
-                    null,
+                    minedBlockObservers,
                     messageValidatorFactory,
                     messageFactory,
                     new QbftExtraDataProviderImpl(qbftExtraDataCodec),

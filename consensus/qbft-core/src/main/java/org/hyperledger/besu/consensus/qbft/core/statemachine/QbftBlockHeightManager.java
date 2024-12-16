@@ -48,8 +48,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Responsible for starting/clearing Consensus rounds at a given block height. One of these is
  * created when a new block is imported to the chain. It immediately then creates a Round-0 object,
- * and sends a Proposal errorMessage. If the round times out prior to importing a block, this class
- * is responsible for creating a RoundChange errorMessage and transmitting it.
+ * and sends a Proposal message. If the round times out prior to importing a block, this class is
+ * responsible for creating a RoundChange message and transmitting it.
  */
 public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
 
@@ -77,8 +77,8 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
    * @param roundChangeManager the round change manager
    * @param qbftRoundFactory the qbft round factory
    * @param clock the clock
-   * @param messageValidatorFactory the errorMessage validator factory
-   * @param messageFactory the errorMessage factory
+   * @param messageValidatorFactory the message validator factory
+   * @param messageFactory the message factory
    */
   public QbftBlockHeightManager(
       final QbftBlockHeader parentHeader,
@@ -249,10 +249,10 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
               qbftRound.getRoundIdentifier(), latestPreparedCertificate);
 
       // Its possible the locally created RoundChange triggers the transmission of a NewRound
-      // errorMessage - so it must be handled accordingly.
+      // message - so it must be handled accordingly.
       handleRoundChangePayload(localRoundChange);
     } catch (final SecurityModuleException e) {
-      LOG.warn("Failed to create signed RoundChange errorMessage.", e);
+      LOG.warn("Failed to create signed RoundChange message.", e);
     }
 
     transmitter.multicastRoundChange(qbftRound.getRoundIdentifier(), latestPreparedCertificate);
@@ -396,11 +396,11 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
 
   /** The enum Message age. */
   public enum MessageAge {
-    /** Prior round errorMessage age. */
+    /** Prior round message age. */
     PRIOR_ROUND,
-    /** Current round errorMessage age. */
+    /** Current round message age. */
     CURRENT_ROUND,
-    /** Future round errorMessage age. */
+    /** Future round message age. */
     FUTURE_ROUND
   }
 }

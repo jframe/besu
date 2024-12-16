@@ -66,8 +66,8 @@ public class QbftController implements BftEventHandler {
    * @param bftFinalState the bft final state
    * @param qbftBlockHeightManagerFactory the qbft block height manager factory
    * @param gossiper the gossiper
-   * @param duplicateMessageTracker the duplicate errorMessage tracker
-   * @param futureMessageBuffer the future errorMessage buffer
+   * @param duplicateMessageTracker the duplicate message tracker
+   * @param futureMessageBuffer the future message buffer
    * @param synchronizerUpdater the synchronizer updater
    * @param bftExtraDataCodec the bft extra data codec
    */
@@ -126,7 +126,7 @@ public class QbftController implements BftEventHandler {
       default:
         throw new IllegalArgumentException(
             String.format(
-                "Received errorMessage with messageCode=%d does not conform to any recognised QBFT errorMessage structure",
+                "Received message with messageCode=%d does not conform to any recognised QBFT errorMessage structure",
                 message.getData().getCode()));
     }
   }
@@ -153,28 +153,28 @@ public class QbftController implements BftEventHandler {
       duplicateMessageTracker.addSeenMessage(data);
       handleMessage(msg.getMessage());
     } else {
-      LOG.trace("Discarded duplicate errorMessage");
+      LOG.trace("Discarded duplicate message");
     }
   }
 
   /**
-   * Consume errorMessage.
+   * Consume message.
    *
    * @param <P> the type parameter of BftMessage
-   * @param message the errorMessage
-   * @param bftMessage the bft errorMessage
-   * @param handleMessage the handle errorMessage
+   * @param message the message
+   * @param bftMessage the bft message
+   * @param handleMessage the handle message
    */
   protected <P extends BftMessage<?>> void consumeMessage(
       final Message message, final P bftMessage, final Consumer<P> handleMessage) {
-    LOG.trace("Received BFT {} errorMessage", bftMessage.getClass().getSimpleName());
+    LOG.trace("Received BFT {} message", bftMessage.getClass().getSimpleName());
 
     // Discard all messages which target the BLOCKCHAIN height (which SHOULD be 1 less than
     // the currentHeightManager, but CAN be the same directly following import).
     if (bftMessage.getRoundIdentifier().getSequenceNumber()
         <= blockchain.getChainHeadBlockNumber()) {
       LOG.debug(
-          "Discarding a errorMessage which targets a height {} not above current chain height {}.",
+          "Discarding a message which targets a height {} not above current chain height {}.",
           bftMessage.getRoundIdentifier().getSequenceNumber(),
           blockchain.getChainHeadBlockNumber());
       return;
@@ -262,15 +262,15 @@ public class QbftController implements BftEventHandler {
     if (isMsgForCurrentHeight(msgRoundIdentifier)) {
       return isMsgFromKnownValidator(msg) && bftFinalState.isLocalNodeValidator();
     } else if (isMsgForFutureChainHeight(msgRoundIdentifier)) {
-      LOG.trace("Received errorMessage for future block height round={}", msgRoundIdentifier);
+      LOG.trace("Received message for future block height round={}", msgRoundIdentifier);
       futureMessageBuffer.addMessage(msgRoundIdentifier.getSequenceNumber(), rawMsg);
       // Notify the synchronizer the transmitting peer must have the parent block to the received
-      // errorMessage's target height.
+      // messages's target height.
       synchronizerUpdater.updatePeerChainState(
           msgRoundIdentifier.getSequenceNumber() - 1L, rawMsg.getConnection());
     } else {
       LOG.trace(
-          "BFT errorMessage discarded as it is from a previous block height messageType={} chainHeight={} eventHeight={}",
+          "BFT message discarded as it is from a previous block height messageType={} chainHeight={} eventHeight={}",
           msg.getMessageType(),
           getCurrentHeightManager().getChainHeight(),
           msgRoundIdentifier.getSequenceNumber());

@@ -34,8 +34,8 @@ import org.slf4j.LoggerFactory;
  * and messages for a future round should have been buffered).
  *
  * <p>If enough RoundChange messages all targeting a given round are received (and this node is the
- * proposer for said round) - a proposal errorMessage is sent, and a new round should be started by
- * the controlling class.
+ * proposer for said round) - a proposal message is sent, and a new round should be started by the
+ * controlling class.
  */
 public class RoundChangeManager {
 
@@ -60,7 +60,7 @@ public class RoundChangeManager {
     }
 
     /**
-     * Add errorMessage.
+     * Add message.
      *
      * @param msg the msg
      */
@@ -111,7 +111,7 @@ public class RoundChangeManager {
    * Instantiates a new Round change manager.
    *
    * @param quorum the quorum
-   * @param roundChangeMessageValidator the round change errorMessage validator
+   * @param roundChangeMessageValidator the round change message validator
    * @param localAddress this node's address
    */
   public RoundChangeManager(
@@ -127,7 +127,7 @@ public class RoundChangeManager {
    * Store the latest round for a node, and if chain is stalled log a summary of which round each
    * address is on
    *
-   * @param message the round-change errorMessage that has just been received
+   * @param message the round-change message that has just been received
    */
   public void storeAndLogRoundChangeSummary(final RoundChange message) {
     roundSummary.put(message.getAuthor(), message.getRoundIdentifier());
@@ -148,16 +148,16 @@ public class RoundChangeManager {
   }
 
   /**
-   * Adds the round errorMessage to this manager and return a certificate if it passes the threshold
+   * Adds the round message to this manager and return a certificate if it passes the threshold
    *
-   * @param msg The signed round change errorMessage to add
+   * @param msg The signed round change message to add
    * @return Empty if the round change threshold hasn't been hit, otherwise a round change
    *     certificate
    */
   public Optional<Collection<RoundChange>> appendRoundChangeMessage(final RoundChange msg) {
 
     if (!isMessageValid(msg)) {
-      LOG.info("RoundChange errorMessage was invalid.");
+      LOG.info("RoundChange message was invalid.");
       return Optional.empty();
     }
 
