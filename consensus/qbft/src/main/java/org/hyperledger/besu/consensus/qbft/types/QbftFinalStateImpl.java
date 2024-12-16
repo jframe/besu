@@ -18,6 +18,7 @@ import org.hyperledger.besu.consensus.common.bft.BftHelpers;
 import org.hyperledger.besu.consensus.common.bft.BlockTimer;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.RoundTimer;
+import org.hyperledger.besu.consensus.common.bft.blockcreation.ProposerSelector;
 import org.hyperledger.besu.consensus.common.bft.network.ValidatorMulticaster;
 import org.hyperledger.besu.consensus.common.validator.ValidatorProvider;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockCreatorFactory;
@@ -32,8 +33,9 @@ public class QbftFinalStateImpl implements QbftFinalState {
   private final ValidatorProvider validatorProvider;
   private final NodeKey nodeKey;
   private final Address localAddress;
-    private final ValidatorMulticaster validatorMulticaster;
-    private final RoundTimer roundTimer;
+  private final ProposerSelector proposerSelector;
+  private final ValidatorMulticaster validatorMulticaster;
+  private final RoundTimer roundTimer;
   private final BlockTimer blockTimer;
   private final QbftBlockCreatorFactory blockCreatorFactory;
   private final Clock clock;
@@ -44,6 +46,7 @@ public class QbftFinalStateImpl implements QbftFinalState {
    * @param validatorProvider the validator provider
    * @param nodeKey the node key
    * @param localAddress the local address
+   * @param proposerSelector the proposer selector
    * @param validatorMulticaster the validator multicaster
    * @param roundTimer the round timer
    * @param blockTimer the block timer
@@ -54,6 +57,7 @@ public class QbftFinalStateImpl implements QbftFinalState {
       final ValidatorProvider validatorProvider,
       final NodeKey nodeKey,
       final Address localAddress,
+      final ProposerSelector proposerSelector,
       final ValidatorMulticaster validatorMulticaster,
       final RoundTimer roundTimer,
       final BlockTimer blockTimer,
@@ -62,8 +66,9 @@ public class QbftFinalStateImpl implements QbftFinalState {
     this.validatorProvider = validatorProvider;
     this.nodeKey = nodeKey;
     this.localAddress = localAddress;
-      this.validatorMulticaster = validatorMulticaster;
-      this.roundTimer = roundTimer;
+    this.proposerSelector = proposerSelector;
+    this.validatorMulticaster = validatorMulticaster;
+    this.roundTimer = roundTimer;
     this.blockTimer = blockTimer;
     this.blockCreatorFactory = blockCreatorFactory;
     this.clock = clock;
@@ -150,10 +155,25 @@ public class QbftFinalStateImpl implements QbftFinalState {
     return blockTimer;
   }
 
+  /**
+   * Is local node proposer for round.
+   *
+   * @param roundIdentifier the round identifier
+   * @return the boolean
+   */
   @Override
   public boolean isLocalNodeProposerForRound(final ConsensusRoundIdentifier roundIdentifier) {
-    final boolean isValidator = getValidators().contains(localAddress);
-    return isValidator;
+    return getProposerForRound(roundIdentifier).equals(localAddress);
+  }
+
+  /**
+   * Gets proposer for round.
+   *
+   * @param roundIdentifier the round identifier
+   * @return the proposer for round
+   */
+  public Address getProposerForRound(final ConsensusRoundIdentifier roundIdentifier) {
+    return proposerSelector.selectProposerForRound(roundIdentifier);
   }
 
   /**

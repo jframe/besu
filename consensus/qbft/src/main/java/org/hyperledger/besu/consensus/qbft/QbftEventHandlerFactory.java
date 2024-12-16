@@ -112,6 +112,7 @@ public class QbftEventHandlerFactory {
             validatorProvider,
             nodeKey,
             Util.publicKeyToAddress(nodeKey.getPublicKey()),
+            proposerSelector,
             uniqueMessageMulticaster,
             new RoundTimer(
                 bftEventQueue,

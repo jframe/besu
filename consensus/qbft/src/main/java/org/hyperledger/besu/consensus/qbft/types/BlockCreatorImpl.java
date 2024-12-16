@@ -54,8 +54,7 @@ public class BlockCreatorImpl implements BlockCreator {
       final QbftBlock block,
       final int roundNumber,
       final Collection<SECPSignature> commitSeals) {
-    final BlockHeader initialBesuHeader =
-        BlockUtil.toBesuBlockHeader(block.getQbftBlockHeader());
+    final BlockHeader initialBesuHeader = BlockUtil.toBesuBlockHeader(block.getQbftBlockHeader());
     BftExtraData initialExtraData = bftExtraDataProvider.getExtraData(block.getQbftBlockHeader());
 
     final BftExtraData sealedExtraData =

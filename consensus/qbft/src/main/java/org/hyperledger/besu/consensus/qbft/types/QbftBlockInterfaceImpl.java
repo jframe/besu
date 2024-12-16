@@ -37,12 +37,12 @@ public class QbftBlockInterfaceImpl implements QbftBlockInterface {
   public QbftBlock replaceRoundInBlock(
       final QbftBlock proposalBlock, final int roundNumber, final HashMode hashMode) {
     final Block besuBlock = toBesuBlock(proposalBlock);
-    final BlockHeaderFunctions blockHeaderFunctions = getBlockHeaderFunctions(bftExtraDataCodec, hashMode);
+    final BlockHeaderFunctions blockHeaderFunctions =
+        getBlockHeaderFunctions(bftExtraDataCodec, hashMode);
     final Block updatedRoundBlock =
         bftBlockInterface.replaceRoundInBlock(besuBlock, roundNumber, blockHeaderFunctions);
     return new QbftBlockWrapper(
         new QbftBlockHeaderImpl(updatedRoundBlock.getHeader(), blockHeaderFunctions),
         updatedRoundBlock.getBody());
   }
-
 }
