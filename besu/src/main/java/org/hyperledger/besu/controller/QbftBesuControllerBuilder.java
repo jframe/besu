@@ -52,6 +52,7 @@ import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.api.jsonrpc.methods.JsonRpcMethods;
 import org.hyperledger.besu.ethereum.blockcreation.MiningCoordinator;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.chain.MinedBlockObserver;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.MiningConfiguration;
@@ -205,7 +206,8 @@ public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
             clock,
             qbftForksSchedule,
             blockCreatorFactory,
-            ethProtocolManager);
+            ethProtocolManager,
+            blockLogger(transactionPool, localAddress));
     final EventMultiplexer eventMultiplexer = new EventMultiplexer(bftEventHandler);
     final BftProcessor bftProcessor = new BftProcessor(bftEventQueue, eventMultiplexer);
 
@@ -364,5 +366,21 @@ public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
     }
 
     return new BftValidatorOverrides(result);
+  }
+
+  private static MinedBlockObserver blockLogger(
+      final TransactionPool transactionPool, final Address localAddress) {
+    return block ->
+        LOG.info(
+            String.format(
+                "%s %s #%,d / %d tx / %d pending / %,d (%01.1f%%) gas / (%s)",
+                block.getHeader().getCoinbase().equals(localAddress) ? "Produced" : "Imported",
+                block.getBody().getTransactions().size() == 0 ? "empty block" : "block",
+                block.getHeader().getNumber(),
+                block.getBody().getTransactions().size(),
+                transactionPool.count(),
+                block.getHeader().getGasUsed(),
+                (block.getHeader().getGasUsed() * 100.0) / block.getHeader().getGasLimit(),
+                block.getHash().toHexString()));
   }
 }

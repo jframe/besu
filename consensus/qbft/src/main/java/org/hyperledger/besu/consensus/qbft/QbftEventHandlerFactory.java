@@ -43,6 +43,7 @@ import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidatorFacto
 import org.hyperledger.besu.consensus.qbft.protocol.Istanbul100SubProtocol;
 import org.hyperledger.besu.consensus.qbft.types.BftEventHandlerAdaptor;
 import org.hyperledger.besu.consensus.qbft.types.BlockHashingImpl;
+import org.hyperledger.besu.consensus.qbft.types.BlockUtil;
 import org.hyperledger.besu.consensus.qbft.types.BlockchainImpl;
 import org.hyperledger.besu.consensus.qbft.types.QbftBlockCreatorFactoryImpl;
 import org.hyperledger.besu.consensus.qbft.types.QbftBlockEncoder;
@@ -76,7 +77,8 @@ public class QbftEventHandlerFactory {
       final Clock clock,
       final ForksSchedule<QbftConfigOptions> qbftForksSchedule,
       final QbftBlockCreatorFactory qbftBlockCreatorFactory,
-      final EthProtocolManager ethProtocolManager) {
+      final EthProtocolManager ethProtocolManager,
+      final org.hyperledger.besu.ethereum.chain.MinedBlockObserver blockLogger) {
     final QbftExtraDataCodec qbftExtraDataCodec = new QbftExtraDataCodec();
 
     final MessageValidatorFactory messageValidatorFactory =
@@ -123,9 +125,10 @@ public class QbftEventHandlerFactory {
             clock);
 
     final Subscribers<MinedBlockObserver> minedBlockObservers = Subscribers.create();
-    //    minedBlockObservers.subscribe(ethProtocolManager);
-    //    minedBlockObservers.subscribe(blockLogger(transactionPool, localAddress));
-    // TODO convert minedBlockObservers
+    minedBlockObservers.subscribe(
+        qbftBlock -> ethProtocolManager.blockMined(BlockUtil.toBesuBlock(qbftBlock)));
+    minedBlockObservers.subscribe(
+        qbftBlock -> blockLogger.blockMined(BlockUtil.toBesuBlock(qbftBlock)));
 
     BlockEncoderRegistry.getInstance().setEncoder(new QbftBlockEncoder(qbftExtraDataCodec));
 
