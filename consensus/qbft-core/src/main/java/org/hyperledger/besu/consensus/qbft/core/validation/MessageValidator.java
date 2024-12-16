@@ -15,8 +15,8 @@
 package org.hyperledger.besu.consensus.qbft.core.validation;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
-import org.hyperledger.besu.consensus.qbft.core.BftBlockInterface;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
+import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
@@ -51,15 +51,15 @@ public class MessageValidator {
     public SubsequentMessageValidator(
         final Collection<Address> validators,
         final ConsensusRoundIdentifier targetRound,
-        final Block proposalBlock,
-        final BftBlockInterface blockInterface) {
-      final Block commitBlock =
+        final QbftBlock proposalBlock,
+        final QbftBlockInterface blockInterface) {
+      final QbftBlock commitBlock =
           blockInterface.replaceRoundInBlock(
               proposalBlock, targetRound.getRoundNumber(), HashMode.COMMITTED_SEAL);
-      prepareValidator = new PrepareValidator(validators, targetRound, proposalBlock.getHash());
+      prepareValidator = new PrepareValidator(validators, targetRound, proposalBlock.getQbftBlockHeader().getHash());
       commitValidator =
           new CommitValidator(
-              validators, targetRound, proposalBlock.getHash(), commitBlock.getHash());
+              validators, targetRound, proposalBlock.getQbftBlockHeader().getHash(), commitBlock.getQbftBlockHeader().getHash());
     }
 
     /**
@@ -92,7 +92,7 @@ public class MessageValidator {
      * @param proposalBlock the proposal block
      * @return the subsequent errorMessage validator
      */
-    SubsequentMessageValidator create(Block proposalBlock);
+    SubsequentMessageValidator create(QbftBlock proposalBlock);
   }
 
   private final SubsequentMessageValidatorFactory subsequentMessageValidatorFactory;

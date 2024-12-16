@@ -14,14 +14,13 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.validation;
 
-import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
 import org.hyperledger.besu.consensus.common.bft.BftHelpers;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.blockcreation.ProposerSelector;
-import org.hyperledger.besu.consensus.qbft.core.BftBlockInterface;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolSchedule;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator.SubsequentMessageValidator;
 import org.hyperledger.besu.datatypes.Address;
 
@@ -31,27 +30,24 @@ import java.util.Collection;
 public class MessageValidatorFactory {
 
   private final ProposerSelector proposerSelector;
-  private final ProtocolSchedule protocolSchedule;
+  private final QbftProtocolSchedule protocolSchedule;
   private final ProtocolContext protocolContext;
-  private final BftExtraDataCodec bftExtraDataCodec;
 
-  /**
+    /**
    * Instantiates a new Message validator factory.
    *
    * @param proposerSelector the proposer selector
    * @param protocolSchedule the protocol schedule
    * @param protocolContext the protocol context
-   * @param bftExtraDataCodec the bft extra data codec
-   */
+     */
   public MessageValidatorFactory(
       final ProposerSelector proposerSelector,
-      final ProtocolSchedule protocolSchedule,
-      final ProtocolContext protocolContext,
-      final BftExtraDataCodec bftExtraDataCodec) {
+      final QbftProtocolSchedule protocolSchedule,
+      final ProtocolContext protocolContext) {
     this.proposerSelector = proposerSelector;
     this.protocolSchedule = protocolSchedule;
     this.protocolContext = protocolContext;
-    this.bftExtraDataCodec = bftExtraDataCodec;
+
   }
 
   /**
@@ -61,7 +57,7 @@ public class MessageValidatorFactory {
    * @return the list of validators
    */
   public static Collection<Address> getValidatorsAfterBlock(
-      final ProtocolContext protocolContext, final BlockHeader parentHeader) {
+      final ProtocolContext protocolContext, final QbftBlockHeader parentHeader) {
     return protocolContext.getValidatorProvider().getValidatorsAfterBlock(parentHeader);
   }
 
@@ -73,7 +69,7 @@ public class MessageValidatorFactory {
    * @return the list of validators
    */
   public static Collection<Address> getValidatorsForBlock(
-      final ProtocolContext protocolContext, final BlockHeader parentHeader) {
+      final ProtocolContext protocolContext, final QbftBlockHeader parentHeader) {
     return protocolContext.getValidatorProvider().getValidatorsForBlock(parentHeader);
   }
 
@@ -85,7 +81,7 @@ public class MessageValidatorFactory {
    * @return the round change errorMessage validator
    */
   public RoundChangeMessageValidator createRoundChangeMessageValidator(
-      final long chainHeight, final BlockHeader parentHeader) {
+      final long chainHeight, final QbftBlockHeader parentHeader) {
 
     final Collection<Address> validatorsForHeight =
         getValidatorsAfterBlock(protocolContext, parentHeader);
@@ -110,7 +106,7 @@ public class MessageValidatorFactory {
    * @return the errorMessage validator
    */
   public MessageValidator createMessageValidator(
-      final ConsensusRoundIdentifier roundIdentifier, final BlockHeader parentHeader) {
+      final ConsensusRoundIdentifier roundIdentifier, final QbftBlockHeader parentHeader) {
     final Collection<Address> validatorsForHeight =
         getValidatorsAfterBlock(protocolContext, parentHeader);
 
@@ -121,10 +117,10 @@ public class MessageValidatorFactory {
             BftHelpers.calculateRequiredValidatorQuorum(validatorsForHeight.size()),
             validatorsForHeight,
             roundIdentifier,
-            proposerSelector.selectProposerForRound(roundIdentifier),
-            bftExtraDataCodec);
+            proposerSelector.selectProposerForRound(roundIdentifier)
+        );
 
-    final BftBlockInterface blockInterface = protocolContext.getBlockInterface();
+    final QbftBlockInterface blockInterface = protocolContext.getBlockInterface();
     return new MessageValidator(
         block ->
             new SubsequentMessageValidator(
@@ -140,7 +136,7 @@ public class MessageValidatorFactory {
    * @return the future round proposal errorMessage validator
    */
   public FutureRoundProposalMessageValidator createFutureRoundProposalMessageValidator(
-      final long chainHeight, final BlockHeader parentHeader) {
+      final long chainHeight, final QbftBlockHeader parentHeader) {
     return new FutureRoundProposalMessageValidator(this, chainHeight, parentHeader);
   }
 }

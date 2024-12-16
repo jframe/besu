@@ -14,8 +14,8 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.events;
 
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 
 public interface MinedBlockObserver {
-  void blockMined(Block block);
+  void blockMined(QbftBlock block);
 }

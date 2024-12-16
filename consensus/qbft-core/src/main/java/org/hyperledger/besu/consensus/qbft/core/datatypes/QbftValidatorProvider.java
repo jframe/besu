@@ -23,7 +23,7 @@ import java.util.Collection;
 import java.util.Optional;
 
 /** The interface Validator provider. */
-public interface ValidatorProvider {
+public interface QbftValidatorProvider {
 
   /**
    * Gets validators at head.
@@ -38,7 +38,7 @@ public interface ValidatorProvider {
    * @param header the header
    * @return the validators after block
    */
-  Collection<Address> getValidatorsAfterBlock(BlockHeader header);
+  Collection<Address> getValidatorsAfterBlock(QbftBlockHeader header);
 
   /**
    * Gets validators for block.
@@ -46,7 +46,7 @@ public interface ValidatorProvider {
    * @param header the header
    * @return the validators for block
    */
-  Collection<Address> getValidatorsForBlock(BlockHeader header);
+  Collection<Address> getValidatorsForBlock(QbftBlockHeader header);
 
   /**
    * Gets vote provider at head.
@@ -66,7 +66,7 @@ public interface ValidatorProvider {
    * know it's using a ForkingValidatorProvider. ForkingValidatorProvider's voteProvider can be
    * different per block. Other ValidatorProviders yield the same voteProvider at every block.
    */
-  default Optional<VoteProvider> getVoteProviderAfterBlock(final BlockHeader header) {
+  default Optional<VoteProvider> getVoteProviderAfterBlock(final QbftBlockHeader header) {
     return getVoteProviderAtHead();
   }
 

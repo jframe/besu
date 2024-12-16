@@ -20,7 +20,7 @@ import java.util.Collection;
 
 public interface BlockCreator {
 
-  Block createBlock(long headerTimeStampSeconds, BlockHeader parentHeader);
+  QbftBlock createBlock(long headerTimeStampSeconds, QbftBlockHeader parentHeader);
 
   /**
    * Create sealed block.
@@ -31,9 +31,9 @@ public interface BlockCreator {
    * @param commitSeals the commit seals
    * @return the block
    */
-  Block createSealedBlock(
+  QbftBlock createSealedBlock(
       final ExtraDataProvider bftExtraDataCodec,
-      final Block block,
+      final QbftBlock block,
       final int roundNumber,
       final Collection<SECPSignature> commitSeals);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright ConsenSys AG.
+ * Copyright contributors to Besu.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -12,13 +12,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package org.hyperledger.besu.consensus.qbft.core;
+package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
+public interface QbftBlock {
+  boolean isEmpty();
 
-/** The Bft block interface. */
-public interface BftBlockInterface {
-
-  Block replaceRoundInBlock(Block proposalBlock, int roundNumber, HashMode hashMode);
+  QbftBlockHeader getQbftBlockHeader();
 }

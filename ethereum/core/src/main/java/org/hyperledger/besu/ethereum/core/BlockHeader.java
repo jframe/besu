@@ -43,6 +43,7 @@ public class BlockHeader extends SealableBlockHeader
   private final Supplier<Hash> hash;
 
   private final Supplier<ParsedExtraData> parsedExtraData;
+  private final BlockHeaderFunctions blockHeaderFunctions;
 
   public BlockHeader(
       final Hash parentHash,
@@ -93,6 +94,7 @@ public class BlockHeader extends SealableBlockHeader
     this.nonce = nonce;
     this.hash = Suppliers.memoize(() -> blockHeaderFunctions.hash(this));
     this.parsedExtraData = Suppliers.memoize(() -> blockHeaderFunctions.parseExtraData(this));
+    this.blockHeaderFunctions = blockHeaderFunctions;
   }
 
   public static boolean hasEmptyBlock(final BlockHeader blockHeader) {
@@ -251,6 +253,14 @@ public class BlockHeader extends SealableBlockHeader
         requestsHash,
         targetBlobCount,
         blockHeaderFunctions);
+  }
+
+  /**
+   * The block header function used, useful for block headers that extend this class.
+   * @return the block header functions
+   */
+  public BlockHeaderFunctions getBlockHeaderFunctions() {
+    return blockHeaderFunctions;
   }
 
   @Override

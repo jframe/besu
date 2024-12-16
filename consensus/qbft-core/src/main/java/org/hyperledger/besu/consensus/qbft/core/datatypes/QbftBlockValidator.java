@@ -14,6 +14,11 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
-public interface ProtocolSchedule {
-  ProtocolContext getByBlockHeader(BlockHeader header);
+import java.util.Optional;
+
+public interface QbftBlockValidator {
+
+  ValidationResult validateAndProcessBlock(ProtocolContext protocolContext, QbftBlock block);
+
+  record ValidationResult(boolean success, Optional<String> errorMessage) {}
 }

@@ -16,7 +16,7 @@ package org.hyperledger.besu.consensus.qbft.core.events;
 
 import org.hyperledger.besu.consensus.common.bft.events.BftEvent;
 import org.hyperledger.besu.consensus.common.bft.events.BftEvents;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
 
 import java.util.Objects;
 
@@ -24,14 +24,14 @@ import com.google.common.base.MoreObjects;
 
 /** Event indicating that new chain head has been received */
 public final class NewChainHead implements BftEvent {
-  private final BlockHeader newChainHeadHeader;
+  private final QbftBlockHeader newChainHeadHeader;
 
   /**
    * Constructor for a NewChainHead event
    *
    * @param newChainHeadHeader The header of the current blockchain head
    */
-  public NewChainHead(final BlockHeader newChainHeadHeader) {
+  public NewChainHead(final QbftBlockHeader newChainHeadHeader) {
     this.newChainHeadHeader = newChainHeadHeader;
   }
 
@@ -69,7 +69,7 @@ public final class NewChainHead implements BftEvent {
    *
    * @return the new chain head header
    */
-  public BlockHeader getNewChainHeadHeader() {
+  public QbftBlockHeader getNewChainHeadHeader() {
     return newChainHeadHeader;
   }
 }

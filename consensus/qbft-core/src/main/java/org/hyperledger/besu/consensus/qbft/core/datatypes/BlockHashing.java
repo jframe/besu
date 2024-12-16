@@ -29,5 +29,5 @@ public interface BlockHashing {
    *     calculated
    * @return the hash of the header including the validator and proposer seal in the extra data
    */
-  Hash calculateDataHashForCommittedSeal(BlockHeader header, BftExtraData extraData);
+  Hash calculateDataHashForCommittedSeal(QbftBlockHeader header, BftExtraData extraData);
 }

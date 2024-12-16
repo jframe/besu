@@ -18,9 +18,9 @@ import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.events.RoundExpiry;
 import org.hyperledger.besu.consensus.common.bft.messagewrappers.BftMessage;
 import org.hyperledger.besu.consensus.common.bft.payload.Payload;
-import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
@@ -57,14 +57,14 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
 
   private final QbftRoundFactory roundFactory;
   private final RoundChangeManager roundChangeManager;
-  private final BlockHeader parentHeader;
+  private final QbftBlockHeader parentHeader;
   private final QbftMessageTransmitter transmitter;
   private final MessageFactory messageFactory;
   private final Map<Integer, RoundState> futureRoundStateBuffer = Maps.newHashMap();
   private final FutureRoundProposalMessageValidator futureRoundProposalMessageValidator;
   private final Clock clock;
   private final Function<ConsensusRoundIdentifier, RoundState> roundStateCreator;
-  private final BftFinalState finalState;
+  private final QbftFinalState finalState;
 
   private Optional<PreparedCertificate> latestPreparedCertificate = Optional.empty();
   private Optional<QbftRound> currentRound = Optional.empty();
@@ -81,8 +81,8 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
    * @param messageFactory the errorMessage factory
    */
   public QbftBlockHeightManager(
-      final BlockHeader parentHeader,
-      final BftFinalState finalState,
+      final QbftBlockHeader parentHeader,
+      final QbftFinalState finalState,
       final RoundChangeManager roundChangeManager,
       final QbftRoundFactory qbftRoundFactory,
       final Clock clock,
@@ -155,7 +155,7 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
     }
 
     final long headerTimeStampSeconds = Math.round(clock.millis() / 1000D);
-    final Block block = qbftRound.createBlock(headerTimeStampSeconds);
+    final QbftBlock block = qbftRound.createBlock(headerTimeStampSeconds);
     final boolean blockHasTransactions = !block.isEmpty();
     if (blockHasTransactions) {
       LOG.trace(
@@ -379,7 +379,7 @@ public class QbftBlockHeightManager implements BaseQbftBlockHeightManager {
   }
 
   @Override
-  public BlockHeader getParentBlockHeader() {
+  public QbftBlockHeader getParentBlockHeader() {
     return parentHeader;
   }
 

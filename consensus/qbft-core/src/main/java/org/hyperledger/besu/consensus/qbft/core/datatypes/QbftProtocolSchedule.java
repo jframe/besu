@@ -14,9 +14,6 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
-public interface BlockValidator {
-
-  ValidationResult validateAndProcessBlock(ProtocolContext protocolContext, Block block);
-
-  record ValidationResult(boolean success, String errorMessage) {}
+public interface QbftProtocolSchedule {
+  QbftProtocolSpec getByBlockHeader(QbftBlockHeader header);
 }

@@ -33,7 +33,7 @@ public class BlockEncoderRegistry {
     return blockEncoder;
   }
 
-  public void setEncoder(BlockEncoder blockEncoder) {
+  public void setEncoder(final BlockEncoder blockEncoder) {
     this.blockEncoder = blockEncoder;
   }
 }

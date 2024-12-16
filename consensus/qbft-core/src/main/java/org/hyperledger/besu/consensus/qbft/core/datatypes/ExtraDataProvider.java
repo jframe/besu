@@ -17,5 +17,5 @@ package org.hyperledger.besu.consensus.qbft.core.datatypes;
 import org.hyperledger.besu.consensus.common.bft.BftExtraData;
 
 public interface ExtraDataProvider {
-  BftExtraData getExtraData(BlockHeader header);
+  BftExtraData getExtraData(QbftBlockHeader header);
 }

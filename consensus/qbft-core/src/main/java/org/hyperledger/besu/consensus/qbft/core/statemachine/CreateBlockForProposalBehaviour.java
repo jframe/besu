@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.statemachine;
 
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 
 /** The functional interface Create block for proposal behaviour. */
 @FunctionalInterface
@@ -26,5 +26,5 @@ public interface CreateBlockForProposalBehaviour {
    * @param headerTimeStampSeconds the header time stamp seconds
    * @return the block
    */
-  Block create(long headerTimeStampSeconds);
+  QbftBlock create(long headerTimeStampSeconds);
 }

@@ -15,7 +15,7 @@
 package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
 public interface Blockchain {
-  BlockHeader getChainHeadHeader();
+  QbftBlockHeader getChainHeadHeader();
 
   long getChainHeadBlockNumber();
 }

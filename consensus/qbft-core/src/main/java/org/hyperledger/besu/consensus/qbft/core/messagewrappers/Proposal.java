@@ -16,7 +16,7 @@ package org.hyperledger.besu.consensus.qbft.core.messagewrappers;
 
 import org.hyperledger.besu.consensus.common.bft.messagewrappers.BftMessage;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.ProposalPayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
@@ -73,7 +73,7 @@ public class Proposal extends BftMessage<ProposalPayload> {
    *
    * @return the block
    */
-  public Block getBlock() {
+  public QbftBlock getBlock() {
     return getPayload().getProposedBlock();
   }
 

@@ -15,5 +15,5 @@
 package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
 public interface ValidatorModeTransitionLogger {
-  void logTransitionChange(BlockHeader parentHeader);
+  void logTransitionChange(QbftBlockHeader parentHeader);
 }

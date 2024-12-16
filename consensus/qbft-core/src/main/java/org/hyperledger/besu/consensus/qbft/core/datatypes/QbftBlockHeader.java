@@ -14,10 +14,11 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
-import org.hyperledger.besu.crypto.Hash;
-import org.hyperledger.besu.datatypes.Address;
 
-public interface BlockHeader {
+import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Hash;
+
+public interface QbftBlockHeader {
 
   long getNumber();
 

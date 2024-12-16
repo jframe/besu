@@ -14,14 +14,14 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
-import org.hyperledger.besu.consensus.qbft.core.BftBlockInterface;
+import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
 
 public interface ProtocolContext {
-  ValidatorProvider getValidatorProvider();
+  QbftValidatorProvider getValidatorProvider();
 
-  BftBlockInterface getBlockInterface();
+  QbftBlockInterface getBlockInterface();
 
-  BlockValidator getBlockValidator();
+  QbftBlockValidator getBlockValidator();
 
-  BlockImporter getBlockImporter();
+  QbftBlockImporter getBlockImporter();
 }

@@ -24,10 +24,10 @@ import org.hyperledger.besu.consensus.common.bft.events.BlockTimerExpiry;
 import org.hyperledger.besu.consensus.common.bft.events.RoundExpiry;
 import org.hyperledger.besu.consensus.common.bft.messagewrappers.BftMessage;
 import org.hyperledger.besu.consensus.common.bft.payload.Authored;
-import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
 import org.hyperledger.besu.consensus.common.bft.statemachine.FutureMessageBuffer;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.Blockchain;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
 import org.hyperledger.besu.consensus.qbft.core.events.BftEventHandler;
 import org.hyperledger.besu.consensus.qbft.core.events.NewChainHead;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.CommitMessageData;
@@ -49,7 +49,7 @@ public class QbftController implements BftEventHandler {
 
   private static final Logger LOG = LoggerFactory.getLogger(QbftController.class);
   private final Blockchain blockchain;
-  private final BftFinalState bftFinalState;
+  private final QbftFinalState bftFinalState;
   private final FutureMessageBuffer futureMessageBuffer;
   private final Gossiper gossiper;
   private final MessageTracker duplicateMessageTracker;
@@ -73,7 +73,7 @@ public class QbftController implements BftEventHandler {
    */
   public QbftController(
       final Blockchain blockchain,
-      final BftFinalState bftFinalState,
+      final QbftFinalState bftFinalState,
       final QbftBlockHeightManagerFactory qbftBlockHeightManagerFactory,
       final Gossiper gossiper,
       final MessageTracker duplicateMessageTracker,
@@ -131,11 +131,11 @@ public class QbftController implements BftEventHandler {
     }
   }
 
-  protected void createNewHeightManager(final BlockHeader parentHeader) {
+  protected void createNewHeightManager(final QbftBlockHeader parentHeader) {
     currentHeightManager = qbftBlockHeightManagerFactory.create(parentHeader);
   }
 
-  protected BaseBlockHeightManager getCurrentHeightManager() {
+  protected BaseQbftBlockHeightManager getCurrentHeightManager() {
     return currentHeightManager;
   }
 
@@ -188,8 +188,8 @@ public class QbftController implements BftEventHandler {
 
   @Override
   public void handleNewBlockEvent(final NewChainHead newChainHead) {
-    final BlockHeader newBlockHeader = newChainHead.getNewChainHeadHeader();
-    final BlockHeader currentMiningParent = getCurrentHeightManager().getParentBlockHeader();
+    final QbftBlockHeader newBlockHeader = newChainHead.getNewChainHeadHeader();
+    final QbftBlockHeader currentMiningParent = getCurrentHeightManager().getParentBlockHeader();
     LOG.debug(
         "New chain head detected (block number={})," + " currently mining on top of {}.",
         newBlockHeader.getNumber(),
@@ -251,7 +251,7 @@ public class QbftController implements BftEventHandler {
     }
   }
 
-  private void startNewHeightManager(final BlockHeader parentHeader) {
+  private void startNewHeightManager(final QbftBlockHeader parentHeader) {
     createNewHeightManager(parentHeader);
     final long newChainHeight = getCurrentHeightManager().getChainHeight();
     futureMessageBuffer.retrieveMessagesForHeight(newChainHeight).forEach(this::handleMessage);

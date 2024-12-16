@@ -19,10 +19,10 @@ import static org.hyperledger.besu.consensus.common.bft.validation.ValidationHel
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockValidator;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockValidator;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolSchedule;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.RoundChange;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
@@ -34,7 +34,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** The Round change errorMessage validator. */
+/** The Round change message validator. */
 public class RoundChangeMessageValidator {
 
   private static final String ERROR_PREFIX = "Invalid RoundChange Message";
@@ -46,7 +46,7 @@ public class RoundChangeMessageValidator {
   private final long chainHeight;
   private final Collection<Address> validators;
   private final ProtocolContext protocolContext;
-  private final ProtocolSchedule protocolSchedule;
+  private final QbftProtocolSchedule protocolSchedule;
 
   /**
    * Instantiates a new Round change errorMessage validator.
@@ -64,7 +64,7 @@ public class RoundChangeMessageValidator {
       final long chainHeight,
       final Collection<Address> validators,
       final ProtocolContext protocolContext,
-      final ProtocolSchedule protocolSchedule) {
+      final QbftProtocolSchedule protocolSchedule) {
     this.roundChangePayloadValidator = roundChangePayloadValidator;
     this.quorumMessageCount = quorumMessageCount;
     this.chainHeight = chainHeight;
@@ -93,10 +93,10 @@ public class RoundChangeMessageValidator {
     return msg.getPreparedRoundMetadata().isEmpty();
   }
 
-  private boolean validateBlock(final Block block) {
+  private boolean validateBlock(final QbftBlock block) {
 
-    final BlockValidator blockValidator =
-        protocolSchedule.getByBlockHeader(block.getHeader()).getBlockValidator();
+    final QbftBlockValidator blockValidator =
+        protocolSchedule.getByBlockHeader(block.getQbftBlockHeader()).getBlockValidator();
 
     final var validationResult = blockValidator.validateAndProcessBlock(protocolContext, block);
 
@@ -112,7 +112,7 @@ public class RoundChangeMessageValidator {
   }
 
   private boolean validateWithBlock(final RoundChange msg) {
-    final Block block = msg.getProposedBlock().get();
+    final QbftBlock block = msg.getProposedBlock().get();
 
     if (!validateBlock(block)) {
       return false;
@@ -125,7 +125,7 @@ public class RoundChangeMessageValidator {
 
     final PreparedRoundMetadata metadata = msg.getPreparedRoundMetadata().get();
 
-    if (!metadata.getPreparedBlockHash().equals(block.getHash())) {
+    if (!metadata.getPreparedBlockHash().equals(block.getQbftBlockHeader().getHash())) {
       LOG.info("{}: Prepared metadata hash does not match supplied block", ERROR_PREFIX);
       return false;
     }

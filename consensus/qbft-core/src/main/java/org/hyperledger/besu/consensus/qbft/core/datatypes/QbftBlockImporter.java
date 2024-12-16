@@ -14,12 +14,8 @@
  */
 package org.hyperledger.besu.consensus.qbft.core.datatypes;
 
-import org.hyperledger.besu.datatypes.Hash;
+public interface QbftBlockImporter {
 
-public interface Block {
-  boolean isEmpty();
+  boolean importBlock(QbftBlock block);
 
-  Hash getHash();
-
-  BlockHeader getHeader();
 }

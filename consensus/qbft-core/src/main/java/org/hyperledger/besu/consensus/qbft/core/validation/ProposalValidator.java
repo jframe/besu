@@ -18,15 +18,14 @@ import static org.hyperledger.besu.consensus.common.bft.validation.ValidationHel
 import static org.hyperledger.besu.consensus.common.bft.validation.ValidationHelpers.hasSufficientEntries;
 import static org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode.COMMITTED_SEAL;
 
-import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.Payload;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
-import org.hyperledger.besu.consensus.qbft.core.BftBlockInterface;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockValidator;
+import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockValidator;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolSchedule;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
@@ -50,14 +49,13 @@ public class ProposalValidator {
   private static final String ERROR_PREFIX = "Invalid Proposal Payload";
 
   private final ProtocolContext protocolContext;
-  private final ProtocolSchedule protocolSchedule;
+  private final QbftProtocolSchedule protocolSchedule;
   private final int quorumMessageCount;
   private final Collection<Address> validators;
   private final ConsensusRoundIdentifier roundIdentifier;
   private final Address expectedProposer;
-  private final BftExtraDataCodec bftExtraDataCodec;
 
-  /**
+    /**
    * Instantiates a new Proposal validator.
    *
    * @param protocolContext the protocol context
@@ -66,23 +64,20 @@ public class ProposalValidator {
    * @param validators the validators
    * @param roundIdentifier the round identifier
    * @param expectedProposer the expected proposer
-   * @param bftExtraDataCodec the bft extra data codec
-   */
+     */
   public ProposalValidator(
       final ProtocolContext protocolContext,
-      final ProtocolSchedule protocolSchedule,
+      final QbftProtocolSchedule protocolSchedule,
       final int quorumMessageCount,
       final Collection<Address> validators,
       final ConsensusRoundIdentifier roundIdentifier,
-      final Address expectedProposer,
-      final BftExtraDataCodec bftExtraDataCodec) {
+      final Address expectedProposer) {
     this.protocolContext = protocolContext;
     this.protocolSchedule = protocolSchedule;
     this.quorumMessageCount = quorumMessageCount;
     this.validators = validators;
     this.roundIdentifier = roundIdentifier;
     this.expectedProposer = expectedProposer;
-    this.bftExtraDataCodec = bftExtraDataCodec;
   }
 
   /**
@@ -92,8 +87,8 @@ public class ProposalValidator {
    * @return the boolean
    */
   public boolean validate(final Proposal msg) {
-    final BlockValidator blockValidator =
-        protocolSchedule.getByBlockHeader(msg.getBlock().getHeader()).getBlockValidator();
+    final QbftBlockValidator blockValidator =
+        protocolSchedule.getByBlockHeader(msg.getBlock().getQbftBlockHeader()).getBlockValidator();
 
     final ProposalPayloadValidator payloadValidator =
         new ProposalPayloadValidator(
@@ -139,7 +134,7 @@ public class ProposalValidator {
         LOG.debug(
             "Prepared Metadata blockhash : {}, proposal blockhash: {}, prepared round in errorMessage: {}, proposal round in errorMessage: {}",
             metadata.getPreparedBlockHash(),
-            proposal.getBlock().getHash(),
+            proposal.getBlock().getQbftBlockHeader().getHash(),
             metadata.getPreparedRound(),
             proposal.getRoundIdentifier().getRoundNumber());
 
@@ -149,12 +144,12 @@ public class ProposalValidator {
         // to create a block with the old round in it, then re-calc expected hash
         // Need to check that if we substitute the LatestPrepareCert round number into the supplied
         // block that we get the SAME hash as PreparedCert.
-        final BftBlockInterface bftBlockInterface = protocolContext.getBlockInterface();
-        final Block currentBlockWithOldRound =
+        final QbftBlockInterface bftBlockInterface = protocolContext.getBlockInterface();
+        final QbftBlock currentBlockWithOldRound =
             bftBlockInterface.replaceRoundInBlock(
                 proposal.getBlock(), metadata.getPreparedRound(), COMMITTED_SEAL);
 
-        final Hash expectedPriorBlockHash = currentBlockWithOldRound.getHash();
+        final Hash expectedPriorBlockHash = currentBlockWithOldRound.getQbftBlockHeader().getHash();
 
         if (!metadata.getPreparedBlockHash().equals(expectedPriorBlockHash)) {
           LOG.info(
@@ -306,7 +301,7 @@ public class ProposalValidator {
   }
 
   private boolean validateBlockCoinbaseMatchesMsgAuthor(final Proposal msg) {
-    if (!msg.getBlock().getHeader().getCoinbase().equals(msg.getAuthor())) {
+    if (!msg.getBlock().getQbftBlockHeader().getCoinbase().equals(msg.getAuthor())) {
       LOG.info("{}: block coinbase does not match the proposer's address", ERROR_PREFIX);
       return false;
     }

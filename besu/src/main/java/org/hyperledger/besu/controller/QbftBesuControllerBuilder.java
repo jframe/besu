@@ -14,8 +14,7 @@
  */
 package org.hyperledger.besu.controller;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
+import com.google.common.base.Suppliers;
 import org.hyperledger.besu.config.BftConfigOptions;
 import org.hyperledger.besu.config.BftFork;
 import org.hyperledger.besu.config.QbftConfigOptions;
@@ -30,43 +29,33 @@ import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
 import org.hyperledger.besu.consensus.common.bft.BftProcessor;
 import org.hyperledger.besu.consensus.common.bft.BftProtocolSchedule;
 import org.hyperledger.besu.consensus.common.bft.BlockTimer;
-import org.hyperledger.besu.consensus.common.bft.EthSynchronizerUpdater;
 import org.hyperledger.besu.consensus.common.bft.EventMultiplexer;
-import org.hyperledger.besu.consensus.common.bft.MessageTracker;
 import org.hyperledger.besu.consensus.common.bft.RoundTimer;
 import org.hyperledger.besu.consensus.common.bft.UniqueMessageMulticaster;
-import org.hyperledger.besu.consensus.common.bft.blockcreation.BftBlockCreatorFactory;
 import org.hyperledger.besu.consensus.common.bft.blockcreation.BftMiningCoordinator;
 import org.hyperledger.besu.consensus.common.bft.blockcreation.ProposerSelector;
 import org.hyperledger.besu.consensus.common.bft.network.ValidatorPeers;
 import org.hyperledger.besu.consensus.common.bft.protocol.BftProtocolManager;
 import org.hyperledger.besu.consensus.common.bft.statemachine.BftEventHandler;
 import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
-import org.hyperledger.besu.consensus.common.bft.statemachine.FutureMessageBuffer;
 import org.hyperledger.besu.consensus.common.validator.ValidatorProvider;
 import org.hyperledger.besu.consensus.common.validator.blockbased.BlockValidatorProvider;
+import org.hyperledger.besu.consensus.qbft.QbftEventHandlerFactory;
 import org.hyperledger.besu.consensus.qbft.QbftExtraDataCodec;
 import org.hyperledger.besu.consensus.qbft.QbftForksSchedulesFactory;
 import org.hyperledger.besu.consensus.qbft.QbftGossip;
 import org.hyperledger.besu.consensus.qbft.QbftProtocolScheduleBuilder;
 import org.hyperledger.besu.consensus.qbft.blockcreation.QbftBlockCreatorFactory;
 import org.hyperledger.besu.consensus.qbft.jsonrpc.QbftJsonRpcMethods;
-import org.hyperledger.besu.consensus.qbft.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.protocol.Istanbul100SubProtocol;
-import org.hyperledger.besu.consensus.qbft.statemachine.QbftBlockHeightManagerFactory;
-import org.hyperledger.besu.consensus.qbft.statemachine.QbftController;
-import org.hyperledger.besu.consensus.qbft.statemachine.QbftRoundFactory;
-import org.hyperledger.besu.consensus.qbft.validation.MessageValidatorFactory;
 import org.hyperledger.besu.consensus.qbft.validator.ForkingValidatorProvider;
 import org.hyperledger.besu.consensus.qbft.validator.TransactionValidatorProvider;
 import org.hyperledger.besu.consensus.qbft.validator.ValidatorContractController;
-import org.hyperledger.besu.consensus.qbft.validator.ValidatorModeTransitionLogger;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.api.jsonrpc.methods.JsonRpcMethods;
 import org.hyperledger.besu.ethereum.blockcreation.MiningCoordinator;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
-import org.hyperledger.besu.ethereum.chain.MinedBlockObserver;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.MiningConfiguration;
@@ -82,7 +71,8 @@ import org.hyperledger.besu.ethereum.p2p.config.SubProtocolConfiguration;
 import org.hyperledger.besu.ethereum.transaction.TransactionSimulator;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
 import org.hyperledger.besu.plugin.services.BesuEvents;
-import org.hyperledger.besu.util.Subscribers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -92,9 +82,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import com.google.common.base.Suppliers;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 /** The Qbft Besu controller builder. */
 public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
@@ -187,7 +175,7 @@ public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
 
     final Address localAddress = Util.publicKeyToAddress(nodeKey.getPublicKey());
     final BftProtocolSchedule bftProtocolSchedule = (BftProtocolSchedule) protocolSchedule;
-    final BftBlockCreatorFactory<?> blockCreatorFactory =
+    final QbftBlockCreatorFactory blockCreatorFactory =
         new QbftBlockCreatorFactory(
             transactionPool,
             protocolContext,
@@ -208,74 +196,16 @@ public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
     // "only send once" filter applied by the UniqueMessageMulticaster.
     peers = new ValidatorPeers(validatorProvider, Istanbul100SubProtocol.NAME);
 
-    final UniqueMessageMulticaster uniqueMessageMulticaster =
-        new UniqueMessageMulticaster(peers, qbftConfig.getGossipedHistoryLimit());
 
-    final QbftGossip gossiper = new QbftGossip(uniqueMessageMulticaster, bftExtraDataCodec().get());
-
-    final BftFinalState finalState =
-        new BftFinalState(
-            validatorProvider,
-            nodeKey,
-            Util.publicKeyToAddress(nodeKey.getPublicKey()),
-            proposerSelector,
-            uniqueMessageMulticaster,
-            new RoundTimer(
-                bftEventQueue,
-                Duration.ofSeconds(qbftConfig.getRequestTimeoutSeconds()),
-                bftExecutors),
-            new BlockTimer(bftEventQueue, qbftForksSchedule, bftExecutors, clock),
-            blockCreatorFactory,
-            clock);
-
-    final MessageValidatorFactory messageValidatorFactory =
-        new MessageValidatorFactory(
-            proposerSelector, bftProtocolSchedule, protocolContext, bftExtraDataCodec().get());
-
-    final Subscribers<MinedBlockObserver> minedBlockObservers = Subscribers.create();
-    minedBlockObservers.subscribe(ethProtocolManager);
-    minedBlockObservers.subscribe(blockLogger(transactionPool, localAddress));
-
-    final FutureMessageBuffer futureMessageBuffer =
-        new FutureMessageBuffer(
-            qbftConfig.getFutureMessagesMaxDistance(),
-            qbftConfig.getFutureMessagesLimit(),
-            blockchain.getChainHeadBlockNumber());
-    final MessageTracker duplicateMessageTracker =
-        new MessageTracker(qbftConfig.getDuplicateMessageLimit());
-
-    final MessageFactory messageFactory = new MessageFactory(nodeKey);
-
-    final BftEventHandler qbftController =
-        new QbftController(
-            blockchain,
-            finalState,
-            new QbftBlockHeightManagerFactory(
-                finalState,
-                new QbftRoundFactory(
-                    finalState,
-                    protocolContext,
-                    bftProtocolSchedule,
-                    minedBlockObservers,
-                    messageValidatorFactory,
-                    messageFactory,
-                    bftExtraDataCodec().get()),
-                messageValidatorFactory,
-                messageFactory,
-                new ValidatorModeTransitionLogger(qbftForksSchedule)),
-            gossiper,
-            duplicateMessageTracker,
-            futureMessageBuffer,
-            new EthSynchronizerUpdater(ethProtocolManager.ethContext().getEthPeers()),
-            bftExtraDataCodec().get());
-
-    final EventMultiplexer eventMultiplexer = new EventMultiplexer(qbftController);
+    final QbftEventHandlerFactory qbftEventHandlerFactory = new QbftEventHandlerFactory();
+    final BftEventHandler bftEventHandler = qbftEventHandlerFactory.create(blockchain, protocolContext, bftProtocolSchedule, proposerSelector, qbftConfig, nodeKey, bftEventQueue, bftExecutors, clock, qbftForksSchedule, blockCreatorFactory, ethProtocolManager);
+    final EventMultiplexer eventMultiplexer = new EventMultiplexer(bftEventHandler);
     final BftProcessor bftProcessor = new BftProcessor(bftEventQueue, eventMultiplexer);
 
     final MiningCoordinator miningCoordinator =
         new BftMiningCoordinator(
             bftExecutors,
-            qbftController,
+            bftEventHandler,
             bftProcessor,
             blockCreatorFactory,
             blockchain,
@@ -429,19 +359,4 @@ public class QbftBesuControllerBuilder extends BftBesuControllerBuilder {
     return new BftValidatorOverrides(result);
   }
 
-  private static MinedBlockObserver blockLogger(
-      final TransactionPool transactionPool, final Address localAddress) {
-    return block ->
-        LOG.info(
-            String.format(
-                "%s %s #%,d / %d tx / %d pending / %,d (%01.1f%%) gas / (%s)",
-                block.getHeader().getCoinbase().equals(localAddress) ? "Produced" : "Imported",
-                block.getBody().getTransactions().size() == 0 ? "empty block" : "block",
-                block.getHeader().getNumber(),
-                block.getBody().getTransactions().size(),
-                transactionPool.count(),
-                block.getHeader().getGasUsed(),
-                (block.getHeader().getGasUsed() * 100.0) / block.getHeader().getGasLimit(),
-                block.getHash().toHexString()));
-  }
 }

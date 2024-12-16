@@ -18,8 +18,8 @@ import static com.google.common.base.Preconditions.checkState;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.Block;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockValidator;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockValidator;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.payload.ProposalPayload;
 import org.hyperledger.besu.datatypes.Address;
@@ -36,7 +36,7 @@ public class ProposalPayloadValidator {
   private static final Logger LOG = LoggerFactory.getLogger(ProposalPayloadValidator.class);
   private final Address expectedProposer;
   private final ConsensusRoundIdentifier targetRound;
-  private final BlockValidator blockValidator;
+  private final QbftBlockValidator blockValidator;
   private final ProtocolContext protocolContext;
 
   /**
@@ -51,7 +51,7 @@ public class ProposalPayloadValidator {
   public ProposalPayloadValidator(
       final Address expectedProposer,
       final ConsensusRoundIdentifier targetRound,
-      final BlockValidator blockValidator,
+      final QbftBlockValidator blockValidator,
       final ProtocolContext protocolContext) {
     this.expectedProposer = expectedProposer;
     this.targetRound = targetRound;
@@ -79,12 +79,12 @@ public class ProposalPayloadValidator {
       return false;
     }
 
-    final Block block = payload.getProposedBlock();
+    final QbftBlock block = payload.getProposedBlock();
     if (!validateBlock(block)) {
       return false;
     }
 
-    if (block.getHeader().getNumber() != payload.getRoundIdentifier().getSequenceNumber()) {
+    if (block.getQbftBlockHeader().getNumber() != payload.getRoundIdentifier().getSequenceNumber()) {
       LOG.info("{}: block number does not match sequence number", ERROR_PREFIX);
       return false;
     }
@@ -92,7 +92,7 @@ public class ProposalPayloadValidator {
     return true;
   }
 
-  private boolean validateBlock(final Block block) {
+  private boolean validateBlock(final QbftBlock block) {
     checkState(blockValidator != null, "block validation not possible, no block validator.");
 
     final var validationResult = blockValidator.validateAndProcessBlock(protocolContext, block);

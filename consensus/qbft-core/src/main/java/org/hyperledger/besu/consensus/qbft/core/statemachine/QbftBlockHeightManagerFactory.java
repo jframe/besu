@@ -15,8 +15,8 @@
 package org.hyperledger.besu.consensus.qbft.core.statemachine;
 
 import org.hyperledger.besu.consensus.common.bft.BftHelpers;
-import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ValidatorModeTransitionLogger;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidatorFactory;
@@ -30,7 +30,7 @@ public class QbftBlockHeightManagerFactory {
   private static final Logger LOG = LoggerFactory.getLogger(QbftBlockHeightManagerFactory.class);
 
   private final QbftRoundFactory roundFactory;
-  private final BftFinalState finalState;
+  private final QbftFinalState finalState;
   private final MessageValidatorFactory messageValidatorFactory;
   private final MessageFactory messageFactory;
   private final ValidatorModeTransitionLogger validatorModeTransitionLogger;
@@ -45,7 +45,7 @@ public class QbftBlockHeightManagerFactory {
    * @param validatorModeTransitionLogger the validator mode transition logger
    */
   public QbftBlockHeightManagerFactory(
-      final BftFinalState finalState,
+      final QbftFinalState finalState,
       final QbftRoundFactory roundFactory,
       final MessageValidatorFactory messageValidatorFactory,
       final MessageFactory messageFactory,
@@ -63,7 +63,7 @@ public class QbftBlockHeightManagerFactory {
    * @param parentHeader the parent header
    * @return the base qbft block height manager
    */
-  public BaseQbftBlockHeightManager create(final BlockHeader parentHeader) {
+  public BaseQbftBlockHeightManager create(final QbftBlockHeader parentHeader) {
     validatorModeTransitionLogger.logTransitionChange(parentHeader);
 
     if (finalState.isLocalNodeValidator()) {
@@ -75,11 +75,11 @@ public class QbftBlockHeightManagerFactory {
     }
   }
 
-  private BaseQbftBlockHeightManager createNoOpBlockHeightManager(final BlockHeader parentHeader) {
+  private BaseQbftBlockHeightManager createNoOpBlockHeightManager(final QbftBlockHeader parentHeader) {
     return new NoOpBlockHeightManager(parentHeader);
   }
 
-  private BaseQbftBlockHeightManager createFullBlockHeightManager(final BlockHeader parentHeader) {
+  private BaseQbftBlockHeightManager createFullBlockHeightManager(final QbftBlockHeader parentHeader) {
     return new QbftBlockHeightManager(
         parentHeader,
         finalState,

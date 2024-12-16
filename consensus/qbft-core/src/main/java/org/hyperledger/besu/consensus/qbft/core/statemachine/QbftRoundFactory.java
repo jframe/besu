@@ -17,10 +17,11 @@ package org.hyperledger.besu.consensus.qbft.core.statemachine;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockCreator;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHashing;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ExtraDataProvider;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolSchedule;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockCreatorFactory;
 import org.hyperledger.besu.consensus.qbft.core.events.MinedBlockObserver;
 import org.hyperledger.besu.consensus.qbft.core.network.QbftMessageTransmitter;
@@ -34,7 +35,7 @@ public class QbftRoundFactory {
   private final QbftFinalState finalState;
   private final QbftBlockCreatorFactory blockCreatorFactory;
   private final ProtocolContext protocolContext;
-  private final ProtocolSchedule protocolSchedule;
+  private final QbftProtocolSchedule protocolSchedule;
   private final Subscribers<MinedBlockObserver> minedBlockObservers;
   private final MessageValidatorFactory messageValidatorFactory;
   private final MessageFactory messageFactory;
@@ -56,7 +57,7 @@ public class QbftRoundFactory {
   public QbftRoundFactory(
       final QbftFinalState finalState,
       final ProtocolContext protocolContext,
-      final ProtocolSchedule protocolSchedule,
+      final QbftProtocolSchedule protocolSchedule,
       final Subscribers<MinedBlockObserver> minedBlockObservers,
       final MessageValidatorFactory messageValidatorFactory,
       final MessageFactory messageFactory,
@@ -80,7 +81,7 @@ public class QbftRoundFactory {
    * @param round the round
    * @return the qbft round
    */
-  public QbftRound createNewRound(final BlockHeader parentHeader, final int round) {
+  public QbftRound createNewRound(final QbftBlockHeader parentHeader, final int round) {
     long nextBlockHeight = parentHeader.getNumber() + 1;
     final ConsensusRoundIdentifier roundIdentifier =
         new ConsensusRoundIdentifier(nextBlockHeight, round);
@@ -102,7 +103,7 @@ public class QbftRoundFactory {
    * @return the qbft round
    */
   public QbftRound createNewRoundWithState(
-      final BlockHeader parentHeader, final RoundState roundState) {
+          final QbftBlockHeader parentHeader, final RoundState roundState) {
     final BlockCreator blockCreator =
         blockCreatorFactory.create(roundState.getRoundIdentifier().getRoundNumber());
 
