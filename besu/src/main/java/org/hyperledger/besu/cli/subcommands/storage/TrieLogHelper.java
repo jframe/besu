@@ -384,7 +384,7 @@ public class TrieLogHelper {
       input.enterList();
       final IdentityHashMap<byte[], byte[]> trieLogs = new IdentityHashMap<>();
       while (!input.isEndOfCurrentList()) {
-        final Bytes trieLogBytes = input.currentListOrBytesArrayAsBytesNoCopy(true);
+        final Bytes trieLogBytes = input.currentListAsBytes();
         TrieLogLayer trieLogLayer =
             TrieLogFactoryImpl.readFrom(new BytesValueRLPInput(Bytes.wrap(trieLogBytes), false));
         trieLogs.put(trieLogLayer.getBlockHash().toArrayUnsafe(), trieLogBytes.toArrayUnsafe());

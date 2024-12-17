@@ -495,6 +495,11 @@ public class BlockDataGenerator {
         Optional.of(revertReason));
   }
 
+  public TransactionReceipt frontierReceipt() {
+    return new TransactionReceipt(
+        random.nextInt(2), positiveLong(), Arrays.asList(log(), log()), Optional.empty());
+  }
+
   public TransactionReceipt receipt() {
     return receipt(positiveLong());
   }

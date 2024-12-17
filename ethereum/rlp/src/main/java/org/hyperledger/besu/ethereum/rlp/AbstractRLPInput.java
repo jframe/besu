@@ -606,14 +606,14 @@ abstract class AbstractRLPInput implements RLPInput {
   }
 
   @Override
-  public Bytes currentListOrBytesArrayAsBytesNoCopy(final boolean moveToNextItem) {
+  public Bytes currentListAsBytesNoCopy(final boolean moveToNextItem) {
     if (currentItem >= size) {
       throw error("Cannot read list, input is fully consumed");
     }
-    if (currentKind.equals(RLPDecodingHelpers.Kind.BYTE_ELEMENT)) {
+    if (currentKind != RLPDecodingHelpers.Kind.SHORT_LIST
+        && currentKind != RLPDecodingHelpers.Kind.LONG_LIST) {
       LOG.atDebug()
-          .setMessage(
-              "Cannot read list or bytes, current item is not a list or bytes array, it is: {}, raw bytes: {}, offset: {}, size: {}")
+          .setMessage("Current item is not a list, it is: {}, raw bytes: {}, offset: {}, size: {}")
           .addArgument(currentKind)
           .addArgument(inputSlice(0, (int) size))
           .addArgument(currentPayloadOffset)
@@ -621,25 +621,44 @@ abstract class AbstractRLPInput implements RLPInput {
           .log();
       throw error("Cannot read list, current item is not a list, it is: " + currentKind);
     }
+
     int takeNumPrevBytes;
-    Bytes res;
-    if (!nextIsList()) {
-      res = inputSlice(currentPayloadOffset, currentPayloadSize);
+    if (currentPayloadSize <= 55) {
+      // list header is a single byte
+      takeNumPrevBytes = 1;
     } else {
-      if (currentPayloadSize <= 55) {
-        // list header is a single byte
-        takeNumPrevBytes = 1;
-      } else {
-        takeNumPrevBytes = RLPEncodingHelpers.sizeLength(currentPayloadSize) + 1;
-      }
-      res =
-          inputSlice(
-              (int) currentPayloadOffset - takeNumPrevBytes, currentPayloadSize + takeNumPrevBytes);
+      takeNumPrevBytes = RLPEncodingHelpers.sizeLength(currentPayloadSize) + 1;
     }
+    Bytes res =
+        inputSlice(
+            (int) currentPayloadOffset - takeNumPrevBytes, currentPayloadSize + takeNumPrevBytes);
 
     if (moveToNextItem) {
       setTo(nextItem());
     }
+    return res;
+  }
+
+  @Override
+  public Bytes currentBytesNoCopy() {
+    // TODO: this returns the same as readBytes, but adds some checking and logging.
+    if (currentItem >= size) {
+      throw error("Cannot read bytes, input is fully consumed");
+    }
+    if (!(currentKind.equals(RLPDecodingHelpers.Kind.SHORT_ELEMENT)
+        || currentKind.equals(RLPDecodingHelpers.Kind.LONG_ELEMENT))) {
+      LOG.atDebug()
+          .setMessage(
+              "Current item is not a bytes array, it is: {}, raw bytes: {}, offset: {}, size: {}")
+          .addArgument(currentKind)
+          .addArgument(inputSlice(0, (int) size))
+          .addArgument(currentPayloadOffset)
+          .addArgument(currentPayloadSize)
+          .log();
+      throw error("Cannot read bytes, current item is not a bytes array, it is: " + currentKind);
+    }
+    final Bytes res = inputSlice(currentPayloadOffset, currentPayloadSize);
+    setTo(nextItem());
     return res;
   }
 }

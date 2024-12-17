@@ -29,6 +29,7 @@ import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.LogWithMetadata;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipts;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
@@ -524,6 +525,15 @@ public class DefaultBlockchain implements MutableBlockchain {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
     final Hash hash = block.getHash();
     updater.putSyncBlockBody(hash, block.getBody());
+    updater.commit();
+  }
+
+  @Override
+  public void unsafeImportSyncReceipts(
+      final SyncTransactionReceipts receipts, final BlockHeader header) {
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    final Hash hash = header.getHash();
+    updater.putSyncTransactionReceipts(hash, receipts);
     updater.commit();
   }
 

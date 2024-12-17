@@ -19,6 +19,7 @@ import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipts;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 
 import java.util.List;
@@ -65,6 +66,8 @@ public interface MutableBlockchain extends Blockchain {
   void unsafeImportBlock(final Block block);
 
   void unsafeImportSyncBlock(final SyncBlock block);
+
+  void unsafeImportSyncReceipts(final SyncTransactionReceipts receipts, final BlockHeader header);
 
   void unsafeSetChainHead(final BlockHeader blockHeader, final Difficulty totalDifficulty);
 

@@ -15,14 +15,18 @@
 package org.hyperledger.besu.ethereum.eth.messages;
 
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipts;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.MessageData;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.RawMessage;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -55,5 +59,25 @@ public final class ReceiptsMessageTest {
       Assertions.assertThat(readData.next()).isEqualTo(receipts.get(i));
     }
     Assertions.assertThat(readData.hasNext()).isFalse();
+
+    final ReceiptsMessage receiptsMessage = ReceiptsMessage.readFrom(raw);
+    final List<SyncTransactionReceipts> syncTransactionReceiptsForBlocks =
+        receiptsMessage.syncReceipts();
+    final List<List<TransactionReceipt>> forBlocks = message.receipts();
+    Assertions.assertThat(syncTransactionReceiptsForBlocks.size()).isEqualTo(forBlocks.size());
+    for (int i = 0; i < syncTransactionReceiptsForBlocks.size(); i++) {
+      final SyncTransactionReceipts syncTransactionReceipts =
+          syncTransactionReceiptsForBlocks.get(i);
+      final List<TransactionReceipt> transactionReceipts = receipts.get(i);
+      Assertions.assertThat(syncTransactionReceipts.getReceiptsRoot())
+          .isEqualTo(BodyValidation.receiptsRoot(transactionReceipts));
+      Assertions.assertThat(syncTransactionReceipts.getRlpForTransactionReceipts())
+          .isEqualTo(rlpEncode(transactionReceipts));
+    }
+  }
+
+  private Bytes rlpEncode(final List<TransactionReceipt> receipts) {
+    return RLP.encode(
+        o -> o.writeList(receipts, (r, rlpOutput) -> r.writeToForStorage(rlpOutput, false)));
   }
 }

@@ -25,8 +25,8 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutor;
+import org.hyperledger.besu.ethereum.eth.sync.DownloadAndStoreSyncBodiesAndSyncReceiptsStep;
 import org.hyperledger.besu.ethereum.eth.sync.DownloadPipelineFactory;
-import org.hyperledger.besu.ethereum.eth.sync.DownloadSyncBodiesStep;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncValidationPolicy;
@@ -53,6 +53,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
   protected final FastSyncValidationPolicy attachedValidationPolicy;
   protected final FastSyncValidationPolicy detachedValidationPolicy;
   protected final FastSyncValidationPolicy ommerValidationPolicy;
+  private final PeerTaskExecutor peerTaskExecutor;
 
   public ValidatorSyncDownloadPipelineFactory(
       final SynchronizerConfiguration syncConfig,
@@ -68,6 +69,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
     this.ethContext = ethContext;
     this.fastSyncState = fastSyncState;
     this.metricsSystem = metricsSystem;
+    this.peerTaskExecutor = peerTaskExecutor;
     final LabelledMetric<Counter> fastSyncValidationCounter =
         metricsSystem.createLabelledCounter(
             BesuMetricCategory.SYNCHRONIZER,
@@ -147,11 +149,12 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             fastSyncState.getPivotBlockNumber().getAsLong(),
             bodyRequestSize);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
-    final DownloadSyncBodiesStep downloadBodiesStep =
-        new DownloadSyncBodiesStep(protocolSchedule, ethContext, metricsSystem);
-    final ImportSyncBlocksStep importBlocksStep =
-        new ImportSyncBlocksStep(
-            protocolContext, ethContext, fastSyncState.getPivotBlockHeader().get());
+    final DownloadAndStoreSyncBodiesAndSyncReceiptsStep downloadBodiesAndReceiptsStep =
+        new DownloadAndStoreSyncBodiesAndSyncReceiptsStep(
+            protocolSchedule, ethContext, metricsSystem, protocolContext, peerTaskExecutor);
+    //    final ImportSyncBlocksStep importBlocksStep =
+    //        new ImportSyncBlocksStep(
+    //            protocolContext, ethContext, fastSyncState.getPivotBlockHeader().get());
     return PipelineBuilder.createPipelineFrom(
             "posPivot",
             validatorSyncSource,
@@ -165,8 +168,7 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             true,
             "validatorSyncHeaderDownload")
         .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
-        .thenProcessAsync("downloadBodies", downloadBodiesStep, downloaderParallelism)
-        .andFinishWith("importBlock", importBlocksStep);
+        .andFinishWith("downloadBodies", downloadBodiesAndReceiptsStep);
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {
