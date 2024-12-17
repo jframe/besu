@@ -43,7 +43,14 @@ import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
 import java.util.concurrent.CompletionStage;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFactory {
+
+  private static final Logger LOG =
+      LoggerFactory.getLogger(ValidatorSyncDownloadPipelineFactory.class);
+
   protected final SynchronizerConfiguration syncConfig;
   protected final ProtocolSchedule protocolSchedule;
   protected final ProtocolContext protocolContext;
@@ -168,7 +175,8 @@ public class ValidatorSyncDownloadPipelineFactory implements DownloadPipelineFac
             true,
             "validatorSyncHeaderDownload")
         .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
-        .andFinishWith("downloadBodies", downloadBodiesAndReceiptsStep);
+        .thenProcessAsync("BodiesAndReceipts", downloadBodiesAndReceiptsStep, downloaderParallelism)
+        .andFinishWith("print", (s) -> LOG.atInfo().log(s));
   }
 
   protected BlockHeader getCommonAncestor(final SyncTarget target) {
