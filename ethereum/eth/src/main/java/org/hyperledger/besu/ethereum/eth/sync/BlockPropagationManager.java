@@ -243,7 +243,7 @@ public class BlockPropagationManager implements UnverifiedForkchoiceListener {
               metricsSystem);
       ethContext
           .getScheduler()
-          .scheduleSyncWorkerTask(importBlocksTask)
+          .scheduleServiceTask(importBlocksTask)
           .whenComplete(
               (r, t) -> {
                 if (r != null) {
@@ -524,7 +524,7 @@ public class BlockPropagationManager implements UnverifiedForkchoiceListener {
 
     return ethContext
         .getScheduler()
-        .scheduleSyncWorkerTask(
+        .scheduleServiceTask(
             () -> repeatableGetBlockFromPeer(Optional.empty(), blockNumber, maybeBlockHash));
   }
 
@@ -546,7 +546,7 @@ public class BlockPropagationManager implements UnverifiedForkchoiceListener {
     var future =
         ethContext
             .getScheduler()
-            .scheduleSyncWorkerTask(getBlockTask::run)
+            .scheduleServiceTask(getBlockTask::run)
             .thenCompose(r -> importOrSavePendingBlock(r.getResult(), r.getPeer().nodeId()));
 
     ethContext.getScheduler().failAfterTimeout(future, getBlockTimeoutMillis);
@@ -614,7 +614,7 @@ public class BlockPropagationManager implements UnverifiedForkchoiceListener {
     final BadBlockManager badBlockManager = protocolContext.getBadBlockManager();
     return ethContext
         .getScheduler()
-        .scheduleSyncWorkerTask(
+        .scheduleServiceTask(
             () ->
                 validateAndProcessPendingBlock(
                     blockHeaderValidator, block, parent, badBlockManager));

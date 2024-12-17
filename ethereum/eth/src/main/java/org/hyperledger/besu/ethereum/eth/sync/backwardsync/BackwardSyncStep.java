@@ -79,7 +79,7 @@ public class BackwardSyncStep {
           context
               .getEthContext()
               .getScheduler()
-              .scheduleSyncWorkerTask(
+              .scheduleServiceTask(
                   () -> {
                     GetHeadersFromPeerTask task =
                         new GetHeadersFromPeerTask(
@@ -113,7 +113,7 @@ public class BackwardSyncStep {
           context
               .getEthContext()
               .getScheduler()
-              .scheduleSyncWorkerTask(retryingGetHeadersEndingAtFromPeerByHashTask::run);
+              .scheduleServiceTask(retryingGetHeadersEndingAtFromPeerByHashTask::run);
     }
     return headersResult.thenApply(
         blockHeaders -> {

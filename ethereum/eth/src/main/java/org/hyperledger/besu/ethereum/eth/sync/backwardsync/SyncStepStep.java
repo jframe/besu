@@ -58,7 +58,7 @@ public class SyncStepStep {
     return context
         .getEthContext()
         .getScheduler()
-        .scheduleSyncWorkerTask(getBlockTask::run)
+        .scheduleServiceTask(getBlockTask::run)
         .thenApply(AbstractPeerTask.PeerTaskResult::getResult);
   }
 
