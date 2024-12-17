@@ -83,9 +83,7 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep
     final CompletableFuture<Void> getReceiptsfuture =
         CompletableFuture.runAsync(() -> receipts(blockHeaders), vte);
 
-    CompletableFuture.allOf(getBlocksfuture, getReceiptsfuture).join();
-
-    return CompletableFuture.completedFuture(ret);
+    return CompletableFuture.allOf(getBlocksfuture, getReceiptsfuture).thenApply((v) -> ret);
   }
 
   private void receipts(final List<BlockHeader> blockHeaders) {
