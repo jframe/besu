@@ -16,21 +16,18 @@ package org.hyperledger.besu.ethereum.eth.sync;
 
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
-import org.hyperledger.besu.ethereum.core.SyncBlock;
 import org.hyperledger.besu.ethereum.core.SyncTransactionReceipts;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutor;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResponseCode;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResult;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.task.GetSyncReceiptsFromPeerTask;
-import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteSyncBlocksTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import org.slf4j.Logger;
@@ -42,11 +39,12 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep implements Consumer<L
       LoggerFactory.getLogger(DownloadAndStoreSyncBodiesAndSyncReceiptsStep.class);
 
   private final ProtocolSchedule protocolSchedule;
-  private final EthContext ethContext;
-  private final MetricsSystem metricsSystem;
+  //  private final EthContext ethContext;
+  //  private final MetricsSystem metricsSystem;
   private final ProtocolContext protocolContext;
   private final PeerTaskExecutor peerTaskExecutor;
-  private final AtomicInteger no_of_max_retries_reached = new AtomicInteger();
+
+  //  private final AtomicInteger no_of_max_retries_reached = new AtomicInteger();
 
   public DownloadAndStoreSyncBodiesAndSyncReceiptsStep(
       final ProtocolSchedule protocolSchedule,
@@ -55,21 +53,21 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep implements Consumer<L
       final ProtocolContext protocolContext,
       final PeerTaskExecutor peerTaskExecutor) {
     this.protocolSchedule = protocolSchedule;
-    this.ethContext = ethContext;
-    this.metricsSystem = metricsSystem;
+    //    this.ethContext = ethContext;
+    //    this.metricsSystem = metricsSystem;
     this.protocolContext = protocolContext;
     this.peerTaskExecutor = peerTaskExecutor;
   }
 
   @Override
   public void accept(final List<BlockHeader> blockHeaders) {
-    final List<SyncBlock> blocks = getSyncBlocks(blockHeaders);
-
-    // store the sync blocks
-    for (final SyncBlock block : blocks) {
-      protocolContext.getBlockchain().unsafeImportSyncBlock(block);
-      LOG.atInfo().setMessage("Imported block {}").addArgument(block::toLogString).log();
-    }
+    //    final List<SyncBlock> blocks = getSyncBlocks(blockHeaders);
+    //
+    //    // store the sync blocks
+    //    for (final SyncBlock block : blocks) {
+    //      protocolContext.getBlockchain().unsafeImportSyncBlock(block);
+    //      LOG.atInfo().setMessage("Imported block {}").addArgument(block::toLogString).log();
+    //    }
 
     // get the receipts for the headers
     final List<SyncTransactionReceiptsAndHeader> receiptsForBlocks = getReceipts(blockHeaders);
@@ -118,28 +116,28 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep implements Consumer<L
         .toList();
   }
 
-  private List<SyncBlock> getSyncBlocks(final List<BlockHeader> blockHeaders) {
-    List<SyncBlock> syncBlocks = null;
-    try {
-      syncBlocks =
-          CompleteSyncBlocksTask.forHeaders(
-                  protocolSchedule, ethContext, blockHeaders, metricsSystem)
-              .run()
-              .join();
-    } catch (final Exception e) {
-      if (no_of_max_retries_reached.getAndIncrement() > 5) {
-        LOG.debug("MAX_RETRIES_REACHED: {}", no_of_max_retries_reached.get());
-        throw new RuntimeException("Have had 5 times MAX_RETRIES_REACHED", e);
-      } else {
-        LOG.debug(
-            "Retry number {}. Exception while getting sync blocks is {}",
-            no_of_max_retries_reached.get(),
-            e);
-        getSyncBlocks(blockHeaders);
-      }
-    }
-    return syncBlocks;
-  }
+  //  private List<SyncBlock> getSyncBlocks(final List<BlockHeader> blockHeaders) {
+  //    List<SyncBlock> syncBlocks = null;
+  //    try {
+  //      syncBlocks =
+  //          CompleteSyncBlocksTask.forHeaders(
+  //                  protocolSchedule, ethContext, blockHeaders, metricsSystem)
+  //              .run()
+  //              .join();
+  //    } catch (final Exception e) {
+  //      if (no_of_max_retries_reached.getAndIncrement() > 5) {
+  //        LOG.debug("MAX_RETRIES_REACHED: {}", no_of_max_retries_reached.get());
+  //        throw new RuntimeException("Have had 5 times MAX_RETRIES_REACHED", e);
+  //      } else {
+  //        LOG.debug(
+  //            "Retry number {}. Exception while getting sync blocks is {}",
+  //            no_of_max_retries_reached.get(),
+  //            e);
+  //        getSyncBlocks(blockHeaders);
+  //      }
+  //    }
+  //    return syncBlocks;
+  //  }
 
   private record SyncTransactionReceiptsAndHeader(
       SyncTransactionReceipts receipts, BlockHeader header) {}
