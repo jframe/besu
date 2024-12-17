@@ -14,12 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.DETACHED_ONLY;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.FULL;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_DETACHED_ONLY;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_SKIP_DETACHED;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DETACHED;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.NONE;
 
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -84,22 +79,13 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             "validationMode");
     attachedValidationPolicy =
         new FastSyncValidationPolicy(
-            this.syncConfig.getFastSyncFullValidationRate(),
-            LIGHT_SKIP_DETACHED,
-            SKIP_DETACHED,
-            fastSyncValidationCounter);
+            this.syncConfig.getFastSyncFullValidationRate(), NONE, NONE, fastSyncValidationCounter);
     ommerValidationPolicy =
         new FastSyncValidationPolicy(
-            this.syncConfig.getFastSyncFullValidationRate(),
-            LIGHT,
-            FULL,
-            fastSyncValidationCounter);
+            this.syncConfig.getFastSyncFullValidationRate(), NONE, NONE, fastSyncValidationCounter);
     detachedValidationPolicy =
         new FastSyncValidationPolicy(
-            this.syncConfig.getFastSyncFullValidationRate(),
-            LIGHT_DETACHED_ONLY,
-            DETACHED_ONLY,
-            fastSyncValidationCounter);
+            this.syncConfig.getFastSyncFullValidationRate(), NONE, NONE, fastSyncValidationCounter);
   }
 
   @Override
