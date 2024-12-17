@@ -27,6 +27,7 @@ import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteSyncBlocksTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,7 +67,7 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep
   @Override
   public CompletableFuture<String> apply(final List<BlockHeader> blockHeaders) {
     final String ret =
-        "finished block headers "
+        "finished block and receipts for blocks from "
             + blockHeaders.getFirst().getNumber()
             + " to "
             + blockHeaders.getLast().getNumber();
@@ -74,26 +75,61 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep
     final List<SyncBlock> blocks = getSyncBlocks(blockHeaders);
 
     // store the sync blocks
-    for (final SyncBlock block : blocks) {
-      protocolContext.getBlockchain().unsafeImportSyncBlock(block);
-      LOG.atInfo().setMessage("Imported block {}").addArgument(block::toLogString).log();
-    }
+    storeBlocks(blocks);
 
     // get the receipts for the headers
     final List<SyncTransactionReceiptsAndHeader> receiptsForBlocks = getReceipts(blockHeaders);
 
     // store the receipts
-    for (final SyncTransactionReceiptsAndHeader receiptsForBlock : receiptsForBlocks) {
-      protocolContext
-          .getBlockchain()
-          .unsafeImportSyncReceipts(receiptsForBlock.receipts(), receiptsForBlock.header());
-      LOG.atInfo()
-          .setMessage("Imported {} receipts for block {}")
-          .addArgument(receiptsForBlock.receipts().size())
-          .addArgument(receiptsForBlock.header()::toLogString)
-          .log();
-    }
+    storeReceipts(receiptsForBlocks);
     return CompletableFuture.completedFuture(ret);
+  }
+
+  private void storeReceipts(final List<SyncTransactionReceiptsAndHeader> receiptsForBlocks) {
+    ethContext
+        .getScheduler()
+        .scheduleFutureTask(
+            () -> {
+              for (final SyncTransactionReceiptsAndHeader receiptsForBlock : receiptsForBlocks) {
+                protocolContext
+                    .getBlockchain()
+                    .unsafeImportSyncReceipts(
+                        receiptsForBlock.receipts(), receiptsForBlock.header());
+              }
+            },
+            Duration.ofMinutes(10))
+        .exceptionally(
+            (error) -> {
+              storeReceipts(receiptsForBlocks);
+              return null;
+            });
+    LOG.atInfo()
+        .setMessage("Imported receipts for {} blocks starting at block {}")
+        .addArgument(receiptsForBlocks.size())
+        .addArgument(receiptsForBlocks.getFirst().header().getNumber())
+        .log();
+  }
+
+  private void storeBlocks(final List<SyncBlock> blocks) {
+    ethContext
+        .getScheduler()
+        .scheduleFutureTask(
+            () -> {
+              for (final SyncBlock block : blocks) {
+                protocolContext.getBlockchain().unsafeImportSyncBlock(block);
+              }
+            },
+            Duration.ofMinutes(10))
+        .exceptionally(
+            (error) -> {
+              storeBlocks(blocks);
+              return null;
+            });
+    LOG.atInfo()
+        .setMessage("Imported {} blocks starting at block number {}")
+        .addArgument(blocks.size())
+        .addArgument(blocks.getFirst().getHeader().getNumber())
+        .log();
   }
 
   private List<SyncTransactionReceiptsAndHeader> getReceipts(final List<BlockHeader> blockHeaders) {
