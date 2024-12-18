@@ -19,12 +19,14 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
 import org.hyperledger.besu.ethereum.core.SyncTransactionReceipts;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
+import org.hyperledger.besu.ethereum.eth.manager.exceptions.MaxRetriesReachedException;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutor;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResponseCode;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResult;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.task.GetSyncReceiptsFromPeerTask;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteSyncBlocksTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
+import org.hyperledger.besu.ethereum.rlp.RLPException;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.ArrayList;
@@ -163,9 +165,12 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep
                   protocolSchedule, ethContext, blockHeaders, metricsSystem)
               .run()
               .join();
-    } catch (final Exception e) {
-      LOG.debug("Exception while getting SyncBlocks", e);
+    } catch (final RLPException | MaxRetriesReachedException e) {
+      LOG.debug("Recoverable exception while getting SyncBlocks", e);
       syncBlocks = getSyncBlocks(blockHeaders);
+    } catch (final Exception e) {
+      LOG.error("Exception while getting SyncBlocks", e);
+      throw (e);
     }
     no_of_max_retries_reached.set(0);
     return syncBlocks;
