@@ -172,7 +172,7 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep
             "Retry number {}. Exception while getting sync blocks is {}",
             no_of_max_retries_reached.get(),
             e);
-        getSyncBlocks(blockHeaders);
+        syncBlocks = getSyncBlocks(blockHeaders);
       }
     }
     return syncBlocks;
