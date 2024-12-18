@@ -95,7 +95,7 @@ public class SyncBlockBody {
     }
     input.leaveList();
     // get the Bytes for the ommers
-    Bytes ommersListBytes1 = input.currentListAsBytesNoCopy(true);
+    Bytes ommersListBytes = input.currentListAsBytesNoCopy(true);
     // get a list of Bytes for the withdrawals
     ArrayList<Bytes> withdrawalBytes = null;
     if (!input.isEndOfCurrentList()) {
@@ -107,7 +107,7 @@ public class SyncBlockBody {
       input.leaveList();
     }
     final SyncBlockBody body =
-        new SyncBlockBody(bytesCurrentBody, transactionBytes, ommersListBytes1, withdrawalBytes);
+        new SyncBlockBody(bytesCurrentBody, transactionBytes, ommersListBytes, withdrawalBytes);
     input.leaveList();
     return body;
   }

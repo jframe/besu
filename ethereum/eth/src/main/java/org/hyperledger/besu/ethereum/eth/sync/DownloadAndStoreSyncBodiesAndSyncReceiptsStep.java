@@ -164,17 +164,10 @@ public class DownloadAndStoreSyncBodiesAndSyncReceiptsStep
               .run()
               .join();
     } catch (final Exception e) {
-      if (no_of_max_retries_reached.getAndIncrement() > 5) {
-        LOG.debug("MAX_RETRIES_REACHED: {}", no_of_max_retries_reached.get());
-        throw new RuntimeException("Have had 5 times MAX_RETRIES_REACHED", e);
-      } else {
-        LOG.debug(
-            "Retry number {}. Exception while getting sync blocks is {}",
-            no_of_max_retries_reached.get(),
-            e);
-        syncBlocks = getSyncBlocks(blockHeaders);
-      }
+      LOG.debug("Exception while getting SyncBlocks", e);
+      syncBlocks = getSyncBlocks(blockHeaders);
     }
+    no_of_max_retries_reached.set(0);
     return syncBlocks;
   }
 
