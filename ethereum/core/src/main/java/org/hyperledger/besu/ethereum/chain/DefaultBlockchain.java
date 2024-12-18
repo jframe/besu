@@ -467,7 +467,7 @@ public class DefaultBlockchain implements MutableBlockchain {
 
     final BlockAddedEvent blockAddedEvent;
     if (storeOnly) {
-      blockAddedEvent = handleStoreOnly(blockWithReceipts);
+      blockAddedEvent = handleStoreOnly(updater, blockWithReceipts);
     } else {
       blockAddedEvent = updateCanonicalChainData(updater, blockWithReceipts);
       if (blockAddedEvent.isNewCanonicalHead()) {
@@ -548,7 +548,9 @@ public class DefaultBlockchain implements MutableBlockchain {
     }
   }
 
-  private BlockAddedEvent handleStoreOnly(final BlockWithReceipts blockWithReceipts) {
+  private BlockAddedEvent handleStoreOnly(
+      final Updater updater, final BlockWithReceipts blockWithReceipts) {
+    updater.setChainHead(blockWithReceipts.getHash());
     return BlockAddedEvent.createForStoredOnly(blockWithReceipts.getBlock());
   }
 
