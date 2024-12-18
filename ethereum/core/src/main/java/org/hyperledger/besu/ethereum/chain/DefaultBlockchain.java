@@ -550,7 +550,9 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   private BlockAddedEvent handleStoreOnly(
       final Updater updater, final BlockWithReceipts blockWithReceipts) {
-    updater.setChainHead(blockWithReceipts.getHash());
+    this.chainHeader = blockWithReceipts.getHeader();
+    Hash blockHash = blockWithReceipts.getHash();
+    updater.setChainHead(blockHash);
     return BlockAddedEvent.createForStoredOnly(blockWithReceipts.getBlock());
   }
 
