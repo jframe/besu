@@ -33,14 +33,13 @@ import org.hyperledger.besu.consensus.qbft.core.statemachine.PreparedCertificate
 import org.hyperledger.besu.crypto.SECPSignature;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.plugin.services.securitymodule.SecurityModuleException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Optional;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-/** The Qbft errorMessage transmitter. */
+/** The Qbft message transmitter. */
 public class QbftMessageTransmitter {
 
   private static final Logger LOG = LoggerFactory.getLogger(QbftMessageTransmitter.class);
@@ -49,9 +48,9 @@ public class QbftMessageTransmitter {
   private final ValidatorMulticaster multicaster;
 
   /**
-   * Instantiates a new Qbft errorMessage transmitter.
+   * Instantiates a new Qbft message transmitter.
    *
-   * @param messageFactory the errorMessage factory
+   * @param messageFactory the message factory
    * @param multicaster the multicaster
    */
   public QbftMessageTransmitter(

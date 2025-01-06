@@ -16,11 +16,11 @@ package org.hyperledger.besu.consensus.qbft.core.validation;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
-import org.hyperledger.besu.consensus.qbft.core.Util;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.payload.CommitPayload;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.core.Util;
 
 import java.util.Collection;
 
@@ -105,7 +105,7 @@ public class CommitValidator {
 
     if (!commitSealCreator.equals(signedPayload.getAuthor())) {
       LOG.info(
-          "{}: Seal was not created by the errorMessage transmitter {} was {}",
+          "{}: Seal was not created by the message transmitter {} was {}",
           ERROR_PREFIX,
           commitSealCreator,
           signedPayload.getAuthor());

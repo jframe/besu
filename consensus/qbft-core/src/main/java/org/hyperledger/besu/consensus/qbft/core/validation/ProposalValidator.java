@@ -30,6 +30,10 @@ import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
 import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
+import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
+import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
+import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
+import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 
@@ -60,7 +64,7 @@ public class ProposalValidator {
    *
    * @param protocolContext the protocol context
    * @param protocolSchedule the protocol schedule
-   * @param quorumMessageCount the quorum errorMessage count
+   * @param quorumMessageCount the quorum message count
    * @param validators the validators
    * @param roundIdentifier the round identifier
    * @param expectedProposer the expected proposer
@@ -95,7 +99,7 @@ public class ProposalValidator {
             expectedProposer, roundIdentifier, blockValidator, protocolContext);
 
     if (!payloadValidator.validate(msg.getSignedPayload())) {
-      LOG.info("{}: invalid proposal payload in proposal errorMessage", ERROR_PREFIX);
+      LOG.info("{}: invalid proposal payload in proposal message", ERROR_PREFIX);
       return false;
     }
 
@@ -132,7 +136,7 @@ public class ProposalValidator {
             roundChangeWithLatestPreparedRound.get().getPayload().getPreparedRoundMetadata().get();
 
         LOG.debug(
-            "Prepared Metadata blockhash : {}, proposal blockhash: {}, prepared round in errorMessage: {}, proposal round in errorMessage: {}",
+            "Prepared Metadata blockhash : {}, proposal blockhash: {}, prepared round in message: {}, proposal round in message: {}",
             metadata.getPreparedBlockHash(),
             proposal.getBlock().getQbftBlockHeader().getHash(),
             metadata.getPreparedRound(),

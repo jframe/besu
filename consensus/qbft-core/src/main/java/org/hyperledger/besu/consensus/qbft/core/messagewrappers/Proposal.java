@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Besu.
+ * Copyright ConsenSys AG.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -16,6 +16,10 @@ package org.hyperledger.besu.consensus.qbft.core.messagewrappers;
 
 import org.hyperledger.besu.consensus.common.bft.messagewrappers.BftMessage;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
+import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
+import org.hyperledger.besu.consensus.qbft.core.payload.ProposalPayload;
+import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
+import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.ProposalPayload;

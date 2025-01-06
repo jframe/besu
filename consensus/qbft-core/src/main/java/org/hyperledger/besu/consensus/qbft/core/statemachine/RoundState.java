@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Besu.
+ * Copyright ConsenSys AG.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -20,7 +20,12 @@ import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator;
+import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
+import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
+import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
+import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator;
 import org.hyperledger.besu.crypto.SECPSignature;
+import org.hyperledger.besu.ethereum.core.Block;
 
 import java.util.Collection;
 import java.util.Optional;
@@ -42,7 +47,7 @@ public class RoundState {
 
   private Optional<Proposal> proposalMessage = Optional.empty();
 
-  // Must track the actual Prepare errorMessage, not just the sender, as these may need to be reused
+  // Must track the actual Prepare message, not just the sender, as these may need to be reused
   // to send out in a PrepareCertificate.
   private final Set<Prepare> prepareMessages = Sets.newLinkedHashSet();
   private final Set<Commit> commitMessages = Sets.newLinkedHashSet();

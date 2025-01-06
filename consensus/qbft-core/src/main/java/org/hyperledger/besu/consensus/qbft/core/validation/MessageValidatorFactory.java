@@ -22,6 +22,7 @@ import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator.SubsequentMessageValidator;
+import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator.SubsequentMessageValidator;
 import org.hyperledger.besu.datatypes.Address;
 
 import java.util.Collection;
@@ -73,11 +74,11 @@ public class MessageValidatorFactory {
   }
 
   /**
-   * Create round change errorMessage validator.
+   * Create round change message validator.
    *
    * @param chainHeight the chain height
    * @param parentHeader the parent header
-   * @return the round change errorMessage validator
+   * @return the round change message validator
    */
   public RoundChangeMessageValidator createRoundChangeMessageValidator(
       final long chainHeight, final QbftBlockHeader parentHeader) {
@@ -98,11 +99,11 @@ public class MessageValidatorFactory {
   }
 
   /**
-   * Create errorMessage validator.
+   * Create message validator.
    *
    * @param roundIdentifier the round identifier
    * @param parentHeader the parent header
-   * @return the errorMessage validator
+   * @return the message validator
    */
   public MessageValidator createMessageValidator(
       final ConsensusRoundIdentifier roundIdentifier, final QbftBlockHeader parentHeader) {
@@ -127,11 +128,11 @@ public class MessageValidatorFactory {
   }
 
   /**
-   * Create future round proposal errorMessage validator.
+   * Create future round proposal message validator.
    *
    * @param chainHeight the chain height
    * @param parentHeader the parent header
-   * @return the future round proposal errorMessage validator
+   * @return the future round proposal message validator
    */
   public FutureRoundProposalMessageValidator createFutureRoundProposalMessageValidator(
       final long chainHeight, final QbftBlockHeader parentHeader) {

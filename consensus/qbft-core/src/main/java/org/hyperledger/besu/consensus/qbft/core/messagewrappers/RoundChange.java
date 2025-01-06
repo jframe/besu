@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Besu.
+ * Copyright ConsenSys AG.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -23,6 +23,10 @@ import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
 import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
+import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
+import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
+import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
+import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
@@ -32,7 +36,7 @@ import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
 
-/** The Round change payload errorMessage. */
+/** The Round change payload message. */
 public class RoundChange extends BftMessage<RoundChangePayload> {
 
   private final Optional<QbftBlock> proposedBlock;

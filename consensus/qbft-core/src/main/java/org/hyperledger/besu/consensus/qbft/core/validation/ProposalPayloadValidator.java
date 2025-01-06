@@ -18,6 +18,7 @@ import static com.google.common.base.Preconditions.checkState;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
+import org.hyperledger.besu.consensus.qbft.core.payload.ProposalPayload;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockValidator;

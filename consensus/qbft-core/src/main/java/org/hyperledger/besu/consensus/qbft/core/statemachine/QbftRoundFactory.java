@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Besu.
+ * Copyright ConsenSys AG.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -27,6 +27,15 @@ import org.hyperledger.besu.consensus.qbft.core.events.MinedBlockObserver;
 import org.hyperledger.besu.consensus.qbft.core.network.QbftMessageTransmitter;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidatorFactory;
+import org.hyperledger.besu.consensus.common.bft.blockcreation.BftBlockCreatorFactory;
+import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
+import org.hyperledger.besu.consensus.qbft.core.network.QbftMessageTransmitter;
+import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
+import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidatorFactory;
+import org.hyperledger.besu.ethereum.ProtocolContext;
+import org.hyperledger.besu.ethereum.blockcreation.BlockCreator;
+import org.hyperledger.besu.ethereum.chain.MinedBlockObserver;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.util.Subscribers;
 
 /** The Qbft round factory. */

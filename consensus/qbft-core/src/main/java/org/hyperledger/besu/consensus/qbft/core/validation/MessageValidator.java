@@ -15,33 +15,30 @@
 package org.hyperledger.besu.consensus.qbft.core.validation;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
-import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
-import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
 import org.hyperledger.besu.datatypes.Address;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.Optional;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /** The Message validator. */
 public class MessageValidator {
 
   private static final Logger LOG = LoggerFactory.getLogger(MessageValidator.class);
 
-  /** The Subsequent errorMessage validator. */
+  /** The Subsequent message validator. */
   public static class SubsequentMessageValidator {
 
     private final PrepareValidator prepareValidator;
     private final CommitValidator commitValidator;
 
     /**
-     * Instantiates a new Subsequent errorMessage validator.
+     * Instantiates a new Subsequent message validator.
      *
      * @param validators the validators
      * @param targetRound the target round
@@ -88,14 +85,14 @@ public class MessageValidator {
     }
   }
 
-  /** The interface Subsequent errorMessage validator factory. */
+  /** The interface Subsequent message validator factory. */
   @FunctionalInterface
   public interface SubsequentMessageValidatorFactory {
     /**
-     * Create subsequent errorMessage validator.
+     * Create subsequent message validator.
      *
      * @param proposalBlock the proposal block
-     * @return the subsequent errorMessage validator
+     * @return the subsequent message validator
      */
     SubsequentMessageValidator create(QbftBlock proposalBlock);
   }
@@ -108,7 +105,7 @@ public class MessageValidator {
   /**
    * Instantiates a new Message validator.
    *
-   * @param subsequentMessageValidatorFactory the subsequent errorMessage validator factory
+   * @param subsequentMessageValidatorFactory the subsequent message validator factory
    * @param proposalValidator the proposal validator
    */
   public MessageValidator(

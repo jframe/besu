@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Besu.
+ * Copyright ConsenSys AG.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -19,6 +19,8 @@ import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.QbftV1;
+import org.hyperledger.besu.consensus.qbft.core.messagedata.QbftV1;
+import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
