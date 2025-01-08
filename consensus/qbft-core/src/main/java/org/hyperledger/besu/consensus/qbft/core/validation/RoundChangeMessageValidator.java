@@ -26,9 +26,6 @@ import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.RoundChange;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.RoundChange;
-import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
-import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
 import org.hyperledger.besu.datatypes.Address;
 
 import java.util.Collection;

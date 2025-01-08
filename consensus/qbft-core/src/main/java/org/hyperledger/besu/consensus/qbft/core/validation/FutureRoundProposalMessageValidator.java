@@ -15,8 +15,8 @@
 package org.hyperledger.besu.consensus.qbft.core.validation;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
 
 /** The Future round proposal message validator. */
 public class FutureRoundProposalMessageValidator {

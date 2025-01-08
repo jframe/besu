@@ -54,7 +54,7 @@ public class QbftBlockHeaderImpl extends BlockHeader implements QbftBlockHeader 
         blockHeader.getExcessBlobGas().orElse(null),
         blockHeader.getParentBeaconBlockRoot().orElse(null),
         blockHeader.getRequestsHash().orElse(null),
-        blockHeader.getTargetBlobCount().orElse(null),
+        blockHeader.getTargetBlobsPerBlock().orElse(null),
         blockHeaderFunctions);
   }
 

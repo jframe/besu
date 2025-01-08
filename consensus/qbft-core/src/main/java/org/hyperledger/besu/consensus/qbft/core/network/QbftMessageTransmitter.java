@@ -33,11 +33,12 @@ import org.hyperledger.besu.consensus.qbft.core.statemachine.PreparedCertificate
 import org.hyperledger.besu.crypto.SECPSignature;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.plugin.services.securitymodule.SecurityModuleException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** The Qbft message transmitter. */
 public class QbftMessageTransmitter {

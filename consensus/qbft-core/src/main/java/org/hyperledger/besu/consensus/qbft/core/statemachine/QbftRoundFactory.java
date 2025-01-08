@@ -27,15 +27,6 @@ import org.hyperledger.besu.consensus.qbft.core.events.MinedBlockObserver;
 import org.hyperledger.besu.consensus.qbft.core.network.QbftMessageTransmitter;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidatorFactory;
-import org.hyperledger.besu.consensus.common.bft.blockcreation.BftBlockCreatorFactory;
-import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
-import org.hyperledger.besu.consensus.qbft.core.network.QbftMessageTransmitter;
-import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
-import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidatorFactory;
-import org.hyperledger.besu.ethereum.ProtocolContext;
-import org.hyperledger.besu.ethereum.blockcreation.BlockCreator;
-import org.hyperledger.besu.ethereum.chain.MinedBlockObserver;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.util.Subscribers;
 
 /** The Qbft round factory. */

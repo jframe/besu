@@ -19,8 +19,6 @@ import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.QbftV1;
-import org.hyperledger.besu.consensus.qbft.core.messagedata.QbftV1;
-import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 

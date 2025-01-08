@@ -20,12 +20,7 @@ import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
-import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator;
 import org.hyperledger.besu.crypto.SECPSignature;
-import org.hyperledger.besu.ethereum.core.Block;
 
 import java.util.Collection;
 import java.util.Optional;

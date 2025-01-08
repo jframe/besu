@@ -21,11 +21,6 @@ import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.RoundChange;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.RoundChange;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
 
 /** The type NoOp block height manager. */
 public class NoOpBlockHeightManager implements BaseQbftBlockHeightManager {

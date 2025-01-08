@@ -22,7 +22,6 @@ import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator.SubsequentMessageValidator;
-import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator.SubsequentMessageValidator;
 import org.hyperledger.besu.datatypes.Address;
 
 import java.util.Collection;

@@ -16,9 +16,10 @@ package org.hyperledger.besu.consensus.qbft.core.messagewrappers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
+import org.hyperledger.besu.consensus.qbft.core.QbftBlockTestFixture;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.QbftV1;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
@@ -27,31 +28,19 @@ import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
 import org.hyperledger.besu.cryptoservices.NodeKey;
 import org.hyperledger.besu.cryptoservices.NodeKeyUtils;
 import org.hyperledger.besu.datatypes.Address;
-import org.hyperledger.besu.ethereum.core.Block;
-import org.hyperledger.besu.ethereum.core.BlockBody;
-import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.Util;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 public class ProposalTest {
-  @Mock private BftExtraDataCodec bftExtraDataCodec;
 
-  private static final Block BLOCK =
-      new Block(
-          new BlockHeaderTestFixture().buildHeader(),
-          new BlockBody(
-              Collections.emptyList(),
-              Collections.emptyList(),
-              Optional.of(Collections.emptyList())));
+  private static final QbftBlock BLOCK = new QbftBlockTestFixture().build();
 
   @Test
   public void canRoundTripProposalMessage() {
@@ -64,21 +53,22 @@ public class ProposalTest {
         SignedData.create(payload, nodeKey.sign(payload.hashForSignature()));
 
     final PreparePayload preparePayload =
-        new PreparePayload(new ConsensusRoundIdentifier(1, 0), BLOCK.getHash());
+        new PreparePayload(
+            new ConsensusRoundIdentifier(1, 0), BLOCK.getQbftBlockHeader().getHash());
     final SignedData<PreparePayload> prepare =
         SignedData.create(preparePayload, nodeKey.sign(preparePayload.hashForSignature()));
 
     final RoundChangePayload roundChangePayload =
         new RoundChangePayload(
             new ConsensusRoundIdentifier(1, 0),
-            Optional.of(new PreparedRoundMetadata(BLOCK.getHash(), 0)));
+            Optional.of(new PreparedRoundMetadata(BLOCK.getQbftBlockHeader().getHash(), 0)));
 
     final SignedData<RoundChangePayload> roundChange =
         SignedData.create(roundChangePayload, nodeKey.sign(roundChangePayload.hashForSignature()));
 
     final Proposal proposal = new Proposal(signedPayload, List.of(roundChange), List.of(prepare));
 
-    final Proposal decodedProposal = Proposal.decode(proposal.encode(), bftExtraDataCodec);
+    final Proposal decodedProposal = Proposal.decode(proposal.encode());
 
     assertThat(decodedProposal.getAuthor()).isEqualTo(addr);
     assertThat(decodedProposal.getMessageType()).isEqualTo(QbftV1.PROPOSAL);

@@ -35,6 +35,7 @@ import org.hyperledger.besu.consensus.qbft.blockcreation.QbftBlockCreatorFactory
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
 import org.hyperledger.besu.consensus.qbft.core.events.MinedBlockObserver;
+import org.hyperledger.besu.consensus.qbft.core.network.QbftGossip;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.statemachine.QbftBlockHeightManagerFactory;
 import org.hyperledger.besu.consensus.qbft.core.statemachine.QbftController;

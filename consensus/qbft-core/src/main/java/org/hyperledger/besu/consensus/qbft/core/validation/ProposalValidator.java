@@ -30,10 +30,6 @@ import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
 import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
-import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
-import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
-import org.hyperledger.besu.consensus.qbft.core.payload.PreparedRoundMetadata;
-import org.hyperledger.besu.consensus.qbft.core.payload.RoundChangePayload;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 
