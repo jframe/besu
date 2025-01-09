@@ -19,7 +19,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
+import org.hyperledger.besu.consensus.qbft.core.BlockEncoderFixture;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockTestFixture;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.QbftV1;
 import org.hyperledger.besu.consensus.qbft.core.payload.PreparePayload;
@@ -44,10 +46,12 @@ public class RoundChangeTest {
   @Mock private BftExtraDataCodec bftExtraDataCodec;
 
   private static final QbftBlock BLOCK = new QbftBlockTestFixture().build();
-  ;
 
   @Test
   public void canRoundTripARoundChangeMessage() {
+    BlockEncoderRegistry.getInstance()
+        .setEncoder(new BlockEncoderFixture().createBlockEncoder(BLOCK));
+
     final NodeKey nodeKey = NodeKeyUtils.generate();
     final Address addr = Util.publicKeyToAddress(nodeKey.getPublicKey());
 

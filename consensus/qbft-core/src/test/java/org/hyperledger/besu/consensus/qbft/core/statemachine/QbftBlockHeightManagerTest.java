@@ -36,16 +36,22 @@ import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.RoundTimer;
 import org.hyperledger.besu.consensus.common.bft.events.RoundExpiry;
 import org.hyperledger.besu.consensus.common.bft.network.ValidatorMulticaster;
+import org.hyperledger.besu.consensus.qbft.core.BlockEncoderFixture;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockHeaderTestFixture;
+import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockTestFixture;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockCreator;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockHashing;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ExtraDataProvider;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockImporter;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSchedule;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftProtocolSpec;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftValidatorProvider;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.RoundChangeMessageData;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
@@ -106,6 +112,10 @@ public class QbftBlockHeightManagerTest {
   @Mock private BlockHashing blockHashing;
   @Mock private ProtocolContext protocolContext;
   @Mock private QbftProtocolSchedule protocolSchedule;
+  @Mock private QbftBlockInterface bftBlockInteface;
+  @Mock private QbftValidatorProvider validatorProvider;
+  @Mock private QbftProtocolSpec protocolSpec;
+  @Mock private QbftBlockImporter blockImporter;
 
   @Captor private ArgumentCaptor<MessageData> sentMessageArgCaptor;
 
@@ -184,6 +194,12 @@ public class QbftBlockHeightManagerTest {
         .thenReturn(
             new BftExtraData(
                 Bytes.wrap(new byte[32]), emptyList(), Optional.empty(), 0, validators));
+
+    when(protocolContext.getBlockInterface()).thenReturn(bftBlockInteface);
+    when(protocolContext.getValidatorProvider()).thenReturn(validatorProvider);
+
+    BlockEncoderRegistry.getInstance()
+        .setEncoder(new BlockEncoderFixture().createBlockEncoder(createdBlock));
   }
 
   @Test
@@ -219,7 +235,9 @@ public class QbftBlockHeightManagerTest {
   @Test
   public void onBlockTimerExpiryRoundTimerIsStartedAndProposalMessageIsTransmitted() {
     when(finalState.isLocalNodeProposerForRound(roundIdentifier)).thenReturn(true);
-    when(blockTimer.checkEmptyBlockExpired(any(), eq(0l))).thenReturn(true);
+    when(blockTimer.checkEmptyBlockExpired(any(), eq(0L))).thenReturn(true);
+    when(bftBlockInteface.replaceRoundInBlock(eq(createdBlock), eq(0), any()))
+        .thenReturn(createdBlock);
 
     final QbftBlockHeightManager manager =
         new QbftBlockHeightManager(
@@ -243,7 +261,7 @@ public class QbftBlockHeightManagerTest {
   public void
       onBlockTimerExpiryForNonProposerRoundTimerIsStartedAndNoProposalMessageIsTransmitted() {
     when(finalState.isLocalNodeProposerForRound(roundIdentifier)).thenReturn(false);
-    when(blockTimer.checkEmptyBlockExpired(any(), eq(0l))).thenReturn(true);
+    when(blockTimer.checkEmptyBlockExpired(any(), eq(0))).thenReturn(true);
 
     final QbftBlockHeightManager manager =
         new QbftBlockHeightManager(
@@ -273,6 +291,9 @@ public class QbftBlockHeightManagerTest {
             clock,
             messageValidatorFactory,
             messageFactory);
+
+    when(bftBlockInteface.replaceRoundInBlock(eq(createdBlock), eq(2), any()))
+        .thenReturn(createdBlock);
 
     // Force a new round to be started at new round number.
     final ConsensusRoundIdentifier futureRoundIdentifier = createFrom(roundIdentifier, 0, +2);
@@ -348,6 +369,8 @@ public class QbftBlockHeightManagerTest {
     when(roundChangeManager.appendRoundChangeMessage(any()))
         .thenReturn(Optional.of(singletonList(roundChange)));
     when(finalState.isLocalNodeProposerForRound(any())).thenReturn(true);
+    when(bftBlockInteface.replaceRoundInBlock(eq(createdBlock), eq(2), any()))
+        .thenReturn(createdBlock);
 
     final QbftBlockHeightManager manager =
         new QbftBlockHeightManager(
@@ -373,6 +396,12 @@ public class QbftBlockHeightManagerTest {
   @Test
   public void messagesForFutureRoundsAreBufferedAndUsedToPreloadNewRoundWhenItIsStarted() {
     when(finalState.getQuorum()).thenReturn(1);
+    when(bftBlockInteface.replaceRoundInBlock(eq(createdBlock), eq(2), any()))
+        .thenReturn(createdBlock);
+    when(blockHashing.calculateDataHashForCommittedSeal(any(), any())).thenReturn(Hash.ZERO);
+    when(blockCreator.createSealedBlock(any(), any(), anyInt(), any())).thenReturn(createdBlock);
+    when(protocolSchedule.getByBlockHeader(any())).thenReturn(protocolSpec);
+    when(protocolSpec.getBlockImporter()).thenReturn(blockImporter);
 
     final ConsensusRoundIdentifier futureRoundIdentifier = createFrom(roundIdentifier, 0, +2);
 
@@ -418,6 +447,12 @@ public class QbftBlockHeightManagerTest {
     when(finalState.getQuorum()).thenReturn(1);
     when(finalState.isLocalNodeProposerForRound(roundIdentifier)).thenReturn(true);
     when(blockTimer.checkEmptyBlockExpired(any(), eq(0l))).thenReturn(true);
+    when(bftBlockInteface.replaceRoundInBlock(eq(createdBlock), eq(0), any()))
+        .thenReturn(createdBlock);
+    when(blockHashing.calculateDataHashForCommittedSeal(any(), any())).thenReturn(Hash.ZERO);
+    when(blockCreator.createSealedBlock(any(), any(), anyInt(), any())).thenReturn(createdBlock);
+    when(protocolSchedule.getByBlockHeader(any())).thenReturn(protocolSpec);
+    when(protocolSpec.getBlockImporter()).thenReturn(blockImporter);
 
     final QbftBlockHeightManager manager =
         new QbftBlockHeightManager(
@@ -456,6 +491,8 @@ public class QbftBlockHeightManagerTest {
   public void preparedCertificateIncludedInRoundChangeMessageOnRoundTimeoutExpired() {
     when(finalState.isLocalNodeProposerForRound(any())).thenReturn(true);
     when(blockTimer.checkEmptyBlockExpired(any(), eq(0l))).thenReturn(true);
+    when(bftBlockInteface.replaceRoundInBlock(eq(createdBlock), eq(0), any()))
+        .thenReturn(createdBlock);
 
     final QbftBlockHeightManager manager =
         new QbftBlockHeightManager(

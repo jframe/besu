@@ -16,10 +16,12 @@ package org.hyperledger.besu.consensus.qbft.core.validation;
 
 import static java.util.Collections.emptyList;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.consensus.qbft.core.datatypes.HashMode.COMMITTED_SEAL;
 import static org.hyperledger.besu.consensus.qbft.core.validation.ValidationTestHelpers.createEmptyRoundChangePayloads;
 import static org.hyperledger.besu.consensus.qbft.core.validation.ValidationTestHelpers.createPreparePayloads;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 
@@ -27,8 +29,11 @@ import org.hyperledger.besu.consensus.common.bft.BftHelpers;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundHelpers;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
+import org.hyperledger.besu.consensus.qbft.core.BlockEncoderFixture;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockHeaderTestFixture;
+import org.hyperledger.besu.consensus.qbft.core.QbftBlockInterface;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockTestFixture;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.BlockEncoderRegistry;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.ProtocolContext;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
@@ -83,8 +88,8 @@ public class ProposalValidatorTest {
   @Mock private QbftBlockValidator blockValidator;
   @Mock private QbftProtocolSchedule protocolSchedule;
   @Mock private QbftProtocolSpec protocolSpec;
-  //  @Mock private BftExtraDataCodec bftExtraDataCodec;
   @Mock private ProtocolContext protocolContext;
+  @Mock private QbftBlockInterface blockInterface;
 
   private final Map<ROUND_ID, RoundSpecificItems> roundItems = new HashMap<>();
 
@@ -94,19 +99,25 @@ public class ProposalValidatorTest {
     when(blockValidator.validateBlock(eq(protocolContext), any()))
         .thenReturn(new QbftBlockValidator.ValidationResult(true, Optional.empty()));
 
+    lenient().when(protocolContext.getBlockInterface()).thenReturn(blockInterface);
     when(protocolSchedule.getByBlockHeader(any())).thenReturn(protocolSpec);
-
     when(protocolSpec.getBlockValidator()).thenReturn(blockValidator);
 
-    //    when(bftExtraDataCodec.encode(any())).thenReturn(Bytes.EMPTY);
     roundItems.put(ROUND_ID.ZERO, createRoundSpecificItems(0));
     roundItems.put(ROUND_ID.ONE, createRoundSpecificItems(1));
+
+    BlockEncoderRegistry.getInstance()
+        .setEncoder(
+            new BlockEncoderFixture().createBlockEncoder(roundItems.get(ROUND_ID.ZERO).block));
   }
 
   private RoundSpecificItems createRoundSpecificItems(final int roundNumber) {
     final ConsensusRoundIdentifier roundIdentifier = new ConsensusRoundIdentifier(1, roundNumber);
     final QbftBlockHeader blockHeader =
-        new QbftBlockHeaderTestFixture().number(roundIdentifier.getSequenceNumber()).build();
+        new QbftBlockHeaderTestFixture()
+            .number(roundIdentifier.getSequenceNumber())
+            .coinbase(validators.getNodeAddresses().getFirst())
+            .build();
     final QbftBlock block = new QbftBlockTestFixture().blockHeader(blockHeader).build();
     return new RoundSpecificItems(
         block,
@@ -153,11 +164,6 @@ public class ProposalValidatorTest {
 
   @Test
   public void validationFailsIfRoundZeroHasNonEmptyPrepares() {
-    //    when(bftExtraDataCodec.encodeWithoutCommitSeals(any())).thenReturn(Bytes.EMPTY);
-    //    when(bftExtraDataCodec.decode(any()))
-    //        .thenReturn(new BftExtraData(Bytes.EMPTY, emptyList(), Optional.empty(), 0,
-    // emptyList()));
-
     final Prepare prepareMsg =
         validators
             .getMessageFactory(1)
@@ -323,7 +329,6 @@ public class ProposalValidatorTest {
                 new PreparedRoundMetadata(
                     Hash.fromHexStringLenient("0x1"),
                     roundItems.get(ROUND_ID.ZERO).roundIdentifier.getRoundNumber())));
-
     final SignedData<RoundChangePayload> preparedRoundChange =
         SignedData.create(
             illegalPayload,
@@ -331,10 +336,8 @@ public class ProposalValidatorTest {
 
     roundChanges.add(preparedRoundChange);
 
-    //    when(bftExtraDataCodec.encodeWithoutCommitSeals(any())).thenReturn(Bytes.EMPTY);
-    //    when(bftExtraDataCodec.decode(any()))
-    //        .thenReturn(new BftExtraData(Bytes.EMPTY, emptyList(), Optional.empty(), 0,
-    // emptyList()));
+    when(blockInterface.replaceRoundInBlock(roundItem.block, 0, COMMITTED_SEAL))
+        .thenReturn(roundItem.block);
 
     final Proposal proposal =
         validators
@@ -381,13 +384,11 @@ public class ProposalValidatorTest {
 
   @Test
   public void validationFailsIfPiggybackedPreparePayloadIsFromNonValidator() {
-    //    when(bftExtraDataCodec.encodeWithoutCommitSeals(any())).thenReturn(Bytes.EMPTY);
-    //    when(bftExtraDataCodec.decode(any()))
-    //        .thenReturn(new BftExtraData(Bytes.EMPTY, emptyList(), Optional.empty(), 0,
-    // emptyList()));
-
     final RoundSpecificItems roundItem = roundItems.get(ROUND_ID.ONE);
     final List<SignedData<RoundChangePayload>> roundChanges = createPreparedRoundZeroRoundChanges();
+
+    when(blockInterface.replaceRoundInBlock(roundItem.block, 0, COMMITTED_SEAL))
+        .thenReturn(roundItem.block);
 
     final QbftNode nonValidator = QbftNode.create();
     final Proposal proposal =
@@ -409,13 +410,11 @@ public class ProposalValidatorTest {
 
   @Test
   public void validationFailsIfPiggybackedPreparePayloadHasDuplicatedAuthors() {
-    //    when(bftExtraDataCodec.encodeWithoutCommitSeals(any())).thenReturn(Bytes.EMPTY);
-    //    when(bftExtraDataCodec.decode(any()))
-    //        .thenReturn(new BftExtraData(Bytes.EMPTY, emptyList(), Optional.empty(), 0,
-    // emptyList()));
-
     final RoundSpecificItems roundItem = roundItems.get(ROUND_ID.ONE);
     final List<SignedData<RoundChangePayload>> roundChanges = createPreparedRoundZeroRoundChanges();
+
+    when(blockInterface.replaceRoundInBlock(roundItem.block, 0, COMMITTED_SEAL))
+        .thenReturn(roundItem.block);
 
     final Proposal proposal =
         validators
@@ -436,13 +435,11 @@ public class ProposalValidatorTest {
 
   @Test
   public void validationFailsIfInsufficientPiggybackedPreparePayloads() {
-    //    when(bftExtraDataCodec.encodeWithoutCommitSeals(any())).thenReturn(Bytes.EMPTY);
-    //    when(bftExtraDataCodec.decode(any()))
-    //        .thenReturn(new BftExtraData(Bytes.EMPTY, emptyList(), Optional.empty(), 0,
-    // emptyList()));
-
     final RoundSpecificItems roundItem = roundItems.get(ROUND_ID.ONE);
     final List<SignedData<RoundChangePayload>> roundChanges = createPreparedRoundZeroRoundChanges();
+
+    when(blockInterface.replaceRoundInBlock(roundItem.block, 0, COMMITTED_SEAL))
+        .thenReturn(roundItem.block);
 
     final Proposal proposal =
         validators
@@ -462,13 +459,11 @@ public class ProposalValidatorTest {
 
   @Test
   public void validationFailsIfPreparePayloadsDoNotMatchMetadataInRoundChanges() {
-    //    when(bftExtraDataCodec.encodeWithoutCommitSeals(any())).thenReturn(Bytes.EMPTY);
-    //    when(bftExtraDataCodec.decode(any()))
-    //        .thenReturn(new BftExtraData(Bytes.EMPTY, emptyList(), Optional.empty(), 0,
-    // emptyList()));
-
     final RoundSpecificItems roundItem = roundItems.get(ROUND_ID.ONE);
     final List<SignedData<RoundChangePayload>> roundChanges = createPreparedRoundZeroRoundChanges();
+
+    when(blockInterface.replaceRoundInBlock(roundItem.block, 0, COMMITTED_SEAL))
+        .thenReturn(roundItem.block);
 
     final Proposal proposal =
         validators
@@ -489,13 +484,11 @@ public class ProposalValidatorTest {
 
   @Test
   public void validationFailsIfPreparePayloadsDoNotMatchBlockHashInRoundChanges() {
-    //    when(bftExtraDataCodec.encodeWithoutCommitSeals(any())).thenReturn(Bytes.EMPTY);
-    //    when(bftExtraDataCodec.decode(any()))
-    //        .thenReturn(new BftExtraData(Bytes.EMPTY, emptyList(), Optional.empty(), 0,
-    // emptyList()));
-
     final RoundSpecificItems roundItem = roundItems.get(ROUND_ID.ONE);
     final List<SignedData<RoundChangePayload>> roundChanges = createPreparedRoundZeroRoundChanges();
+
+    when(blockInterface.replaceRoundInBlock(roundItem.block, 0, COMMITTED_SEAL))
+        .thenReturn(roundItem.block);
 
     final Proposal proposal =
         validators
@@ -516,13 +509,11 @@ public class ProposalValidatorTest {
 
   @Test
   public void validationFailsIfTwoRoundChangesArePreparedOnSameRoundDifferentBlock() {
-    //    when(bftExtraDataCodec.encodeWithoutCommitSeals(any())).thenReturn(Bytes.EMPTY);
-    //    when(bftExtraDataCodec.decode(any()))
-    //        .thenReturn(new BftExtraData(Bytes.EMPTY, emptyList(), Optional.empty(), 0,
-    // emptyList()));
-
     final RoundSpecificItems roundItem = roundItems.get(ROUND_ID.ONE);
     final List<SignedData<RoundChangePayload>> roundChanges = createPreparedRoundZeroRoundChanges();
+
+    when(blockInterface.replaceRoundInBlock(roundItem.block, 0, COMMITTED_SEAL))
+        .thenReturn(roundItem.block);
 
     final RoundChangePayload illegalPreparedRoundChangePayload =
         new RoundChangePayload(
