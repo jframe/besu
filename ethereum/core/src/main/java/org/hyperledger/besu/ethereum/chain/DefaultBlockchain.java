@@ -790,11 +790,11 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   private static void indexTransactionsForBlock(
       final BlockchainStorage.Updater updater, final Hash blockHash, final List<Transaction> txs) {
-    for (int index = 0; index < txs.size(); index++) {
-      final Hash txHash = txs.get(index).getHash();
-      final TransactionLocation loc = new TransactionLocation(blockHash, index);
-      updater.putTransactionLocation(txHash, loc);
-    }
+    //    for (int index = 0; index < txs.size(); index++) {
+    //      final Hash txHash = txs.get(index).getHash();
+    //      final TransactionLocation loc = new TransactionLocation(blockHash, index);
+    //      updater.putTransactionLocation(txHash, loc);
+    //    }
   }
 
   private static void clearIndexedTransactionsForBlock(
