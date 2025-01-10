@@ -58,6 +58,33 @@ public class QbftBlockHeaderImpl extends BlockHeader implements QbftBlockHeader 
         blockHeaderFunctions);
   }
 
+  public QbftBlockHeaderImpl(final BlockHeader blockHeader) {
+    super(
+        blockHeader.getParentHash(),
+        blockHeader.getOmmersHash(),
+        blockHeader.getCoinbase(),
+        blockHeader.getStateRoot(),
+        blockHeader.getTransactionsRoot(),
+        blockHeader.getReceiptsRoot(),
+        blockHeader.getLogsBloom(),
+        blockHeader.getDifficulty(),
+        blockHeader.getNumber(),
+        blockHeader.getGasLimit(),
+        blockHeader.getGasUsed(),
+        blockHeader.getTimestamp(),
+        blockHeader.getExtraData(),
+        blockHeader.getBaseFee().orElse(null),
+        blockHeader.getMixHashOrPrevRandao(),
+        blockHeader.getNonce(),
+        blockHeader.getWithdrawalsRoot().orElse(null),
+        blockHeader.getGasUsed(),
+        blockHeader.getExcessBlobGas().orElse(null),
+        blockHeader.getParentBeaconBlockRoot().orElse(null),
+        blockHeader.getRequestsHash().orElse(null),
+        blockHeader.getTargetBlobsPerBlock().orElse(null),
+        blockHeader.getBlockHeaderFunctions());
+  }
+
   public QbftBlockHeaderImpl(
       final Hash parentHash,
       final Hash ommersHash,

@@ -18,13 +18,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.consensus.qbft.core.support.IntegrationTestHelpers.createSignedCommitPayload;
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.support.RoundSpecificPeers;
 import org.hyperledger.besu.consensus.qbft.core.support.TestContext;
 import org.hyperledger.besu.consensus.qbft.core.support.TestContextBuilder;
-import org.hyperledger.besu.ethereum.core.Block;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,7 +45,7 @@ public class LocalNodeNotProposerTest {
 
   private final MessageFactory localNodeMessageFactory = context.getLocalNodeMessageFactory();
 
-  private final Block blockToPropose =
+  private final QbftBlock blockToPropose =
       context.createBlockForProposalFromChainHead(15, peers.getProposer().getNodeAddress());
 
   private Prepare expectedTxPrepare;
@@ -53,7 +53,9 @@ public class LocalNodeNotProposerTest {
 
   @BeforeEach
   public void setup() {
-    expectedTxPrepare = localNodeMessageFactory.createPrepare(roundId, blockToPropose.getHash());
+    expectedTxPrepare =
+        localNodeMessageFactory.createPrepare(
+            roundId, blockToPropose.getQbftBlockHeader().getHash());
 
     expectedTxCommit =
         new Commit(
@@ -67,17 +69,17 @@ public class LocalNodeNotProposerTest {
 
     peers.verifyMessagesReceived(expectedTxPrepare);
 
-    peers.getNonProposing(0).injectPrepare(roundId, blockToPropose.getHash());
+    peers.getNonProposing(0).injectPrepare(roundId, blockToPropose.getQbftBlockHeader().getHash());
     peers.verifyNoMessagesReceived();
 
-    peers.getNonProposing(1).injectPrepare(roundId, blockToPropose.getHash());
+    peers.getNonProposing(1).injectPrepare(roundId, blockToPropose.getQbftBlockHeader().getHash());
     peers.verifyMessagesReceived(expectedTxCommit);
 
     // Ensure the local blockchain has NOT incremented yet.
     assertThat(context.getCurrentChainHeight()).isEqualTo(0);
 
     // NO further messages should be transmitted when another Prepare is received.
-    peers.getNonProposing(1).injectPrepare(roundId, blockToPropose.getHash());
+    peers.getNonProposing(1).injectPrepare(roundId, blockToPropose.getQbftBlockHeader().getHash());
     peers.verifyNoMessagesReceived();
 
     // Inject a commit, ensure blockChain is not updated, and no message are sent (not quorum yet)
@@ -105,7 +107,7 @@ public class LocalNodeNotProposerTest {
     peers.verifyNoMessagesReceived();
     assertThat(context.getCurrentChainHeight()).isEqualTo(0);
 
-    peers.prepareForNonProposing(roundId, blockToPropose.getHash());
+    peers.prepareForNonProposing(roundId, blockToPropose.getQbftBlockHeader().getHash());
     peers.verifyNoMessagesReceived();
     assertThat(context.getCurrentChainHeight()).isEqualTo(0);
 
@@ -127,7 +129,7 @@ public class LocalNodeNotProposerTest {
     peers.verifyMessagesReceived(expectedTxPrepare);
     assertThat(context.getCurrentChainHeight()).isEqualTo(1);
 
-    peers.getNonProposing(0).injectPrepare(roundId, blockToPropose.getHash());
+    peers.getNonProposing(0).injectPrepare(roundId, blockToPropose.getQbftBlockHeader().getHash());
     peers.verifyNoMessagesReceived();
   }
 }

@@ -19,8 +19,9 @@ import static org.hyperledger.besu.consensus.qbft.core.support.IntegrationTestHe
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.events.BlockTimerExpiry;
-import org.hyperledger.besu.consensus.common.bft.events.NewChainHead;
 import org.hyperledger.besu.consensus.common.bft.events.RoundExpiry;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.events.NewChainHead;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Proposal;
@@ -28,7 +29,6 @@ import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.support.RoundSpecificPeers;
 import org.hyperledger.besu.consensus.qbft.core.support.TestContext;
 import org.hyperledger.besu.consensus.qbft.core.support.TestContextBuilder;
-import org.hyperledger.besu.ethereum.core.Block;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -62,7 +62,7 @@ public class LocalNodeIsProposerTest {
 
   private final MessageFactory localNodeMessageFactory = context.getLocalNodeMessageFactory();
 
-  private Block expectedProposedBlock;
+  private QbftBlock expectedProposedBlock;
   private Proposal expectedTxProposal;
   private Commit expectedTxCommit;
   private Prepare expectedTxPrepare;
@@ -75,7 +75,8 @@ public class LocalNodeIsProposerTest {
             roundId, expectedProposedBlock, Collections.emptyList(), Collections.emptyList());
 
     expectedTxPrepare =
-        localNodeMessageFactory.createPrepare(roundId, expectedProposedBlock.getHash());
+        localNodeMessageFactory.createPrepare(
+            roundId, expectedProposedBlock.getQbftBlockHeader().getHash());
 
     expectedTxCommit =
         new Commit(
@@ -91,10 +92,14 @@ public class LocalNodeIsProposerTest {
     peers.verifyMessagesReceived(expectedTxProposal, expectedTxPrepare);
 
     // NOTE: In these test roles.getProposer() will return NULL.
-    peers.getNonProposing(0).injectPrepare(roundId, expectedProposedBlock.getHash());
+    peers
+        .getNonProposing(0)
+        .injectPrepare(roundId, expectedProposedBlock.getQbftBlockHeader().getHash());
     peers.verifyNoMessagesReceived();
 
-    peers.getNonProposing(1).injectPrepare(roundId, expectedProposedBlock.getHash());
+    peers
+        .getNonProposing(1)
+        .injectPrepare(roundId, expectedProposedBlock.getQbftBlockHeader().getHash());
     peers.verifyMessagesReceived(expectedTxCommit);
 
     peers.getNonProposing(1).injectCommit(roundId, expectedProposedBlock);
@@ -135,7 +140,7 @@ public class LocalNodeIsProposerTest {
 
     context
         .getController()
-        .handleNewBlockEvent(new NewChainHead(expectedProposedBlock.getHeader()));
+        .handleNewBlockEvent(new NewChainHead(expectedProposedBlock.getQbftBlockHeader()));
     peers.verifyNoMessagesReceived();
   }
 
@@ -150,11 +155,17 @@ public class LocalNodeIsProposerTest {
     assertThat(context.getBlockchain().getChainHeadBlockNumber()).isEqualTo(1);
     peers.verifyNoMessagesReceived();
 
-    peers.getNonProposing(0).injectPrepare(roundId, expectedProposedBlock.getHash());
+    peers
+        .getNonProposing(0)
+        .injectPrepare(roundId, expectedProposedBlock.getQbftBlockHeader().getHash());
     peers.verifyNoMessagesReceived();
-    peers.getNonProposing(1).injectPrepare(roundId, expectedProposedBlock.getHash());
+    peers
+        .getNonProposing(1)
+        .injectPrepare(roundId, expectedProposedBlock.getQbftBlockHeader().getHash());
     peers.verifyNoMessagesReceived();
-    peers.getNonProposing(2).injectPrepare(roundId, expectedProposedBlock.getHash());
+    peers
+        .getNonProposing(2)
+        .injectPrepare(roundId, expectedProposedBlock.getQbftBlockHeader().getHash());
     peers.verifyNoMessagesReceived();
   }
 }

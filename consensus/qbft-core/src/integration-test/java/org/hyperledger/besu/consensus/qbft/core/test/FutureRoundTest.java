@@ -21,6 +21,7 @@ import static org.hyperledger.besu.consensus.qbft.core.support.IntegrationTestHe
 import org.hyperledger.besu.consensus.common.bft.BftHelpers;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
@@ -29,7 +30,6 @@ import org.hyperledger.besu.consensus.qbft.core.support.RoundSpecificPeers;
 import org.hyperledger.besu.consensus.qbft.core.support.TestContext;
 import org.hyperledger.besu.consensus.qbft.core.support.TestContextBuilder;
 import org.hyperledger.besu.crypto.SECPSignature;
-import org.hyperledger.besu.ethereum.core.Block;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -64,14 +64,16 @@ public class FutureRoundTest {
 
   @Test
   public void messagesForFutureRoundAreNotActionedUntilRoundIsActive() {
-    final Block futureBlock =
+    final QbftBlock futureBlock =
         context.createBlockForProposalFromChainHead(60, peers.getProposer().getNodeAddress());
     final int quorum = BftHelpers.calculateRequiredValidatorQuorum(NETWORK_SIZE);
     final ConsensusRoundIdentifier subsequentRoundId = new ConsensusRoundIdentifier(1, 6);
     final RoundSpecificPeers subsequentRoles = context.roundSpecificPeers(subsequentRoundId);
 
     for (int i = 0; i < quorum - 2; i++) {
-      futurePeers.getNonProposing(i).injectPrepare(futureRoundId, futureBlock.getHash());
+      futurePeers
+          .getNonProposing(i)
+          .injectPrepare(futureRoundId, futureBlock.getQbftBlockHeader().getHash());
     }
 
     for (int i = 0; i < quorum - 2; i++) {
@@ -81,7 +83,9 @@ public class FutureRoundTest {
     // inject a prepare and a commit from a subsequent round, and ensure no transmissions are
     // created
 
-    subsequentRoles.getNonProposing(1).injectPrepare(subsequentRoundId, futureBlock.getHash());
+    subsequentRoles
+        .getNonProposing(1)
+        .injectPrepare(subsequentRoundId, futureBlock.getQbftBlockHeader().getHash());
     subsequentRoles.getNonProposing(1).injectCommit(subsequentRoundId, futureBlock);
 
     peers.verifyNoMessagesReceived();
@@ -97,19 +101,23 @@ public class FutureRoundTest {
             futureRoundId, signedRoundChangePayload, emptyList(), futureBlock);
 
     final Prepare expectedPrepare =
-        localNodeMessageFactory.createPrepare(futureRoundId, futureBlock.getHash());
+        localNodeMessageFactory.createPrepare(
+            futureRoundId, futureBlock.getQbftBlockHeader().getHash());
 
     peers.verifyMessagesReceived(expectedPrepare);
 
     // following 1 more prepare, a commit msg will be sent
-    futurePeers.getNonProposing(quorum - 2).injectPrepare(futureRoundId, futureBlock.getHash());
+    futurePeers
+        .getNonProposing(quorum - 2)
+        .injectPrepare(futureRoundId, futureBlock.getQbftBlockHeader().getHash());
 
-    final Block commitBlock =
+    final QbftBlock commitBlock =
         createCommitBlockFromProposalBlock(futureBlock, futureRoundId.getRoundNumber());
     final SECPSignature commitSeal =
-        context.getLocalNodeParams().getNodeKey().sign(commitBlock.getHash());
+        context.getLocalNodeParams().getNodeKey().sign(commitBlock.getQbftBlockHeader().getHash());
     final Commit expectedCommit =
-        localNodeMessageFactory.createCommit(futureRoundId, futureBlock.getHash(), commitSeal);
+        localNodeMessageFactory.createCommit(
+            futureRoundId, futureBlock.getQbftBlockHeader().getHash(), commitSeal);
     peers.verifyMessagesReceived(expectedCommit);
 
     // requires 1 more commit and the blockchain will progress
@@ -120,14 +128,14 @@ public class FutureRoundTest {
 
   @Test
   public void priorRoundsCannotBeCompletedAfterReceptionOfNewRound() {
-    final Block initialBlock =
+    final QbftBlock initialBlock =
         context.createBlockForProposalFromChainHead(30, peers.getProposer().getNodeAddress());
-    final Block futureBlock =
+    final QbftBlock futureBlock =
         context.createBlockForProposalFromChainHead(60, peers.getProposer().getNodeAddress());
 
     peers.getProposer().injectProposal(roundId, initialBlock);
 
-    peers.prepareForNonProposing(roundId, initialBlock.getHash());
+    peers.prepareForNonProposing(roundId, initialBlock.getQbftBlockHeader().getHash());
 
     peers.getProposer().injectCommit(roundId, initialBlock);
     // At this stage, the local node has 2 commit msgs (proposer and local) so has not committed
@@ -143,7 +151,8 @@ public class FutureRoundTest {
             futureRoundId, signedRoundChangePayload, emptyList(), futureBlock);
 
     final Prepare expectedFuturePrepare =
-        localNodeMessageFactory.createPrepare(futureRoundId, futureBlock.getHash());
+        localNodeMessageFactory.createPrepare(
+            futureRoundId, futureBlock.getQbftBlockHeader().getHash());
     peers.verifyMessagesReceived(expectedFuturePrepare);
 
     // attempt to complete the previous round

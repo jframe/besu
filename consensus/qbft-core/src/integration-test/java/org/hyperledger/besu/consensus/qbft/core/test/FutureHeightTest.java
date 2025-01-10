@@ -15,21 +15,19 @@
 package org.hyperledger.besu.consensus.qbft.core.test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.util.Lists.emptyList;
 import static org.hyperledger.besu.consensus.qbft.core.support.IntegrationTestHelpers.createSignedCommitPayload;
 
 import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
-import org.hyperledger.besu.consensus.common.bft.BftHelpers;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
-import org.hyperledger.besu.consensus.common.bft.events.NewChainHead;
 import org.hyperledger.besu.consensus.qbft.QbftExtraDataCodec;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.events.NewChainHead;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.support.RoundSpecificPeers;
 import org.hyperledger.besu.consensus.qbft.core.support.TestContext;
 import org.hyperledger.besu.consensus.qbft.core.support.TestContextBuilder;
-import org.hyperledger.besu.ethereum.core.Block;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -63,14 +61,19 @@ public class FutureHeightTest {
 
   @Test
   public void messagesForFutureHeightAreBufferedUntilChainHeightCatchesUp() {
-    final Block currentHeightBlock = context.createBlockForProposalFromChainHead(30);
-    final Block signedCurrentHeightBlock =
-        BftHelpers.createSealedBlock(
-            bftExtraDataCodec, currentHeightBlock, 0, peers.sign(currentHeightBlock.getHash()));
+    final QbftBlock currentHeightBlock = context.createBlockForProposalFromChainHead(30);
+    final QbftBlock signedCurrentHeightBlock =
+        context.createSealedBlock(
+            bftExtraDataCodec,
+            currentHeightBlock,
+            0,
+            peers.sign(currentHeightBlock.getQbftBlockHeader().getHash()));
 
-    final Block futureHeightBlock =
+    final QbftBlock futureHeightBlock =
         context.createBlockForProposal(
-            signedCurrentHeightBlock.getHeader(), 60, peers.getProposer().getNodeAddress());
+            signedCurrentHeightBlock.getQbftBlockHeader(),
+            60,
+            peers.getProposer().getNodeAddress());
 
     peers.getProposer().injectProposal(futureHeightRoundId, futureHeightBlock);
     peers.verifyNoMessagesReceived();
@@ -78,13 +81,15 @@ public class FutureHeightTest {
     // verify that we have incremented the estimated height of the proposer.
     peers
         .getProposer()
-        .verifyEstimatedChainHeightEquals(futureHeightBlock.getHeader().getNumber() - 1);
+        .verifyEstimatedChainHeightEquals(futureHeightBlock.getQbftBlockHeader().getNumber() - 1);
 
     // Inject prepares and commits from all peers
-    peers.prepareForNonProposing(futureHeightRoundId, futureHeightBlock.getHash());
+    peers.prepareForNonProposing(
+        futureHeightRoundId, futureHeightBlock.getQbftBlockHeader().getHash());
     peers.forNonProposing(
         peer ->
-            peer.verifyEstimatedChainHeightEquals(futureHeightBlock.getHeader().getNumber() - 1));
+            peer.verifyEstimatedChainHeightEquals(
+                futureHeightBlock.getQbftBlockHeader().getNumber() - 1));
 
     peers.commitForNonProposing(futureHeightRoundId, futureHeightBlock);
 
@@ -92,14 +97,15 @@ public class FutureHeightTest {
     assertThat(context.getCurrentChainHeight()).isEqualTo(0);
 
     // Add block to chain, and notify system of its arrival.
-    context.getBlockchain().appendBlock(signedCurrentHeightBlock, emptyList());
+    context.appendBlock(signedCurrentHeightBlock);
     assertThat(context.getCurrentChainHeight()).isEqualTo(1);
     context
         .getController()
-        .handleNewBlockEvent(new NewChainHead(signedCurrentHeightBlock.getHeader()));
+        .handleNewBlockEvent(new NewChainHead(signedCurrentHeightBlock.getQbftBlockHeader()));
 
     final Prepare expectedPrepareMessage =
-        localNodeMessageFactory.createPrepare(futureHeightRoundId, futureHeightBlock.getHash());
+        localNodeMessageFactory.createPrepare(
+            futureHeightRoundId, futureHeightBlock.getQbftBlockHeader().getHash());
 
     final Commit expectedCommitMessage =
         new Commit(
@@ -112,30 +118,36 @@ public class FutureHeightTest {
 
   @Test
   public void messagesFromPreviousHeightAreDiscarded() {
-    final Block currentHeightBlock =
+    final QbftBlock currentHeightBlock =
         context.createBlockForProposalFromChainHead(30, peers.getProposer().getNodeAddress());
-    final Block signedCurrentHeightBlock =
-        BftHelpers.createSealedBlock(
-            bftExtraDataCodec, currentHeightBlock, 0, peers.sign(currentHeightBlock.getHash()));
+    final QbftBlock signedCurrentHeightBlock =
+        context.createSealedBlock(
+            bftExtraDataCodec,
+            currentHeightBlock,
+            0,
+            peers.sign(currentHeightBlock.getQbftBlockHeader().getHash()));
 
     peers.getProposer().injectProposal(roundId, currentHeightBlock);
-    peers.getNonProposing(0).injectPrepare(roundId, currentHeightBlock.getHash());
+    peers
+        .getNonProposing(0)
+        .injectPrepare(roundId, currentHeightBlock.getQbftBlockHeader().getHash());
 
     final Prepare expectedPrepareMessage =
-        localNodeMessageFactory.createPrepare(roundId, currentHeightBlock.getHash());
+        localNodeMessageFactory.createPrepare(
+            roundId, currentHeightBlock.getQbftBlockHeader().getHash());
 
     peers.verifyMessagesReceived(expectedPrepareMessage);
 
     // Add block to chain, and notify system of its arrival.
-    context.getBlockchain().appendBlock(signedCurrentHeightBlock, emptyList());
+    context.appendBlock(signedCurrentHeightBlock);
     assertThat(context.getCurrentChainHeight()).isEqualTo(1);
     context
         .getController()
-        .handleNewBlockEvent(new NewChainHead(signedCurrentHeightBlock.getHeader()));
+        .handleNewBlockEvent(new NewChainHead(signedCurrentHeightBlock.getQbftBlockHeader()));
 
     // Inject prepares and commits from all peers for the 'previous' round (i.e. the height
     // from before the block arrived).
-    peers.prepareForNonProposing(roundId, currentHeightBlock.getHash());
+    peers.prepareForNonProposing(roundId, currentHeightBlock.getQbftBlockHeader().getHash());
     peers.commitForNonProposing(roundId, currentHeightBlock);
 
     peers.verifyNoMessagesReceived();
@@ -144,12 +156,14 @@ public class FutureHeightTest {
 
   @Test
   public void multipleNewChainHeadEventsDoesNotRestartCurrentHeightManager() {
-    final Block currentHeightBlock =
+    final QbftBlock currentHeightBlock =
         context.createBlockForProposalFromChainHead(30, peers.getProposer().getNodeAddress());
 
     peers.getProposer().injectProposal(roundId, currentHeightBlock);
-    peers.getProposer().injectPrepare(roundId, currentHeightBlock.getHash());
-    peers.getNonProposing(0).injectPrepare(roundId, currentHeightBlock.getHash());
+    peers.getProposer().injectPrepare(roundId, currentHeightBlock.getQbftBlockHeader().getHash());
+    peers
+        .getNonProposing(0)
+        .injectPrepare(roundId, currentHeightBlock.getQbftBlockHeader().getHash());
 
     peers.clearReceivedMessages();
 
@@ -158,7 +172,9 @@ public class FutureHeightTest {
         .handleNewBlockEvent(new NewChainHead(context.getBlockchain().getChainHeadHeader()));
 
     // Should only require 1 more prepare to close it out
-    peers.getNonProposing(1).injectPrepare(roundId, currentHeightBlock.getHash());
+    peers
+        .getNonProposing(1)
+        .injectPrepare(roundId, currentHeightBlock.getQbftBlockHeader().getHash());
 
     final Commit expectedCommitMessage =
         new Commit(
@@ -169,41 +185,53 @@ public class FutureHeightTest {
 
   @Test
   public void correctMessagesAreExtractedFromFutureHeightBuffer() {
-    final Block currentHeightBlock = context.createBlockForProposalFromChainHead(30);
-    final Block signedCurrentHeightBlock =
-        BftHelpers.createSealedBlock(
-            bftExtraDataCodec, currentHeightBlock, 0, peers.sign(currentHeightBlock.getHash()));
+    final QbftBlock currentHeightBlock = context.createBlockForProposalFromChainHead(30);
+    final QbftBlock signedCurrentHeightBlock =
+        context.createSealedBlock(
+            bftExtraDataCodec,
+            currentHeightBlock,
+            0,
+            peers.sign(currentHeightBlock.getQbftBlockHeader().getHash()));
 
-    final Block nextHeightBlock =
+    final QbftBlock nextHeightBlock =
         context.createBlockForProposal(
-            signedCurrentHeightBlock.getHeader(), 60, peers.getProposer().getNodeAddress());
-    final Block signedNextHeightBlock =
-        BftHelpers.createSealedBlock(
-            bftExtraDataCodec, nextHeightBlock, 0, peers.sign(nextHeightBlock.getHash()));
+            signedCurrentHeightBlock.getQbftBlockHeader(),
+            60,
+            peers.getProposer().getNodeAddress());
+    final QbftBlock signedNextHeightBlock =
+        context.createSealedBlock(
+            bftExtraDataCodec,
+            nextHeightBlock,
+            0,
+            peers.sign(nextHeightBlock.getQbftBlockHeader().getHash()));
 
-    final Block futureHeightBlock =
+    final QbftBlock futureHeightBlock =
         context.createBlockForProposal(
-            signedNextHeightBlock.getHeader(), 90, peers.getNonProposing(0).getNodeAddress());
+            signedNextHeightBlock.getQbftBlockHeader(),
+            90,
+            peers.getNonProposing(0).getNodeAddress());
 
     final ConsensusRoundIdentifier nextHeightRoundId = new ConsensusRoundIdentifier(2, 0);
     final ConsensusRoundIdentifier futureHeightRoundId = new ConsensusRoundIdentifier(3, 0);
 
     // Inject prepares and commits from all peers into FutureHeight (2 height time)
-    peers.prepareForNonProposing(futureHeightRoundId, futureHeightBlock.getHash());
+    peers.prepareForNonProposing(
+        futureHeightRoundId, futureHeightBlock.getQbftBlockHeader().getHash());
     peers.commitForNonProposing(futureHeightRoundId, futureHeightBlock);
 
     // Add the "interim" block to chain, and notify system of its arrival.
-    context.getBlockchain().appendBlock(signedCurrentHeightBlock, emptyList());
+    context.appendBlock(signedCurrentHeightBlock);
     assertThat(context.getCurrentChainHeight()).isEqualTo(1);
     context
         .getController()
-        .handleNewBlockEvent(new NewChainHead(signedCurrentHeightBlock.getHeader()));
+        .handleNewBlockEvent(new NewChainHead(signedCurrentHeightBlock.getQbftBlockHeader()));
 
     peers.verifyNoMessagesReceived();
     peers.getProposer().injectProposal(nextHeightRoundId, nextHeightBlock);
 
     final Prepare expectedPrepareMessage =
-        localNodeMessageFactory.createPrepare(nextHeightRoundId, nextHeightBlock.getHash());
+        localNodeMessageFactory.createPrepare(
+            nextHeightRoundId, nextHeightBlock.getQbftBlockHeader().getHash());
 
     // Assert ONLY a prepare message was received, not any commits (i.e. futureHeightRoundId
     // messages have not been used.
@@ -213,14 +241,15 @@ public class FutureHeightTest {
     peers.getNonProposing(0).injectProposal(futureHeightRoundId, futureHeightBlock);
 
     // Change to the FutureRound, and confirm prepare and commit msgs are sent
-    context.getBlockchain().appendBlock(signedNextHeightBlock, emptyList());
+    context.appendBlock(signedNextHeightBlock);
     assertThat(context.getCurrentChainHeight()).isEqualTo(2);
     context
         .getController()
-        .handleNewBlockEvent(new NewChainHead(signedNextHeightBlock.getHeader()));
+        .handleNewBlockEvent(new NewChainHead(signedNextHeightBlock.getQbftBlockHeader()));
 
     final Prepare expectedFuturePrepareMessage =
-        localNodeMessageFactory.createPrepare(futureHeightRoundId, futureHeightBlock.getHash());
+        localNodeMessageFactory.createPrepare(
+            futureHeightRoundId, futureHeightBlock.getQbftBlockHeader().getHash());
 
     final Commit expectedCommitMessage =
         new Commit(

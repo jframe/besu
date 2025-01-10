@@ -19,6 +19,7 @@ import static org.hyperledger.besu.consensus.qbft.core.support.IntegrationTestHe
 
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.inttest.NodeParams;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.QbftV1;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Prepare;
@@ -31,7 +32,6 @@ import org.hyperledger.besu.crypto.SECPSignature;
 import org.hyperledger.besu.cryptoservices.NodeKey;
 import org.hyperledger.besu.cryptoservices.NodeKeyUtils;
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.Util;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.MessageData;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.RawMessage;
@@ -63,7 +63,7 @@ public class SpuriousBehaviourTest {
   private final ConsensusRoundIdentifier roundId = new ConsensusRoundIdentifier(1, 0);
   private final RoundSpecificPeers peers = context.roundSpecificPeers(roundId);
 
-  private final Block proposedBlock =
+  private final QbftBlock proposedBlock =
       context.createBlockForProposalFromChainHead(30, peers.getProposer().getNodeAddress());
   private Prepare expectedPrepare;
   private Commit expectedCommit;
@@ -72,7 +72,9 @@ public class SpuriousBehaviourTest {
   public void setup() {
 
     expectedPrepare =
-        context.getLocalNodeMessageFactory().createPrepare(roundId, proposedBlock.getHash());
+        context
+            .getLocalNodeMessageFactory()
+            .createPrepare(roundId, proposedBlock.getQbftBlockHeader().getHash());
     expectedCommit =
         new Commit(
             createSignedCommitPayload(
@@ -123,7 +125,7 @@ public class SpuriousBehaviourTest {
     peers.prepareForNonProposing(roundId, Hash.ZERO);
     peers.verifyNoMessagesReceived();
 
-    peers.prepareForNonProposing(roundId, proposedBlock.getHash());
+    peers.prepareForNonProposing(roundId, proposedBlock.getQbftBlockHeader().getHash());
     peers.verifyMessagesReceived(expectedCommit);
 
     peers.prepareForNonProposing(roundId, Hash.ZERO);
@@ -138,7 +140,7 @@ public class SpuriousBehaviourTest {
     peers.getProposer().injectProposal(roundId, proposedBlock);
     peers.verifyMessagesReceived(expectedPrepare);
 
-    peers.prepareForNonProposing(roundId, proposedBlock.getHash());
+    peers.prepareForNonProposing(roundId, proposedBlock.getQbftBlockHeader().getHash());
 
     // for a network of 5, 4 seals are required (local + 3 remote)
     peers.getNonProposing(0).injectCommit(roundId, proposedBlock);
@@ -148,7 +150,7 @@ public class SpuriousBehaviourTest {
     final ValidatorPeer badSealPeer = peers.getNonProposing(2);
     final SECPSignature illegalSeal = badSealPeer.getnodeKey().sign(Hash.ZERO);
 
-    badSealPeer.injectCommit(roundId, proposedBlock.getHash(), illegalSeal);
+    badSealPeer.injectCommit(roundId, proposedBlock.getQbftBlockHeader().getHash(), illegalSeal);
     assertThat(context.getCurrentChainHeight()).isEqualTo(0);
 
     // Now inject the REAL commit message

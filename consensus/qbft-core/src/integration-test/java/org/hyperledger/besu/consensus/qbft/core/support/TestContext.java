@@ -17,13 +17,25 @@ package org.hyperledger.besu.consensus.qbft.core.support;
 import org.hyperledger.besu.consensus.common.bft.BftBlockHeaderFunctions;
 import org.hyperledger.besu.consensus.common.bft.BftExecutors;
 import org.hyperledger.besu.consensus.common.bft.BftExtraDataCodec;
+import org.hyperledger.besu.consensus.common.bft.BftHelpers;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.EventMultiplexer;
+import org.hyperledger.besu.consensus.common.bft.blockcreation.ProposerSelector;
 import org.hyperledger.besu.consensus.common.bft.inttest.NodeParams;
-import org.hyperledger.besu.consensus.common.bft.statemachine.BftEventHandler;
-import org.hyperledger.besu.consensus.common.bft.statemachine.BftFinalState;
 import org.hyperledger.besu.consensus.common.validator.ValidatorProvider;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.Blockchain;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftBlockHeader;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftFinalState;
+import org.hyperledger.besu.consensus.qbft.core.datatypes.QbftValidatorProvider;
+import org.hyperledger.besu.consensus.qbft.core.events.BftEventHandler;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
+import org.hyperledger.besu.consensus.qbft.types.BlockUtil;
+import org.hyperledger.besu.consensus.qbft.types.BlockchainImpl;
+import org.hyperledger.besu.consensus.qbft.types.QbftBlockHeaderImpl;
+import org.hyperledger.besu.consensus.qbft.types.QbftBlockImpl;
+import org.hyperledger.besu.consensus.qbft.types.QbftValidatorProviderImpl;
+import org.hyperledger.besu.crypto.SECPSignature;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
@@ -31,6 +43,8 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderBuilder;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -48,10 +62,11 @@ public class TestContext {
   private final MutableBlockchain blockchain;
   private final BftExecutors bftExecutors;
   private final BftEventHandler controller;
-  private final BftFinalState finalState;
+  private final QbftFinalState finalState;
   private final EventMultiplexer eventMultiplexer;
   private final MessageFactory messageFactory;
   private final ValidatorProvider validatorProvider;
+  private final ProposerSelector proposerSelector;
   private final BftExtraDataCodec bftExtraDataCodec;
 
   public TestContext(
@@ -59,10 +74,11 @@ public class TestContext {
       final MutableBlockchain blockchain,
       final BftExecutors bftExecutors,
       final BftEventHandler controller,
-      final BftFinalState finalState,
+      final QbftFinalState finalState,
       final EventMultiplexer eventMultiplexer,
       final MessageFactory messageFactory,
       final ValidatorProvider validatorProvider,
+      final ProposerSelector proposerSelector,
       final BftExtraDataCodec bftExtraDataCodec) {
     this.remotePeers = remotePeers;
     this.blockchain = blockchain;
@@ -72,6 +88,7 @@ public class TestContext {
     this.eventMultiplexer = eventMultiplexer;
     this.messageFactory = messageFactory;
     this.validatorProvider = validatorProvider;
+    this.proposerSelector = proposerSelector;
     this.bftExtraDataCodec = bftExtraDataCodec;
   }
 
@@ -80,8 +97,8 @@ public class TestContext {
     controller.start();
   }
 
-  public MutableBlockchain getBlockchain() {
-    return blockchain;
+  public Blockchain getBlockchain() {
+    return new BlockchainImpl(blockchain);
   }
 
   public BftEventHandler getController() {
@@ -96,56 +113,67 @@ public class TestContext {
     return messageFactory;
   }
 
-  public Block createBlockForProposalFromChainHead(final long timestamp) {
+  public QbftBlock createBlockForProposalFromChainHead(final long timestamp) {
     return createBlockForProposalFromChainHead(timestamp, finalState.getLocalAddress(), 0);
   }
 
-  public Block createBlockForProposalFromChainHead(final long timestamp, final int roundNumber) {
+  public QbftBlock createBlockForProposalFromChainHead(
+      final long timestamp, final int roundNumber) {
     return createBlockForProposalFromChainHead(
         timestamp, finalState.getLocalAddress(), roundNumber);
   }
 
-  public Block createBlockForProposalFromChainHead(final long timestamp, final Address proposer) {
+  public QbftBlock createBlockForProposalFromChainHead(
+      final long timestamp, final Address proposer) {
     // this implies that EVERY block will have this node as the proposer :/
-    return createBlockForProposal(blockchain.getChainHeadHeader(), timestamp, proposer, 0);
+    return createBlockForProposal(
+        new QbftBlockHeaderImpl(blockchain.getChainHeadHeader()), timestamp, proposer, 0);
   }
 
-  public Block createBlockForProposalFromChainHead(
+  public QbftBlock createBlockForProposalFromChainHead(
       final long timestamp, final Address proposer, final int roundNumber) {
     // this implies that EVERY block will have this node as the proposer :/
     return createBlockForProposal(
-        blockchain.getChainHeadHeader(), timestamp, proposer, roundNumber);
+        new QbftBlockHeaderImpl(blockchain.getChainHeadHeader()), timestamp, proposer, roundNumber);
   }
 
-  public Block createBlockForProposal(
-      final BlockHeader parent,
+  public QbftBlock createBlockForProposal(
+      final QbftBlockHeader parent,
       final long timestamp,
       final Address proposer,
       final int roundNumber) {
-    final Block block =
-        finalState
-            .getBlockCreatorFactory()
-            .create(roundNumber)
-            .createBlock(timestamp, parent)
-            .getBlock();
+    final QbftBlock block =
+        finalState.getBlockCreatorFactory().create(roundNumber).createBlock(timestamp, parent);
 
-    final BlockHeaderBuilder headerBuilder = BlockHeaderBuilder.fromHeader(block.getHeader());
+    final BlockHeaderBuilder headerBuilder =
+        BlockHeaderBuilder.fromHeader(BlockUtil.toBesuBlockHeader(block.getQbftBlockHeader()));
     headerBuilder
         .coinbase(proposer)
         .blockHeaderFunctions(BftBlockHeaderFunctions.forCommittedSeal(bftExtraDataCodec));
     final BlockHeader newHeader = headerBuilder.buildBlockHeader();
 
-    return new Block(newHeader, block.getBody());
+    return new QbftBlockImpl(newHeader, BlockUtil.toBesuBlock(block).getBody());
   }
 
-  public Block createBlockForProposal(
-      final BlockHeader parent, final long timestamp, final Address proposer) {
+  public QbftBlock createBlockForProposal(
+      final QbftBlockHeader parent, final long timestamp, final Address proposer) {
     return createBlockForProposal(parent, timestamp, proposer, 0);
+  }
+
+  public QbftBlock createSealedBlock(
+      final BftExtraDataCodec bftExtraDataCodec,
+      final QbftBlock block,
+      final int roundNumber,
+      final Collection<SECPSignature> commitSeals) {
+    final Block sealedBlock =
+        BftHelpers.createSealedBlock(
+            bftExtraDataCodec, BlockUtil.toBesuBlock(block), roundNumber, commitSeals);
+    return new QbftBlockImpl(sealedBlock);
   }
 
   public RoundSpecificPeers roundSpecificPeers(final ConsensusRoundIdentifier roundId) {
     // This will return NULL if the LOCAL node is the proposer for the specified round
-    final Address proposerAddress = finalState.getProposerForRound(roundId);
+    final Address proposerAddress = proposerSelector.selectProposerForRound(roundId);
     final ValidatorPeer proposer = remotePeers.getOrDefault(proposerAddress, null);
 
     final List<ValidatorPeer> nonProposers = new ArrayList<>(remotePeers.values());
@@ -162,7 +190,16 @@ public class TestContext {
     return blockchain.getChainHeadBlockNumber();
   }
 
-  public ValidatorProvider getValidatorProvider() {
-    return validatorProvider;
+  public QbftValidatorProvider getValidatorProvider() {
+    return new QbftValidatorProviderImpl(validatorProvider);
+  }
+
+  public void appendBlock(final QbftBlock signedCurrentHeightBlock) {
+    blockchain.appendBlock(
+        BlockUtil.toBesuBlock(signedCurrentHeightBlock), Collections.emptyList());
+  }
+
+  public QbftBlockHeader getBlockHeader(final int blockNumber) {
+    return new QbftBlockHeaderImpl(blockchain.getBlockHeader(blockNumber).get());
   }
 }
