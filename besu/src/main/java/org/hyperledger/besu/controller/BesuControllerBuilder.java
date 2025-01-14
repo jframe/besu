@@ -40,6 +40,7 @@ import org.hyperledger.besu.ethereum.chain.ChainPrunerConfiguration;
 import org.hyperledger.besu.ethereum.chain.DefaultBlockchain;
 import org.hyperledger.besu.ethereum.chain.GenesisState;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
+import org.hyperledger.besu.ethereum.chain.TransactionIndexer;
 import org.hyperledger.besu.ethereum.chain.VariablesStorage;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Difficulty;
@@ -116,6 +117,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -706,6 +708,13 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               + " and frequency to be: "
               + chainPrunerConfiguration.getChainPruningBlocksFrequency());
     }
+
+    ExecutorService txIndexerExecutorService =
+        MonitoredExecutors.newBoundedThreadPool(
+            TransactionIndexer.class.getSimpleName(), 1, 1, 1000, metricsSystem);
+    TransactionIndexer transactionIndexer =
+        new TransactionIndexer(blockchainStorage, txIndexerExecutorService);
+    blockchain.observeBlockAdded(transactionIndexer);
 
     final TransactionPool transactionPool =
         TransactionPoolFactory.createTransactionPool(
