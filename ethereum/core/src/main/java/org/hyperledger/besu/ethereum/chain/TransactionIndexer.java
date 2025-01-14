@@ -14,6 +14,9 @@
  */
 package org.hyperledger.besu.ethereum.chain;
 
+import static org.hyperledger.besu.ethereum.chain.BlockAddedEvent.EventType.CHAIN_REORG;
+import static org.hyperledger.besu.ethereum.chain.BlockAddedEvent.EventType.HEAD_ADVANCED;
+
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.Transaction;
 
@@ -32,22 +35,37 @@ public class TransactionIndexer implements BlockAddedObserver {
 
   @Override
   public void onBlockAdded(final BlockAddedEvent event) {
-    if (event.getEventType() == BlockAddedEvent.EventType.HEAD_ADVANCED) {
+    if (event.getEventType() == HEAD_ADVANCED) {
       txIndexerExecutorService.execute(
           () -> {
             BlockchainStorage.Updater updater = blockchainStorage.updater();
             indexTransactionsForBlock(
                 updater, event.getBlock().getHash(), event.getBlock().getBody().getTransactions());
           });
+    } else if (event.getEventType() == CHAIN_REORG) {
+      txIndexerExecutorService.execute(
+          () -> {
+            BlockchainStorage.Updater updater = blockchainStorage.updater();
+            clearIndexedTransactionsForBlock(updater, event.getRemovedTransactions());
+            indexTransactionsForBlock(
+                updater, event.getBlock().getHash(), event.getAddedTransactions());
+          });
     }
   }
 
-  private void indexTransactionsForBlock(
+  static void indexTransactionsForBlock(
       final BlockchainStorage.Updater updater, final Hash blockHash, final List<Transaction> txs) {
     for (int index = 0; index < txs.size(); index++) {
       final Hash txHash = txs.get(index).getHash();
       final TransactionLocation loc = new TransactionLocation(blockHash, index);
       updater.putTransactionLocation(txHash, loc);
+    }
+  }
+
+  private static void clearIndexedTransactionsForBlock(
+      final BlockchainStorage.Updater updater, final List<Transaction> txs) {
+    for (final Transaction tx : txs) {
+      updater.removeTransactionLocation(tx.getHash());
     }
   }
 }

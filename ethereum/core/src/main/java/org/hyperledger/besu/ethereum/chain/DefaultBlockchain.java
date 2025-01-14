@@ -489,7 +489,8 @@ public class DefaultBlockchain implements MutableBlockchain {
     updater.putBlockHeader(blockHash, block.getHeader());
     updater.putBlockHash(block.getHeader().getNumber(), blockHash);
     updater.putBlockBody(blockHash, block.getBody());
-    //    indexTransactionsForBlock(updater, blockHash, block.getBody().getTransactions());
+    TransactionIndexer.indexTransactionsForBlock(
+        updater, blockHash, block.getBody().getTransactions());
     updater.putTransactionReceipts(blockHash, transactionReceipts);
     maybeTotalDifficulty.ifPresent(
         totalDifficulty -> updater.putTotalDifficulty(blockHash, totalDifficulty));
@@ -559,8 +560,6 @@ public class DefaultBlockchain implements MutableBlockchain {
 
     updater.putBlockHash(blockWithReceipts.getNumber(), newBlockHash);
     updater.setChainHead(newBlockHash);
-    //    indexTransactionsForBlock(
-    //        updater, newBlockHash, blockWithReceipts.getBlock().getBody().getTransactions());
     gasUsedCounter.inc(blockWithReceipts.getHeader().getGasUsed());
     numberOfTransactionsCounter.inc(
         blockWithReceipts.getBlock().getBody().getTransactions().size());
@@ -648,11 +647,9 @@ public class DefaultBlockchain implements MutableBlockchain {
     // Update indexed transactions
     newTransactions.forEach(
         (blockHash, transactionsInBlock) -> {
-          //          indexTransactionsForBlock(updater, blockHash, transactionsInBlock);
           // Don't remove transactions that are being re-indexed.
           removedTransactions.removeAll(transactionsInBlock);
         });
-    //    clearIndexedTransactionsForBlock(updater, removedTransactions);
 
     // Update tracked forks
     final Collection<Hash> forks = blockchainStorage.getForkHeads();
@@ -787,23 +784,6 @@ public class DefaultBlockchain implements MutableBlockchain {
     chainHeadTransactionCount = block.getBody().getTransactions().size();
     chainHeadOmmerCount = block.getBody().getOmmers().size();
   }
-
-  //  private static void indexTransactionsForBlock(
-  //      final BlockchainStorage.Updater updater, final Hash blockHash, final List<Transaction>
-  // txs) {
-  //        for (int index = 0; index < txs.size(); index++) {
-  //          final Hash txHash = txs.get(index).getHash();
-  //          final TransactionLocation loc = new TransactionLocation(blockHash, index);
-  //          updater.putTransactionLocation(txHash, loc);
-  //        }
-  //  }
-
-  //  private static void clearIndexedTransactionsForBlock(
-  //      final BlockchainStorage.Updater updater, final List<Transaction> txs) {
-  //    for (final Transaction tx : txs) {
-  //      updater.removeTransactionLocation(tx.getHash());
-  //    }
-  //  }
 
   @VisibleForTesting
   Set<Hash> getForks() {
