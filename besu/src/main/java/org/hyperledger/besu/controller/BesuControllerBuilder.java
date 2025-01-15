@@ -711,7 +711,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
 
     ExecutorService txIndexerExecutorService =
         MonitoredExecutors.newBoundedThreadPool(
-            TransactionIndexer.class.getSimpleName(), 1, 1, 1000, metricsSystem);
+            TransactionIndexer.class.getSimpleName(), 1, 1, 1, metricsSystem);
     TransactionIndexer transactionIndexer =
         new TransactionIndexer(blockchainStorage, txIndexerExecutorService);
     blockchain.observeBlockAdded(transactionIndexer);
