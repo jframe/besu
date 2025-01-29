@@ -37,7 +37,6 @@ import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.RoundTimer;
 import org.hyperledger.besu.consensus.common.bft.events.RoundExpiry;
 import org.hyperledger.besu.consensus.common.bft.network.ValidatorMulticaster;
-import org.hyperledger.besu.consensus.common.validator.ValidatorProvider;
 import org.hyperledger.besu.consensus.qbft.core.QbftBlockTestFixture;
 import org.hyperledger.besu.consensus.qbft.core.messagedata.RoundChangeMessageData;
 import org.hyperledger.besu.consensus.qbft.core.messagewrappers.Commit;
@@ -49,6 +48,8 @@ import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockCodec;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockCreator;
+import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockHashing;
+import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockImporter;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockInterface;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftContext;
@@ -56,17 +57,17 @@ import org.hyperledger.besu.consensus.qbft.core.types.QbftExtraDataProvider;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftFinalState;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftProtocolSchedule;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftProtocolSpec;
+import org.hyperledger.besu.consensus.qbft.core.types.QbftValidatorProvider;
 import org.hyperledger.besu.consensus.qbft.core.validation.FutureRoundProposalMessageValidator;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidator;
 import org.hyperledger.besu.consensus.qbft.core.validation.MessageValidatorFactory;
+import org.hyperledger.besu.consensus.qbft.core.validation.QbftBlockHeaderTestFixture;
 import org.hyperledger.besu.crypto.SignatureAlgorithmFactory;
 import org.hyperledger.besu.cryptoservices.NodeKey;
 import org.hyperledger.besu.cryptoservices.NodeKeyUtils;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.ProtocolContext;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
-import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.Util;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.MessageData;
 import org.hyperledger.besu.util.Subscribers;
@@ -94,7 +95,7 @@ import org.mockito.quality.Strictness;
 public class QbftBlockHeightManagerTest {
 
   private final NodeKey nodeKey = NodeKeyUtils.generate();
-  private final BlockHeaderTestFixture headerTestFixture = new BlockHeaderTestFixture();
+  private final QbftBlockHeaderTestFixture headerTestFixture = new QbftBlockHeaderTestFixture();
   private MessageFactory messageFactory;
 
   @Mock private QbftFinalState finalState;
@@ -110,14 +111,15 @@ public class QbftBlockHeightManagerTest {
   @Mock private ValidatorMulticaster validatorMulticaster;
   @Mock private ProtocolContext protocolContext;
   @Mock private QbftProtocolSchedule protocolSchedule;
-  @Mock private BlockHeader parentHeader;
+  @Mock private QbftBlockHeader parentHeader;
   @Mock private BftExtraDataCodec bftExtraDataCodec;
   @Mock private QbftBlockCodec blockEncoder;
   @Mock private QbftExtraDataProvider qbftExtraDataProvider;
   @Mock private QbftBlockInterface blockInterface;
-  @Mock private ValidatorProvider validatorProvider;
+  @Mock private QbftValidatorProvider validatorProvider;
   @Mock private QbftProtocolSpec protocolSpec;
   @Mock private QbftBlockImporter blockImporter;
+  @Mock private QbftBlockHashing blockHashing;
 
   @Captor private ArgumentCaptor<MessageData> sentMessageArgCaptor;
 
@@ -175,6 +177,7 @@ public class QbftBlockHeightManagerTest {
                   roundTimer,
                   bftExtraDataCodec,
                   qbftExtraDataProvider,
+                  blockHashing,
                   parentHeader);
             });
 
@@ -194,6 +197,7 @@ public class QbftBlockHeightManagerTest {
                   roundTimer,
                   bftExtraDataCodec,
                   qbftExtraDataProvider,
+                  blockHashing,
                   parentHeader);
             });
 

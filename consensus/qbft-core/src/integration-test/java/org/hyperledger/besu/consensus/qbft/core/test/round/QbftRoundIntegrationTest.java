@@ -29,6 +29,7 @@ import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.RoundTimer;
 import org.hyperledger.besu.consensus.common.bft.inttest.StubValidatorMulticaster;
 import org.hyperledger.besu.consensus.qbft.QbftExtraDataCodec;
+import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockHeaderImpl;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockImpl;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockInterfaceImpl;
 import org.hyperledger.besu.consensus.qbft.core.network.QbftMessageTransmitter;
@@ -38,6 +39,8 @@ import org.hyperledger.besu.consensus.qbft.core.statemachine.RoundState;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlock;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockCodec;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockCreator;
+import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockHashing;
+import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockHeader;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockImporter;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftContext;
 import org.hyperledger.besu.consensus.qbft.core.types.QbftExtraDataProvider;
@@ -97,9 +100,10 @@ public class QbftRoundIntegrationTest {
   private MessageFactory throwingMessageFactory;
   private QbftMessageTransmitter transmitter;
   @Mock private StubValidatorMulticaster multicaster;
-  @Mock private BlockHeader parentHeader;
+  @Mock private QbftBlockHeader parentHeader;
   @Mock private QbftBlockCodec blockEncoder;
   @Mock private QbftExtraDataProvider qbftExtraDataProvider;
+  @Mock private QbftBlockHashing blockHashing;
 
   private QbftBlock proposedBlock;
 
@@ -129,8 +133,9 @@ public class QbftRoundIntegrationTest {
     headerTestFixture.number(1);
     final BlockHeader header = headerTestFixture.buildHeader();
     final Block block = new Block(header, new BlockBody(emptyList(), emptyList()));
+    final QbftBlockHeader qbftBlockHeader = new QbftBlockHeaderImpl(header);
     proposedBlock = new QbftBlockImpl(block);
-    when(qbftExtraDataProvider.getExtraData(header)).thenReturn(proposedExtraData);
+    when(qbftExtraDataProvider.getExtraData(qbftBlockHeader)).thenReturn(proposedExtraData);
 
     when(protocolSchedule.getByBlockHeader(any())).thenReturn(protocolSpec);
     when(protocolSpec.getBlockImporter()).thenReturn(blockImporter);
@@ -163,6 +168,7 @@ public class QbftRoundIntegrationTest {
             roundTimer,
             bftExtraDataCodec,
             qbftExtraDataProvider,
+            blockHashing,
             parentHeader);
 
     round.handleProposalMessage(
@@ -203,6 +209,7 @@ public class QbftRoundIntegrationTest {
             roundTimer,
             bftExtraDataCodec,
             qbftExtraDataProvider,
+            blockHashing,
             parentHeader);
 
     // inject a block first, then a prepare on it.

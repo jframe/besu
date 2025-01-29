@@ -15,9 +15,9 @@
 package org.hyperledger.besu.consensus.qbft.adaptor;
 
 import org.hyperledger.besu.consensus.qbft.core.types.QbftBlock;
+import org.hyperledger.besu.consensus.qbft.core.types.QbftBlockHeader;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.Block;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
 
 import java.util.Objects;
 
@@ -27,27 +27,27 @@ import java.util.Objects;
  */
 public class QbftBlockImpl implements QbftBlock {
 
-  private final BlockHeader header;
-  private final Block block;
+  private final Block besuBlock;
+  private final QbftBlockHeader qbftBlockHeader;
 
   /**
    * Constructs a QbftBlock from a Besu Block.
    *
-   * @param block the Besu Block
+   * @param besuBlock the Besu Block
    */
-  public QbftBlockImpl(final Block block) {
-    this.block = block;
-    this.header = block.getHeader();
+  public QbftBlockImpl(final Block besuBlock) {
+    this.besuBlock = besuBlock;
+    this.qbftBlockHeader = new QbftBlockHeaderImpl(besuBlock.getHeader());
   }
 
   @Override
-  public BlockHeader getHeader() {
-    return header;
+  public QbftBlockHeader getHeader() {
+    return qbftBlockHeader;
   }
 
   @Override
   public boolean isEmpty() {
-    return header.getTransactionsRoot().equals(Hash.EMPTY_TRIE_HASH);
+    return besuBlock.getHeader().getTransactionsRoot().equals(Hash.EMPTY_TRIE_HASH);
   }
 
   /**
@@ -57,17 +57,18 @@ public class QbftBlockImpl implements QbftBlock {
    * @return the Besu Block
    */
   public Block getBesuBlock() {
-    return block;
+    return besuBlock;
   }
 
   @Override
   public boolean equals(final Object o) {
     if (!(o instanceof QbftBlockImpl qbftBlock)) return false;
-    return Objects.equals(header, qbftBlock.header) && Objects.equals(block, qbftBlock.block);
+    return Objects.equals(besuBlock, qbftBlock.besuBlock)
+        && Objects.equals(qbftBlockHeader, qbftBlock.qbftBlockHeader);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(header, block);
+    return Objects.hash(besuBlock, qbftBlockHeader);
   }
 }
