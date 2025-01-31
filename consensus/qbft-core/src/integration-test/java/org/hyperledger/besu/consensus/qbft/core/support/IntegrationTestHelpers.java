@@ -19,7 +19,7 @@ import org.hyperledger.besu.consensus.common.bft.BftBlockInterface;
 import org.hyperledger.besu.consensus.common.bft.ConsensusRoundIdentifier;
 import org.hyperledger.besu.consensus.common.bft.payload.SignedData;
 import org.hyperledger.besu.consensus.qbft.QbftExtraDataCodec;
-import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockHashingImpl;
+import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockHashingAdaptor;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockInterfaceImpl;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftExtraDataProviderImpl;
 import org.hyperledger.besu.consensus.qbft.core.payload.CommitPayload;
@@ -47,7 +47,7 @@ public class IntegrationTestHelpers {
     final QbftBlock commitBlock =
         createCommitBlockFromProposalBlock(block, roundId.getRoundNumber());
     final QbftBlockHashing blockHashing =
-        new QbftBlockHashingImpl(new BftBlockHashing(qbftExtraDataEncoder));
+        new QbftBlockHashingAdaptor(new BftBlockHashing(qbftExtraDataEncoder));
     final QbftExtraDataProvider extraDataProvider =
         new QbftExtraDataProviderImpl(qbftExtraDataEncoder);
     final SECPSignature commitSeal =

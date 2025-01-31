@@ -51,14 +51,14 @@ import org.hyperledger.besu.consensus.qbft.adaptor.BftEventHandlerAdaptor;
 import org.hyperledger.besu.consensus.qbft.adaptor.BlockUtil;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockCodecImpl;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockCreatorFactoryImpl;
-import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockHashingImpl;
+import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockHashingAdaptor;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockInterfaceImpl;
-import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockchainImpl;
+import org.hyperledger.besu.consensus.qbft.adaptor.QbftBlockchainAdaptor;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftExtraDataProviderImpl;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftFinalStateImpl;
 import org.hyperledger.besu.consensus.qbft.adaptor.QbftProtocolScheduleImpl;
-import org.hyperledger.besu.consensus.qbft.adaptor.QbftValidatorModeTransitionLoggerImpl;
-import org.hyperledger.besu.consensus.qbft.adaptor.QbftValidatorProviderImpl;
+import org.hyperledger.besu.consensus.qbft.adaptor.QbftValidatorModeTransitionLoggerAdaptor;
+import org.hyperledger.besu.consensus.qbft.adaptor.QbftValidatorProviderAdaptor;
 import org.hyperledger.besu.consensus.qbft.blockcreation.QbftBlockCreatorFactory;
 import org.hyperledger.besu.consensus.qbft.core.network.QbftGossip;
 import org.hyperledger.besu.consensus.qbft.core.payload.MessageFactory;
@@ -218,7 +218,7 @@ public class QbftBesuControllerBuilder extends BesuControllerBuilder {
     final ValidatorProvider validatorProvider =
         protocolContext.getConsensusContext(BftContext.class).getValidatorProvider();
     final QbftValidatorProvider qbftValidatorProvider =
-        new QbftValidatorProviderImpl(validatorProvider);
+        new QbftValidatorProviderAdaptor(validatorProvider);
 
     final QbftBlockInterface qbftBlockInterface = new QbftBlockInterfaceImpl(bftBlockInterface);
     final QbftContext qbftContext = new QbftContext(qbftValidatorProvider, qbftBlockInterface);
@@ -294,7 +294,7 @@ public class QbftBesuControllerBuilder extends BesuControllerBuilder {
 
     final QbftEventHandler qbftEventHandler =
         new QbftController(
-            new QbftBlockchainImpl(blockchain),
+            new QbftBlockchainAdaptor(blockchain),
             finalState,
             new QbftBlockHeightManagerFactory(
                 finalState,
@@ -307,10 +307,10 @@ public class QbftBesuControllerBuilder extends BesuControllerBuilder {
                     messageFactory,
                     qbftExtraDataCodec,
                     new QbftExtraDataProviderImpl(qbftExtraDataCodec),
-                    new QbftBlockHashingImpl(new BftBlockHashing(qbftExtraDataCodec))),
+                    new QbftBlockHashingAdaptor(new BftBlockHashing(qbftExtraDataCodec))),
                 messageValidatorFactory,
                 messageFactory,
-                new QbftValidatorModeTransitionLoggerImpl(
+                new QbftValidatorModeTransitionLoggerAdaptor(
                     new ValidatorModeTransitionLogger(qbftForksSchedule))),
             gossiper,
             duplicateMessageTracker,

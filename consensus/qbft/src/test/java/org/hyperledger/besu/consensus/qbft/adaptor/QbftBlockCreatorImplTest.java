@@ -52,7 +52,7 @@ class QbftBlockCreatorImplTest {
   @Test
   void createsBlockUsingBesuBlockCreator() {
     BlockHeader besuParentHeader = new BlockHeaderTestFixture().buildHeader();
-    QbftBlockHeader parentHeader = new QbftBlockHeaderImpl(besuParentHeader);
+    QbftBlockHeader parentHeader = new QbftBlockHeaderAdaptor(besuParentHeader);
 
     when(blockCreator.createBlock(10, besuParentHeader))
         .thenReturn(new BlockCreator.BlockCreationResult(besuBlock, null, null));
@@ -76,7 +76,7 @@ class QbftBlockCreatorImplTest {
     Block besuBlock = new Block(header, BlockBody.empty());
     QbftBlock block = new QbftBlockImpl(besuBlock);
     SECPSignature seal = new SECPSignature(BigInteger.ONE, BigInteger.ONE, (byte) 1);
-    when(qbftExtraDataProvider.getExtraData(new QbftBlockHeaderImpl(header)))
+    when(qbftExtraDataProvider.getExtraData(new QbftBlockHeaderAdaptor(header)))
         .thenReturn(bftExtraData);
 
     QbftBlockCreatorImpl qbftBlockCreator =

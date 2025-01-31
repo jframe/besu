@@ -37,7 +37,7 @@ public class QbftBlockImpl implements QbftBlock {
    */
   public QbftBlockImpl(final Block besuBlock) {
     this.besuBlock = besuBlock;
-    this.qbftBlockHeader = new QbftBlockHeaderImpl(besuBlock.getHeader());
+    this.qbftBlockHeader = new QbftBlockHeaderAdaptor(besuBlock.getHeader());
   }
 
   @Override
