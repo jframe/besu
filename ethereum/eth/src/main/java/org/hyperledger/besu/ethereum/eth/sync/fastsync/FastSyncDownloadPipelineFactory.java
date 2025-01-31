@@ -108,12 +108,12 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
       final SyncState syncState,
       final SyncTarget syncTarget,
       final Pipeline<?> pipeline) {
-    return scheduler.startPipeline(pipeline);
+    return scheduler
+        .startPipeline(createDownloadHeadersPipeline(syncTarget))
+        .thenCompose(__ -> scheduler.startPipeline(pipeline));
   }
 
-  @Override
-  public Pipeline<SyncTargetRange> createDownloadPipelineForSyncTarget(final SyncTarget target) {
-
+  protected Pipeline<SyncTargetRange> createDownloadHeadersPipeline(final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
     final int singleHeaderBufferSize = headerRequestSize * downloaderParallelism;
@@ -139,6 +139,43 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             metricsSystem);
     final RangeHeadersValidationStep validateHeadersJoinUpStep =
         new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
+    final SaveHeadersStep saveHeadersStep = new SaveHeadersStep(protocolContext.getBlockchain());
+
+    return PipelineBuilder.createPipelineFrom(
+            "fetchCheckpoints",
+            checkpointRangeSource,
+            downloaderParallelism,
+            metricsSystem.createLabelledCounter(
+                BesuMetricCategory.SYNCHRONIZER,
+                "chain_download_pipeline_processed_total",
+                "Number of entries process by each chain download pipeline stage",
+                "step",
+                "action"),
+            true,
+            "fastSync")
+        .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
+        .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
+        .andFinishWith("saveHeader", saveHeadersStep);
+  }
+
+  @Override
+  public Pipeline<SyncTargetRange> createDownloadPipelineForSyncTarget(final SyncTarget target) {
+
+    final int downloaderParallelism = syncConfig.getDownloaderParallelism();
+    final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
+    final int singleHeaderBufferSize = headerRequestSize * downloaderParallelism;
+
+    final SyncTargetRangeSource checkpointRangeSource =
+        new SyncTargetRangeSource(
+            new RangeHeadersFetcher(
+                syncConfig, protocolSchedule, ethContext, fastSyncState, metricsSystem),
+            this::shouldContinueDownloadingFromPeer,
+            ethContext.getScheduler(),
+            target.peer(),
+            getCommonAncestor(target),
+            syncConfig.getDownloaderCheckpointRetries(),
+            SyncTerminationCondition.never());
+    final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, syncConfig, metricsSystem);
     final DownloadReceiptsStep downloadReceiptsStep =
@@ -164,9 +201,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
                 "action"),
             true,
             "fastSync")
-        .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
-        .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
-        .inBatches(headerRequestSize)
+        .thenProcessAsync("loadHeaders", loadHeadersStep, downloaderParallelism)
         .thenProcessAsyncOrdered("downloadBodies", downloadBodiesStep, downloaderParallelism)
         .thenProcessAsyncOrdered("downloadReceipts", downloadReceiptsStep, downloaderParallelism)
         .andFinishWith("importBlock", importBlockStep);
