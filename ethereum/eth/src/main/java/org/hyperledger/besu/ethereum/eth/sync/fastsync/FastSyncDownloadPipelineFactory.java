@@ -114,9 +114,9 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
   }
 
   protected Pipeline<SyncTargetRange> createDownloadHeadersPipeline(final SyncTarget target) {
-    final int downloaderParallelism = syncConfig.getDownloaderParallelism();
+    final int downloaderHeaderParallelism = syncConfig.getDownloaderHeaderParallelism();
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
-    final int singleHeaderBufferSize = headerRequestSize * downloaderParallelism;
+    final int singleHeaderBufferSize = headerRequestSize * downloaderHeaderParallelism;
 
     final SyncTargetRangeSource checkpointRangeSource =
         new SyncTargetRangeSource(
@@ -144,7 +144,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
     return PipelineBuilder.createPipelineFrom(
             "fetchCheckpoints",
             checkpointRangeSource,
-            downloaderParallelism,
+            downloaderHeaderParallelism,
             metricsSystem.createLabelledCounter(
                 BesuMetricCategory.SYNCHRONIZER,
                 "chain_download_pipeline_processed_total",
@@ -153,17 +153,15 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
                 "action"),
             true,
             "fastSync")
-        .thenProcessAsyncOrdered("downloadHeaders", downloadHeadersStep, downloaderParallelism)
+        .thenProcessAsyncOrdered(
+            "downloadHeaders", downloadHeadersStep, downloaderHeaderParallelism)
         .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
         .andFinishWith("saveHeader", saveHeadersStep);
   }
 
   @Override
   public Pipeline<SyncTargetRange> createDownloadPipelineForSyncTarget(final SyncTarget target) {
-
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
-    final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
-    final int singleHeaderBufferSize = headerRequestSize * downloaderParallelism;
 
     final SyncTargetRangeSource checkpointRangeSource =
         new SyncTargetRangeSource(

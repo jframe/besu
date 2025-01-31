@@ -43,6 +43,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       "--Xsynchronizer-downloader-chain-segment-size";
   private static final String DOWNLOADER_PARALLELISM_FLAG =
       "--Xsynchronizer-downloader-parallelism";
+  private static final String DOWNLOADER_HEADER_PARALLELISM_FLAG =
+      "--Xsynchronizer-downloader-header-parallelism";
   private static final String TRANSACTIONS_PARALLELISM_FLAG =
       "--Xsynchronizer-transactions-parallelism";
   private static final String COMPUTATION_PARALLELISM_FLAG =
@@ -153,6 +155,14 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       paramLabel = "<INTEGER>",
       description = "Number of threads to provide to chain downloader (default: ${DEFAULT-VALUE})")
   private int downloaderParallelism = SynchronizerConfiguration.DEFAULT_DOWNLOADER_PARALLELISM;
+
+  @CommandLine.Option(
+      names = DOWNLOADER_HEADER_PARALLELISM_FLAG,
+      hidden = true,
+      paramLabel = "<INTEGER>",
+      description = "Number of threads to provide to chain downloader (default: ${DEFAULT-VALUE})")
+  private int downloaderHeaderParallelism =
+      SynchronizerConfiguration.DEFAULT_DOWNLOADER_PARALLELISM;
 
   @CommandLine.Option(
       names = TRANSACTIONS_PARALLELISM_FLAG,
@@ -373,6 +383,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     options.downloaderCheckpointRetries = config.getDownloaderCheckpointRetries();
     options.downloaderChainSegmentSize = config.getDownloaderChainSegmentSize();
     options.downloaderParallelism = config.getDownloaderParallelism();
+    options.downloaderHeaderParallelism = config.getDownloaderHeaderParallelism();
     options.transactionsParallelism = config.getTransactionsParallelism();
     options.computationParallelism = config.getComputationParallelism();
     options.fastSyncPivotDistance = config.getSyncPivotDistance();
@@ -412,6 +423,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     builder.downloaderCheckpointRetries(downloaderCheckpointRetries);
     builder.downloaderChainSegmentSize(downloaderChainSegmentSize);
     builder.downloaderParallelism(downloaderParallelism);
+    builder.downloaderHeaderParallelism(downloaderHeaderParallelism);
     builder.transactionsParallelism(transactionsParallelism);
     builder.computationParallelism(computationParallelism);
     builder.syncPivotDistance(fastSyncPivotDistance);
@@ -456,6 +468,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             OptionParser.format(downloaderChainSegmentSize),
             DOWNLOADER_PARALLELISM_FLAG,
             OptionParser.format(downloaderParallelism),
+            DOWNLOADER_HEADER_PARALLELISM_FLAG,
+            OptionParser.format(downloaderHeaderParallelism),
             TRANSACTIONS_PARALLELISM_FLAG,
             OptionParser.format(transactionsParallelism),
             COMPUTATION_PARALLELISM_FLAG,

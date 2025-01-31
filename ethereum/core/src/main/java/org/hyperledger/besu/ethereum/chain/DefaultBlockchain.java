@@ -415,15 +415,30 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   @Override
+  public synchronized void appendBlockWithoutHeader(
+      final Block block, final List<TransactionReceipt> receipts) {
+    if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
+    appendBlockHelper(new BlockWithReceipts(block, receipts), false, true);
+  }
+
+  @Override
   public synchronized void appendBlock(final Block block, final List<TransactionReceipt> receipts) {
     if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
-    appendBlockHelper(new BlockWithReceipts(block, receipts), false);
+    appendBlockHelper(new BlockWithReceipts(block, receipts), false, false);
   }
 
   @Override
   public synchronized void storeBlock(final Block block, final List<TransactionReceipt> receipts) {
     if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
-    appendBlockHelper(new BlockWithReceipts(block, receipts), true);
+    appendBlockHelper(new BlockWithReceipts(block, receipts), true, false);
+  }
+
+  @Override
+  public void storeHeader(final BlockHeader blockHeader) {
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    updater.putBlockHeader(blockHeader.getHash(), blockHeader);
+    updater.putBlockHash(blockHeader.getNumber(), blockHeader.getBlockHash());
+    updater.commit();
   }
 
   private void cacheBlockData(final Block block, final List<TransactionReceipt> receipts) {
@@ -447,7 +462,9 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   private void appendBlockHelper(
-      final BlockWithReceipts blockWithReceipts, final boolean storeOnly) {
+      final BlockWithReceipts blockWithReceipts,
+      final boolean storeOnly,
+      final boolean blocksOnly) {
 
     if (!blockShouldBeProcessed(blockWithReceipts.getBlock(), blockWithReceipts.getReceipts())) {
       return;
@@ -460,7 +477,10 @@ public class DefaultBlockchain implements MutableBlockchain {
 
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
 
-    updater.putBlockHeader(hash, block.getHeader());
+    if (!blocksOnly) {
+      updater.putBlockHeader(hash, block.getHeader());
+    }
+
     updater.putBlockBody(hash, block.getBody());
     updater.putTransactionReceipts(hash, receipts);
     updater.putTotalDifficulty(hash, td);
