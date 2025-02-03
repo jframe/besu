@@ -45,6 +45,7 @@ import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
+import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
 import org.slf4j.Logger;
@@ -136,7 +137,8 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             detachedValidationPolicy,
             syncConfig,
             headerRequestSize,
-            metricsSystem);
+            metricsSystem,
+            Optional.of(fastSyncState.getPivotBlockHeader().get()));
     final RangeHeadersValidationStep validateHeadersJoinUpStep =
         new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
     final SaveHeadersStep saveHeadersStep = new SaveHeadersStep(protocolContext.getBlockchain());
@@ -153,8 +155,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
                 "action"),
             true,
             "fastSync")
-        .thenProcessAsyncOrdered(
-            "downloadHeaders", downloadHeadersStep, downloaderHeaderParallelism)
+        .thenProcessAsync("downloadHeaders", downloadHeadersStep, downloaderHeaderParallelism)
         .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
         .andFinishWith("saveHeader", saveHeadersStep);
   }

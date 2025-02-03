@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.eth.sync;
 
 import static java.util.Collections.emptyList;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static org.hyperledger.besu.util.log.LogUtil.throttledLog;
 
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -34,7 +35,9 @@ import org.hyperledger.besu.util.FutureUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 import org.slf4j.Logger;
@@ -43,6 +46,8 @@ import org.slf4j.LoggerFactory;
 public class DownloadHeadersStep
     implements Function<SyncTargetRange, CompletableFuture<RangeHeaders>> {
   private static final Logger LOG = LoggerFactory.getLogger(DownloadHeadersStep.class);
+  private static final int LOG_REPEAT_DELAY = 30;
+
   private final ProtocolSchedule protocolSchedule;
   private final ProtocolContext protocolContext;
   private final EthContext ethContext;
@@ -50,6 +55,8 @@ public class DownloadHeadersStep
   private final SynchronizerConfiguration synchronizerConfiguration;
   private final int headerRequestSize;
   private final MetricsSystem metricsSystem;
+  private final Optional<BlockHeader> pivotHeader;
+  private final AtomicBoolean logInfo = new AtomicBoolean(true);
 
   public DownloadHeadersStep(
       final ProtocolSchedule protocolSchedule,
@@ -58,7 +65,8 @@ public class DownloadHeadersStep
       final ValidationPolicy validationPolicy,
       final SynchronizerConfiguration synchronizerConfiguration,
       final int headerRequestSize,
-      final MetricsSystem metricsSystem) {
+      final MetricsSystem metricsSystem,
+      final Optional<BlockHeader> pivotHeader) {
     this.protocolSchedule = protocolSchedule;
     this.protocolContext = protocolContext;
     this.ethContext = ethContext;
@@ -66,6 +74,7 @@ public class DownloadHeadersStep
     this.synchronizerConfiguration = synchronizerConfiguration;
     this.headerRequestSize = headerRequestSize;
     this.metricsSystem = metricsSystem;
+    this.pivotHeader = pivotHeader;
   }
 
   @Override
@@ -137,6 +146,21 @@ public class DownloadHeadersStep
 
   private RangeHeaders processHeaders(
       final SyncTargetRange checkpointRange, final List<BlockHeader> headers) {
+    if (pivotHeader.isPresent()) {
+      double importPercent =
+          (double) (100 * headers.getLast().getNumber()) / pivotHeader.get().getNumber();
+      throttledLog(
+          LOG::info,
+          String.format(
+              "Block header import progress: %d of %d (%.2f%%), Peer count: %d}",
+              headers.getLast().getNumber(),
+              pivotHeader.get().getNumber(),
+              importPercent,
+              ethContext.getEthPeers().peerCount()),
+          logInfo,
+          LOG_REPEAT_DELAY);
+    }
+
     if (checkpointRange.hasEnd()) {
       final List<BlockHeader> headersToImport = new ArrayList<>(headers);
       headersToImport.add(checkpointRange.getEnd());

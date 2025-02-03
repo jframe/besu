@@ -162,7 +162,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       paramLabel = "<INTEGER>",
       description = "Number of threads to provide to chain downloader (default: ${DEFAULT-VALUE})")
   private int downloaderHeaderParallelism =
-      SynchronizerConfiguration.DEFAULT_DOWNLOADER_PARALLELISM;
+      SynchronizerConfiguration.DEFAULT_DOWNLOADER_HEADER_PARALLELISM;
 
   @CommandLine.Option(
       names = TRANSACTIONS_PARALLELISM_FLAG,

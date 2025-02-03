@@ -36,6 +36,7 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
+import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
 import org.slf4j.Logger;
@@ -102,7 +103,8 @@ public class FullSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             detachedValidationPolicy,
             syncConfig,
             headerRequestSize,
-            metricsSystem);
+            metricsSystem,
+            Optional.empty());
     final RangeHeadersValidationStep validateHeadersJoinUpStep =
         new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
     final DownloadBodiesStep downloadBodiesStep =

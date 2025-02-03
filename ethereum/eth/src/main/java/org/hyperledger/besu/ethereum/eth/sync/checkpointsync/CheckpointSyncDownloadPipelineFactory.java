@@ -53,7 +53,7 @@ public class CheckpointSyncDownloadPipelineFactory extends FastSyncDownloadPipel
       final Pipeline<?> pipeline) {
     return scheduler
         .startPipeline(createDownloadCheckPointPipeline(syncState, syncTarget))
-        .thenCompose(unused -> scheduler.startPipeline(pipeline));
+        .thenCompose(unused -> super.startPipeline(scheduler, syncState, syncTarget, pipeline));
   }
 
   protected Pipeline<Hash> createDownloadCheckPointPipeline(
