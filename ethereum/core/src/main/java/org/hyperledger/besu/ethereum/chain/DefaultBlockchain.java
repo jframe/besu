@@ -418,7 +418,7 @@ public class DefaultBlockchain implements MutableBlockchain {
   public synchronized void appendBlockWithoutHeader(
       final Block block, final List<TransactionReceipt> receipts, final boolean txIndexing) {
     if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
-    appendBlockHelper(new BlockWithReceipts(block, receipts), false, true, true);
+    appendBlockHelper(new BlockWithReceipts(block, receipts), false, txIndexing, true);
   }
 
   @Override
@@ -432,6 +432,12 @@ public class DefaultBlockchain implements MutableBlockchain {
       final Block block, final List<TransactionReceipt> receipts) {
     if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
     appendBlockHelper(new BlockWithReceipts(block, receipts), false, false, false);
+  }
+
+  @Override
+  public synchronized void storeBlock(final Block block, final List<TransactionReceipt> receipts) {
+    if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
+    appendBlockHelper(new BlockWithReceipts(block, receipts), true, true, false);
   }
 
   @Override
