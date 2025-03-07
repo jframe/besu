@@ -14,13 +14,6 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.DETACHED_ONLY;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.FULL;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_DETACHED_ONLY;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_SKIP_DETACHED;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DETACHED;
-
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
@@ -44,12 +37,17 @@ import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.FULL;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_SKIP_DETACHED;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.NONE;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DETACHED;
 
 public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory {
   private static final Logger LOG = LoggerFactory.getLogger(FastSyncDownloadPipelineFactory.class);
@@ -98,8 +96,8 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
     detachedValidationPolicy =
         new FastSyncValidationPolicy(
             this.syncConfig.getFastSyncFullValidationRate(),
-            LIGHT_DETACHED_ONLY,
-            DETACHED_ONLY,
+            NONE,
+            NONE,
             fastSyncValidationCounter);
   }
 
@@ -111,7 +109,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
       final Pipeline<?> pipeline) {
     return scheduler
         .startPipeline(createDownloadHeadersPipeline(syncTarget))
-        .thenCompose(__ -> scheduler.startPipeline(pipeline));
+        .thenCompose(ignore -> scheduler.startPipeline(pipeline));
   }
 
   protected Pipeline<SyncTargetRange> createDownloadHeadersPipeline(final SyncTarget target) {
