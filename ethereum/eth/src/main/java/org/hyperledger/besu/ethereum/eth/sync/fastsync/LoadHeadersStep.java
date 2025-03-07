@@ -42,7 +42,7 @@ public class LoadHeadersStep
 
   @Override
   public CompletableFuture<List<BlockHeader>> apply(final SyncTargetRange checkpointRange) {
-    LOG.info(
+    LOG.debug(
         "Loading headers for range {} to {}", checkpointRange.getStart(), checkpointRange.getEnd());
     if (checkpointRange.getSegmentLengthExclusive() == 0) {
       // There are no extra headers to download.

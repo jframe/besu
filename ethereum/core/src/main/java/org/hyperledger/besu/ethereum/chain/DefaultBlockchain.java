@@ -429,7 +429,7 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   @Override
   public synchronized void appendBlockWithoutIndexingTransactions(
-    final Block block, final List<TransactionReceipt> receipts) {
+      final Block block, final List<TransactionReceipt> receipts) {
     if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
     appendBlockHelper(new BlockWithReceipts(block, receipts), false, false, false);
   }
@@ -463,7 +463,10 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   private void appendBlockHelper(
-      final BlockWithReceipts blockWithReceipts, final boolean storeOnly, final boolean transactionIndexing, final boolean blocksOnly) {
+      final BlockWithReceipts blockWithReceipts,
+      final boolean storeOnly,
+      final boolean transactionIndexing,
+      final boolean blocksOnly) {
 
     if (!blockShouldBeProcessed(blockWithReceipts.getBlock(), blockWithReceipts.getReceipts())) {
       return;
