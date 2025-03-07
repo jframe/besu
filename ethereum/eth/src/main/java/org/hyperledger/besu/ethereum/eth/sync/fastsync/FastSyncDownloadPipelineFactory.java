@@ -14,6 +14,12 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.FULL;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_SKIP_DETACHED;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.NONE;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DETACHED;
+
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
@@ -37,17 +43,12 @@ import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.FULL;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_SKIP_DETACHED;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.NONE;
-import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DETACHED;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory {
   private static final Logger LOG = LoggerFactory.getLogger(FastSyncDownloadPipelineFactory.class);
@@ -95,10 +96,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             fastSyncValidationCounter);
     detachedValidationPolicy =
         new FastSyncValidationPolicy(
-            this.syncConfig.getFastSyncFullValidationRate(),
-            NONE,
-            NONE,
-            fastSyncValidationCounter);
+            this.syncConfig.getFastSyncFullValidationRate(), NONE, NONE, fastSyncValidationCounter);
   }
 
   @Override
