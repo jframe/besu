@@ -14,8 +14,10 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.DETACHED_ONLY;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.FULL;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT;
+import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_DETACHED_ONLY;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.LIGHT_SKIP_DETACHED;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.NONE;
 import static org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode.SKIP_DETACHED;
@@ -62,6 +64,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
   protected final FastSyncValidationPolicy attachedValidationPolicy;
   protected final FastSyncValidationPolicy detachedValidationPolicy;
   protected final FastSyncValidationPolicy ommerValidationPolicy;
+  private final FastSyncValidationPolicy headerValidationPolicy;
 
   public FastSyncDownloadPipelineFactory(
       final SynchronizerConfiguration syncConfig,
@@ -96,6 +99,12 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             fastSyncValidationCounter);
     detachedValidationPolicy =
         new FastSyncValidationPolicy(
+            this.syncConfig.getFastSyncFullValidationRate(),
+            LIGHT_DETACHED_ONLY,
+            DETACHED_ONLY,
+            fastSyncValidationCounter);
+    headerValidationPolicy =
+        new FastSyncValidationPolicy(
             this.syncConfig.getFastSyncFullValidationRate(), NONE, NONE, fastSyncValidationCounter);
   }
 
@@ -125,12 +134,13 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             getCommonAncestor(target),
             syncConfig.getDownloaderCheckpointRetries(),
             SyncTerminationCondition.never());
+
     final DownloadHeadersStep downloadHeadersStep =
         new DownloadHeadersStep(
             protocolSchedule,
             protocolContext,
             ethContext,
-            detachedValidationPolicy,
+            headerValidationPolicy,
             syncConfig,
             headerRequestSize,
             metricsSystem,
