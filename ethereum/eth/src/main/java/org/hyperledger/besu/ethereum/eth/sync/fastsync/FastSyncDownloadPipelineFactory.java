@@ -174,7 +174,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
     final long syncTarget = protocolContext.getBlockchain().getChainHead().getHeight();
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
-            getCommonAncestor(target).getNumber(), syncTarget, downloaderParallelism);
+            getCommonAncestor(target).getNumber(), syncTarget, false, downloaderParallelism);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, syncConfig, metricsSystem);

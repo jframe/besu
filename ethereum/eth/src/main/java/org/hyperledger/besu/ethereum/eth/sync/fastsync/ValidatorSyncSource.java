@@ -20,14 +20,19 @@ import java.util.Optional;
 public class ValidatorSyncSource implements Iterator<SyncTargetNumberRange> {
   private final long checkpointTarget;
   private final long syncTarget;
+  private final boolean backwards;
   private final int headerRequestSize;
 
   private Optional<SyncTargetNumberRange> maybeLastRange = Optional.empty();
 
   public ValidatorSyncSource(
-      final long checkpointTarget, final long syncTarget, final int headerRequestSize) {
+          final long checkpointTarget,
+          final long syncTarget,
+          final boolean backwards,
+          final int headerRequestSize) {
     this.checkpointTarget = checkpointTarget;
     this.syncTarget = syncTarget;
+    this.backwards = backwards;
     this.headerRequestSize = headerRequestSize;
   }
 
@@ -53,15 +58,29 @@ public class ValidatorSyncSource implements Iterator<SyncTargetNumberRange> {
   }
 
   private SyncTargetNumberRange createFirstRange() {
-    return new SyncTargetNumberRange(syncTarget - headerRequestSize, syncTarget);
+    if (backwards) {
+      return new SyncTargetNumberRange(syncTarget - headerRequestSize, syncTarget);
+    } else {
+      final long startBlockNumber = Math.max(checkpointTarget, 1);
+      return new SyncTargetNumberRange(startBlockNumber, startBlockNumber + headerRequestSize);
+    }
   }
 
   private SyncTargetNumberRange createNextRange(final SyncTargetNumberRange lastRange) {
-    final long lowerBlockNumber = Math.max(lastRange.lowerBlockNumber() - headerRequestSize, 0);
-    return new SyncTargetNumberRange(lowerBlockNumber, lastRange.lowerBlockNumber());
+    if (backwards) {
+      final long lowerBlockNumber = Math.max(lastRange.lowerBlockNumber() - headerRequestSize, 0);
+      return new SyncTargetNumberRange(lowerBlockNumber, lastRange.lowerBlockNumber());
+    } else {
+      return new SyncTargetNumberRange(
+              lastRange.upperBlockNumber(), lastRange.upperBlockNumber() + headerRequestSize);
+    }
   }
 
   private boolean hasReachedCheckpointTarget() {
-    return maybeLastRange.map(r -> r.lowerBlockNumber() <= checkpointTarget).orElse(false);
+    if (backwards) {
+      return maybeLastRange.map(r -> r.lowerBlockNumber() <= checkpointTarget).orElse(false);
+    } else {
+      return maybeLastRange.map(r -> r.upperBlockNumber() >= syncTarget).orElse(false);
+    }
   }
 }
