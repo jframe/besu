@@ -26,10 +26,10 @@ public class ValidatorSyncSource implements Iterator<SyncTargetNumberRange> {
   private Optional<SyncTargetNumberRange> maybeLastRange = Optional.empty();
 
   public ValidatorSyncSource(
-          final long checkpointTarget,
-          final long syncTarget,
-          final boolean backwards,
-          final int headerRequestSize) {
+      final long checkpointTarget,
+      final long syncTarget,
+      final boolean backwards,
+      final int headerRequestSize) {
     this.checkpointTarget = checkpointTarget;
     this.syncTarget = syncTarget;
     this.backwards = backwards;
@@ -72,7 +72,7 @@ public class ValidatorSyncSource implements Iterator<SyncTargetNumberRange> {
       return new SyncTargetNumberRange(lowerBlockNumber, lastRange.lowerBlockNumber());
     } else {
       return new SyncTargetNumberRange(
-              lastRange.upperBlockNumber(), lastRange.upperBlockNumber() + headerRequestSize);
+          lastRange.upperBlockNumber(), lastRange.upperBlockNumber() + headerRequestSize);
     }
   }
 
