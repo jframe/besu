@@ -19,7 +19,6 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
-import org.hyperledger.besu.ethereum.eth.sync.range.SyncTargetRange;
 
 import java.util.List;
 import java.util.Optional;
@@ -32,7 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class LoadHeadersStep
-    implements Function<SyncTargetRange, CompletableFuture<List<BlockHeader>>> {
+    implements Function<SyncTargetNumberRange, CompletableFuture<List<BlockHeader>>> {
   private static final Logger LOG = LoggerFactory.getLogger(LoadHeadersStep.class);
   private final Blockchain blockchain;
 
@@ -41,22 +40,26 @@ public class LoadHeadersStep
   }
 
   @Override
-  public CompletableFuture<List<BlockHeader>> apply(final SyncTargetRange checkpointRange) {
-    LOG.debug(
-        "Loading headers for range {} to {}", checkpointRange.getStart(), checkpointRange.getEnd());
-    if (checkpointRange.getSegmentLengthExclusive() == 0) {
+  public CompletableFuture<List<BlockHeader>> apply(final SyncTargetNumberRange checkpointRange) {
+    return loadHeaders(checkpointRange);
+  }
+
+  private CompletableFuture<List<BlockHeader>> loadHeaders(final SyncTargetNumberRange range) {
+    LOG.info(
+        "Loading headers for range {} to {}", range.lowerBlockNumber(), range.upperBlockNumber());
+    if (range.getSegmentLengthExclusive() == 0) {
       // There are no extra headers to download.
       return completedFuture(emptyList());
     }
+    long startBlockNumber = range.lowerBlockNumber();
+    long endBlockNumber = range.upperBlockNumber();
 
-    long startBlockNumber = checkpointRange.getStart().getNumber();
-    long endBlockNumber = checkpointRange.getEnd().getNumber();
     List<BlockHeader> headers =
         Stream.iterate(startBlockNumber, n -> n + 1)
             .limit(endBlockNumber - startBlockNumber)
             .map(blockchain::getBlockHeader)
             .flatMap(Optional::stream)
             .collect(Collectors.toList());
-    return completedFuture(headers);
+    return CompletableFuture.completedFuture(headers);
   }
 }

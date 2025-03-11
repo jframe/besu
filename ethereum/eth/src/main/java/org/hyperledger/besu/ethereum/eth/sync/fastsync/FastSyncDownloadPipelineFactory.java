@@ -167,19 +167,14 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
   }
 
   @Override
-  public Pipeline<SyncTargetRange> createDownloadPipelineForSyncTarget(final SyncTarget target) {
+  public Pipeline<SyncTargetNumberRange> createDownloadPipelineForSyncTarget(
+      final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
 
-    final SyncTargetRangeSource checkpointRangeSource =
-        new SyncTargetRangeSource(
-            new RangeHeadersFetcher(
-                syncConfig, protocolSchedule, ethContext, fastSyncState, metricsSystem),
-            this::shouldContinueDownloadingFromPeer,
-            ethContext.getScheduler(),
-            target.peer(),
-            getCommonAncestor(target),
-            syncConfig.getDownloaderCheckpointRetries(),
-            SyncTerminationCondition.never());
+    final long syncTarget = protocolContext.getBlockchain().getChainHead().getHeight();
+    final ValidatorSyncSource validatorSyncSource =
+        new ValidatorSyncSource(
+            getCommonAncestor(target).getNumber(), syncTarget, downloaderParallelism);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, syncConfig, metricsSystem);
@@ -197,7 +192,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
 
     return PipelineBuilder.createPipelineFrom(
             "fetchCheckpoints",
-            checkpointRangeSource,
+            validatorSyncSource,
             downloaderParallelism,
             metricsSystem.createLabelledCounter(
                 BesuMetricCategory.SYNCHRONIZER,
