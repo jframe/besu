@@ -16,10 +16,11 @@ package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 public class ValidatorSyncSource implements Iterator<SyncTargetNumberRange> {
   private final long checkpointTarget;
-  private final long syncTarget;
+  private final Supplier<Long> syncTarget;
   private final boolean backwards;
   private final int headerRequestSize;
 
@@ -27,7 +28,7 @@ public class ValidatorSyncSource implements Iterator<SyncTargetNumberRange> {
 
   public ValidatorSyncSource(
       final long checkpointTarget,
-      final long syncTarget,
+      final Supplier<Long> syncTarget,
       final boolean backwards,
       final int headerRequestSize) {
     this.checkpointTarget = checkpointTarget;
@@ -59,7 +60,7 @@ public class ValidatorSyncSource implements Iterator<SyncTargetNumberRange> {
 
   private SyncTargetNumberRange createFirstRange() {
     if (backwards) {
-      return new SyncTargetNumberRange(syncTarget - headerRequestSize, syncTarget);
+      return new SyncTargetNumberRange(syncTarget.get() - headerRequestSize, syncTarget.get());
     } else {
       final long startBlockNumber = Math.max(checkpointTarget, 1);
       return new SyncTargetNumberRange(startBlockNumber, startBlockNumber + headerRequestSize);
@@ -80,7 +81,7 @@ public class ValidatorSyncSource implements Iterator<SyncTargetNumberRange> {
     if (backwards) {
       return maybeLastRange.map(r -> r.lowerBlockNumber() <= checkpointTarget).orElse(false);
     } else {
-      return maybeLastRange.map(r -> r.upperBlockNumber() >= syncTarget).orElse(false);
+      return maybeLastRange.map(r -> r.upperBlockNumber() >= syncTarget.get()).orElse(false);
     }
   }
 }

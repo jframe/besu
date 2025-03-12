@@ -116,7 +116,9 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
       final Pipeline<?> pipeline) {
     return scheduler
         .startPipeline(createDownloadHeadersPipeline(syncTarget))
-        .thenCompose(ignore -> scheduler.startPipeline(pipeline));
+        .thenCompose(ignore -> {
+          return scheduler.startPipeline(pipeline);
+        });
   }
 
   protected Pipeline<SyncTargetRange> createDownloadHeadersPipeline(final SyncTarget target) {
@@ -160,7 +162,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
                 "step",
                 "action"),
             true,
-            "fastSync")
+            "headerDownload")
         .thenProcessAsync("downloadHeaders", downloadHeadersStep, downloaderHeaderParallelism)
         .thenFlatMap("validateHeadersJoin", validateHeadersJoinUpStep, singleHeaderBufferSize)
         .andFinishWith("saveHeader", saveHeadersStep);
@@ -171,10 +173,12 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
       final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
 
-    final long syncTarget = protocolContext.getBlockchain().getChainHead().getHeight();
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
-            getCommonAncestor(target).getNumber(), syncTarget, false, downloaderParallelism);
+            getCommonAncestor(target).getNumber() + 1, // Start from the next block skipping checkpoint
+            () -> protocolContext.getBlockchain().getChainHead().getHeight(),
+            false,
+            downloaderParallelism);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, syncConfig, metricsSystem);

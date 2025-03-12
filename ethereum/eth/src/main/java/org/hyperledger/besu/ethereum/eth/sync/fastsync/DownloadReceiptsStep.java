@@ -25,10 +25,13 @@ import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResponseCode;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResult;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.task.GetReceiptsFromPeerTask;
+import org.hyperledger.besu.ethereum.eth.sync.DownloadBodiesStep;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.GetReceiptsForHeadersTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.List;
@@ -38,6 +41,7 @@ import java.util.function.Function;
 
 public class DownloadReceiptsStep
     implements Function<List<Block>, CompletableFuture<List<BlockWithReceipts>>> {
+  private static final Logger LOG = LoggerFactory.getLogger(DownloadReceiptsStep.class);
 
   private final ProtocolSchedule protocolSchedule;
   private final EthContext ethContext;
@@ -57,6 +61,7 @@ public class DownloadReceiptsStep
 
   @Override
   public CompletableFuture<List<BlockWithReceipts>> apply(final List<Block> blocks) {
+    LOG.info("Downloading receipts for {} blocks", blocks.size());
     final List<BlockHeader> headers = blocks.stream().map(Block::getHeader).collect(toList());
     if (synchronizerConfiguration.isPeerTaskSystemEnabled()) {
       return ethContext
