@@ -73,41 +73,46 @@ public class ImportBlocksStep implements Consumer<List<BlockWithReceipts>> {
   @Override
   public void accept(final List<BlockWithReceipts> blocksWithReceipts) {
     LOG.info("Importing {} blocks", blocksWithReceipts.size());
-    final long startTime = System.nanoTime();
-    for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
-      if (!importBlock(blockWithReceipts)) {
-        throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
+    try {
+      final long startTime = System.nanoTime();
+      for (final BlockWithReceipts blockWithReceipts : blocksWithReceipts) {
+        if (!importBlock(blockWithReceipts)) {
+          throw InvalidBlockException.fromInvalidBlock(blockWithReceipts.getHeader());
+        }
+        LOG.atTrace()
+            .setMessage("Imported block {}")
+            .addArgument(blockWithReceipts.getBlock()::toLogString)
+            .log();
       }
-      LOG.atTrace()
-          .setMessage("Imported block {}")
-          .addArgument(blockWithReceipts.getBlock()::toLogString)
-          .log();
-    }
-    if (logStartBlock.isEmpty()) {
-      logStartBlock = OptionalLong.of(blocksWithReceipts.get(0).getNumber());
-    }
-    final long lastBlock = blocksWithReceipts.get(blocksWithReceipts.size() - 1).getNumber();
-    int peerCount = -1; // ethContext is not available in tests
-    if (ethContext != null && ethContext.getEthPeers().peerCount() >= 0) {
-      peerCount = ethContext.getEthPeers().peerCount();
-    }
-    final long endTime = System.nanoTime();
+      if (logStartBlock.isEmpty()) {
+        logStartBlock = OptionalLong.of(blocksWithReceipts.get(0).getNumber());
+      }
+      final long lastBlock = blocksWithReceipts.get(blocksWithReceipts.size() - 1).getNumber();
+      int peerCount = -1; // ethContext is not available in tests
+      if (ethContext != null && ethContext.getEthPeers().peerCount() >= 0) {
+        peerCount = ethContext.getEthPeers().peerCount();
+      }
+      final long endTime = System.nanoTime();
 
-    accumulatedTime += TimeUnit.MILLISECONDS.convert(endTime - startTime, TimeUnit.NANOSECONDS);
-    if (accumulatedTime > PRINT_DELAY) {
-      final long blocksPercent = getBlocksPercent(lastBlock, pivotHeader.getNumber());
-      LOG.info(
-          "Block import progress: {} of {} ({}%), Peer count: {}",
-          lastBlock, pivotHeader.getNumber(), blocksPercent, peerCount);
-      LOG.debug(
-          "Completed importing chain segment {} to {} ({} blocks in {}ms), Peer count: {}",
-          logStartBlock.getAsLong(),
-          lastBlock,
-          lastBlock - logStartBlock.getAsLong() + 1,
-          accumulatedTime,
-          peerCount);
-      accumulatedTime = 0L;
-      logStartBlock = OptionalLong.empty();
+      accumulatedTime += TimeUnit.MILLISECONDS.convert(endTime - startTime, TimeUnit.NANOSECONDS);
+      if (accumulatedTime > PRINT_DELAY) {
+        final long blocksPercent = getBlocksPercent(lastBlock, pivotHeader.getNumber());
+        LOG.info(
+            "Block import progress: {} of {} ({}%), Peer count: {}",
+            lastBlock, pivotHeader.getNumber(), blocksPercent, peerCount);
+        LOG.debug(
+            "Completed importing chain segment {} to {} ({} blocks in {}ms), Peer count: {}",
+            logStartBlock.getAsLong(),
+            lastBlock,
+            lastBlock - logStartBlock.getAsLong() + 1,
+            accumulatedTime,
+            peerCount);
+        accumulatedTime = 0L;
+        logStartBlock = OptionalLong.empty();
+      }
+    } catch (Exception e) {
+      LOG.info("Error importing blocks", e);
+      throw new RuntimeException("Error importing blocks", e);
     }
   }
 
