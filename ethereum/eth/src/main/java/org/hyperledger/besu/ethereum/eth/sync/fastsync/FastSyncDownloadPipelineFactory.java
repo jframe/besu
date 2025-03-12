@@ -116,9 +116,10 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
       final Pipeline<?> pipeline) {
     return scheduler
         .startPipeline(createDownloadHeadersPipeline(syncTarget))
-        .thenCompose(ignore -> {
-          return scheduler.startPipeline(pipeline);
-        });
+        .thenCompose(
+            ignore -> {
+              return scheduler.startPipeline(pipeline);
+            });
   }
 
   protected Pipeline<SyncTargetRange> createDownloadHeadersPipeline(final SyncTarget target) {
@@ -175,7 +176,8 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
 
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
-            getCommonAncestor(target).getNumber() + 1, // Start from the next block skipping checkpoint
+            getCommonAncestor(target).getNumber()
+                + 1, // Start from the next block skipping checkpoint
             () -> protocolContext.getBlockchain().getChainHead().getHeight(),
             false,
             downloaderParallelism);

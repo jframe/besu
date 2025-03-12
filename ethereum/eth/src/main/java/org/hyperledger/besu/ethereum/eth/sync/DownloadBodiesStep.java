@@ -17,17 +17,17 @@ package org.hyperledger.besu.ethereum.eth.sync;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.LoadHeadersStep;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteBlocksTask;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.CompleteBlocksWithPeerTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DownloadBodiesStep
     implements Function<List<BlockHeader>, CompletableFuture<List<Block>>> {
