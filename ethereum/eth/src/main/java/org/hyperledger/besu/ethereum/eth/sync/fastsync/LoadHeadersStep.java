@@ -45,21 +45,30 @@ public class LoadHeadersStep
   }
 
   private CompletableFuture<List<BlockHeader>> loadHeaders(final SyncTargetNumberRange range) {
-    LOG.info(
-        "Loading headers for range {} to {}", range.lowerBlockNumber(), range.upperBlockNumber());
-    if (range.getSegmentLengthExclusive() == 0) {
-      // There are no extra headers to download.
-      return completedFuture(emptyList());
-    }
-    long startBlockNumber = range.lowerBlockNumber();
-    long endBlockNumber = range.upperBlockNumber();
+    try {
+      LOG.info(
+          "Loading headers for range {} to {}", range.lowerBlockNumber(), range.upperBlockNumber());
+      if (range.getSegmentLengthExclusive() == 0) {
+        // There are no extra headers to download.
+        return completedFuture(emptyList());
+      }
+      long startBlockNumber = range.lowerBlockNumber();
+      long endBlockNumber = range.upperBlockNumber();
 
-    List<BlockHeader> headers =
-        Stream.iterate(startBlockNumber, n -> n + 1)
-            .limit(endBlockNumber - startBlockNumber)
-            .map(blockchain::getBlockHeader)
-            .flatMap(Optional::stream)
-            .collect(Collectors.toList());
-    return CompletableFuture.completedFuture(headers);
+      List<BlockHeader> headers =
+          Stream.iterate(startBlockNumber, n -> n + 1)
+              .limit(endBlockNumber - startBlockNumber)
+              .map(blockchain::getBlockHeader)
+              .flatMap(Optional::stream)
+              .collect(Collectors.toList());
+      return CompletableFuture.completedFuture(headers);
+    } catch (final Exception e) {
+      LOG.error(
+          "Error loading headers for range {} to {}",
+          range.lowerBlockNumber(),
+          range.upperBlockNumber(),
+          e);
+      return CompletableFuture.completedFuture(emptyList());
+    }
   }
 }

@@ -51,15 +51,21 @@ public class DownloadBodiesStep
 
   @Override
   public CompletableFuture<List<Block>> apply(final List<BlockHeader> blockHeaders) {
-    LOG.info("Downloading block bodies for {} headers", blockHeaders.size());
-    if (synchronizerConfiguration.isPeerTaskSystemEnabled()) {
-      return ethContext
-          .getScheduler()
-          .scheduleServiceTask(() -> getBodiesWithPeerTaskSystem(blockHeaders));
-    } else {
-      return CompleteBlocksTask.forHeaders(
-              protocolSchedule, ethContext, blockHeaders, metricsSystem)
-          .run();
+    try {
+      LOG.info("Downloading block bodies for {} headers", blockHeaders.size());
+      if (synchronizerConfiguration.isPeerTaskSystemEnabled()) {
+        return ethContext
+            .getScheduler()
+            .scheduleServiceTask(() -> getBodiesWithPeerTaskSystem(blockHeaders));
+      } else {
+        return CompleteBlocksTask.forHeaders(
+                protocolSchedule, ethContext, blockHeaders, metricsSystem)
+            .run();
+      }
+
+    } catch (final Exception e) {
+      LOG.error("Error downloading block bodies", e);
+      return CompletableFuture.completedFuture(List.of());
     }
   }
 

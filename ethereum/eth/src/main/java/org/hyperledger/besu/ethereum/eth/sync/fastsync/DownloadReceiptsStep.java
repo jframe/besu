@@ -61,18 +61,23 @@ public class DownloadReceiptsStep
 
   @Override
   public CompletableFuture<List<BlockWithReceipts>> apply(final List<Block> blocks) {
-    LOG.info("Downloading receipts for {} blocks", blocks.size());
-    final List<BlockHeader> headers = blocks.stream().map(Block::getHeader).collect(toList());
-    if (synchronizerConfiguration.isPeerTaskSystemEnabled()) {
-      return ethContext
-          .getScheduler()
-          .scheduleServiceTask(() -> getReceiptsWithPeerTaskSystem(headers))
-          .thenApply((receipts) -> combineBlocksAndReceipts(blocks, receipts));
+    try {
+      LOG.info("Downloading receipts for {} blocks", blocks.size());
+      final List<BlockHeader> headers = blocks.stream().map(Block::getHeader).collect(toList());
+      if (synchronizerConfiguration.isPeerTaskSystemEnabled()) {
+        return ethContext
+            .getScheduler()
+            .scheduleServiceTask(() -> getReceiptsWithPeerTaskSystem(headers))
+            .thenApply((receipts) -> combineBlocksAndReceipts(blocks, receipts));
 
-    } else {
-      return GetReceiptsForHeadersTask.forHeaders(ethContext, headers, metricsSystem)
-          .run()
-          .thenApply((receipts) -> combineBlocksAndReceipts(blocks, receipts));
+      } else {
+        return GetReceiptsForHeadersTask.forHeaders(ethContext, headers, metricsSystem)
+            .run()
+            .thenApply((receipts) -> combineBlocksAndReceipts(blocks, receipts));
+      }
+    } catch (final Exception e) {
+      LOG.error("Error downloading receipts", e);
+      return CompletableFuture.completedFuture(List.of());
     }
   }
 
