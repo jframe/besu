@@ -112,13 +112,18 @@ public class PipelineChainDownloader implements ChainDownloader {
 
   private CompletionStage<Void> repeatUnlessDownloadComplete(
       @SuppressWarnings("unused") final Void result) {
-    syncState.clearSyncTarget();
-    if (syncTargetManager.shouldContinueDownloading()
-        && !syncState.hasReachedTerminalDifficulty().orElse(Boolean.FALSE)) {
-      return performDownload();
-    } else {
-      LOG.info("PipelineChain download complete");
-      return completedFuture(null);
+    try {
+      syncState.clearSyncTarget();
+      if (syncTargetManager.shouldContinueDownloading()
+          && !syncState.hasReachedTerminalDifficulty().orElse(Boolean.FALSE)) {
+        return performDownload();
+      } else {
+        LOG.info("PipelineChain download complete");
+        return completedFuture(null);
+      }
+    } catch (Exception e) {
+      LOG.error("Error in repeatUnlessDownloadComplete", e);
+      return CompletableFuture.failedFuture(e);
     }
   }
 
@@ -157,6 +162,8 @@ public class PipelineChainDownloader implements ChainDownloader {
   }
 
   private synchronized CompletionStage<Void> startDownloadForSyncTarget(final SyncTarget target) {
+    LOG.info("Starting download pipeline for sync target {}", target);
+
     if (cancelled.get() || syncState.hasReachedTerminalDifficulty().orElse(Boolean.FALSE)) {
       return CompletableFuture.failedFuture(
           new CancellationException("Chain download was cancelled"));

@@ -217,18 +217,26 @@ public class SyncTargetManager extends AbstractSyncTargetManager {
 
   @Override
   public boolean shouldContinueDownloading() {
-    final BlockHeader pivotBlockHeader = fastSyncState.getPivotBlockHeader().get();
-    boolean isValidChainHead =
-        protocolContext.getBlockchain().getChainHeadHash().equals(pivotBlockHeader.getHash());
-    if (!isValidChainHead) {
-      if (protocolContext.getBlockchain().contains(pivotBlockHeader.getHash())
-          && protocolContext.getBlockchain().getBlockBody(pivotBlockHeader.getHash()).isPresent()) {
-        protocolContext.getBlockchain().rewindToBlock(pivotBlockHeader.getHash());
-      } else {
-        return true;
+    try {
+      final BlockHeader pivotBlockHeader = fastSyncState.getPivotBlockHeader().get();
+      boolean isValidChainHead =
+          protocolContext.getBlockchain().getChainHeadHash().equals(pivotBlockHeader.getHash());
+      if (!isValidChainHead) {
+        if (protocolContext.getBlockchain().contains(pivotBlockHeader.getHash())
+            && protocolContext
+                .getBlockchain()
+                .getBlockBody(pivotBlockHeader.getHash())
+                .isPresent()) {
+          protocolContext.getBlockchain().rewindToBlock(pivotBlockHeader.getHash());
+        } else {
+          return true;
+        }
       }
+      return !worldStateStorageCoordinator.isWorldStateAvailable(
+          pivotBlockHeader.getStateRoot(), pivotBlockHeader.getBlockHash());
+    } catch (final Exception e) {
+      LOG.error("Error checking if should continue downloading", e);
+      return true;
     }
-    return !worldStateStorageCoordinator.isWorldStateAvailable(
-        pivotBlockHeader.getStateRoot(), pivotBlockHeader.getBlockHash());
   }
 }
