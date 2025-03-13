@@ -178,7 +178,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
         new ValidatorSyncSource(
             getCommonAncestor(target).getNumber()
                 + 1, // Start from the next block skipping checkpoint
-            () -> protocolContext.getBlockchain().getChainHead().getHeight(),
+            () -> fastSyncState.getPivotBlockHeader().get().getNumber(),
             false,
             downloaderParallelism);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
