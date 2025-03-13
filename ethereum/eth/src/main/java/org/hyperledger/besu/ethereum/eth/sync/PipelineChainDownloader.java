@@ -162,7 +162,10 @@ public class PipelineChainDownloader implements ChainDownloader {
   }
 
   private synchronized CompletionStage<Void> startDownloadForSyncTarget(final SyncTarget target) {
-    LOG.info("Starting download pipeline for sync target {}", target);
+    LOG.info(
+        "Starting download pipeline for sync target {}, {}",
+        target,
+        Thread.currentThread().getStackTrace());
 
     if (cancelled.get() || syncState.hasReachedTerminalDifficulty().orElse(Boolean.FALSE)) {
       return CompletableFuture.failedFuture(
