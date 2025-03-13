@@ -173,6 +173,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
   public Pipeline<SyncTargetNumberRange> createDownloadPipelineForSyncTarget(
       final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
+    final int requestSize = syncConfig.getDownloaderHeaderRequestSize();
 
     final ValidatorSyncSource validatorSyncSource =
         new ValidatorSyncSource(
@@ -180,7 +181,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
                 + 1, // Start from the next block skipping checkpoint
             () -> fastSyncState.getPivotBlockHeader().get().getNumber(),
             false,
-            downloaderParallelism);
+            requestSize);
     final LoadHeadersStep loadHeadersStep = new LoadHeadersStep(protocolContext.getBlockchain());
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, syncConfig, metricsSystem);
