@@ -64,7 +64,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
   protected final FastSyncValidationPolicy attachedValidationPolicy;
   protected final FastSyncValidationPolicy detachedValidationPolicy;
   protected final FastSyncValidationPolicy ommerValidationPolicy;
-  private final FastSyncValidationPolicy headerValidationPolicy;
+  private final FastSyncValidationPolicy noneHeaderValidationPolicy;
 
   public FastSyncDownloadPipelineFactory(
       final SynchronizerConfiguration syncConfig,
@@ -103,7 +103,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             LIGHT_DETACHED_ONLY,
             DETACHED_ONLY,
             fastSyncValidationCounter);
-    headerValidationPolicy =
+    noneHeaderValidationPolicy =
         new FastSyncValidationPolicy(
             this.syncConfig.getFastSyncFullValidationRate(), NONE, NONE, fastSyncValidationCounter);
   }
@@ -143,7 +143,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             protocolSchedule,
             protocolContext,
             ethContext,
-            headerValidationPolicy,
+            noneHeaderValidationPolicy,
             syncConfig,
             headerRequestSize,
             metricsSystem,
@@ -191,8 +191,8 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
         new ImportBlocksStep(
             protocolSchedule,
             protocolContext,
-            attachedValidationPolicy,
-            ommerValidationPolicy,
+            noneHeaderValidationPolicy,
+            noneHeaderValidationPolicy,
             ethContext,
             fastSyncState.getPivotBlockHeader().get(),
             syncConfig.getSnapSyncConfiguration().isSnapSyncTransactionIndexingEnabled());
