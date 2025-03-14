@@ -457,7 +457,7 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   private boolean blockShouldBeProcessed(
-      final Block block, final List<TransactionReceipt> receipts, final boolean blocksOnly) {
+      final Block block, final List<TransactionReceipt> receipts, boolean blocksOnly) {
     checkArgument(
         block.getBody().getTransactions().size() == receipts.size(),
         "Supplied receipts do not match block transactions.");
@@ -877,7 +877,7 @@ public class DefaultBlockchain implements MutableBlockchain {
     }
   }
 
-  private boolean blockIsAlreadyTracked(final Block block, final boolean blocksOnly) {
+  private boolean blockIsAlreadyTracked(final Block block, boolean blocksOnly) {
     if (block.getHeader().getParentHash().equals(chainHeader.getHash())) {
       // If this block builds on our chain head it would have a higher TD and be the chain head
       // but since it isn't we mustn't have imported it yet.
