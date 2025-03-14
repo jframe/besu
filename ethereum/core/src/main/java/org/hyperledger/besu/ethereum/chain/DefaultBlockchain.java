@@ -457,11 +457,11 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   private boolean blockShouldBeProcessed(
-      final Block block, final List<TransactionReceipt> receipts, boolean blocksOnly) {
+      final Block block, final List<TransactionReceipt> receipts) {
     checkArgument(
         block.getBody().getTransactions().size() == receipts.size(),
         "Supplied receipts do not match block transactions.");
-    if (blockIsAlreadyTracked(block, blocksOnly)) {
+    if (blockIsAlreadyTracked(block)) {
       return false;
     }
     checkArgument(blockIsConnected(block), "Attempt to append non-connected block.");
@@ -474,8 +474,8 @@ public class DefaultBlockchain implements MutableBlockchain {
       final boolean transactionIndexing,
       final boolean blocksOnly) {
 
-    if (blockShouldBeProcessed(
-        blockWithReceipts.getBlock(), blockWithReceipts.getReceipts(), blocksOnly)) {
+    if (!blocksOnly
+        && !blockShouldBeProcessed(blockWithReceipts.getBlock(), blockWithReceipts.getReceipts())) {
       return;
     }
 
@@ -877,19 +877,14 @@ public class DefaultBlockchain implements MutableBlockchain {
     }
   }
 
-  private boolean blockIsAlreadyTracked(final Block block, boolean blocksOnly) {
+  private boolean blockIsAlreadyTracked(final Block block) {
     if (block.getHeader().getParentHash().equals(chainHeader.getHash())) {
       // If this block builds on our chain head it would have a higher TD and be the chain head
       // but since it isn't we mustn't have imported it yet.
       // Saves a db read for the most common case
       return false;
     }
-
-    if (blocksOnly) {
-      return blockchainStorage.getBlockBody(block.getHash()).isPresent();
-    } else {
-      return blockchainStorage.getBlockHeader(block.getHash()).isPresent();
-    }
+    return blockchainStorage.getBlockHeader(block.getHash()).isPresent();
   }
 
   private boolean blockIsConnected(final Block block) {
