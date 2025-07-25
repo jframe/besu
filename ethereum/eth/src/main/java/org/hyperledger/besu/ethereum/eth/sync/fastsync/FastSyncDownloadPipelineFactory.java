@@ -45,12 +45,7 @@ import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 
 import java.util.concurrent.CompletionStage;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory {
-  private static final Logger LOG = LoggerFactory.getLogger(FastSyncDownloadPipelineFactory.class);
-
   protected final SynchronizerConfiguration syncConfig;
   protected final ProtocolSchedule protocolSchedule;
   protected final ProtocolContext protocolContext;
@@ -108,8 +103,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
       final Pipeline<?> pipeline) {
     return scheduler
         .startPipeline(createDownloadHeadersPipeline(syncTarget))
-        .thenCompose(
-            ignore -> scheduler.startPipeline(createDownloadBlocksPipeline(syncState, syncTarget)));
+        .thenCompose(ignore -> scheduler.startPipeline(createDownloadBlocksPipeline(syncState)));
   }
 
   // Implemented to satisfy the interface but not used in FastSync.
@@ -153,8 +147,7 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
         .andFinishWith("saveHeader", saveHeadersStep);
   }
 
-  private Pipeline<SyncTargetNumberRange> createDownloadBlocksPipeline(
-      final SyncState syncState, final SyncTarget target) {
+  private Pipeline<SyncTargetNumberRange> createDownloadBlocksPipeline(final SyncState syncState) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
 
