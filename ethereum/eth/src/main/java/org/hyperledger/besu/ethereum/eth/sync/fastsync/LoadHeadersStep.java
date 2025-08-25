@@ -61,6 +61,22 @@ public class LoadHeadersStep
               .map(blockchain::getBlockHeader)
               .flatMap(Optional::stream)
               .collect(Collectors.toList());
+      
+      // Check if all headers were loaded successfully
+      long expectedCount = endBlockNumber - startBlockNumber;
+      if (headers.size() != expectedCount) {
+        LOG.error(
+            "Missing headers in range {} to {}. Expected {} headers but found {}",
+            startBlockNumber,
+            endBlockNumber,
+            expectedCount,
+            headers.size());
+        throw new IllegalStateException(
+            String.format(
+                "Headers not available for range %d to %d. Expected %d headers but found %d",
+                startBlockNumber, endBlockNumber, expectedCount, headers.size()));
+      }
+      
       return CompletableFuture.completedFuture(headers);
     } catch (final Exception e) {
       LOG.error(
@@ -68,7 +84,10 @@ public class LoadHeadersStep
           range.lowerBlockNumber(),
           range.upperBlockNumber(),
           e);
-      return CompletableFuture.completedFuture(emptyList());
+      // Propagate the exception instead of returning empty list
+      CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
+      future.completeExceptionally(e);
+      return future;
     }
   }
 }

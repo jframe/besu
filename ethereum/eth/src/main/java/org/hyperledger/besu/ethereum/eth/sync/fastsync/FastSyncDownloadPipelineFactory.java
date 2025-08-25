@@ -114,10 +114,15 @@ public class FastSyncDownloadPipelineFactory implements DownloadPipelineFactory 
       final SyncState syncState,
       final SyncTarget syncTarget,
       final Pipeline<?> pipeline) {
+    // Create and store the headers pipeline so we can wait for its completion
+    final Pipeline<SyncTargetRange> headersPipeline = createDownloadHeadersPipeline(syncState, syncTarget);
+    
+    // Start the headers pipeline and wait for it to complete
     return scheduler
-        .startPipeline(createDownloadHeadersPipeline(syncState, syncTarget))
+        .startPipeline(headersPipeline)
         .thenCompose(
             ignore -> {
+              LOG.info("Headers download completed, starting body/receipt download");
               return scheduler.startPipeline(pipeline);
             });
   }
