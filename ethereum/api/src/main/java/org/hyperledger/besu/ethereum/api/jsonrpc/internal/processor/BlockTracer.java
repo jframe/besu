@@ -70,9 +70,8 @@ public class BlockTracer {
               tracer,
               blockReplay
                   .getProtocolSpec(header)
-                  .getBlockHashProcessor()
+                  .getPreExecutionProcessor()
                   .createBlockHashLookup(blockchain, header),
-              false,
               blobGasPrice);
       final List<TraceFrame> traceFrames = tracer.copyTraceFrames();
       tracer.reset();

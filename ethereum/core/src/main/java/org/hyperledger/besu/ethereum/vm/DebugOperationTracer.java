@@ -16,8 +16,8 @@ package org.hyperledger.besu.ethereum.vm;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.debug.OpCodeTracerConfig;
 import org.hyperledger.besu.ethereum.debug.TraceFrame;
-import org.hyperledger.besu.ethereum.debug.TraceOptions;
 import org.hyperledger.besu.evm.ModificationNotAllowedException;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -39,7 +39,7 @@ import org.apache.tuweni.units.bigints.UInt256;
 
 public class DebugOperationTracer implements OperationTracer {
 
-  private final TraceOptions options;
+  private final OpCodeTracerConfig options;
 
   /**
    * A flag to indicate if call operations should trace just the operation cost (false, Geth style,
@@ -64,7 +64,7 @@ public class DebugOperationTracer implements OperationTracer {
    * @param recordChildCallGas A flag on whether to produce geth style (true) or parity style
    *     (false) gas amounts for call operations
    */
-  public DebugOperationTracer(final TraceOptions options, final boolean recordChildCallGas) {
+  public DebugOperationTracer(final OpCodeTracerConfig options, final boolean recordChildCallGas) {
     this.options = options;
     this.recordChildCallGas = recordChildCallGas;
   }
@@ -214,7 +214,7 @@ public class DebugOperationTracer implements OperationTracer {
   }
 
   private Optional<Map<UInt256, UInt256>> captureStorage(final MessageFrame frame) {
-    if (!options.isStorageEnabled()) {
+    if (!options.traceStorage()) {
       return Optional.empty();
     }
     try {
@@ -230,7 +230,7 @@ public class DebugOperationTracer implements OperationTracer {
   }
 
   private Optional<Bytes[]> captureMemory(final MessageFrame frame) {
-    if (!options.isMemoryEnabled() || frame.memoryWordSize() == 0) {
+    if (!options.traceMemory() || frame.memoryWordSize() == 0) {
       return Optional.empty();
     }
     final Bytes[] memoryContents = new Bytes[frame.memoryWordSize()];
@@ -241,7 +241,7 @@ public class DebugOperationTracer implements OperationTracer {
   }
 
   private Optional<Bytes[]> captureStack(final MessageFrame frame) {
-    if (!options.isStackEnabled()) {
+    if (!options.traceStack()) {
       return Optional.empty();
     }
 

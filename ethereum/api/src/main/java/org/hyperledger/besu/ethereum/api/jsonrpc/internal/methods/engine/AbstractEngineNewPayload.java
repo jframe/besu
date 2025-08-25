@@ -173,7 +173,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
     try {
       maybeVersionedHashes = extractVersionedHashes(maybeVersionedHashParam);
     } catch (RuntimeException ex) {
-      return respondWithInvalid(
+      return respondWithError(
           reqId,
           blockParam,
           mergeCoordinator.getLatestValidAncestor(blockParam.getParentHash()).orElse(null),
@@ -203,7 +203,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
     try {
       maybeRequests = extractRequests(maybeRequestsParam);
     } catch (RequestType.InvalidRequestTypeException ex) {
-      return respondWithInvalid(
+      return respondWithError(
           reqId,
           blockParam,
           mergeCoordinator.getLatestValidAncestor(blockParam.getParentHash()).orElse(null),
@@ -285,6 +285,15 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
               "Computed block hash %s does not match block hash parameter %s",
               newBlockHeader.getBlockHash(), blockParam.getBlockHash());
       LOG.debug(errorMessage);
+      // If the block is invalid, we want to return INVALID
+      // from the spec:
+      // https://github.com/ethereum/execution-apis/blob/main/src/engine/prague.md#engine_newpayloadv4
+      // Given the executionRequests, client software MUST compute the execution requests commitment
+      // and incorporate it into the blockHash validation process.
+      // That is, if the computed commitment does not match the corresponding commitment in the
+      // execution layer block header,
+      // the call MUST return {status: INVALID, latestValidHash: null, validationError: errorMessage
+      // | null}.
       return respondWithInvalid(reqId, blockParam, null, getInvalidBlockHashStatus(), errorMessage);
     }
 
@@ -299,7 +308,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
             maybeVersionedHashes,
             protocolSchedule.get().getByBlockHeader(newBlockHeader));
     if (!blobValidationResult.isValid()) {
-      return respondWithInvalid(
+      return respondWithError(
           reqId,
           blockParam,
           mergeCoordinator.getLatestValidAncestor(blockParam.getParentHash()).orElse(null),
@@ -326,7 +335,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
     if (maybeParentHeader.isPresent()
         && (Long.compareUnsigned(maybeParentHeader.get().getTimestamp(), blockParam.getTimestamp())
             >= 0)) {
-      return respondWithInvalid(
+      return respondWithError(
           reqId,
           blockParam,
           mergeCoordinator.getLatestValidAncestor(blockParam.getParentHash()).orElse(null),
@@ -373,8 +382,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
         Throwable causedBy = executionResult.causedBy().get();
         if (causedBy instanceof StorageException || causedBy instanceof MerkleTrieException) {
           RpcErrorType error = RpcErrorType.INTERNAL_ERROR;
-          JsonRpcErrorResponse response = new JsonRpcErrorResponse(reqId, error);
-          return response;
+          return new JsonRpcErrorResponse(reqId, error);
         }
       }
       LOG.debug("New payload is invalid: {}", executionResult.errorMessage.get());
@@ -456,7 +464,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
   JsonRpcResponse respondWithInvalid(
       final Object requestId,
       final EnginePayloadParameter param,
-      final Hash latestValidHash,
+      final Hash latestValidHash, // this should be null for invalid
       final EngineStatus invalidStatus,
       final String validationError) {
     if (!INVALID.equals(invalidStatus) && !INVALID_BLOCK_HASH.equals(invalidStatus)) {
@@ -485,6 +493,36 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
             invalidStatus, latestValidHash, Optional.of(validationError)));
   }
 
+  JsonRpcResponse respondWithError(
+      final Object requestId,
+      final EnginePayloadParameter param,
+      final Hash latestValidHash,
+      final EngineStatus invalidStatus,
+      final String validationError) {
+    if (!INVALID.equals(invalidStatus) && !INVALID_BLOCK_HASH.equals(invalidStatus)) {
+      throw new IllegalArgumentException(
+          "Don't call respondWithError() with non-invalid status of " + invalidStatus.toString());
+    }
+    final String invalidBlockLogMessage =
+        String.format(
+            "Invalid new payload: number: %s, hash: %s, parentHash: %s, latestValidHash: %s, status: %s, validationError: %s",
+            param.getBlockNumber(),
+            param.getBlockHash(),
+            param.getParentHash(),
+            latestValidHash == null ? null : latestValidHash.toHexString(),
+            invalidStatus.name(),
+            validationError);
+    // always log invalid at DEBUG
+    LOG.debug(invalidBlockLogMessage);
+    // periodically log at WARN
+    if (lastInvalidWarn + ENGINE_API_LOGGING_THRESHOLD < System.currentTimeMillis()) {
+      lastInvalidWarn = System.currentTimeMillis();
+      LOG.warn(invalidBlockLogMessage);
+    }
+    // return ErrorResponse
+    return new JsonRpcErrorResponse(requestId, RpcErrorType.INVALID_ENGINE_PARAMS);
+  }
+
   protected EngineStatus getInvalidBlockHashStatus() {
     return INVALID;
   }
@@ -511,6 +549,12 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
       if (versionedHashes.isEmpty()) {
         return ValidationResult.invalid(
             RpcErrorType.INVALID_BLOB_COUNT, "There must be at least one blob");
+      }
+      if (protocolSpec.getGasCalculator().blobGasCost(versionedHashes.get().size())
+          > protocolSpec.getGasLimitCalculator().transactionBlobGasLimitCap()) {
+        return ValidationResult.invalid(
+            RpcErrorType.INVALID_BLOB_COUNT,
+            String.format("Blob transaction has too many blobs: %d", versionedHashes.get().size()));
       }
       transactionVersionedHashes.addAll(versionedHashes.get());
     }
@@ -615,18 +659,24 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
       final Optional<Integer> nbParallelizedTransactions) {
     final StringBuilder message = new StringBuilder();
     final int nbTransactions = block.getBody().getTransactions().size();
-    message.append("Imported #%,d  (%s)|%5d tx");
+    message.append("Imported #%,d  (%s)| %4d tx");
     final List<Object> messageArgs =
         new ArrayList<>(
             List.of(
                 block.getHeader().getNumber(), block.getHash().toShortLogString(), nbTransactions));
+    if (nbParallelizedTransactions.isPresent()) {
+      double parallelizedTxPercentage =
+          (double) (nbParallelizedTransactions.get() * 100) / nbTransactions;
+      message.append(" (%5.1f%% parallel)");
+      messageArgs.add(parallelizedTxPercentage);
+    }
     if (block.getBody().getWithdrawals().isPresent()) {
-      message.append("|%3d ws");
+      message.append("| %2d ws");
       messageArgs.add(block.getBody().getWithdrawals().get().size());
     }
     double mgasPerSec = (timeInS != 0) ? block.getHeader().getGasUsed() / (timeInS * 1_000_000) : 0;
     message.append(
-        "|%2d blobs| base fee %s| gas used %,11d (%5.1f%%)| exec time %01.3fs| mgas/s %6.2f");
+        "| %2d blobs| %s bfee| %,11d (%5.1f%%) gas used| %01.3fs exec| %6.2f Mgas/s| %2d peers");
     messageArgs.addAll(
         List.of(
             blobCount,
@@ -634,15 +684,8 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
             block.getHeader().getGasUsed(),
             (block.getHeader().getGasUsed() * 100.0) / block.getHeader().getGasLimit(),
             timeInS,
-            mgasPerSec));
-    if (nbParallelizedTransactions.isPresent()) {
-      double parallelizedTxPercentage =
-          (double) (nbParallelizedTransactions.get() * 100) / nbTransactions;
-      message.append("| parallel txs %5.1f%%");
-      messageArgs.add(parallelizedTxPercentage);
-    }
-    message.append("| peers: %2d");
-    messageArgs.add(ethPeers.peerCount());
+            mgasPerSec,
+            ethPeers.peerCount()));
     LOG.info(String.format(message.toString(), messageArgs.toArray()));
   }
 

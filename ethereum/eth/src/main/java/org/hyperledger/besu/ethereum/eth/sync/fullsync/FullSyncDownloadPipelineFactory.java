@@ -82,7 +82,8 @@ public class FullSyncDownloadPipelineFactory implements DownloadPipelineFactory 
   }
 
   @Override
-  public Pipeline<?> createDownloadPipelineForSyncTarget(final SyncTarget target) {
+  public Pipeline<?> createDownloadPipelineForSyncTarget(
+      final SyncState syncState, final SyncTarget target) {
     final int downloaderParallelism = syncConfig.getDownloaderParallelism();
     final int headerRequestSize = syncConfig.getDownloaderHeaderRequestSize();
     final int singleHeaderBufferSize = headerRequestSize * downloaderParallelism;
@@ -103,10 +104,8 @@ public class FullSyncDownloadPipelineFactory implements DownloadPipelineFactory 
             detachedValidationPolicy,
             syncConfig,
             headerRequestSize,
-            metricsSystem,
-            Optional.empty());
-    final RangeHeadersValidationStep validateHeadersJoinUpStep =
-        new RangeHeadersValidationStep(protocolSchedule, protocolContext, detachedValidationPolicy);
+            metricsSystem);
+    final RangeHeadersValidationStep validateHeadersJoinUpStep = new RangeHeadersValidationStep();
     final DownloadBodiesStep downloadBodiesStep =
         new DownloadBodiesStep(protocolSchedule, ethContext, syncConfig, metricsSystem);
     final ExtractTxSignaturesStep extractTxSignaturesStep = new ExtractTxSignaturesStep();

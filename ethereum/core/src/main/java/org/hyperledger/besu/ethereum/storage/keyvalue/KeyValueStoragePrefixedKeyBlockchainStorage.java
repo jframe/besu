@@ -28,7 +28,11 @@ import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.core.Difficulty;
+import org.hyperledger.besu.ethereum.core.SyncBlockBody;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.core.encoding.receipt.TransactionReceiptDecoder;
+import org.hyperledger.besu.ethereum.core.encoding.receipt.TransactionReceiptEncoder;
+import org.hyperledger.besu.ethereum.core.encoding.receipt.TransactionReceiptEncodingConfiguration;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
@@ -133,7 +137,7 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
   }
 
   private List<TransactionReceipt> rlpDecodeTransactionReceipts(final Bytes bytes) {
-    return RLP.input(bytes).readList(TransactionReceipt::readFrom);
+    return RLP.input(bytes).readList(in -> TransactionReceiptDecoder.readFrom(in, true));
   }
 
   private Hash bytesToHash(final Bytes bytes) {
@@ -279,6 +283,11 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
     }
 
     @Override
+    public void putSyncBlockBody(final Hash blockHash, final SyncBlockBody blockBody) {
+      set(BLOCK_BODY_PREFIX, blockHash, blockBody.getRlp());
+    }
+
+    @Override
     public void putTransactionLocation(
         final Hash transactionHash, final TransactionLocation transactionLocation) {
       set(TRANSACTION_LOCATION_PREFIX, transactionHash, RLP.encode(transactionLocation::writeTo));
@@ -375,7 +384,14 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
       return RLP.encode(
           o ->
               o.writeList(
-                  receipts, (r, rlpOutput) -> r.writeToForStorage(rlpOutput, receiptCompaction)));
+                  receipts,
+                  (r, rlpOutput) -> {
+                    var options =
+                        receiptCompaction
+                            ? TransactionReceiptEncodingConfiguration.STORAGE_WITH_COMPACTION
+                            : TransactionReceiptEncodingConfiguration.STORAGE_WITHOUT_COMPACTION;
+                    TransactionReceiptEncoder.writeTo(r, rlpOutput, options);
+                  }));
     }
 
     private void removeVariables() {

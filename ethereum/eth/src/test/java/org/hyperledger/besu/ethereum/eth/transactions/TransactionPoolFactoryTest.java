@@ -37,7 +37,6 @@ import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.MiningConfiguration;
-import org.hyperledger.besu.ethereum.core.PrivacyParameters;
 import org.hyperledger.besu.ethereum.core.Synchronizer;
 import org.hyperledger.besu.ethereum.eth.EthProtocolConfiguration;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
@@ -122,7 +121,7 @@ public class TransactionPoolFactoryTest {
             25,
             false,
             SyncMode.SNAP,
-            new ForkIdManager(blockchain, Collections.emptyList(), Collections.emptyList(), false));
+            new ForkIdManager(blockchain, Collections.emptyList(), Collections.emptyList()));
     when(ethContext.getEthMessages()).thenReturn(ethMessages);
     when(ethContext.getEthPeers()).thenReturn(ethPeers);
 
@@ -302,7 +301,8 @@ public class TransactionPoolFactoryTest {
 
   private void setupInitialSyncPhase(final SyncState syncState) {
     pool = createTransactionPool(LAYERED, syncState);
-
+    SynchronizerConfiguration syncConfig = mock(SynchronizerConfiguration.class);
+    when(syncConfig.getSyncMode()).thenReturn(SyncMode.FULL);
     ethProtocolManager =
         new EthProtocolManager(
             blockchain,
@@ -315,7 +315,7 @@ public class TransactionPoolFactoryTest {
             ethContext,
             Collections.emptyList(),
             Optional.empty(),
-            mock(SynchronizerConfiguration.class),
+            syncConfig,
             mock(EthScheduler.class),
             mock(ForkIdManager.class));
   }
@@ -374,7 +374,6 @@ public class TransactionPoolFactoryTest {
                 config,
                 Optional.of(DEFAULT_CHAIN_ID),
                 ProtocolSpecAdapters.create(0, Function.identity()),
-                PrivacyParameters.DEFAULT,
                 false,
                 EvmConfiguration.DEFAULT,
                 MiningConfiguration.MINING_DISABLED,

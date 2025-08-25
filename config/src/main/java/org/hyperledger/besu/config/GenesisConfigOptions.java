@@ -78,7 +78,7 @@ public interface GenesisConfigOptions {
    * @return the boolean
    */
   default boolean isConsensusMigration() {
-    return isIbft2() && isQbft();
+    return (isIbft2() || isIbftLegacy()) && isQbft();
   }
 
   /**
@@ -87,6 +87,13 @@ public interface GenesisConfigOptions {
    * @return the consensus engine
    */
   String getConsensusEngine();
+
+  /**
+   * Gets ibft legacy config options.
+   *
+   * @return the ibft legacy config options
+   */
+  IbftLegacyConfigOptions getIbftLegacyConfigOptions();
 
   /**
    * Gets checkpoint options.
@@ -262,6 +269,41 @@ public interface GenesisConfigOptions {
    * @return the osaka time
    */
   OptionalLong getOsakaTime();
+
+  /**
+   * Gets bpo1 time.
+   *
+   * @return the bpo1 time
+   */
+  OptionalLong getBpo1Time();
+
+  /**
+   * Gets bpo2 time.
+   *
+   * @return the bpo2 time
+   */
+  OptionalLong getBpo2Time();
+
+  /**
+   * Gets bpo3 time.
+   *
+   * @return the bpo3 time
+   */
+  OptionalLong getBpo3Time();
+
+  /**
+   * Gets bpo4 time.
+   *
+   * @return the bpo4 time
+   */
+  OptionalLong getBpo4Time();
+
+  /**
+   * Gets bpo5 time.
+   *
+   * @return the bpo5 time
+   */
+  OptionalLong getBpo5Time();
 
   /**
    * Gets future eips time.

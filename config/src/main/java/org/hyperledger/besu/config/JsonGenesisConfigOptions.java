@@ -118,6 +118,8 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
       return ETHASH_CONFIG_KEY;
     } else if (isIbft2()) {
       return IBFT2_CONFIG_KEY;
+    } else if (isIbftLegacy()) {
+      return IBFT_LEGACY_CONFIG_KEY;
     } else if (isQbft()) {
       return QBFT_CONFIG_KEY;
     } else if (isClique()) {
@@ -155,6 +157,13 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
   @Override
   public boolean isPoa() {
     return isQbft() || isClique() || isIbft2() || isIbftLegacy();
+  }
+
+  @Override
+  public IbftLegacyConfigOptions getIbftLegacyConfigOptions() {
+    return JsonUtil.getObjectNode(configRoot, IBFT_LEGACY_CONFIG_KEY)
+        .map(IbftLegacyConfigOptions::new)
+        .orElse(IbftLegacyConfigOptions.DEFAULT);
   }
 
   @Override
@@ -317,6 +326,31 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
   @Override
   public OptionalLong getOsakaTime() {
     return getOptionalLong("osakatime");
+  }
+
+  @Override
+  public OptionalLong getBpo1Time() {
+    return getOptionalLong("bpo1time");
+  }
+
+  @Override
+  public OptionalLong getBpo2Time() {
+    return getOptionalLong("bpo2time");
+  }
+
+  @Override
+  public OptionalLong getBpo3Time() {
+    return getOptionalLong("bpo3time");
+  }
+
+  @Override
+  public OptionalLong getBpo4Time() {
+    return getOptionalLong("bpo4time");
+  }
+
+  @Override
+  public OptionalLong getBpo5Time() {
+    return getOptionalLong("bpo5time");
   }
 
   @Override
@@ -494,6 +528,11 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
     getCancunEOFTime().ifPresent(l -> builder.put("cancunEOFTime", l));
     getPragueTime().ifPresent(l -> builder.put("pragueTime", l));
     getOsakaTime().ifPresent(l -> builder.put("osakaTime", l));
+    getBpo1Time().ifPresent(l -> builder.put("bpo1Time", l));
+    getBpo2Time().ifPresent(l -> builder.put("bpo2Time", l));
+    getBpo3Time().ifPresent(l -> builder.put("bpo3Time", l));
+    getBpo4Time().ifPresent(l -> builder.put("bpo4Time", l));
+    getBpo5Time().ifPresent(l -> builder.put("bpo5Time", l));
     getTerminalBlockNumber().ifPresent(l -> builder.put("terminalBlockNumber", l));
     getTerminalBlockHash().ifPresent(h -> builder.put("terminalBlockHash", h.toHexString()));
     getFutureEipsTime().ifPresent(l -> builder.put("futureEipsTime", l));
@@ -528,6 +567,9 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
     }
     if (isEthHash()) {
       builder.put("ethash", getEthashConfigOptions().asMap());
+    }
+    if (isIbftLegacy()) {
+      builder.put("ibft", getIbftLegacyConfigOptions().asMap());
     }
     if (isIbft2()) {
       builder.put("ibft2", getBftConfigOptions().asMap());
@@ -652,6 +694,11 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
             getCancunEOFTime(),
             getPragueTime(),
             getOsakaTime(),
+            getBpo1Time(),
+            getBpo2Time(),
+            getBpo3Time(),
+            getBpo4Time(),
+            getBpo5Time(),
             getFutureEipsTime(),
             getExperimentalEipsTime());
     // when adding forks add an entry to ${REPO_ROOT}/config/src/test/resources/all_forks.json

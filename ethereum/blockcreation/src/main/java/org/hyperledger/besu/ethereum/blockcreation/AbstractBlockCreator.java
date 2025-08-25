@@ -16,7 +16,7 @@ package org.hyperledger.besu.ethereum.blockcreation;
 
 import static org.hyperledger.besu.ethereum.core.BlockHeaderBuilder.createPending;
 import static org.hyperledger.besu.ethereum.mainnet.feemarket.ExcessBlobGasCalculator.calculateExcessBlobGasForParent;
-import static org.hyperledger.besu.ethereum.trie.diffbased.common.provider.WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.BlobGas;
@@ -184,7 +184,7 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
       final Optional<Bytes32> maybePrevRandao,
       final Optional<Bytes32> maybeParentBeaconBlockRoot,
       final long timestamp,
-      boolean rewardCoinbase,
+      final boolean rewardCoinbase,
       final BlockHeader parentHeader) {
 
     final var timings = new BlockCreationTiming();
@@ -205,7 +205,7 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
               .buildProcessableBlockHeader();
 
       final Address miningBeneficiary =
-          miningBeneficiaryCalculator.getMiningBeneficiary(processableBlockHeader.getNumber());
+          miningBeneficiaryCalculator.getMiningBeneficiary(timestamp, processableBlockHeader);
 
       throwIfStopped();
 
@@ -219,21 +219,19 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
               .getTransactionSelectionService()
               .createPluginTransactionSelector(selectorsStateManager);
       final var operationTracer = pluginTransactionSelector.getOperationTracer();
-      pluginTransactionSelector
-          .getOperationTracer()
-          .traceStartBlock(processableBlockHeader, miningBeneficiary);
+      operationTracer.traceStartBlock(
+          disposableWorldState, processableBlockHeader, miningBeneficiary);
 
-      operationTracer.traceStartBlock(processableBlockHeader, miningBeneficiary);
       BlockProcessingContext blockProcessingContext =
           new BlockProcessingContext(
               processableBlockHeader,
               disposableWorldState,
               newProtocolSpec,
               newProtocolSpec
-                  .getBlockHashProcessor()
+                  .getPreExecutionProcessor()
                   .createBlockHashLookup(protocolContext.getBlockchain(), processableBlockHeader),
               operationTracer);
-      newProtocolSpec.getBlockHashProcessor().process(blockProcessingContext);
+      newProtocolSpec.getPreExecutionProcessor().process(blockProcessingContext);
 
       timings.register("preTxsSelection");
       final TransactionSelectionResults transactionResults =
@@ -343,7 +341,7 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
       final ProtocolSpec newProtocolSpec,
       final BlockHeader parentHeader) {
 
-    if (newProtocolSpec.getFeeMarket().implementsDataFee()) {
+    if (newProtocolSpec.getFeeMarket().implementsBlobFee()) {
       final var gasCalculator = newProtocolSpec.getGasCalculator();
       final int newBlobsCount =
           transactionResults.getTransactionsByType(TransactionType.BLOB).stream()
@@ -392,10 +390,7 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
             isCancelled::get,
             miningBeneficiary,
             blobGasPrice,
-            protocolSpec.getFeeMarket(),
-            protocolSpec.getGasCalculator(),
-            protocolSpec.getGasLimitCalculator(),
-            protocolSpec.getBlockHashProcessor(),
+            protocolSpec,
             pluginTransactionSelector,
             ethScheduler,
             selectorsStateManager);
@@ -495,6 +490,6 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
 
   @FunctionalInterface
   protected interface MiningBeneficiaryCalculator {
-    Address getMiningBeneficiary(long blockNumber);
+    Address getMiningBeneficiary(long blockTimestamp, ProcessableBlockHeader parentHeader);
   }
 }
