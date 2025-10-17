@@ -402,14 +402,32 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
     }
 
     private Bytes rlpEncodeSyncReceipts(final List<SyncTransactionReceipt> syncReceipts) {
-      return RLP.encode(
-          o ->
-              o.writeList(
-                  syncReceipts,
-                  (sr, rlpOutput) -> {
-                    // Use the already-encoded bytes from SyncTransactionReceipt
-                    rlpOutput.writeRaw(sr.getEncodedBytes());
-                  }));
+      if (receiptCompaction) {
+        // When compaction is enabled, we need to decode and re-encode with compaction options
+        // This is because the sync receipts are encoded in network/trie-root format without compaction
+        return RLP.encode(
+            o ->
+                o.writeList(
+                    syncReceipts,
+                    (sr, rlpOutput) -> {
+                      final var receipt = sr.getReceiptSupplier().get();
+                      TransactionReceiptEncoder.writeTo(
+                          receipt,
+                          rlpOutput,
+                          TransactionReceiptEncodingConfiguration.STORAGE_WITH_COMPACTION);
+                    }));
+      } else {
+        // Without compaction, we can use the already-encoded bytes directly
+        // This is the optimal path that avoids decoding
+        return RLP.encode(
+            o ->
+                o.writeList(
+                    syncReceipts,
+                    (sr, rlpOutput) -> {
+                      // Use the already-encoded bytes from SyncTransactionReceipt
+                      rlpOutput.writeRaw(sr.getEncodedBytes());
+                    }));
+      }
     }
 
     private void removeVariables() {
