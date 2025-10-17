@@ -88,7 +88,7 @@ public class ImportSyncBlocksStepTest {
       when(blockImporter.importSyncBlockForSyncing(
               protocolContext,
               blockWithReceipts.getBlock(),
-              blockWithReceipts.getReceipts(),
+              blockWithReceipts.getSyncReceipts(),
               false))
           .thenReturn(new BlockImportResult(true));
     }

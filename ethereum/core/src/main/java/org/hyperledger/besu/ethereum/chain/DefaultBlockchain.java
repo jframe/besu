@@ -30,6 +30,7 @@ import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.LogWithMetadata;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
@@ -502,16 +503,16 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   @Override
   public synchronized void appendSyncBlock(
-      final SyncBlock block, final List<TransactionReceipt> receipts) {
+      final SyncBlock block, final List<SyncTransactionReceipt> syncReceipts) {
     cacheBlockHeader(block.getHeader());
-    appendSyncBlockHelper(block, receipts, true);
+    appendSyncBlockHelper(block, syncReceipts, true);
   }
 
   @Override
   public synchronized void appendSyncBlockWithoutIndexingTransactions(
-      final SyncBlock block, final List<TransactionReceipt> receipts) {
+      final SyncBlock block, final List<SyncTransactionReceipt> syncReceipts) {
     cacheBlockHeader(block.getHeader());
-    appendSyncBlockHelper(block, receipts, false);
+    appendSyncBlockHelper(block, syncReceipts, false);
   }
 
   @Override
@@ -602,7 +603,7 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   private void appendSyncBlockHelper(
       final SyncBlock block,
-      final List<TransactionReceipt> receipts,
+      final List<SyncTransactionReceipt> syncReceipts,
       final boolean transactionIndexing) {
 
     if (blockIsAlreadyTracked(block.getHeader())) {
@@ -616,12 +617,12 @@ public class DefaultBlockchain implements MutableBlockchain {
 
     updater.putBlockHeader(hash, block.getHeader());
     updater.putSyncBlockBody(hash, block.getBody());
-    updater.putTransactionReceipts(hash, receipts);
+    updater.putSyncTransactionReceipts(hash, syncReceipts);
     updater.putTotalDifficulty(hash, td);
 
     final BlockAddedEvent blockAddedEvent;
 
-    blockAddedEvent = updateCanonicalChainData(updater, block, receipts, transactionIndexing);
+    blockAddedEvent = updateCanonicalChainData(updater, block, syncReceipts, transactionIndexing);
     if (blockAddedEvent.isNewCanonicalHead()) {
       updateCacheForNewCanonicalHead(block, td);
     }
@@ -723,7 +724,7 @@ public class DefaultBlockchain implements MutableBlockchain {
   private BlockAddedEvent updateCanonicalChainData(
       final BlockchainStorage.Updater updater,
       final SyncBlock newBlock,
-      final List<TransactionReceipt> receipts,
+      final List<SyncTransactionReceipt> syncReceipts,
       final boolean transactionIndexing) {
 
     final Hash chainHead = blockchainStorage.getChainHead().orElse(null);
@@ -734,7 +735,7 @@ public class DefaultBlockchain implements MutableBlockchain {
 
     try {
       if (newBlock.getHeader().getParentHash().equals(chainHead) || chainHead == null) {
-        return handleNewHead(updater, newBlock, receipts, transactionIndexing);
+        return handleNewHead(updater, newBlock, syncReceipts, transactionIndexing);
       } else {
         throw new RuntimeException("Blocks during sync should always be in order");
       }
@@ -780,7 +781,7 @@ public class DefaultBlockchain implements MutableBlockchain {
   private BlockAddedEvent handleNewHead(
       final Updater updater,
       final SyncBlock newBlock,
-      final List<TransactionReceipt> receipts,
+      final List<SyncTransactionReceipt> syncReceipts,
       final boolean transactionIndexing) {
     // This block advances the chain, update the chain head
     final Hash newBlockHash = newBlock.getHash();
@@ -794,6 +795,10 @@ public class DefaultBlockchain implements MutableBlockchain {
     }
     gasUsedCounter.inc(newBlock.getHeader().getGasUsed());
     numberOfTransactionsCounter.inc(newBlock.getBody().getTransactionCount());
+
+    // Decode receipts only for event generation
+    final List<TransactionReceipt> receipts =
+        syncReceipts.stream().map(sr -> sr.getReceiptSupplier().get()).collect(toList());
 
     return BlockAddedEvent.createForSyncHeadAdvancement(
         newBlock.getHeader(),

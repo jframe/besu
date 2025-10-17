@@ -19,6 +19,7 @@ import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 
@@ -72,9 +73,9 @@ public interface MutableBlockchain extends Blockchain {
    * as long as they are connected.
    *
    * @param syncBlock The syncBlock to append.
-   * @param receipts The list of receipts associated with this syncBlock's transactions.
+   * @param syncReceipts The list of sync receipts associated with this syncBlock's transactions.
    */
-  void appendSyncBlock(SyncBlock syncBlock, List<TransactionReceipt> receipts);
+  void appendSyncBlock(SyncBlock syncBlock, List<SyncTransactionReceipt> syncReceipts);
 
   /**
    * Adds a syncBlock to the blockchain without indexing transactions.
@@ -84,10 +85,10 @@ public interface MutableBlockchain extends Blockchain {
    * as long as they are connected.
    *
    * @param syncBlock The block to append.
-   * @param receipts The list of receipts associated with this block's transactions.
+   * @param syncReceipts The list of sync receipts associated with this block's transactions.
    */
   void appendSyncBlockWithoutIndexingTransactions(
-      SyncBlock syncBlock, List<TransactionReceipt> receipts);
+      SyncBlock syncBlock, List<SyncTransactionReceipt> syncReceipts);
 
   /**
    * Adds a block to the blockchain, without updating the chain state.

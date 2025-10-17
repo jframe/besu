@@ -119,7 +119,7 @@ public class ImportSyncBlocksStep implements Consumer<List<SyncBlockWithReceipts
         importer.importSyncBlockForSyncing(
             protocolContext,
             blockWithReceipts.getBlock(),
-            blockWithReceipts.getReceipts(),
+            blockWithReceipts.getSyncReceipts(),
             transactionIndexingEnabled);
     return blockImportResult.isImported();
   }

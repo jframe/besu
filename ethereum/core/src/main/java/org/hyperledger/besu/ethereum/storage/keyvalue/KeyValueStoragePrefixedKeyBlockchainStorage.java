@@ -29,6 +29,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.SyncBlockBody;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.core.encoding.receipt.TransactionReceiptDecoder;
 import org.hyperledger.besu.ethereum.core.encoding.receipt.TransactionReceiptEncoder;
@@ -300,6 +301,12 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
     }
 
     @Override
+    public void putSyncTransactionReceipts(
+        final Hash blockHash, final List<SyncTransactionReceipt> syncTransactionReceipts) {
+      set(TRANSACTION_RECEIPTS_PREFIX, blockHash, rlpEncodeSyncReceipts(syncTransactionReceipts));
+    }
+
+    @Override
     public void putBlockHash(final long blockNumber, final Hash blockHash) {
       set(BLOCK_HASH_PREFIX, UInt256.valueOf(blockNumber), blockHash);
     }
@@ -391,6 +398,17 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
                             ? TransactionReceiptEncodingConfiguration.STORAGE_WITH_COMPACTION
                             : TransactionReceiptEncodingConfiguration.STORAGE_WITHOUT_COMPACTION;
                     TransactionReceiptEncoder.writeTo(r, rlpOutput, options);
+                  }));
+    }
+
+    private Bytes rlpEncodeSyncReceipts(final List<SyncTransactionReceipt> syncReceipts) {
+      return RLP.encode(
+          o ->
+              o.writeList(
+                  syncReceipts,
+                  (sr, rlpOutput) -> {
+                    // Use the already-encoded bytes from SyncTransactionReceipt
+                    rlpOutput.writeRaw(sr.getEncodedBytes());
                   }));
     }
 
