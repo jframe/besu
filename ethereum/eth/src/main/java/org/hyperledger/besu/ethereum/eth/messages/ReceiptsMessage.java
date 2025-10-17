@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.eth.messages;
 
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.core.encoding.receipt.TransactionReceiptDecoder;
 import org.hyperledger.besu.ethereum.core.encoding.receipt.TransactionReceiptEncoder;
@@ -89,6 +90,31 @@ public final class ReceiptsMessage extends AbstractMessageData {
       final List<TransactionReceipt> receiptSet = new ArrayList<>(setSize);
       for (int i = 0; i < setSize; i++) {
         receiptSet.add(TransactionReceiptDecoder.readFrom(input, false));
+      }
+      input.leaveList();
+      receipts.add(receiptSet);
+    }
+    input.leaveList();
+    return receipts;
+  }
+
+  /**
+   * Reads receipts from the message as SyncTransactionReceipts (minimally decoded).
+   *
+   * <p>This method is more memory efficient than {@link #receipts()} as it does not fully decode
+   * the receipt structures. The receipts can be lazily decoded when needed.
+   *
+   * @return a list of lists of sync transaction receipts
+   */
+  public List<List<SyncTransactionReceipt>> syncReceipts() {
+    final RLPInput input = new BytesValueRLPInput(data, false);
+    input.enterList();
+    final List<List<SyncTransactionReceipt>> receipts = new ArrayList<>();
+    while (input.nextIsList()) {
+      final int setSize = input.enterList();
+      final List<SyncTransactionReceipt> receiptSet = new ArrayList<>(setSize);
+      for (int i = 0; i < setSize; i++) {
+        receiptSet.add(SyncTransactionReceipt.readFrom(input));
       }
       input.leaveList();
       receipts.add(receiptSet);
