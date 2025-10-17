@@ -254,6 +254,85 @@ public class SyncTransactionReceiptTest {
     assertThat(decoded.getLogsList()).isEmpty();
   }
 
+  @Test
+  public void shouldCreateSyncReceiptFromDecodedReceipt() {
+    // Create a fully decoded receipt
+    final TransactionReceipt originalReceipt =
+        new TransactionReceipt(TransactionType.EIP1559, 1, 12345L, createLogs(2), Optional.empty());
+
+    // Create SyncTransactionReceipt from the decoded receipt
+    final SyncTransactionReceipt syncReceipt = SyncTransactionReceipt.fromDecoded(originalReceipt);
+
+    // The receipt supplier should return the original receipt directly
+    final TransactionReceipt returnedReceipt = syncReceipt.getReceiptSupplier().get();
+    assertThat(returnedReceipt).isSameAs(originalReceipt);
+    assertThat(returnedReceipt).isEqualTo(originalReceipt);
+  }
+
+  @Test
+  public void shouldReturnSameReceiptMultipleTimesWhenCreatedFromDecoded() {
+    // Create a fully decoded receipt
+    final TransactionReceipt originalReceipt =
+        new TransactionReceipt(
+            TransactionType.FRONTIER, 0, 99999L, createLogs(1), Optional.empty());
+
+    // Create SyncTransactionReceipt from the decoded receipt
+    final SyncTransactionReceipt syncReceipt = SyncTransactionReceipt.fromDecoded(originalReceipt);
+
+    // Call getReceiptSupplier multiple times
+    final TransactionReceipt firstCall = syncReceipt.getReceiptSupplier().get();
+    final TransactionReceipt secondCall = syncReceipt.getReceiptSupplier().get();
+    final TransactionReceipt thirdCall = syncReceipt.getReceiptSupplier().get();
+
+    // All calls should return the same instance
+    assertThat(firstCall).isSameAs(originalReceipt);
+    assertThat(secondCall).isSameAs(originalReceipt);
+    assertThat(thirdCall).isSameAs(originalReceipt);
+  }
+
+  @Test
+  public void shouldThrowExceptionWhenGetEncodedBytesCalledOnFromDecodedReceipt() {
+    // Create a fully decoded receipt
+    final TransactionReceipt originalReceipt =
+        new TransactionReceipt(
+            TransactionType.ACCESS_LIST, 1, 54321L, createLogs(0), Optional.empty());
+
+    // Create SyncTransactionReceipt from the decoded receipt
+    final SyncTransactionReceipt syncReceipt = SyncTransactionReceipt.fromDecoded(originalReceipt);
+
+    // Calling getEncodedBytes should throw an exception since we don't have encoded bytes
+    try {
+      syncReceipt.getEncodedBytes();
+      throw new AssertionError("Expected UnsupportedOperationException");
+    } catch (UnsupportedOperationException e) {
+      assertThat(e.getMessage())
+          .contains(
+              "Cannot get encoded bytes from a SyncTransactionReceipt created from decoded receipt");
+    }
+  }
+
+  @Test
+  public void shouldWorkWithBothEncodedAndDecodedReceiptsInSameList() {
+    // Create one receipt from encoded bytes
+    final TransactionReceipt receipt1 =
+        new TransactionReceipt(TransactionType.FRONTIER, 1, 1000L, createLogs(1), Optional.empty());
+    final Bytes encodedBytes = encodeReceipt(receipt1);
+    final SyncTransactionReceipt syncReceipt1 = new SyncTransactionReceipt(encodedBytes);
+
+    // Create another receipt from decoded receipt
+    final TransactionReceipt receipt2 =
+        new TransactionReceipt(TransactionType.EIP1559, 1, 2000L, createLogs(2), Optional.empty());
+    final SyncTransactionReceipt syncReceipt2 = SyncTransactionReceipt.fromDecoded(receipt2);
+
+    // Both should work correctly
+    final TransactionReceipt decoded1 = syncReceipt1.getReceiptSupplier().get();
+    final TransactionReceipt decoded2 = syncReceipt2.getReceiptSupplier().get();
+
+    assertThat(decoded1.getCumulativeGasUsed()).isEqualTo(1000L);
+    assertThat(decoded2.getCumulativeGasUsed()).isEqualTo(2000L);
+    assertThat(decoded2).isSameAs(receipt2); // fromDecoded returns same instance
+  }
+
   // Helper methods
 
   private List<Log> createLogs(final int count) {

@@ -18,16 +18,18 @@ import org.hyperledger.besu.datatypes.Hash;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import com.google.common.base.MoreObjects;
 
 public class SyncBlockWithReceipts {
   private final SyncBlock block;
-  private final List<TransactionReceipt> receipts;
+  private final List<SyncTransactionReceipt> syncReceipts;
 
-  public SyncBlockWithReceipts(final SyncBlock block, final List<TransactionReceipt> receipts) {
+  public SyncBlockWithReceipts(
+      final SyncBlock block, final List<SyncTransactionReceipt> syncReceipts) {
     this.block = block;
-    this.receipts = receipts;
+    this.syncReceipts = syncReceipts;
   }
 
   public BlockHeader getHeader() {
@@ -38,8 +40,20 @@ public class SyncBlockWithReceipts {
     return block;
   }
 
+  public List<SyncTransactionReceipt> getSyncReceipts() {
+    return syncReceipts;
+  }
+
+  /**
+   * Lazily decode the sync receipts into full TransactionReceipt objects. This should only be
+   * called at the storage boundary when receipts need to be persisted to the database.
+   *
+   * @return List of fully decoded TransactionReceipt objects
+   */
   public List<TransactionReceipt> getReceipts() {
-    return receipts;
+    return syncReceipts.stream()
+        .map(sr -> sr.getReceiptSupplier().get())
+        .collect(Collectors.toList());
   }
 
   public long getNumber() {
@@ -59,19 +73,19 @@ public class SyncBlockWithReceipts {
       return false;
     }
     final SyncBlockWithReceipts that = (SyncBlockWithReceipts) o;
-    return Objects.equals(block, that.block) && Objects.equals(receipts, that.receipts);
+    return Objects.equals(block, that.block) && Objects.equals(syncReceipts, that.syncReceipts);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(block, receipts);
+    return Objects.hash(block, syncReceipts);
   }
 
   @Override
   public String toString() {
     return MoreObjects.toStringHelper(this)
         .add("block", block)
-        .add("receipts", receipts)
+        .add("syncReceipts", syncReceipts)
         .toString();
   }
 }

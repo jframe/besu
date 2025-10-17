@@ -40,6 +40,7 @@ import org.apache.tuweni.bytes.Bytes;
 public class SyncTransactionReceipt {
 
   private final Bytes encodedReceipt;
+  private final Supplier<TransactionReceipt> receiptSupplier;
 
   /**
    * Creates a SyncTransactionReceipt from the raw RLP-encoded bytes.
@@ -49,6 +50,16 @@ public class SyncTransactionReceipt {
    */
   public SyncTransactionReceipt(final Bytes encodedReceipt) {
     this.encodedReceipt = encodedReceipt;
+    this.receiptSupplier = null; // Will be lazily created in getReceiptSupplier()
+  }
+
+  /**
+   * Private constructor for creating a SyncTransactionReceipt with a pre-decoded receipt. Used by
+   * fromDecoded() factory method.
+   */
+  private SyncTransactionReceipt(final Supplier<TransactionReceipt> receiptSupplier) {
+    this.encodedReceipt = null;
+    this.receiptSupplier = receiptSupplier;
   }
 
   /**
@@ -59,7 +70,13 @@ public class SyncTransactionReceipt {
    * @return the encoded receipt bytes
    */
   public Bytes getEncodedBytes() {
-    return encodedReceipt;
+    if (encodedReceipt != null) {
+      return encodedReceipt;
+    }
+    // If we only have a decoded receipt (from fallback path), encode it for trie root computation
+    throw new UnsupportedOperationException(
+        "Cannot get encoded bytes from a SyncTransactionReceipt created from decoded receipt. "
+            + "Use getReceiptSupplier() instead.");
   }
 
   /**
@@ -78,6 +95,12 @@ public class SyncTransactionReceipt {
    * @return a supplier that decodes and returns the full TransactionReceipt
    */
   public Supplier<TransactionReceipt> getReceiptSupplier() {
+    // If this was created from an already-decoded receipt (fallback path), return that supplier
+    if (receiptSupplier != null) {
+      return receiptSupplier;
+    }
+
+    // Otherwise, create a supplier that lazily decodes from the encoded bytes
     return () -> {
       final BytesValueRLPInput input = new BytesValueRLPInput(encodedReceipt, false);
 
@@ -133,6 +156,19 @@ public class SyncTransactionReceipt {
     return new SyncTransactionReceipt(receiptBytes);
   }
 
+  /**
+   * Create a SyncTransactionReceipt from an already decoded TransactionReceipt. This is used for
+   * the fallback path when receipts are fetched using the old system that fully decodes receipts.
+   *
+   * @param receipt The fully decoded transaction receipt
+   * @return SyncTransactionReceipt wrapping the decoded receipt
+   */
+  public static SyncTransactionReceipt fromDecoded(final TransactionReceipt receipt) {
+    // Since we already have a decoded receipt, we don't need to store the encoded form
+    // Just create a supplier that returns the receipt directly
+    return new SyncTransactionReceipt(() -> receipt);
+  }
+
   @Override
   public boolean equals(final Object o) {
     if (this == o) {
@@ -142,16 +178,25 @@ public class SyncTransactionReceipt {
       return false;
     }
     final SyncTransactionReceipt that = (SyncTransactionReceipt) o;
-    return Objects.equals(encodedReceipt, that.encodedReceipt);
+    // For equality, compare based on what we have
+    if (encodedReceipt != null && that.encodedReceipt != null) {
+      return Objects.equals(encodedReceipt, that.encodedReceipt);
+    }
+    // If one or both have decoded receipts, we can't easily compare without decoding both
+    return false;
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(encodedReceipt);
+    return encodedReceipt != null ? Objects.hash(encodedReceipt) : Objects.hash(receiptSupplier);
   }
 
   @Override
   public String toString() {
-    return "SyncTransactionReceipt{" + "encodedReceipt=" + encodedReceipt + '}';
+    if (encodedReceipt != null) {
+      return "SyncTransactionReceipt{" + "encodedReceipt=" + encodedReceipt + '}';
+    } else {
+      return "SyncTransactionReceipt{" + "decodedReceipt=<supplier>" + '}';
+    }
   }
 }

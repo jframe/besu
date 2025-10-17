@@ -27,6 +27,7 @@ import org.hyperledger.besu.ethereum.core.BlockImporter;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
 import org.hyperledger.besu.ethereum.core.SyncBlockBody;
 import org.hyperledger.besu.ethereum.core.SyncBlockWithReceipts;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
 import org.hyperledger.besu.ethereum.mainnet.DefaultProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
@@ -77,7 +78,10 @@ public class ImportSyncBlocksStepTest {
             .map(
                 block ->
                     new SyncBlockWithReceipts(
-                        block, gen.receipts(realBlocks.get(i.getAndIncrement()))))
+                        block,
+                        gen.receipts(realBlocks.get(i.getAndIncrement())).stream()
+                            .map(SyncTransactionReceipt::fromDecoded)
+                            .collect(toList())))
             .collect(toList());
 
     for (final SyncBlockWithReceipts blockWithReceipts : blocksWithReceipts) {

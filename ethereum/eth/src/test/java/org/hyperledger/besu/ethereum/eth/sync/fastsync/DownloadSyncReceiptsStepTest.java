@@ -177,6 +177,49 @@ public class DownloadSyncReceiptsStepTest {
     assertThat(blocksWithReceipts.get(0).getReceipts().get(0)).isEqualTo(originalReceipt);
   }
 
+  @Test
+  public void shouldReturnSyncReceiptsWithoutDecodingInNewPath()
+      throws ExecutionException, InterruptedException {
+    DownloadSyncReceiptsStep downloadSyncReceiptsStep =
+        new DownloadSyncReceiptsStep(
+            protocolSchedule,
+            ethProtocolManager.ethContext(),
+            SynchronizerConfiguration.builder().isPeerTaskSystemEnabled(true).build(),
+            new NoOpMetricsSystem());
+
+    final List<SyncBlock> blocks = asList(mockSyncBlock());
+
+    // Create a sync receipt with encoded bytes (not decoded)
+    final TransactionReceipt originalReceipt =
+        new TransactionReceipt(1, 12345L, Collections.emptyList(), Optional.empty());
+    final SyncTransactionReceipt syncReceipt = Mockito.mock(SyncTransactionReceipt.class);
+    Mockito.when(syncReceipt.getReceiptSupplier()).thenReturn(() -> originalReceipt);
+
+    Map<BlockHeader, List<SyncTransactionReceipt>> syncReceiptsMap = new HashMap<>();
+    syncReceiptsMap.put(blocks.get(0).getHeader(), List.of(syncReceipt));
+
+    PeerTaskExecutorResult<Map<BlockHeader, List<SyncTransactionReceipt>>> peerTaskResult =
+        new PeerTaskExecutorResult<>(
+            Optional.of(syncReceiptsMap),
+            PeerTaskExecutorResponseCode.SUCCESS,
+            Collections.emptyList());
+    Mockito.when(peerTaskExecutor.execute(Mockito.any(GetSyncReceiptsFromPeerTask.class)))
+        .thenReturn(peerTaskResult);
+
+    final CompletableFuture<List<SyncBlockWithReceipts>> result =
+        downloadSyncReceiptsStep.apply(blocks);
+
+    // Verify that SyncBlockWithReceipts contains SyncTransactionReceipts (not decoded yet)
+    List<SyncBlockWithReceipts> blocksWithReceipts = result.get();
+    assertThat(blocksWithReceipts).hasSize(1);
+    assertThat(blocksWithReceipts.get(0).getSyncReceipts()).hasSize(1);
+    assertThat(blocksWithReceipts.get(0).getSyncReceipts().get(0)).isEqualTo(syncReceipt);
+
+    // Verify that getReceipts() triggers lazy decoding
+    assertThat(blocksWithReceipts.get(0).getReceipts()).hasSize(1);
+    assertThat(blocksWithReceipts.get(0).getReceipts().get(0)).isEqualTo(originalReceipt);
+  }
+
   private SyncBlock mockSyncBlock() {
     final BlockHeader blockHeader = Mockito.mock(BlockHeader.class);
     Mockito.when(blockHeader.getReceiptsRoot()).thenReturn(Hash.fromHexStringLenient("DEADBEEF"));

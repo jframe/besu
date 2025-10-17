@@ -144,11 +144,8 @@ public class DownloadSyncReceiptsStep
                         + ", receipts: "
                         + syncReceipts.size());
               }
-              // Convert SyncTransactionReceipts to TransactionReceipts
-              // This is the point where we lazily decode receipts for database insertion
-              final List<TransactionReceipt> receipts =
-                  syncReceipts.stream().map(sr -> sr.getReceiptSupplier().get()).collect(toList());
-              return new SyncBlockWithReceipts(block, receipts);
+              // Keep receipts as SyncTransactionReceipts - don't decode until storage boundary
+              return new SyncBlockWithReceipts(block, syncReceipts);
             })
         .toList();
   }
@@ -177,7 +174,13 @@ public class DownloadSyncReceiptsStep
                         + ", receipts: "
                         + receipts.size());
               }
-              return new SyncBlockWithReceipts(block, receipts);
+              // Wrap the fully-decoded receipts from the old system in SyncTransactionReceipt
+              // This ensures both code paths produce the same output type
+              final List<SyncTransactionReceipt> syncReceipts =
+                  receipts.stream()
+                      .map(receipt -> SyncTransactionReceipt.fromDecoded(receipt))
+                      .collect(toList());
+              return new SyncBlockWithReceipts(block, syncReceipts);
             })
         .toList();
   }
