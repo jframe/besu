@@ -20,6 +20,7 @@ import static org.hyperledger.besu.crypto.Hash.sha256;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.core.Util;
@@ -108,6 +109,22 @@ public final class BodyValidation {
                             receipt,
                             rlpOutput,
                             TransactionReceiptEncodingConfiguration.TRIE_ROOT))));
+
+    return Util.getRootFromListOfBytes(bytesList);
+  }
+
+  /**
+   * Generates the receipt root for a list of sync receipts (minimally decoded)
+   *
+   * <p>This method is more efficient than {@link #receiptsRoot(List)} as it uses the already
+   * encoded bytes from the sync receipts without needing to re-encode them.
+   *
+   * @param syncReceipts the sync receipts with raw RLP bytes
+   * @return the receipt root
+   */
+  public static Hash syncReceiptsRoot(final List<SyncTransactionReceipt> syncReceipts) {
+    final ArrayList<Bytes> bytesList = new ArrayList<>(syncReceipts.size());
+    syncReceipts.forEach(receipt -> bytesList.add(receipt.getEncodedBytes()));
 
     return Util.getRootFromListOfBytes(bytesList);
   }
