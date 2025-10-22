@@ -382,7 +382,7 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
       BlobGas used = BlobGas.of(gasCalculator.blobGasCost(newBlobsCount));
       return new GasUsage(excessBlobGas, used);
     }
-    return null;
+    return new GasUsage(BlobGas.ZERO, BlobGas.ZERO);
   }
 
   private TransactionSelectionResults selectTransactions(
