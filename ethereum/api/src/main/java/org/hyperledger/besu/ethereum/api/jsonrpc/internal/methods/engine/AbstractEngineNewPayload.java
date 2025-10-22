@@ -283,8 +283,10 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
             blockParam.getPrevRandao(),
             0,
             maybeWithdrawals.map(BodyValidation::withdrawalsRoot).orElse(null),
-            null,
-            null,
+            blockParam.getBlobGasUsed(),
+            blockParam.getExcessBlobGas() == null
+                ? null
+                : BlobGas.fromHexString(blockParam.getExcessBlobGas()),
             maybeParentBeaconBlockRoot.orElse(null),
             maybeRequests.map(BodyValidation::requestsHash).orElse(null),
             maybeBlockAccessList.map(BodyValidation::balHash).orElse(null),
