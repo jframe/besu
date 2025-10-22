@@ -292,6 +292,8 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
             maybeBlockAccessList.map(BodyValidation::balHash).orElse(null),
             headerFunctions);
 
+    LOG.debug("New block header: {}", newBlockHeader);
+
     // ensure the block hash matches the blockParam hash
     // this must be done before any other check
     if (!newBlockHeader.getHash().equals(blockParam.getBlockHash())) {

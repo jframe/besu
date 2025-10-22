@@ -104,7 +104,7 @@ public abstract class AbstractEngineGetPayload extends ExecutionEngineJsonRpcMet
     if (maybePayload.isPresent()) {
       final PayloadWrapper payload = maybePayload.get();
       final BlockWithReceipts proposal = payload.blockWithReceipts();
-      LOG.trace("assembledBlock with receipts {}", proposal);
+      LOG.debug("assembledBlock with receipts {}", proposal);
       ValidationResult<RpcErrorType> forkValidationResult =
           validateForkSupported(proposal.getHeader().getTimestamp());
       if (!forkValidationResult.isValid()) {
