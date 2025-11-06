@@ -279,7 +279,6 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(
             getStateArchiveContextForWrite(storage).get(), accountHash.toArrayUnsafe());
-    LOG.info("Putting flat account with key: {}, value: {}", Bytes.of(keySuffixed), accountValue);
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
 
