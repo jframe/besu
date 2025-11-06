@@ -81,10 +81,9 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     Optional<byte[]> archiveContext = storage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
     if (archiveContext.isPresent()) {
       try {
+        long worldBlockNumber = Bytes.wrap(archiveContext.get()).toLong();
         return Optional.of(
-            // The context for flat-DB PUTs is the block number recorded in the specified world
-            // state, + 1
-            new BonsaiContext(Bytes.wrap(archiveContext.get()).toLong() + 1));
+            new BonsaiContext(worldBlockNumber == 0 ? worldBlockNumber : worldBlockNumber + 1));
       } catch (NumberFormatException e) {
         throw new IllegalStateException(
             "World state archive context invalid format: "
@@ -280,7 +279,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(
             getStateArchiveContextForWrite(storage).get(), accountHash.toArrayUnsafe());
-
+    LOG.info("Putting flat account with key: {}, value: {}", Bytes.of(keySuffixed), accountValue);
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
 
