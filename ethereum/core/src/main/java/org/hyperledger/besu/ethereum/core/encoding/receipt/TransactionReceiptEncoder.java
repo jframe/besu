@@ -16,8 +16,9 @@ package org.hyperledger.besu.ethereum.core.encoding.receipt;
 
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
-import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.rlp.PreAllocatedRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
+import org.hyperledger.besu.ethereum.rlp.RLPSizeEstimator;
 
 import java.util.List;
 
@@ -27,14 +28,53 @@ public class TransactionReceiptEncoder {
   public Bytes encode(
       final List<TransactionReceipt> transactionReceipts,
       final TransactionReceiptEncodingConfiguration options) {
-    return RLP.encode(
-        (rlpOutput) -> {
-          if (transactionReceipts.isEmpty()) {
-            rlpOutput.writeEmptyList();
-          } else {
-            transactionReceipts.forEach((tr) -> writeTo(tr, rlpOutput, options));
-          }
-        });
+    // Use optimized pre-allocated RLP encoder with size estimation
+    final int estimatedSize = estimateReceiptsListSize(transactionReceipts);
+    final PreAllocatedRLPOutput output = PreAllocatedRLPOutput.get();
+    try {
+      output.reset(estimatedSize);
+      if (transactionReceipts.isEmpty()) {
+        output.writeEmptyList();
+      } else {
+        transactionReceipts.forEach((tr) -> writeTo(tr, output, options));
+      }
+      return output.encoded();
+    } finally {
+      output.returnToPool();
+    }
+  }
+
+  /**
+   * Estimate the size of a list of transaction receipts.
+   *
+   * @param receipts The list of receipts
+   * @return Estimated size in bytes
+   */
+  private int estimateReceiptsListSize(final List<TransactionReceipt> receipts) {
+    if (receipts.isEmpty()) {
+      return 10; // Empty list is very small
+    }
+
+    // Estimate per receipt and sum up
+    int totalSize = 20; // List header overhead
+    for (final TransactionReceipt receipt : receipts) {
+      totalSize += estimateReceiptSize(receipt);
+    }
+    return totalSize;
+  }
+
+  /**
+   * Estimate the size of a single receipt.
+   *
+   * @param receipt The receipt
+   * @return Estimated size in bytes
+   */
+  private int estimateReceiptSize(final TransactionReceipt receipt) {
+    final int logCount = receipt.getLogsList().size();
+    final int avgLogDataSize = 100; // Conservative average
+    final int avgTopicsPerLog = 3; // Typical
+
+    return RLPSizeEstimator.estimateReceiptSize(logCount, avgLogDataSize, avgTopicsPerLog);
   }
 
   public static void writeTo(
@@ -49,10 +89,32 @@ public class TransactionReceiptEncoder {
     }
 
     if (shouldEncodeOpaqueBytes(receipt, options)) {
-      rlpOutput.writeBytes(RLP.encode(out -> writeLegacyReceipt(receipt, out, options)));
+      // Use optimized encoder for opaque bytes
+      final int estimatedSize = estimateSingleReceiptSize(receipt);
+      final PreAllocatedRLPOutput tempOutput = PreAllocatedRLPOutput.get();
+      try {
+        tempOutput.reset(estimatedSize);
+        writeLegacyReceipt(receipt, tempOutput, options);
+        rlpOutput.writeBytes(tempOutput.encoded());
+      } finally {
+        tempOutput.returnToPool();
+      }
       return;
     }
     writeLegacyReceipt(receipt, rlpOutput, options);
+  }
+
+  /**
+   * Estimate size for a single receipt encoding (helper for opaque bytes).
+   *
+   * @param receipt The receipt
+   * @return Estimated size in bytes
+   */
+  private static int estimateSingleReceiptSize(final TransactionReceipt receipt) {
+    final int logCount = receipt.getLogsList().size();
+    final int avgLogDataSize = 100;
+    final int avgTopicsPerLog = 3;
+    return RLPSizeEstimator.estimateReceiptSize(logCount, avgLogDataSize, avgTopicsPerLog);
   }
 
   private static boolean shouldEncodeOpaqueBytes(

@@ -52,6 +52,14 @@ class RLPEncodingHelpers {
     return size;
   }
 
+  /** The size of just the list header (without payload) given the payload size. */
+  static int listHeaderSize(final int payloadSize) {
+    if (isShortList(payloadSize)) {
+      return 1;
+    }
+    return 1 + sizeLength(payloadSize);
+  }
+
   /**
    * Writes the result of encoding the provided value to the provided destination (which must be big
    * enough).

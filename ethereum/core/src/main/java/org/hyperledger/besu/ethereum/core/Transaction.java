@@ -43,10 +43,11 @@ import org.hyperledger.besu.ethereum.core.kzg.Blob;
 import org.hyperledger.besu.ethereum.core.kzg.BlobsWithCommitments;
 import org.hyperledger.besu.ethereum.core.kzg.KZGCommitment;
 import org.hyperledger.besu.ethereum.core.kzg.KZGProof;
-import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
+import org.hyperledger.besu.ethereum.rlp.PreAllocatedRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
+import org.hyperledger.besu.ethereum.rlp.RLPSizeEstimator;
 
 import java.math.BigInteger;
 import java.util.Collection;
@@ -537,9 +538,30 @@ public class Transaction
 
   @Override
   public Bytes encoded() {
-    final BytesValueRLPOutput rplOutput = new BytesValueRLPOutput();
-    writeTo(rplOutput);
-    return rplOutput.encoded();
+    // Use optimized pre-allocated RLP encoder with size estimation
+    final int estimatedSize = estimateEncodedSize();
+    final PreAllocatedRLPOutput output = PreAllocatedRLPOutput.get();
+    try {
+      output.reset(estimatedSize);
+      writeTo(output);
+      return output.encoded();
+    } finally {
+      output.returnToPool();
+    }
+  }
+
+  /**
+   * Estimate the RLP-encoded size of this transaction for buffer pre-allocation.
+   *
+   * @return Estimated size in bytes
+   */
+  private int estimateEncodedSize() {
+    final int payloadSize = getPayload().size();
+    final int accessListSize = maybeAccessList.map(List::size).orElse(0);
+    final boolean hasBlobCommitments = versionedHashes.isPresent();
+
+    return RLPSizeEstimator.estimateTransactionSize(
+        payloadSize, accessListSize, hasBlobCommitments);
   }
 
   @Override

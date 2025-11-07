@@ -15,12 +15,36 @@
 package org.hyperledger.besu.ethereum.core.encoding;
 
 import org.hyperledger.besu.ethereum.core.BlockHeader;
-import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.rlp.PreAllocatedRLPOutput;
+import org.hyperledger.besu.ethereum.rlp.RLPSizeEstimator;
 
 import org.apache.tuweni.bytes.Bytes;
 
 public class BlockHeaderEncoder {
   public Bytes encode(final BlockHeader blockHeader) {
-    return RLP.encode(blockHeader::writeTo);
+    // Use optimized pre-allocated RLP encoder with size estimation
+    final int estimatedSize = estimateBlockHeaderSize(blockHeader);
+    final PreAllocatedRLPOutput output = PreAllocatedRLPOutput.get();
+    try {
+      output.reset(estimatedSize);
+      blockHeader.writeTo(output);
+      return output.encoded();
+    } finally {
+      output.returnToPool();
+    }
+  }
+
+  /**
+   * Estimate the RLP-encoded size of a block header.
+   *
+   * @param blockHeader The block header to estimate
+   * @return Estimated size in bytes
+   */
+  private int estimateBlockHeaderSize(final BlockHeader blockHeader) {
+    final int extraDataSize = blockHeader.getExtraData().size();
+    final boolean hasWithdrawals = blockHeader.getWithdrawalsRoot().isPresent();
+    final boolean hasBlobFields = blockHeader.getExcessBlobGas().isPresent();
+
+    return RLPSizeEstimator.estimateBlockHeaderSize(extraDataSize, hasWithdrawals, hasBlobFields);
   }
 }

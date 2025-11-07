@@ -64,6 +64,7 @@ import org.hyperledger.besu.cli.options.NodePrivateKeyFileOption;
 import org.hyperledger.besu.cli.options.P2PDiscoveryOptions;
 import org.hyperledger.besu.cli.options.PermissionsOptions;
 import org.hyperledger.besu.cli.options.PluginsConfigurationOptions;
+import org.hyperledger.besu.cli.options.RLPOptions;
 import org.hyperledger.besu.cli.options.RPCOptions;
 import org.hyperledger.besu.cli.options.RpcWebsocketOptions;
 import org.hyperledger.besu.cli.options.SynchronizerOptions;
@@ -313,6 +314,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
   private final ChainPruningOptions unstableChainPruningOptions = ChainPruningOptions.create();
   private final QBFTOptions unstableQbftOptions = QBFTOptions.create();
   private final DebugTracerOptions unstableDebugTracerOptions = DebugTracerOptions.create();
+  private final RLPOptions unstableRLPOptions = RLPOptions.create();
 
   // stable CLI options
   final DataStorageOptions dataStorageOptions = DataStorageOptions.create();
@@ -1172,6 +1174,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
             .put("Chain Data Pruning Options", unstableChainPruningOptions)
             .put("QBFT Options", unstableQbftOptions)
             .put("Debug Tracer Options", unstableDebugTracerOptions)
+            .put("RLP Options", unstableRLPOptions)
             .build();
 
     UnstableOptionsSubCommand.createUnstableOptions(commandLine, unstableOptions);
