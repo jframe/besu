@@ -26,9 +26,9 @@ public class RLPOptions {
           "Enable optimized RLP encoder using pre-allocated buffers and thread-local pooling. "
               + "This optimization reduces CPU overhead during block processing and sync. "
               + "(default: ${DEFAULT-VALUE})",
-      fallbackValue = "true",
+      fallbackValue = "false",
       arity = "1")
-  private final Boolean rlpOptimizationEnabled = Boolean.TRUE;
+  private final Boolean rlpOptimizationEnabled = Boolean.FALSE;
 
   /** Default constructor. */
   RLPOptions() {}
