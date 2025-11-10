@@ -287,13 +287,41 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
             config.isHighSpec() && segment.isEligibleToHighSpecFlag()
                 ? ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC
                 : config.getCacheCapacity());
-    return new BlockBasedTableConfig()
+
+    final BlockBasedTableConfig tableConfig = new BlockBasedTableConfig()
         .setFormatVersion(ROCKSDB_FORMAT_VERSION)
         .setBlockCache(cache)
         .setFilterPolicy(new BloomFilter(10, false))
         .setPartitionFilters(true)
-        .setCacheIndexAndFilterBlocks(false)
         .setBlockSize(ROCKSDB_BLOCK_SIZE);
+
+    // Optimize for archive segments that use seekForPrev heavily
+    if (isArchiveSegment(segment)) {
+      tableConfig
+          // Cache index and filter blocks to reduce I/O for reverse iteration
+          .setCacheIndexAndFilterBlocks(true)
+          // Pin L0 index and filter blocks to avoid eviction during heavy seeks
+          .setPinL0FilterAndIndexBlocksInCache(true)
+          // Pin top-level index to improve iterator performance
+          .setPinTopLevelIndexAndFilter(true);
+    } else {
+      tableConfig.setCacheIndexAndFilterBlocks(false);
+    }
+
+    return tableConfig;
+  }
+
+  /**
+   * Check if a segment is an archive segment that benefits from seekForPrev optimizations.
+   *
+   * @param segment the segment to check
+   * @return true if this is an archive segment
+   */
+  private boolean isArchiveSegment(final SegmentIdentifier segment) {
+    final String segmentName = segment.getName();
+    return segmentName.contains("ACCOUNT_INFO_STATE")
+        || segmentName.contains("ACCOUNT_STORAGE")
+        || segmentName.contains("ARCHIVE");
   }
 
   /***
@@ -423,13 +451,10 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   public Optional<NearestKeyValue> getNearestBefore(
       final SegmentIdentifier segmentIdentifier, final Bytes key) throws StorageException {
 
-    try (final RocksIterator rocksIterator =
-        getDB().newIterator(safeColumnHandle(segmentIdentifier))) {
-      rocksIterator.seekForPrev(key.toArrayUnsafe());
-      return Optional.of(rocksIterator)
-          .filter(AbstractRocksIterator::isValid)
-          .map(it -> new NearestKeyValue(Bytes.of(it.key()), Optional.of(it.value())));
-    }
+    // Use optimized reader that tries point lookups for recent blocks before falling back to
+    // expensive seekForPrev
+    return OptimizedRocksDBReader.getNearestBeforeOptimized(
+        getDB(), safeColumnHandle(segmentIdentifier), key);
   }
 
   @Override
