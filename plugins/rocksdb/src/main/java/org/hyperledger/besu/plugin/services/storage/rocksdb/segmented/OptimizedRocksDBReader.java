@@ -131,7 +131,11 @@ public class OptimizedRocksDBReader {
       final RocksDB db, final ColumnFamilyHandle columnFamilyHandle, final List<Bytes> keys)
       throws StorageException {
 
+    // Initialize results list with nulls
     final List<Optional<NearestKeyValue>> results = new ArrayList<>(keys.size());
+    for (int i = 0; i < keys.size(); i++) {
+      results.add(null);
+    }
 
     // First, try point lookups for all keys in batch
     final List<byte[]> pointLookupKeys = new ArrayList<>();
@@ -168,13 +172,13 @@ public class OptimizedRocksDBReader {
 
           if (value != null) {
             // Found via point lookup
-            results.add(
+            results.set(
                 originalIndex,
                 Optional.of(
                     new NearestKeyValue(Bytes.of(pointLookupKeys.get(i)), Optional.of(value))));
           } else {
             // Need to fall back to seekForPrev for this key
-            results.add(originalIndex, getNearestBeforeWithSeek(db, columnFamilyHandle, keys.get(originalIndex)));
+            results.set(originalIndex, getNearestBeforeWithSeek(db, columnFamilyHandle, keys.get(originalIndex)));
           }
         }
       } catch (final RocksDBException e) {
@@ -182,10 +186,10 @@ public class OptimizedRocksDBReader {
       }
     }
 
-    // Handle keys that were too short for optimization
+    // Handle keys that were too short for optimization or not yet processed
     for (int i = 0; i < keys.size(); i++) {
-      if (results.size() <= i || results.get(i) == null) {
-        results.add(i, getNearestBeforeWithSeek(db, columnFamilyHandle, keys.get(i)));
+      if (results.get(i) == null) {
+        results.set(i, getNearestBeforeWithSeek(db, columnFamilyHandle, keys.get(i)));
       }
     }
 
