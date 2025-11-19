@@ -34,6 +34,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorld
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
 import java.util.Optional;
@@ -59,6 +60,7 @@ class TrieLogManagerTests {
   @Mock Blockchain blockchain;
   @Mock BonsaiWorldStateKeyValueStorage.Updater mockedUpdater;
   @Mock KeyValueStorageTransaction mockedTrieLogTransaction;
+  @Mock SegmentedKeyValueStorageTransaction mockedWorldStateTransaction;
 
   BonsaiWorldStateUpdateAccumulator bonsaiUpdater =
       spy(
@@ -76,6 +78,7 @@ class TrieLogManagerTests {
     when(bonsaiWorldState.getWorldStateStorage()).thenReturn(bonsaiWorldStateKeyValueStorage);
     when(bonsaiWorldStateKeyValueStorage.updater()).thenReturn(mockedUpdater);
     when(mockedUpdater.getTrieLogStorageTransaction()).thenReturn(mockedTrieLogTransaction);
+    when(mockedUpdater.getWorldStateTransaction()).thenReturn(mockedWorldStateTransaction);
 
     trieLogManager = new TrieLogManager(blockchain, bonsaiWorldStateKeyValueStorage, 512, null);
   }
@@ -106,5 +109,14 @@ class TrieLogManagerTests {
 
     verify(mockedTrieLogTransaction, times(1))
         .put(eq(blockHeader.getBlockHash().toArrayUnsafe()), any());
+  }
+
+  @Test
+  void testSaveTrieLogRollsBackWorldStateTransaction() {
+    trieLogManager.saveTrieLog(bonsaiUpdater, Hash.ZERO, blockHeader, bonsaiWorldState);
+
+    verify(mockedUpdater, times(1)).commitTrieLogOnly();
+    verify(mockedWorldStateTransaction, times(1)).rollback();
+    verify(mockedUpdater, times(0)).rollback();
   }
 }

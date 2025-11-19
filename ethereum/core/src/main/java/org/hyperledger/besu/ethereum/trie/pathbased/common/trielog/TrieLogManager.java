@@ -83,6 +83,8 @@ public class TrieLogManager {
       } finally {
         if (success) {
           stateUpdater.commitTrieLogOnly();
+          // rollback the unused composed worldstate transaction to prevent resource leak
+          stateUpdater.getWorldStateTransaction().rollback();
         } else {
           stateUpdater.rollback();
         }
@@ -184,6 +186,8 @@ public class TrieLogManager {
             .getTrieLogStorageTransaction()
             .put(blockHash.toArrayUnsafe(), trieLog.toArrayUnsafe());
         updater.commitTrieLogOnly();
+        // rollback the unused composed worldstate transaction to prevent resource leak
+        updater.getWorldStateTransaction().rollback();
         // TODO maybe find a way to have a clean and complete trielog for observers
         trieLogObservers.forEach(
             o ->
