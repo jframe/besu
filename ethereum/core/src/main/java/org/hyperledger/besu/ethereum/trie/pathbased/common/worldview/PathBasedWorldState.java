@@ -263,6 +263,9 @@ public abstract class PathBasedWorldState
         saveTrieLog.run();
         // commit only the composed worldstate, as trielog transaction is already complete:
         stateUpdater.commitComposedOnly();
+        // rollback the unused trielog transaction from stateUpdater to prevent resource leak
+        // (the trielog was already saved in saveTrieLog.run() using a separate updater)
+        stateUpdater.getTrieLogStorageTransaction().rollback();
         if (!isStorageFrozen) {
           // optionally save the committed worldstate state in the cache
           cacheWorldState.run();
