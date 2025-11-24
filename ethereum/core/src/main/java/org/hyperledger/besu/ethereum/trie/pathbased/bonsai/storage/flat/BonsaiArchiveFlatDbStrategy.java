@@ -31,8 +31,10 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
+import org.hyperledger.besu.util.cache.MemoryBoundCache;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -50,6 +52,40 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
   protected final Counter getAccountFromArchiveCounter;
   protected final Counter getStorageFromArchiveCounter;
+  protected final Counter suffixCacheHitAccountCounter;
+  protected final Counter suffixCacheMissAccountCounter;
+  protected final Counter suffixCacheHitStorageCounter;
+  protected final Counter suffixCacheMissStorageCounter;
+
+  // Cache to store the block number suffix for seekForPrev results
+  private final MemoryBoundCache<SuffixCacheKey, Long> suffixCache;
+
+  /**
+   * Cache key for suffix lookups, combining the natural key (accountHash or accountHash+slotHash)
+   * with the requested block number.
+   */
+  private static class SuffixCacheKey {
+    private final Bytes naturalKey;
+    private final long blockNumber;
+
+    SuffixCacheKey(final Bytes naturalKey, final long blockNumber) {
+      this.naturalKey = naturalKey;
+      this.blockNumber = blockNumber;
+    }
+
+    @Override
+    public boolean equals(final Object o) {
+      if (this == o) return true;
+      if (o == null || getClass() != o.getClass()) return false;
+      SuffixCacheKey that = (SuffixCacheKey) o;
+      return blockNumber == that.blockNumber && Objects.equals(naturalKey, that.naturalKey);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(naturalKey, blockNumber);
+    }
+  }
 
   public BonsaiArchiveFlatDbStrategy(
       final MetricsSystem metricsSystem, final CodeStorageStrategy codeStorageStrategy) {
@@ -66,6 +102,57 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
             BesuMetricCategory.BLOCKCHAIN,
             "get_storage_from_archive_counter",
             "Total number of calls to get storage that were from archived state");
+
+    suffixCacheHitAccountCounter =
+        metricsSystem.createCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "suffix_cache_hit_account_counter",
+            "Total number of account lookups that hit the suffix cache");
+
+    suffixCacheMissAccountCounter =
+        metricsSystem.createCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "suffix_cache_miss_account_counter",
+            "Total number of account lookups that missed the suffix cache");
+
+    suffixCacheHitStorageCounter =
+        metricsSystem.createCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "suffix_cache_hit_storage_counter",
+            "Total number of storage lookups that hit the suffix cache");
+
+    suffixCacheMissStorageCounter =
+        metricsSystem.createCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "suffix_cache_miss_storage_counter",
+            "Total number of storage lookups that missed the suffix cache");
+
+    // Initialize suffix cache with 16 MB max size
+    // Each cache entry: ~32 bytes (key hash) + 8 bytes (block number) + 8 bytes (suffix) = ~48
+    // bytes
+    // 16 MB / 48 bytes ≈ 350k entries
+    this.suffixCache =
+        new MemoryBoundCache<>(
+            16 * 1024 * 1024, (key, value) -> key.naturalKey.size() + Long.BYTES + Long.BYTES);
+
+    // Register cache statistics gauges
+    metricsSystem.createLongGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "suffix_cache_size",
+        "Current number of entries in the suffix cache",
+        suffixCache::estimatedSize);
+
+    metricsSystem.createGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "suffix_cache_hit_rate",
+        "Hit rate of the suffix cache",
+        suffixCache::hitRate);
+
+    metricsSystem.createLongGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "suffix_cache_evictions",
+        "Total number of evictions from the suffix cache",
+        suffixCache::evictionCount);
   }
 
   static final byte[] MAX_BLOCK_SUFFIX = Bytes.ofUnsignedLong(Long.MAX_VALUE).toArrayUnsafe();
@@ -125,10 +212,39 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     getAccountCounter.inc();
     Optional<SegmentedKeyValueStorage.NearestKeyValue> accountFound;
 
+    final Optional<BonsaiContext> contextForRead = getStateArchiveContextForRead(storage);
     // keyNearest, use MAX_BLOCK_SUFFIX in the absence of a block context:
     Bytes keyNearest =
-        calculateArchiveKeyWithMaxSuffix(
-            getStateArchiveContextForRead(storage), accountHash.toArrayUnsafe());
+        calculateArchiveKeyWithMaxSuffix(contextForRead, accountHash.toArrayUnsafe());
+
+    // Try cache first if we have a block context
+    if (contextForRead.isPresent()) {
+      final long blockNumber =
+          contextForRead.flatMap(BonsaiContext::getBlockNumber).orElse(Long.MAX_VALUE);
+      final SuffixCacheKey cacheKey =
+          new SuffixCacheKey(Bytes.wrap(accountHash.toArrayUnsafe()), blockNumber);
+      final Long cachedSuffix = suffixCache.getIfPresent(cacheKey);
+
+      if (cachedSuffix != null) {
+        suffixCacheHitAccountCounter.inc();
+        // Try direct lookup with cached suffix
+        final byte[] cachedKey =
+            Arrays.concatenate(
+                accountHash.toArrayUnsafe(), Bytes.ofUnsignedLong(cachedSuffix).toArrayUnsafe());
+        final Optional<byte[]> cachedValue = storage.get(ACCOUNT_INFO_STATE, cachedKey);
+
+        if (cachedValue.isPresent() && !Arrays.areEqual(DELETED_ACCOUNT_VALUE, cachedValue.get())) {
+          getAccountFoundInFlatDatabaseCounter.inc();
+          return Optional.of(Bytes.wrap(cachedValue.get()));
+        } else if (cachedValue.isPresent()) {
+          // Found but it's a deleted value
+          getAccountFoundInFlatDatabaseCounter.inc();
+          return Optional.empty();
+        }
+      } else {
+        suffixCacheMissAccountCounter.inc();
+      }
+    }
 
     // Find the nearest account state for this address and block context
     Optional<SegmentedKeyValueStorage.NearestKeyValue> nearestAccount =
@@ -152,6 +268,19 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
       accountFound = nearestAccount;
       getAccountFoundInFlatDatabaseCounter.inc();
+    }
+
+    // Cache the suffix if found and we have a block context
+    if (accountFound.isPresent() && contextForRead.isPresent()) {
+      final long blockNumber =
+          contextForRead.flatMap(BonsaiContext::getBlockNumber).orElse(Long.MAX_VALUE);
+      final Bytes foundKey = accountFound.get().key();
+      // Extract suffix (last 8 bytes)
+      final long suffix =
+          Bytes.wrap(foundKey.slice(foundKey.size() - Long.BYTES, Long.BYTES)).toLong();
+      final SuffixCacheKey cacheKey =
+          new SuffixCacheKey(Bytes.wrap(accountHash.toArrayUnsafe()), blockNumber);
+      suffixCache.put(cacheKey, suffix);
     }
 
     if (accountFound.isPresent()) {
@@ -319,9 +448,36 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, storageSlotKey.getSlotHash());
+    final Optional<BonsaiContext> contextForRead = getStateArchiveContextForRead(storage);
     // keyNearest, use MAX_BLOCK_SUFFIX in the absence of a block context:
-    Bytes keyNearest =
-        calculateArchiveKeyWithMaxSuffix(getStateArchiveContextForRead(storage), naturalKey);
+    Bytes keyNearest = calculateArchiveKeyWithMaxSuffix(contextForRead, naturalKey);
+
+    // Try cache first if we have a block context
+    if (contextForRead.isPresent()) {
+      final long blockNumber =
+          contextForRead.flatMap(BonsaiContext::getBlockNumber).orElse(Long.MAX_VALUE);
+      final SuffixCacheKey cacheKey = new SuffixCacheKey(Bytes.wrap(naturalKey), blockNumber);
+      final Long cachedSuffix = suffixCache.getIfPresent(cacheKey);
+
+      if (cachedSuffix != null) {
+        suffixCacheHitStorageCounter.inc();
+        // Try direct lookup with cached suffix
+        final byte[] cachedKey =
+            Arrays.concatenate(naturalKey, Bytes.ofUnsignedLong(cachedSuffix).toArrayUnsafe());
+        final Optional<byte[]> cachedValue = storage.get(ACCOUNT_STORAGE_STORAGE, cachedKey);
+
+        if (cachedValue.isPresent() && !Arrays.areEqual(DELETED_STORAGE_VALUE, cachedValue.get())) {
+          getStorageValueFlatDatabaseCounter.inc();
+          return Optional.of(Bytes.wrap(cachedValue.get()));
+        } else if (cachedValue.isPresent()) {
+          // Found but it's a deleted value
+          getStorageValueFlatDatabaseCounter.inc();
+          return Optional.empty();
+        }
+      } else {
+        suffixCacheMissStorageCounter.inc();
+      }
+    }
 
     // Find the nearest storage for this address, slot key hash, and block context
     Optional<SegmentedKeyValueStorage.NearestKeyValue> nearestStorage =
@@ -349,6 +505,18 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     } else {
       storageFound = nearestStorage;
       getStorageValueFlatDatabaseCounter.inc();
+    }
+
+    // Cache the suffix if found and we have a block context
+    if (storageFound.isPresent() && contextForRead.isPresent()) {
+      final long blockNumber =
+          contextForRead.flatMap(BonsaiContext::getBlockNumber).orElse(Long.MAX_VALUE);
+      final Bytes foundKey = storageFound.get().key();
+      // Extract suffix (last 8 bytes)
+      final long suffix =
+          Bytes.wrap(foundKey.slice(foundKey.size() - Long.BYTES, Long.BYTES)).toLong();
+      final SuffixCacheKey cacheKey = new SuffixCacheKey(Bytes.wrap(naturalKey), blockNumber);
+      suffixCache.put(cacheKey, suffix);
     }
 
     // The entry exists (so metrics are still incremented) but we don't return deleted values
