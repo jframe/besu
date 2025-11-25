@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiArchiveStateIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategyProvider;
@@ -26,6 +27,8 @@ import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.util.Optional;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,9 +36,15 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbStrategyProvider.class);
 
+  private Optional<BonsaiArchiveStateIndex> stateIndex = Optional.empty();
+
   public BonsaiFlatDbStrategyProvider(
       final MetricsSystem metricsSystem, final DataStorageConfiguration dataStorageConfiguration) {
     super(metricsSystem, dataStorageConfiguration);
+  }
+
+  public void setStateIndex(final BonsaiArchiveStateIndex stateIndex) {
+    this.stateIndex = Optional.of(stateIndex);
   }
 
   @Override
@@ -94,7 +103,19 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
     if (flatDbMode == FlatDbMode.FULL) {
       return new BonsaiFullFlatDbStrategy(metricsSystem, codeStorageStrategy);
     } else if (flatDbMode == FlatDbMode.ARCHIVE) {
-      return new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
+      // Use indexed strategy if index is available and enabled
+      boolean indexEnabled =
+          dataStorageConfiguration
+              .getPathBasedExtraStorageConfiguration()
+              .getUnstable()
+              .getArchiveIndexEnabled();
+      if (indexEnabled && stateIndex.isPresent()) {
+        LOG.info("Using BonsaiArchiveIndexedFlatDbStrategy with index-based access");
+        return new BonsaiArchiveIndexedFlatDbStrategy(
+            metricsSystem, codeStorageStrategy, stateIndex.get());
+      } else {
+        return new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
+      }
     } else {
       return new BonsaiPartialFlatDbStrategy(metricsSystem, codeStorageStrategy);
     }

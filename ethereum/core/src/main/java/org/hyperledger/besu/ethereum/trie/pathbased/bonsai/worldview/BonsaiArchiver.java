@@ -14,14 +14,19 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiArchiveIndexBuilder;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiArchiveStateIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
 import java.util.Optional;
@@ -59,17 +64,41 @@ public class BonsaiArchiver implements BlockAddedObserver {
   // For logging progress. Saves doing a DB read just to record our progress
   final AtomicLong latestArchivedBlock = new AtomicLong(0);
 
+  // Optional index components for index-based access
+  private final Optional<BonsaiArchiveStateIndex> stateIndex;
+  private final Optional<BonsaiArchiveIndexBuilder> indexBuilder;
+  private final boolean indexEnabled;
+
   public BonsaiArchiver(
       final PathBasedWorldStateKeyValueStorage rootWorldStateStorage,
       final Blockchain blockchain,
       final Consumer<Runnable> executeAsync,
       final TrieLogManager trieLogManager,
-      final MetricsSystem metricsSystem) {
+      final MetricsSystem metricsSystem,
+      final boolean indexEnabled) {
     this.rootWorldStateStorage = rootWorldStateStorage;
     this.blockchain = blockchain;
     this.executeAsync = executeAsync;
     this.trieLogManager = trieLogManager;
     this.metricsSystem = metricsSystem;
+    this.indexEnabled = indexEnabled;
+
+    // Initialize index components if enabled
+    if (indexEnabled) {
+      this.stateIndex =
+          Optional.of(
+              new BonsaiArchiveStateIndex(rootWorldStateStorage.getComposedWorldStateStorage()));
+      this.indexBuilder =
+          Optional.of(
+              new BonsaiArchiveIndexBuilder(
+                  stateIndex.get(),
+                  trieLogManager,
+                  blockchain,
+                  rootWorldStateStorage.getComposedWorldStateStorage()));
+    } else {
+      this.stateIndex = Optional.empty();
+      this.indexBuilder = Optional.empty();
+    }
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
@@ -78,9 +107,31 @@ public class BonsaiArchiver implements BlockAddedObserver {
         () -> latestArchivedBlock.get());
   }
 
+  // Backward compatibility constructor
+  public BonsaiArchiver(
+      final PathBasedWorldStateKeyValueStorage rootWorldStateStorage,
+      final Blockchain blockchain,
+      final Consumer<Runnable> executeAsync,
+      final TrieLogManager trieLogManager,
+      final MetricsSystem metricsSystem) {
+    this(rootWorldStateStorage, blockchain, executeAsync, trieLogManager, metricsSystem, false);
+  }
+
   public void initialize() {
     // Read from the DB where we got to previously
     latestArchivedBlock.set(rootWorldStateStorage.getLatestArchivedBlock().orElse(0L));
+  }
+
+  public Optional<BonsaiArchiveStateIndex> getStateIndex() {
+    return stateIndex;
+  }
+
+  public Optional<BonsaiArchiveIndexBuilder> getIndexBuilder() {
+    return indexBuilder;
+  }
+
+  public boolean isIndexEnabled() {
+    return indexEnabled;
   }
 
   public long getPendingBlocksCount() {
@@ -147,11 +198,28 @@ public class BonsaiArchiver implements BlockAddedObserver {
                     .log();
                 Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHash);
                 if (trieLog.isPresent()) {
+                  // If index is enabled, update it with modifications from this block
+                  Optional<SegmentedKeyValueStorageTransaction> indexTx = Optional.empty();
+                  if (indexEnabled && stateIndex.isPresent()) {
+                    indexTx =
+                        Optional.of(
+                            rootWorldStateStorage.getComposedWorldStateStorage().startTransaction());
+                  }
+
+                  final Optional<SegmentedKeyValueStorageTransaction> finalIndexTx = indexTx;
                   trieLog
                       .get()
                       .getAccountChanges()
                       .forEach(
                           (address, change) -> {
+                            // Update index if enabled
+                            if (indexEnabled && finalIndexTx.isPresent()) {
+                              stateIndex
+                                  .get()
+                                  .addAccountModification(
+                                      finalIndexTx.get(), address.addressHash(), block.getKey());
+                            }
+
                             // Move any previous state for this account
                             archivedAccountStateCount.addAndGet(
                                 rootWorldStateStorage.archivePreviousAccountState(
@@ -170,6 +238,17 @@ public class BonsaiArchiver implements BlockAddedObserver {
                           (address, storageSlotKey) -> {
                             storageSlotKey.forEach(
                                 (slotKey, slotValue) -> {
+                                  // Update index if enabled
+                                  if (indexEnabled && finalIndexTx.isPresent()) {
+                                    stateIndex
+                                        .get()
+                                        .addStorageModification(
+                                            finalIndexTx.get(),
+                                            address.addressHash(),
+                                            slotKey,
+                                            block.getKey());
+                                  }
+
                                   // Move any previous state for this account
                                   archivedAccountStorageCount.addAndGet(
                                       rootWorldStateStorage.archivePreviousStorageState(
@@ -182,6 +261,11 @@ public class BonsaiArchiver implements BlockAddedObserver {
                                               address.addressHash(), slotKey.getSlotHash())));
                                 });
                           });
+
+                  // Commit index transaction if present
+                  if (indexTx.isPresent()) {
+                    indexTx.get().commit();
+                  }
                 }
                 LOG.atDebug()
                     .setMessage("All account state and storage archived for block {}")
