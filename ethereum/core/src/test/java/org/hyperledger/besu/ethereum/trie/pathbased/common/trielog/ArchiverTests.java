@@ -206,7 +206,12 @@ public class ArchiverTests {
 
     BonsaiArchiver archiver =
         new BonsaiArchiver(
-            worldStateStorage, blockchain, executeAsync, trieLogManager, new NoOpMetricsSystem());
+            worldStateStorage,
+            blockchain,
+            executeAsync,
+            trieLogManager,
+            new NoOpMetricsSystem(),
+            false); // Disable deferred archiving for tests
     archiver.getPendingBlocksCount();
     archiver.initialize();
 
@@ -312,7 +317,12 @@ public class ArchiverTests {
     // Initialize the archiver
     BonsaiArchiver archiver =
         new BonsaiArchiver(
-            worldStateStorage, blockchain, executeAsync, trieLogManager, new NoOpMetricsSystem());
+            worldStateStorage,
+            blockchain,
+            executeAsync,
+            trieLogManager,
+            new NoOpMetricsSystem(),
+            false); // Disable deferred archiving for tests
     archiver.initialize();
 
     currentBlockHeight = 100L;
@@ -452,7 +462,12 @@ public class ArchiverTests {
     // Initialize the archiver
     BonsaiArchiver archiver =
         new BonsaiArchiver(
-            worldStateStorage, blockchain, executeAsync, trieLogManager, new NoOpMetricsSystem());
+            worldStateStorage,
+            blockchain,
+            executeAsync,
+            trieLogManager,
+            new NoOpMetricsSystem(),
+            false); // Disable deferred archiving for tests
     archiver.initialize();
 
     currentBlockHeight = 100L;
@@ -623,7 +638,12 @@ public class ArchiverTests {
     // Initialize the archiver
     BonsaiArchiver archiver =
         new BonsaiArchiver(
-            worldStateStorage, blockchain, executeAsync, trieLogManager, new NoOpMetricsSystem());
+            worldStateStorage,
+            blockchain,
+            executeAsync,
+            trieLogManager,
+            new NoOpMetricsSystem(),
+            false); // Disable deferred archiving for tests
     archiver.initialize();
 
     currentBlockHeight = 100L;
@@ -799,7 +819,8 @@ public class ArchiverTests {
             blockchain,
             executeAsync,
             trieLogManager,
-            new NoOpMetricsSystem());
+            new NoOpMetricsSystem(),
+            false); // Disable deferred archiving for tests
     archiver.initialize();
 
     // Chain height is 150, we've archived state up to block 150
@@ -1027,7 +1048,8 @@ public class ArchiverTests {
             blockchain,
             executeAsync,
             trieLogManager,
-            new NoOpMetricsSystem());
+            new NoOpMetricsSystem(),
+            false); // Disable deferred archiving for tests
     archiver.initialize();
 
     // Chain height is 150, we've archived state up to block 150

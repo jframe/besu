@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
@@ -55,21 +56,28 @@ public class BonsaiArchiver implements BlockAddedObserver {
   private static final int DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE = 10;
   private final TrieLogManager trieLogManager;
   protected final MetricsSystem metricsSystem;
+  private final boolean deferArchivingDuringSync;
 
   // For logging progress. Saves doing a DB read just to record our progress
   final AtomicLong latestArchivedBlock = new AtomicLong(0);
+
+  // Track whether initial sync is in progress to defer archiving
+  private volatile boolean initialSyncInProgress = true;
+  private final AtomicInteger bulkArchivingInProgress = new AtomicInteger(0);
 
   public BonsaiArchiver(
       final PathBasedWorldStateKeyValueStorage rootWorldStateStorage,
       final Blockchain blockchain,
       final Consumer<Runnable> executeAsync,
       final TrieLogManager trieLogManager,
-      final MetricsSystem metricsSystem) {
+      final MetricsSystem metricsSystem,
+      final boolean deferArchivingDuringSync) {
     this.rootWorldStateStorage = rootWorldStateStorage;
     this.blockchain = blockchain;
     this.executeAsync = executeAsync;
     this.trieLogManager = trieLogManager;
     this.metricsSystem = metricsSystem;
+    this.deferArchivingDuringSync = deferArchivingDuringSync;
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
@@ -81,6 +89,26 @@ public class BonsaiArchiver implements BlockAddedObserver {
   public void initialize() {
     // Read from the DB where we got to previously
     latestArchivedBlock.set(rootWorldStateStorage.getLatestArchivedBlock().orElse(0L));
+
+    // Check if we're still significantly behind chain head, which indicates we're still in initial
+    // sync
+    long chainHead = blockchain.getChainHeadBlockNumber();
+    long latestArchived = latestArchivedBlock.get();
+    long blocksBehind = chainHead - latestArchived;
+
+    // If we're very far behind (more than the catchup limit), we're likely still in initial sync
+    if (blocksBehind > CATCHUP_LIMIT) {
+      LOG.info(
+          "Bonsai archiver is {} blocks behind chain head. Will defer archiving until sync completes.",
+          blocksBehind);
+      initialSyncInProgress = true;
+    } else {
+      // We're caught up or close to it, so initial sync must be done
+      LOG.info(
+          "Bonsai archiver is {} blocks behind chain head. Archiving will proceed normally.",
+          blocksBehind);
+      initialSyncInProgress = false;
+    }
   }
 
   public long getPendingBlocksCount() {
@@ -221,6 +249,16 @@ public class BonsaiArchiver implements BlockAddedObserver {
 
   @Override
   public void onBlockAdded(final BlockAddedEvent addedBlockContext) {
+    // Skip archiving during initial sync to avoid performance degradation (if flag is enabled)
+    if (deferArchivingDuringSync && initialSyncInProgress) {
+      return;
+    }
+
+    // Skip if bulk archiving is running
+    if (bulkArchivingInProgress.get() > 0) {
+      return;
+    }
+
     initialize();
     final Optional<Long> blockNumber = Optional.of(addedBlockContext.getHeader().getNumber());
     blockNumber.ifPresent(
@@ -238,5 +276,157 @@ public class BonsaiArchiver implements BlockAddedObserver {
                 }
               });
         });
+  }
+
+  /**
+   * Called when initial sync completes. Triggers bulk archiving of historical state from trielogs.
+   * This avoids the performance overhead of archiving during sync by deferring all archiving work
+   * until after sync is complete.
+   */
+  public void onInitialSyncCompleted() {
+    initialSyncInProgress = false;
+
+    if (deferArchivingDuringSync) {
+      LOG.info(
+          "Initial sync completed. Starting bulk archive generation from trielogs. "
+              + "Deferred archiving was enabled to improve sync performance.");
+      // Trigger bulk archiving asynchronously
+      executeAsync.accept(this::executeBulkArchiving);
+    } else {
+      LOG.info("Initial sync completed. Archive generation was done incrementally during sync.");
+    }
+  }
+
+  /**
+   * Process all blocks from the last archived block up to the chain head, generating archive
+   * entries from trielogs. This is much more efficient than archiving during sync because: - No
+   * competition with block import for I/O - Can process in large batches - No seekForPrev overhead
+   * during sync critical path - Trielogs already contain all the information we need
+   */
+  private void executeBulkArchiving() {
+    if (bulkArchivingInProgress.incrementAndGet() > 1) {
+      bulkArchivingInProgress.decrementAndGet();
+      LOG.warn("Bulk archiving already in progress, skipping");
+      return;
+    }
+
+    try {
+      long startTime = System.currentTimeMillis();
+      long startBlock = rootWorldStateStorage.getLatestArchivedBlock().orElse(0L) + 1;
+      long endBlock =
+          blockchain.getChainHeadBlockNumber() - DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE;
+      long totalBlocks = endBlock - startBlock + 1;
+
+      if (totalBlocks <= 0) {
+        LOG.info("No blocks to archive");
+        return;
+      }
+
+      LOG.info(
+          "Starting bulk archive generation for blocks {} to {} ({} total blocks)",
+          startBlock,
+          endBlock,
+          totalBlocks);
+
+      long blocksProcessed = 0;
+      long lastProgressLog = System.currentTimeMillis();
+
+      // Process blocks one at a time (batching at the transaction level is handled by
+      // moveBlockStateToArchive)
+      for (long blockNum = startBlock; blockNum <= endBlock; blockNum++) {
+        // Archive this block
+        Optional<Hash> blockHash = blockchain.getBlockHashByNumber(blockNum);
+        if (blockHash.isEmpty()) {
+          LOG.warn("Block {} not found in blockchain, skipping", blockNum);
+          continue;
+        }
+
+        Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHash.get());
+        if (trieLog.isEmpty()) {
+          LOG.warn("TrieLog for block {} not found, skipping", blockNum);
+          continue;
+        }
+
+        // Archive state for this block using existing archiving logic
+        archiveBlockFromTrieLog(blockNum, blockHash.get(), trieLog.get());
+
+        blocksProcessed++;
+
+        // Log progress every 100 blocks or every 10 seconds
+        long now = System.currentTimeMillis();
+        if (blockNum % 100 == 0 || (now - lastProgressLog > 10000)) {
+          long duration = now - startTime;
+          double progress = (double) blocksProcessed / totalBlocks * 100;
+          long blocksRemaining = totalBlocks - blocksProcessed;
+          long estimatedTimeRemaining =
+              blocksProcessed > 0 ? (duration * blocksRemaining / blocksProcessed) : 0;
+
+          LOG.info(
+              "Archive progress: {}/{} blocks ({}%), {} blocks behind chain head. Est. time remaining: {} seconds",
+              blocksProcessed,
+              totalBlocks,
+              String.format("%.1f", progress),
+              blockchain.getChainHeadBlockNumber() - blockNum,
+              estimatedTimeRemaining / 1000);
+
+          lastProgressLog = now;
+        }
+      }
+
+      long duration = System.currentTimeMillis() - startTime;
+      LOG.info(
+          "Bulk archive generation complete. Processed {} blocks in {} seconds ({} blocks/sec)",
+          blocksProcessed,
+          duration / 1000,
+          blocksProcessed > 0 ? (blocksProcessed * 1000) / duration : 0);
+
+    } catch (Exception e) {
+      LOG.error("Error during bulk archiving", e);
+    } finally {
+      bulkArchivingInProgress.decrementAndGet();
+    }
+  }
+
+  /**
+   * Archive state for a single block using its trielog. This examines what changed in the block and
+   * moves the previous versions of those keys to the archive segment.
+   */
+  private void archiveBlockFromTrieLog(
+      final long blockNum, final Hash blockHash, final TrieLog trieLog) {
+    // Archive account state
+    trieLog
+        .getAccountChanges()
+        .forEach(
+            (address, change) -> {
+              // Move any previous state for this account
+              Optional<BlockHeader> parentHeader =
+                  blockchain
+                      .getBlockHeader(blockHash)
+                      .flatMap(header -> blockchain.getBlockHeader(header.getParentHash()));
+              rootWorldStateStorage.archivePreviousAccountState(
+                  parentHeader, address.addressHash());
+            });
+
+    // Archive storage state
+    trieLog
+        .getStorageChanges()
+        .forEach(
+            (address, storageSlotKey) -> {
+              storageSlotKey.forEach(
+                  (slotKey, slotValue) -> {
+                    // Move any previous state for this storage slot
+                    Optional<BlockHeader> parentHeader =
+                        blockchain
+                            .getBlockHeader(blockHash)
+                            .flatMap(header -> blockchain.getBlockHeader(header.getParentHash()));
+                    rootWorldStateStorage.archivePreviousStorageState(
+                        parentHeader,
+                        Bytes.concatenate(address.addressHash(), slotKey.getSlotHash()));
+                  });
+            });
+
+    // Update tracking
+    rootWorldStateStorage.setLatestArchivedBlock(blockNum);
+    latestArchivedBlock.set(blockNum);
   }
 }

@@ -80,6 +80,7 @@ public interface PathBasedExtraStorageConfiguration {
 
     boolean DEFAULT_FULL_FLAT_DB_ENABLED = true;
     boolean DEFAULT_CODE_USING_CODE_HASH_ENABLED = true;
+    boolean DEFAULT_ARCHIVE_DEFER_DURING_SYNC = true;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -89,6 +90,11 @@ public interface PathBasedExtraStorageConfiguration {
     @Value.Default
     default boolean getCodeStoredByCodeHashEnabled() {
       return DEFAULT_CODE_USING_CODE_HASH_ENABLED;
+    }
+
+    @Value.Default
+    default boolean getArchiveDeferDuringSync() {
+      return DEFAULT_ARCHIVE_DEFER_DURING_SYNC;
     }
   }
 }

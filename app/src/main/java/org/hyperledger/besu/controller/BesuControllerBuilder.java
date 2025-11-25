@@ -874,6 +874,20 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               scheduler,
               ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager());
       blockchain.observeBlockAdded(archiver);
+
+      // Subscribe to initial sync completion to trigger bulk archiving
+      syncState.subscribeCompletionReached(
+          new org.hyperledger.besu.plugin.services.BesuEvents.InitialSyncCompletionListener() {
+            @Override
+            public void onInitialSyncCompleted() {
+              archiver.onInitialSyncCompleted();
+            }
+
+            @Override
+            public void onInitialSyncRestart() {
+              // Nothing to do on restart
+            }
+          });
     }
 
     final List<Closeable> closeables = new ArrayList<>();
@@ -973,16 +987,25 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final Blockchain blockchain,
       final EthScheduler scheduler,
       final TrieLogManager trieLogManager) {
+    final boolean deferArchivingDuringSync =
+        dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getArchiveDeferDuringSync();
+
     final BonsaiArchiver archiver =
         new BonsaiArchiver(
             (PathBasedWorldStateKeyValueStorage) worldStateStorage,
             blockchain,
             scheduler::executeServiceTask,
             trieLogManager,
-            metricsSystem);
+            metricsSystem,
+            deferArchivingDuringSync);
 
     archiver.initialize();
-    LOG.info("Bonsai archiver initialised");
+    LOG.info(
+        "Bonsai archiver initialised with deferred archiving {}",
+        deferArchivingDuringSync ? "enabled" : "disabled");
     return archiver;
   }
 
