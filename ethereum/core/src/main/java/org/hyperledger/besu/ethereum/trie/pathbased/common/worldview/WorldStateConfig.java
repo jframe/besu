@@ -27,9 +27,16 @@ public class WorldStateConfig {
   /** Indicates whether the mode is stateful. Default is true. */
   private boolean isStateful;
 
+  /**
+   * Indicates whether archive fast sync is enabled. When enabled, trie persistence and archiving
+   * are skipped during sync, then archive is rebuilt from trielogs after sync completes.
+   */
+  private boolean isArchiveFastSyncEnabled;
+
   private WorldStateConfig(final Builder builder) {
     this.isTrieDisabled = builder.isTrieDisabled;
     this.isStateful = builder.isStateful;
+    this.isArchiveFastSyncEnabled = builder.isArchiveFastSyncEnabled;
   }
 
   public boolean isTrieDisabled() {
@@ -40,12 +47,20 @@ public class WorldStateConfig {
     return isStateful;
   }
 
+  public boolean isArchiveFastSyncEnabled() {
+    return isArchiveFastSyncEnabled;
+  }
+
   public void setTrieDisabled(final boolean trieDisabled) {
     isTrieDisabled = trieDisabled;
   }
 
   public void setStateful(final boolean stateful) {
     isStateful = stateful;
+  }
+
+  public void setArchiveFastSyncEnabled(final boolean archiveFastSyncEnabled) {
+    isArchiveFastSyncEnabled = archiveFastSyncEnabled;
   }
 
   /**
@@ -55,7 +70,11 @@ public class WorldStateConfig {
    * @return a new WorldStateConfig instance with merged values
    */
   public WorldStateConfig apply(final WorldStateConfig other) {
-    return new Builder(this).trieDisabled(other.isTrieDisabled).stateful(other.isStateful).build();
+    return new Builder(this)
+        .trieDisabled(other.isTrieDisabled)
+        .stateful(other.isStateful)
+        .archiveFastSyncEnabled(other.isArchiveFastSyncEnabled)
+        .build();
   }
 
   public static Builder newBuilder() {
@@ -73,12 +92,14 @@ public class WorldStateConfig {
   public static class Builder {
     private boolean isStateful = true;
     private boolean isTrieDisabled = false;
+    private boolean isArchiveFastSyncEnabled = false;
 
     public Builder() {}
 
     public Builder(final WorldStateConfig spec) {
       this.isTrieDisabled = spec.isTrieDisabled();
       this.isStateful = spec.isStateful();
+      this.isArchiveFastSyncEnabled = spec.isArchiveFastSyncEnabled();
     }
 
     public Builder trieDisabled(final boolean trieDisabled) {
@@ -88,6 +109,11 @@ public class WorldStateConfig {
 
     public Builder stateful(final boolean stateful) {
       this.isStateful = stateful;
+      return this;
+    }
+
+    public Builder archiveFastSyncEnabled(final boolean archiveFastSyncEnabled) {
+      this.isArchiveFastSyncEnabled = archiveFastSyncEnabled;
       return this;
     }
 

@@ -41,6 +41,15 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
   @Override
   protected FlatDbMode getRequestedFlatDbMode(
       final DataStorageConfiguration dataStorageConfiguration) {
+    // If archive fast sync is enabled, use FULL mode during sync
+    // Will be migrated to ARCHIVE mode during phase 3
+    if (dataStorageConfiguration
+        .getPathBasedExtraStorageConfiguration()
+        .getUnstable()
+        .getArchiveFastSyncEnabled()) {
+      return FlatDbMode.FULL; // Non-versioned during fast sync
+    }
+
     return dataStorageConfiguration
             .getPathBasedExtraStorageConfiguration()
             .getUnstable()
@@ -84,6 +93,21 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
         TRIE_BRANCH_STORAGE, FLAT_DB_MODE, FlatDbMode.PARTIAL.getVersion().toArrayUnsafe());
     transaction.commit();
     loadFlatDbStrategy(composedWorldStateStorage); // force reload of flat db reader strategy
+  }
+
+  /**
+   * Migrate from FULL to ARCHIVE mode after fast sync completes. Called during Phase 3 when
+   * rebuilding archive from trielogs.
+   */
+  public void migrateToArchiveMode(final SegmentedKeyValueStorage composedWorldStateStorage) {
+    final SegmentedKeyValueStorageTransaction transaction =
+        composedWorldStateStorage.startTransaction();
+    LOG.info("Migrating FlatDbStrategy from FULL to ARCHIVE mode");
+    transaction.put(
+        TRIE_BRANCH_STORAGE, FLAT_DB_MODE, FlatDbMode.ARCHIVE.getVersion().toArrayUnsafe());
+    transaction.commit();
+    loadFlatDbStrategy(composedWorldStateStorage); // force reload of flat db reader strategy
+    LOG.info("Migration to ARCHIVE mode complete");
   }
 
   @Override

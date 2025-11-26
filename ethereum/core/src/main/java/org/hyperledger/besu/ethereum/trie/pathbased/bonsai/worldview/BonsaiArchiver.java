@@ -59,23 +59,38 @@ public class BonsaiArchiver implements BlockAddedObserver {
   // For logging progress. Saves doing a DB read just to record our progress
   final AtomicLong latestArchivedBlock = new AtomicLong(0);
 
+  // Archive fast sync mode: skip archiving during sync, rebuild from trielogs later
+  private final boolean archiveFastSyncEnabled;
+
   public BonsaiArchiver(
       final PathBasedWorldStateKeyValueStorage rootWorldStateStorage,
       final Blockchain blockchain,
       final Consumer<Runnable> executeAsync,
       final TrieLogManager trieLogManager,
-      final MetricsSystem metricsSystem) {
+      final MetricsSystem metricsSystem,
+      final boolean archiveFastSyncEnabled) {
     this.rootWorldStateStorage = rootWorldStateStorage;
     this.blockchain = blockchain;
     this.executeAsync = executeAsync;
     this.trieLogManager = trieLogManager;
     this.metricsSystem = metricsSystem;
+    this.archiveFastSyncEnabled = archiveFastSyncEnabled;
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
         "archived_blocks_state",
         "Total number of blocks for which state has been archived",
         () -> latestArchivedBlock.get());
+  }
+
+  // Backward compatibility constructor
+  public BonsaiArchiver(
+      final PathBasedWorldStateKeyValueStorage rootWorldStateStorage,
+      final Blockchain blockchain,
+      final Consumer<Runnable> executeAsync,
+      final TrieLogManager trieLogManager,
+      final MetricsSystem metricsSystem) {
+    this(rootWorldStateStorage, blockchain, executeAsync, trieLogManager, metricsSystem, false);
   }
 
   public void initialize() {
@@ -91,6 +106,12 @@ public class BonsaiArchiver implements BlockAddedObserver {
   // This is intended to maintain good performance for new block imports by keeping the primary
   // DB segments to live state only. Returns the number of state and storage entries moved.
   public int moveBlockStateToArchive() {
+    // Skip archiving during fast sync mode - will be rebuilt from trielogs later
+    if (archiveFastSyncEnabled) {
+      LOG.trace("Skipping archiving during fast sync mode");
+      return 0;
+    }
+
     final long retainAboveThisBlock =
         blockchain.getChainHeadBlockNumber() - DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE;
 

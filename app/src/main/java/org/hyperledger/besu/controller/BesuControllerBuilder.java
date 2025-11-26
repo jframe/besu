@@ -973,16 +973,28 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final Blockchain blockchain,
       final EthScheduler scheduler,
       final TrieLogManager trieLogManager) {
+    // Check if archive fast sync is enabled
+    final boolean archiveFastSyncEnabled =
+        dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getArchiveFastSyncEnabled();
+
     final BonsaiArchiver archiver =
         new BonsaiArchiver(
             (PathBasedWorldStateKeyValueStorage) worldStateStorage,
             blockchain,
             scheduler::executeServiceTask,
             trieLogManager,
-            metricsSystem);
+            metricsSystem,
+            archiveFastSyncEnabled);
 
     archiver.initialize();
-    LOG.info("Bonsai archiver initialised");
+    if (archiveFastSyncEnabled) {
+      LOG.info("Bonsai archiver initialised with fast sync mode enabled");
+    } else {
+      LOG.info("Bonsai archiver initialised");
+    }
     return archiver;
   }
 
@@ -1277,18 +1289,31 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
         final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
             worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
 
-        yield new BonsaiArchiveWorldStateProvider(
-            worldStateKeyValueStorage,
-            blockchain,
-            Optional.of(
-                dataStorageConfiguration
-                    .getPathBasedExtraStorageConfiguration()
-                    .getMaxLayersToLoad()),
-            bonsaiCachedMerkleTrieLoader,
-            besuComponent.map(BesuComponent::getBesuPluginContext).orElse(null),
-            evmConfiguration,
-            worldStateHealerSupplier,
-            codeCache);
+        final BonsaiArchiveWorldStateProvider provider =
+            new BonsaiArchiveWorldStateProvider(
+                worldStateKeyValueStorage,
+                blockchain,
+                Optional.of(
+                    dataStorageConfiguration
+                        .getPathBasedExtraStorageConfiguration()
+                        .getMaxLayersToLoad()),
+                bonsaiCachedMerkleTrieLoader,
+                besuComponent.map(BesuComponent::getBesuPluginContext).orElse(null),
+                evmConfiguration,
+                worldStateHealerSupplier,
+                codeCache);
+
+        // Set archive fast sync mode if enabled
+        if (dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getArchiveFastSyncEnabled()) {
+          provider.getWorldStateConfig().setArchiveFastSyncEnabled(true);
+          provider.getWorldStateConfig().setTrieDisabled(true); // Disable trie during fast sync
+          LOG.info("Archive fast sync mode enabled (trie disabled)");
+        }
+
+        yield provider;
       }
       case FOREST -> {
         final WorldStatePreimageStorage preimageStorage =

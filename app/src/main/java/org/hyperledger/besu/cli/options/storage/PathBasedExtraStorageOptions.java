@@ -106,6 +106,14 @@ public class PathBasedExtraStorageOptions
             "Enables code storage using code hash instead of by account hash. (default: ${DEFAULT-VALUE})")
     private boolean codeUsingCodeHashEnabled = DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-archive-fast-sync"},
+        arity = "1",
+        description =
+            "Enables fast sync mode for archive nodes: skips trie persistence and archiving during sync, then rebuilds archive from trielogs. (default: ${DEFAULT-VALUE})")
+    private boolean archiveFastSyncEnabled = false;
+
     /** Default Constructor. */
     Unstable() {}
   }
@@ -173,6 +181,8 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getFullFlatDbEnabled();
     dataStorageOptions.unstableOptions.codeUsingCodeHashEnabled =
         domainObject.getUnstable().getCodeStoredByCodeHashEnabled();
+    dataStorageOptions.unstableOptions.archiveFastSyncEnabled =
+        domainObject.getUnstable().getArchiveFastSyncEnabled();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
 
@@ -190,6 +200,7 @@ public class PathBasedExtraStorageOptions
             ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                 .fullFlatDbEnabled(unstableOptions.fullFlatDbEnabled)
                 .codeStoredByCodeHashEnabled(unstableOptions.codeUsingCodeHashEnabled)
+                .archiveFastSyncEnabled(unstableOptions.archiveFastSyncEnabled)
                 .build())
         .build();
   }
