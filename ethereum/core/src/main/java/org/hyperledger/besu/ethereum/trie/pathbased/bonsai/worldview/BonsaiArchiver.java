@@ -302,6 +302,7 @@ public class BonsaiArchiver implements BlockAddedObserver {
   }
 
   private final Lock archiveMutex = new ReentrantLock(true);
+  private final Lock indexMutex = new ReentrantLock(true);
 
   @Override
   public void onBlockAdded(final BlockAddedEvent addedBlockContext) {
@@ -312,47 +313,58 @@ public class BonsaiArchiver implements BlockAddedObserver {
 
       executeAsync.accept(
           () -> {
-            try {
-              Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHash);
+            // Use mutex to prevent concurrent index transaction commits
+            if (indexMutex.tryLock()) {
+              try {
+                Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHash);
 
-              if (trieLog.isPresent()) {
-                SegmentedKeyValueStorageTransaction indexTx =
-                    rootWorldStateStorage.getComposedWorldStateStorage().startTransaction();
+                if (trieLog.isPresent()) {
+                  SegmentedKeyValueStorageTransaction indexTx =
+                      rootWorldStateStorage.getComposedWorldStateStorage().startTransaction();
 
-                // Index account changes
-                trieLog
-                    .get()
-                    .getAccountChanges()
-                    .forEach(
-                        (address, change) -> {
-                          stateIndex
-                              .get()
-                              .addAccountModification(indexTx, address.addressHash(), blockNumber);
-                        });
+                  // Index account changes
+                  trieLog
+                      .get()
+                      .getAccountChanges()
+                      .forEach(
+                          (address, change) -> {
+                            stateIndex
+                                .get()
+                                .addAccountModification(
+                                    indexTx, address.addressHash(), blockNumber);
+                          });
 
-                // Index storage changes
-                trieLog
-                    .get()
-                    .getStorageChanges()
-                    .forEach(
-                        (address, storageSlotKey) -> {
-                          storageSlotKey.forEach(
-                              (slotKey, slotValue) -> {
-                                stateIndex
-                                    .get()
-                                    .addStorageModification(
-                                        indexTx, address.addressHash(), slotKey, blockNumber);
-                              });
-                        });
+                  // Index storage changes
+                  trieLog
+                      .get()
+                      .getStorageChanges()
+                      .forEach(
+                          (address, storageSlotKey) -> {
+                            storageSlotKey.forEach(
+                                (slotKey, slotValue) -> {
+                                  stateIndex
+                                      .get()
+                                      .addStorageModification(
+                                          indexTx, address.addressHash(), slotKey, blockNumber);
+                                });
+                          });
 
-                indexTx.commit();
+                  indexTx.commit();
 
-                if (blockNumber % 10000 == 0) {
-                  LOG.info("Index built for block {} during sync", blockNumber);
+                  if (blockNumber % 10000 == 0) {
+                    LOG.info("Index built for block {} during sync", blockNumber);
+                  }
                 }
+              } catch (Exception e) {
+                LOG.error("Error building index for block {}", blockNumber, e);
+              } finally {
+                indexMutex.unlock();
               }
-            } catch (Exception e) {
-              LOG.error("Error building index for block {}", blockNumber, e);
+            } else {
+              // Skip this block if another index update is in progress
+              // It will be picked up by the incremental builder later
+              LOG.trace(
+                  "Skipped index update for block {} (index update in progress)", blockNumber);
             }
           });
     }
