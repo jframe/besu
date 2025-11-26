@@ -973,16 +973,52 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final Blockchain blockchain,
       final EthScheduler scheduler,
       final TrieLogManager trieLogManager) {
+    // Check if archive index is enabled
+    final boolean indexEnabled =
+        dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getArchiveIndexEnabled();
+
     final BonsaiArchiver archiver =
         new BonsaiArchiver(
             (PathBasedWorldStateKeyValueStorage) worldStateStorage,
             blockchain,
             scheduler::executeServiceTask,
             trieLogManager,
-            metricsSystem);
+            metricsSystem,
+            indexEnabled);
 
     archiver.initialize();
-    LOG.info("Bonsai archiver initialised");
+
+    // Connect index to strategy provider if enabled
+    if (indexEnabled && archiver.getStateIndex().isPresent()) {
+      final BonsaiWorldStateKeyValueStorage bonsaiStorage =
+          (BonsaiWorldStateKeyValueStorage) worldStateStorage;
+      bonsaiStorage.getFlatDbStrategyProvider().setStateIndex(archiver.getStateIndex().get());
+      LOG.info("Bonsai archiver initialised with index enabled");
+
+      // Build index on startup if configured
+      if (dataStorageConfiguration
+              .getPathBasedExtraStorageConfiguration()
+              .getUnstable()
+              .getArchiveIndexBuildOnStartup()
+          && archiver.getIndexBuilder().isPresent()) {
+        scheduler.executeServiceTask(
+            () -> {
+              if (!archiver.getIndexBuilder().get().isIndexUpToDate()) {
+                LOG.info("Building archive index from trielogs...");
+                long blocksIndexed = archiver.getIndexBuilder().get().buildIndexIncremental();
+                LOG.info("Archive index build complete. Indexed {} blocks", blocksIndexed);
+              } else {
+                LOG.info("Archive index is already up to date");
+              }
+            });
+      }
+    } else {
+      LOG.info("Bonsai archiver initialised");
+    }
+
     return archiver;
   }
 

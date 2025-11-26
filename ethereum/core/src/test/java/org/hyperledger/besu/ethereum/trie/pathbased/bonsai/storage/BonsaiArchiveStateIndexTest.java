@@ -15,20 +15,16 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ARCHIVE_STATE_INDEX;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
-import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.Optional;
 
-import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,8 +70,7 @@ public class BonsaiArchiveStateIndexTest {
     tx.commit();
 
     // Verify the index contains the modifications
-    Optional<Long> result =
-        index.findStorageModificationBlockNumber(accountHash, slotKey, 250L);
+    Optional<Long> result = index.findStorageModificationBlockNumber(accountHash, slotKey, 250L);
     assertThat(result).isPresent();
     assertThat(result.get()).isEqualTo(200L);
   }

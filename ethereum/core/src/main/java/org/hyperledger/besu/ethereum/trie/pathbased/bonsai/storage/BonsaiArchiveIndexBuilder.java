@@ -33,8 +33,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * BonsaiArchiveIndexBuilder builds an index of state changes from trielogs. This index enables
- * fast O(1) lookups of historical state without requiring expensive seekForPrev operations.
+ * BonsaiArchiveIndexBuilder builds an index of state changes from trielogs. This index enables fast
+ * O(1) lookups of historical state without requiring expensive seekForPrev operations.
  *
  * <p>The builder processes trielogs sequentially and tracks which blocks modified which accounts
  * and storage slots. This approach is inspired by Geth's archive implementation.

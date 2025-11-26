@@ -14,9 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 
-import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
@@ -203,7 +201,9 @@ public class BonsaiArchiver implements BlockAddedObserver {
                   if (indexEnabled && stateIndex.isPresent()) {
                     indexTx =
                         Optional.of(
-                            rootWorldStateStorage.getComposedWorldStateStorage().startTransaction());
+                            rootWorldStateStorage
+                                .getComposedWorldStateStorage()
+                                .startTransaction());
                   }
 
                   final Optional<SegmentedKeyValueStorageTransaction> finalIndexTx = indexTx;
@@ -305,6 +305,59 @@ public class BonsaiArchiver implements BlockAddedObserver {
 
   @Override
   public void onBlockAdded(final BlockAddedEvent addedBlockContext) {
+    // Build index from trielog during sync if enabled
+    if (indexEnabled && stateIndex.isPresent()) {
+      final long blockNumber = addedBlockContext.getHeader().getNumber();
+      final Hash blockHash = addedBlockContext.getHeader().getHash();
+
+      executeAsync.accept(
+          () -> {
+            try {
+              Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHash);
+
+              if (trieLog.isPresent()) {
+                SegmentedKeyValueStorageTransaction indexTx =
+                    rootWorldStateStorage.getComposedWorldStateStorage().startTransaction();
+
+                // Index account changes
+                trieLog
+                    .get()
+                    .getAccountChanges()
+                    .forEach(
+                        (address, change) -> {
+                          stateIndex
+                              .get()
+                              .addAccountModification(indexTx, address.addressHash(), blockNumber);
+                        });
+
+                // Index storage changes
+                trieLog
+                    .get()
+                    .getStorageChanges()
+                    .forEach(
+                        (address, storageSlotKey) -> {
+                          storageSlotKey.forEach(
+                              (slotKey, slotValue) -> {
+                                stateIndex
+                                    .get()
+                                    .addStorageModification(
+                                        indexTx, address.addressHash(), slotKey, blockNumber);
+                              });
+                        });
+
+                indexTx.commit();
+
+                if (blockNumber % 10000 == 0) {
+                  LOG.info("Index built for block {} during sync", blockNumber);
+                }
+              }
+            } catch (Exception e) {
+              LOG.error("Error building index for block {}", blockNumber, e);
+            }
+          });
+    }
+
+    // Normal archiving (always runs)
     initialize();
     final Optional<Long> blockNumber = Optional.of(addedBlockContext.getHeader().getNumber());
     blockNumber.ifPresent(

@@ -17,7 +17,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ARCHIVE_STATE_INDEX;
 
-import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -80,7 +79,8 @@ public class BonsaiArchiveStateIndex {
 
       // Keep list sorted and deduplicated
       if (blockNumbers.size() > 1
-          && blockNumbers.get(blockNumbers.size() - 1) < blockNumbers.get(blockNumbers.size() - 2)) {
+          && blockNumbers.get(blockNumbers.size() - 1)
+              < blockNumbers.get(blockNumbers.size() - 2)) {
         Collections.sort(blockNumbers);
       }
 
@@ -116,7 +116,8 @@ public class BonsaiArchiveStateIndex {
 
       // Keep list sorted and deduplicated
       if (blockNumbers.size() > 1
-          && blockNumbers.get(blockNumbers.size() - 1) < blockNumbers.get(blockNumbers.size() - 2)) {
+          && blockNumbers.get(blockNumbers.size() - 1)
+              < blockNumbers.get(blockNumbers.size() - 2)) {
         Collections.sort(blockNumbers);
       }
 
@@ -330,9 +331,7 @@ public class BonsaiArchiveStateIndex {
     return storage.get(ARCHIVE_STATE_INDEX, markerKey).map(bytes -> Bytes.wrap(bytes).toLong());
   }
 
-  /**
-   * Clear all index data. Use with caution.
-   */
+  /** Clear all index data. Use with caution. */
   public void clear() {
     storage.clear(ARCHIVE_STATE_INDEX);
   }

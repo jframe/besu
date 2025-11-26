@@ -104,7 +104,8 @@ public class BonsaiArchiveIndexedFlatDbStrategy extends BonsaiArchiveFlatDbStrat
 
       long blockNumber = modificationBlock.get();
       byte[] key =
-          calculateArchiveKeyWithMinSuffix(new BonsaiContext(blockNumber), accountHash.toArrayUnsafe());
+          calculateArchiveKeyWithMinSuffix(
+              new BonsaiContext(blockNumber), accountHash.toArrayUnsafe());
 
       // Try primary segment first
       Optional<byte[]> value = storage.get(ACCOUNT_INFO_STATE, key);
@@ -216,5 +217,4 @@ public class BonsaiArchiveIndexedFlatDbStrategy extends BonsaiArchiveFlatDbStrat
     }
     return Optional.of(Bytes.wrap(value));
   }
-
 }
