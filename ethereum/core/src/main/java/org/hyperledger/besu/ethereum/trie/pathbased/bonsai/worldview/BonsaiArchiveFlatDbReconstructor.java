@@ -76,14 +76,14 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
-        "archive_reconstruction_progress",
+        "archive_reconstruction_blocks_processed",
         "Number of blocks processed during archive reconstruction",
         blocksProcessed::get);
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
-        "archive_reconstruction_total",
-        "Total number of blocks to process during archive reconstruction",
+        "archive_reconstruction_blocks_target",
+        "Target number of blocks to process during archive reconstruction",
         totalBlocks::get);
   }
 
