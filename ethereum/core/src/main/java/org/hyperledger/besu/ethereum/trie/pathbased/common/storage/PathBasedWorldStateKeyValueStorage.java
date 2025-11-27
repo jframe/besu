@@ -72,6 +72,10 @@ public abstract class PathBasedWorldStateKeyValueStorage
   // 0x6172636869766564426C6F636B73
   public static final byte[] ARCHIVED_BLOCKS = "archivedBlocks".getBytes(StandardCharsets.UTF_8);
 
+  // 0x617263686976656446696C6544624C617374426C6F636B
+  public static final byte[] ARCHIVED_FLAT_DB_LAST_BLOCK =
+      "archivedFlatDbLastBlock".getBytes(StandardCharsets.UTF_8);
+
   private final AtomicBoolean shouldClose = new AtomicBoolean(false);
 
   protected final AtomicBoolean isClosed = new AtomicBoolean(false);
@@ -402,6 +406,22 @@ public abstract class PathBasedWorldStateKeyValueStorage
     tx.put(
         ACCOUNT_INFO_STATE_ARCHIVE,
         ARCHIVED_BLOCKS,
+        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+    tx.commit();
+  }
+
+  public Optional<Long> getLatestArchivedFlatDbBlock() {
+    return composedWorldStateStorage
+        .get(ACCOUNT_INFO_STATE_ARCHIVE, ARCHIVED_FLAT_DB_LAST_BLOCK)
+        .map(Bytes::wrap)
+        .map(Bytes::toLong);
+  }
+
+  public void setLatestArchivedFlatDbBlock(final Long blockNumber) {
+    SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
+    tx.put(
+        ACCOUNT_INFO_STATE_ARCHIVE,
+        ARCHIVED_FLAT_DB_LAST_BLOCK,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
     tx.commit();
   }

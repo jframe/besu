@@ -41,16 +41,27 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
   @Override
   protected FlatDbMode getRequestedFlatDbMode(
       final DataStorageConfiguration dataStorageConfiguration) {
-    return dataStorageConfiguration
+    if (!dataStorageConfiguration
+        .getPathBasedExtraStorageConfiguration()
+        .getUnstable()
+        .getFullFlatDbEnabled()) {
+      return FlatDbMode.PARTIAL;
+    }
+
+    // For X_BONSAI_ARCHIVE with deferred mode, start with FULL and upgrade to ARCHIVE after sync
+    if (dataStorageConfiguration.getDataStorageFormat().equals(DataStorageFormat.X_BONSAI_ARCHIVE)
+        && dataStorageConfiguration
             .getPathBasedExtraStorageConfiguration()
             .getUnstable()
-            .getFullFlatDbEnabled()
-        ? (dataStorageConfiguration
-                .getDataStorageFormat()
-                .equals(DataStorageFormat.X_BONSAI_ARCHIVE)
-            ? FlatDbMode.ARCHIVE
-            : FlatDbMode.FULL)
-        : FlatDbMode.PARTIAL;
+            .getDeferArchiveUntilSyncComplete()) {
+      return FlatDbMode.FULL;
+    }
+
+    return dataStorageConfiguration
+            .getDataStorageFormat()
+            .equals(DataStorageFormat.X_BONSAI_ARCHIVE)
+        ? FlatDbMode.ARCHIVE
+        : FlatDbMode.FULL;
   }
 
   @Override
@@ -71,6 +82,16 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
       transaction.put(
           TRIE_BRANCH_STORAGE, FLAT_DB_MODE, FlatDbMode.ARCHIVE.getVersion().toArrayUnsafe());
     }
+    transaction.commit();
+    loadFlatDbStrategy(composedWorldStateStorage); // force reload of flat db reader strategy
+  }
+
+  public void upgradeToArchiveFlatDbMode(final SegmentedKeyValueStorage composedWorldStateStorage) {
+    final SegmentedKeyValueStorageTransaction transaction =
+        composedWorldStateStorage.startTransaction();
+    LOG.info("Upgrading FlatDbStrategy to ARCHIVE mode");
+    transaction.put(
+        TRIE_BRANCH_STORAGE, FLAT_DB_MODE, FlatDbMode.ARCHIVE.getVersion().toArrayUnsafe());
     transaction.commit();
     loadFlatDbStrategy(composedWorldStateStorage); // force reload of flat db reader strategy
   }

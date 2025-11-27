@@ -165,6 +165,10 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     flatDbStrategyProvider.upgradeToFullFlatDbMode(composedWorldStateStorage);
   }
 
+  public void upgradeToArchiveFlatDbMode() {
+    flatDbStrategyProvider.upgradeToArchiveFlatDbMode(composedWorldStateStorage);
+  }
+
   public void downgradeToPartialFlatDbMode() {
     flatDbStrategyProvider.downgradeToPartialFlatDbMode(composedWorldStateStorage);
   }

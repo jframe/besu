@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConf
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.DEFAULT_TRIE_LOG_PRUNING_WINDOW_SIZE;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.MINIMUM_TRIE_LOG_RETENTION_LIMIT;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_CODE_USING_CODE_HASH_ENABLED;
+import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_DEFER_ARCHIVE_UNTIL_SYNC_COMPLETE;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_FULL_FLAT_DB_ENABLED;
 
 import org.hyperledger.besu.cli.options.CLIOptions;
@@ -106,6 +107,14 @@ public class PathBasedExtraStorageOptions
             "Enables code storage using code hash instead of by account hash. (default: ${DEFAULT-VALUE})")
     private boolean codeUsingCodeHashEnabled = DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-defer-archive-until-sync-complete"},
+        arity = "1",
+        description =
+            "When using X_BONSAI_ARCHIVE storage format, defer archive state reconstruction until initial sync is complete. During sync, operates as regular Bonsai for better performance. (default: ${DEFAULT-VALUE})")
+    private boolean deferArchiveUntilSyncComplete = DEFAULT_DEFER_ARCHIVE_UNTIL_SYNC_COMPLETE;
+
     /** Default Constructor. */
     Unstable() {}
   }
@@ -173,6 +182,8 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getFullFlatDbEnabled();
     dataStorageOptions.unstableOptions.codeUsingCodeHashEnabled =
         domainObject.getUnstable().getCodeStoredByCodeHashEnabled();
+    dataStorageOptions.unstableOptions.deferArchiveUntilSyncComplete =
+        domainObject.getUnstable().getDeferArchiveUntilSyncComplete();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
 
@@ -190,6 +201,7 @@ public class PathBasedExtraStorageOptions
             ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                 .fullFlatDbEnabled(unstableOptions.fullFlatDbEnabled)
                 .codeStoredByCodeHashEnabled(unstableOptions.codeUsingCodeHashEnabled)
+                .deferArchiveUntilSyncComplete(unstableOptions.deferArchiveUntilSyncComplete)
                 .build())
         .build();
   }
