@@ -804,8 +804,12 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             Optional.empty(),
             forkIdManager);
 
-    final PivotBlockSelector pivotBlockSelector =
-        createPivotSelector(protocolSchedule, protocolContext, ethContext, syncState, blockchain);
+    final var pivotSelectorResult =
+        createPivotSelectorWithForkchoiceSupplier(
+            protocolSchedule, protocolContext, ethContext, syncState, blockchain);
+    final PivotBlockSelector pivotBlockSelector = pivotSelectorResult.pivotSelector();
+    final Optional<Supplier<Optional<org.hyperledger.besu.consensus.merge.ForkchoiceEvent>>>
+        forkchoiceStateSupplier = pivotSelectorResult.forkchoiceSupplier();
 
     final DefaultSynchronizer synchronizer =
         createSynchronizer(
@@ -816,7 +820,8 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             peerTaskExecutor,
             syncState,
             ethProtocolManager,
-            pivotBlockSelector);
+            pivotBlockSelector,
+            forkchoiceStateSupplier);
 
     worldStateHealerSupplier.set(synchronizer::healWorldState);
 
@@ -1037,6 +1042,29 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final SyncState syncState,
       final EthProtocolManager ethProtocolManager,
       final PivotBlockSelector pivotBlockSelector) {
+    return createSynchronizer(
+        protocolSchedule,
+        worldStateStorageCoordinator,
+        protocolContext,
+        ethContext,
+        peerTaskExecutor,
+        syncState,
+        ethProtocolManager,
+        pivotBlockSelector,
+        Optional.empty());
+  }
+
+  protected DefaultSynchronizer createSynchronizer(
+      final ProtocolSchedule protocolSchedule,
+      final WorldStateStorageCoordinator worldStateStorageCoordinator,
+      final ProtocolContext protocolContext,
+      final EthContext ethContext,
+      final PeerTaskExecutor peerTaskExecutor,
+      final SyncState syncState,
+      final EthProtocolManager ethProtocolManager,
+      final PivotBlockSelector pivotBlockSelector,
+      final Optional<Supplier<Optional<org.hyperledger.besu.consensus.merge.ForkchoiceEvent>>>
+          forkchoiceStateSupplier) {
 
     return new DefaultSynchronizer(
         syncConfig,
@@ -1052,10 +1080,20 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
         clock,
         metricsSystem,
         getFullSyncTerminationCondition(protocolContext.getBlockchain()),
-        pivotBlockSelector);
+        pivotBlockSelector,
+        forkchoiceStateSupplier);
   }
 
-  private PivotBlockSelector createPivotSelector(
+  /**
+   * Result of creating a pivot block selector, including optional forkchoice supplier for
+   * post-merge networks.
+   */
+  record PivotSelectorResult(
+      PivotBlockSelector pivotSelector,
+      Optional<Supplier<Optional<org.hyperledger.besu.consensus.merge.ForkchoiceEvent>>>
+          forkchoiceSupplier) {}
+
+  private PivotSelectorResult createPivotSelectorWithForkchoiceSupplier(
       final ProtocolSchedule protocolSchedule,
       final ProtocolContext protocolContext,
       final EthContext ethContext,
@@ -1066,13 +1104,15 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       LOG.info(
           "{} is configured, creating initial sync for BFT",
           genesisConfigOptions.getConsensusEngine().toUpperCase(Locale.ROOT));
-      return new BFTPivotSelectorFromPeers(
-          ethContext,
-          syncConfig,
-          syncState,
-          protocolContext,
-          nodeKey,
-          blockchain.getChainHeadHeader());
+      return new PivotSelectorResult(
+          new BFTPivotSelectorFromPeers(
+              ethContext,
+              syncConfig,
+              syncState,
+              protocolContext,
+              nodeKey,
+              blockchain.getChainHeadHeader()),
+          Optional.empty());
     } else if (genesisConfigOptions.getTerminalTotalDifficulty().isPresent()) {
       LOG.info("TTD difficulty is present, creating initial sync for PoS");
 
@@ -1088,16 +1128,19 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             LOG.info("Initial sync done, unsubscribe forkchoice supplier");
           };
 
-      return new PivotSelectorFromSafeBlock(
-          protocolContext,
-          protocolSchedule,
-          ethContext,
-          genesisConfigOptions,
-          unverifiedForkchoiceSupplier,
-          unsubscribeForkchoiceListener);
+      return new PivotSelectorResult(
+          new PivotSelectorFromSafeBlock(
+              protocolContext,
+              protocolSchedule,
+              ethContext,
+              genesisConfigOptions,
+              unverifiedForkchoiceSupplier,
+              unsubscribeForkchoiceListener),
+          Optional.of(unverifiedForkchoiceSupplier));
     } else {
       LOG.info("TTD difficulty is not present, creating initial sync phase for PoW");
-      return new PivotSelectorFromPeers(ethContext, syncConfig, syncState);
+      return new PivotSelectorResult(
+          new PivotSelectorFromPeers(ethContext, syncConfig, syncState), Optional.empty());
     }
   }
 
