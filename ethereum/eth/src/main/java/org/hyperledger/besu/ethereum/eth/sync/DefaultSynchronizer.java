@@ -92,6 +92,40 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
       final MetricsSystem metricsSystem,
       final SyncTerminationCondition terminationCondition,
       final PivotBlockSelector pivotBlockSelector) {
+    this(
+        syncConfig,
+        protocolSchedule,
+        protocolContext,
+        worldStateStorageCoordinator,
+        blockBroadcaster,
+        ethContext,
+        peerTaskExecutor,
+        syncState,
+        dataDirectory,
+        storageProvider,
+        clock,
+        metricsSystem,
+        terminationCondition,
+        pivotBlockSelector,
+        Optional.empty());
+  }
+
+  public DefaultSynchronizer(
+      final SynchronizerConfiguration syncConfig,
+      final ProtocolSchedule protocolSchedule,
+      final ProtocolContext protocolContext,
+      final WorldStateStorageCoordinator worldStateStorageCoordinator,
+      final BlockBroadcaster blockBroadcaster,
+      final EthContext ethContext,
+      final PeerTaskExecutor peerTaskExecutor,
+      final SyncState syncState,
+      final Path dataDirectory,
+      final StorageProvider storageProvider,
+      final Clock clock,
+      final MetricsSystem metricsSystem,
+      final SyncTerminationCondition terminationCondition,
+      final PivotBlockSelector pivotBlockSelector,
+      final Optional<Supplier<Optional<ForkchoiceEvent>>> forkchoiceStateSupplier) {
     this.syncState = syncState;
     this.pivotBlockSelector = pivotBlockSelector;
     this.protocolContext = protocolContext;
@@ -139,7 +173,8 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
                     metricsSystem,
                     terminationCondition,
                     peerTaskExecutor,
-                    syncDurationMetrics));
+                    syncDurationMetrics,
+                    forkchoiceStateSupplier));
 
     this.fastSyncFactory =
         switch (syncConfig.getSyncMode()) {

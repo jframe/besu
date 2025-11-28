@@ -16,6 +16,8 @@ package org.hyperledger.besu.ethereum.eth.sync.fullsync;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
+import org.hyperledger.besu.consensus.merge.ForkchoiceEvent;
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -30,6 +32,7 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,6 +44,7 @@ class FullSyncTargetManager extends AbstractSyncTargetManager {
   private final ProtocolContext protocolContext;
   private final EthContext ethContext;
   private final SyncTerminationCondition terminationCondition;
+  private final Optional<Supplier<Optional<ForkchoiceEvent>>> forkchoiceStateSupplier;
 
   FullSyncTargetManager(
       final SynchronizerConfiguration config,
@@ -49,11 +53,30 @@ class FullSyncTargetManager extends AbstractSyncTargetManager {
       final EthContext ethContext,
       final MetricsSystem metricsSystem,
       final SyncTerminationCondition terminationCondition) {
+    this(
+        config,
+        protocolSchedule,
+        protocolContext,
+        ethContext,
+        metricsSystem,
+        terminationCondition,
+        Optional.empty());
+  }
+
+  FullSyncTargetManager(
+      final SynchronizerConfiguration config,
+      final ProtocolSchedule protocolSchedule,
+      final ProtocolContext protocolContext,
+      final EthContext ethContext,
+      final MetricsSystem metricsSystem,
+      final SyncTerminationCondition terminationCondition,
+      final Optional<Supplier<Optional<ForkchoiceEvent>>> forkchoiceStateSupplier) {
     super(config, protocolSchedule, protocolContext, ethContext, metricsSystem);
     this.config = config;
     this.protocolContext = protocolContext;
     this.ethContext = ethContext;
     this.terminationCondition = terminationCondition;
+    this.forkchoiceStateSupplier = forkchoiceStateSupplier;
   }
 
   @Override
@@ -76,6 +99,14 @@ class FullSyncTargetManager extends AbstractSyncTargetManager {
 
   @Override
   protected CompletableFuture<Optional<EthPeer>> selectBestAvailableSyncTarget() {
+    // If we have a forkchoice target and we've reached the safe block, stop syncing
+    if (hasReachedForkchoiceSafeBlock()) {
+      LOG.info(
+          "Reached FCU safe block target at block {}, stopping full sync to transition to backward sync",
+          protocolContext.getBlockchain().getChainHeadBlockNumber());
+      return completedFuture(Optional.empty());
+    }
+
     final Optional<EthPeer> maybeBestPeer = ethContext.getEthPeers().bestPeerWithHeightEstimate();
     if (!maybeBestPeer.isPresent()) {
       LOG.info(
@@ -107,6 +138,46 @@ class FullSyncTargetManager extends AbstractSyncTargetManager {
     final MutableBlockchain blockchain = protocolContext.getBlockchain();
     // We're in sync if the peer's chain is no better than our chain
     return !peer.chainState().chainIsBetterThan(blockchain.getChainHead());
+  }
+
+  /**
+   * Checks if we've reached the FCU safe block target. This is used in post-merge networks to stop
+   * full sync once we've synced up to the safe block announced by the consensus client.
+   *
+   * <p>IMPORTANT: This only applies AFTER terminal difficulty (TTD) has been reached. For networks
+   * syncing through the merge, full sync must continue until TTD is reached regardless of FCU safe
+   * block position.
+   *
+   * @return true if we have a forkchoice supplier, TTD has been reached, and we've reached or
+   *     passed the safe block
+   */
+  private boolean hasReachedForkchoiceSafeBlock() {
+    if (forkchoiceStateSupplier.isEmpty()) {
+      return false;
+    }
+
+    // Only use FCU safe block targeting after TTD has been reached
+    // This ensures networks syncing through the merge don't stop prematurely
+    if (!terminationCondition.shouldStopDownload()) {
+      return false;
+    }
+
+    final Optional<ForkchoiceEvent> maybeForkchoice = forkchoiceStateSupplier.get().get();
+    if (maybeForkchoice.isEmpty() || !maybeForkchoice.get().hasValidSafeBlockHash()) {
+      return false;
+    }
+
+    final Hash safeBlockHash = maybeForkchoice.get().getSafeBlockHash();
+    final MutableBlockchain blockchain = protocolContext.getBlockchain();
+
+    // Check if we have the safe block in our chain
+    final boolean hasSafeBlock = blockchain.contains(safeBlockHash);
+
+    if (hasSafeBlock) {
+      LOG.debug("Chain contains FCU safe block {}", safeBlockHash);
+    }
+
+    return hasSafeBlock;
   }
 
   @Override

@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.fullsync;
 
+import org.hyperledger.besu.consensus.merge.ForkchoiceEvent;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutor;
@@ -30,6 +31,7 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +55,30 @@ public class FullSyncDownloader {
       final SyncTerminationCondition terminationCondition,
       final PeerTaskExecutor peerTaskExecutor,
       final SyncDurationMetrics syncDurationMetrics) {
+    this(
+        syncConfig,
+        protocolSchedule,
+        protocolContext,
+        ethContext,
+        syncState,
+        metricsSystem,
+        terminationCondition,
+        peerTaskExecutor,
+        syncDurationMetrics,
+        Optional.empty());
+  }
+
+  public FullSyncDownloader(
+      final SynchronizerConfiguration syncConfig,
+      final ProtocolSchedule protocolSchedule,
+      final ProtocolContext protocolContext,
+      final EthContext ethContext,
+      final SyncState syncState,
+      final MetricsSystem metricsSystem,
+      final SyncTerminationCondition terminationCondition,
+      final PeerTaskExecutor peerTaskExecutor,
+      final SyncDurationMetrics syncDurationMetrics,
+      final Optional<Supplier<Optional<ForkchoiceEvent>>> forkchoiceStateSupplier) {
     this.syncConfig = syncConfig;
     this.protocolContext = protocolContext;
     this.syncState = syncState;
@@ -85,7 +111,8 @@ public class FullSyncDownloader {
             metricsSystem,
             terminationCondition,
             syncDurationMetrics,
-            peerTaskExecutor);
+            peerTaskExecutor,
+            forkchoiceStateSupplier);
   }
 
   public CompletableFuture<Void> start() {

@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.fullsync;
 
+import org.hyperledger.besu.consensus.merge.ForkchoiceEvent;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutor;
@@ -24,6 +25,9 @@ import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+
+import java.util.Optional;
+import java.util.function.Supplier;
 
 public class FullSyncChainDownloader {
   private FullSyncChainDownloader() {}
@@ -38,6 +42,30 @@ public class FullSyncChainDownloader {
       final SyncTerminationCondition terminationCondition,
       final SyncDurationMetrics syncDurationMetrics,
       final PeerTaskExecutor peerTaskExecutor) {
+    return create(
+        config,
+        protocolSchedule,
+        protocolContext,
+        ethContext,
+        syncState,
+        metricsSystem,
+        terminationCondition,
+        syncDurationMetrics,
+        peerTaskExecutor,
+        Optional.empty());
+  }
+
+  public static ChainDownloader create(
+      final SynchronizerConfiguration config,
+      final ProtocolSchedule protocolSchedule,
+      final ProtocolContext protocolContext,
+      final EthContext ethContext,
+      final SyncState syncState,
+      final MetricsSystem metricsSystem,
+      final SyncTerminationCondition terminationCondition,
+      final SyncDurationMetrics syncDurationMetrics,
+      final PeerTaskExecutor peerTaskExecutor,
+      final Optional<Supplier<Optional<ForkchoiceEvent>>> forkchoiceStateSupplier) {
 
     final FullSyncTargetManager syncTargetManager =
         new FullSyncTargetManager(
@@ -46,7 +74,8 @@ public class FullSyncChainDownloader {
             protocolContext,
             ethContext,
             metricsSystem,
-            terminationCondition);
+            terminationCondition,
+            forkchoiceStateSupplier);
 
     return new PipelineChainDownloader(
         syncState,
