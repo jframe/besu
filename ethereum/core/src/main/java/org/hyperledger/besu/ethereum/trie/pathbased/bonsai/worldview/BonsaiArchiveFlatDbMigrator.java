@@ -22,7 +22,9 @@ import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage.Updater;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
@@ -37,6 +39,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +58,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private final Blockchain blockchain;
   private final ScheduledExecutorService executorService;
   private final TrieLogManager trieLogManager;
+  private final BonsaiArchiveFlatDbStrategy writeStrategy;
   private final AtomicBoolean isReconstructing = new AtomicBoolean(false);
   private final AtomicLong blocksProcessed = new AtomicLong(0);
   private final AtomicLong totalBlocks = new AtomicLong(0);
@@ -78,6 +82,10 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.trieLogManager = trieLogManager;
+
+    // Create strategy for writing versioned archive entries
+    final CodeHashCodeStorageStrategy codeStorageStrategy = new CodeHashCodeStorageStrategy();
+    this.writeStrategy = new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
@@ -279,23 +287,26 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    * @param trieLog the trielog containing changes
    */
   private void rewriteAccountChanges(final TrieLog trieLog) {
-    final BonsaiWorldStateKeyValueStorage.Updater updater = worldStateStorage.updater();
+    final Updater updater = worldStateStorage.updater();
+    final var transaction = updater.getWorldStateTransaction();
+    final var storage = worldStateStorage.getComposedWorldStateStorage();
 
     trieLog
         .getAccountChanges()
         .forEach(
             (address, change) -> {
+              final Hash accountHash = address.addressHash();
+
               // Get the account value from the trielog's "prior" state
-              final AccountValue priorAccountValue =
-                  change.getPrior();
+              final AccountValue priorAccountValue = change.getPrior();
               if (priorAccountValue != null) {
                 // Serialize the account value to RLP
                 final Bytes accountBytes = RLP.encode(priorAccountValue::writeTo);
-                // Write the account with versioned key (accountHash + blockNumber)
-                updater.putAccountInfoState(address.addressHash(), accountBytes);
+                // Write the account with versioned key using BonsaiArchiveFlatDbStrategy
+                writeStrategy.putFlatAccount(storage, transaction, accountHash, accountBytes);
               } else {
                 // Account was created in this block, so prior state is non-existent (deleted)
-                updater.removeAccountInfoState(address.addressHash());
+                writeStrategy.removeFlatAccount(storage, transaction, accountHash);
               }
             });
 
@@ -308,31 +319,35 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    * @param trieLog the trielog containing changes
    */
   private void rewriteStorageChanges(final TrieLog trieLog) {
-    final BonsaiWorldStateKeyValueStorage.Updater updater = worldStateStorage.updater();
+    final Updater updater = worldStateStorage.updater();
+    final var transaction = updater.getWorldStateTransaction();
+    final var storage = worldStateStorage.getComposedWorldStateStorage();
 
     trieLog
         .getStorageChanges()
         .forEach(
-            (address, storageChanges) ->
-                storageChanges.forEach(
-                    (slotKey, slotValue) -> {
-                      // Get the storage value from the trielog's "prior" state
-                      final org.apache.tuweni.units.bigints.UInt256 priorValue =
-                          slotValue.getPrior();
-                      if (priorValue != null && !priorValue.isZero()) {
-                        // Write the storage with versioned key (accountHash + slotHash +
-                        // blockNumber)
-                        updater.putStorageValueBySlotHash(
-                            address.addressHash(),
-                            slotKey.getSlotHash(),
-                            Bytes.wrap(priorValue.toBytes()));
-                      } else {
-                        // Storage was created in this block or deleted, so prior state is
-                        // non-existent
-                        updater.removeStorageValueBySlotHash(
-                            address.addressHash(), slotKey.getSlotHash());
-                      }
-                    }));
+            (address, storageChanges) -> {
+              final Hash accountHash = address.addressHash();
+              storageChanges.forEach(
+                  (slotKey, slotValue) -> {
+                    // Get the storage value from the trielog's "prior" state
+                    final UInt256 priorValue = slotValue.getPrior();
+                    if (priorValue != null && !priorValue.isZero()) {
+                      // Write the storage with versioned key using BonsaiArchiveFlatDbStrategy
+                      writeStrategy.putFlatAccountStorageValueByStorageSlotHash(
+                          storage,
+                          transaction,
+                          accountHash,
+                          slotKey.getSlotHash(),
+                          Bytes.wrap(priorValue.toBytes()));
+                    } else {
+                      // Storage was created in this block or deleted, so prior state is
+                      // non-existent
+                      writeStrategy.removeFlatAccountStorageValueByStorageSlotHash(
+                          storage, transaction, accountHash, slotKey.getSlotHash());
+                    }
+                  });
+            });
 
     updater.commit();
   }
