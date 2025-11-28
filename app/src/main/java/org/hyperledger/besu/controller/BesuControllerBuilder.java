@@ -109,6 +109,7 @@ import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 import org.hyperledger.besu.plugin.ServiceManager;
+import org.hyperledger.besu.plugin.services.BesuEvents.InitialSyncCompletionListener;
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.services.BesuPluginContextImpl;
@@ -874,9 +875,22 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final TrieLogManager trieLogManager =
           ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
 
-      final BonsaiArchiver archiver =
-          createBonsaiArchiver(worldStateKeyValueStorage, blockchain, scheduler, trieLogManager);
-      blockchain.observeBlockAdded(archiver);
+      syncState.subscribeCompletionReached(
+          new InitialSyncCompletionListener() {
+            @Override
+            public void onInitialSyncCompleted() {
+              LOG.info("Initial sync completed, enabling BonsaiArchiver");
+              final BonsaiArchiver archiver =
+                  createBonsaiArchiver(
+                      worldStateKeyValueStorage, blockchain, scheduler, trieLogManager);
+              blockchain.observeBlockAdded(archiver);
+            }
+
+            @Override
+            public void onInitialSyncRestart() {
+              // No action needed
+            }
+          });
 
       // Setup deferred archive reconstructor if enabled
       if (dataStorageConfiguration
