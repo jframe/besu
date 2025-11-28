@@ -93,7 +93,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvi
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveFlatDbReconstructor;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveFlatDbMigrator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiver;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
@@ -897,10 +897,10 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
           .getPathBasedExtraStorageConfiguration()
           .getUnstable()
           .getDeferArchiveUntilSyncComplete()) {
-        final BonsaiArchiveFlatDbReconstructor reconstructor =
-            createBonsaiArchiveFlatDbReconstructor(
+        final BonsaiArchiveFlatDbMigrator flatDbMigrator =
+            createBonsaiArchiveFlatDbMigrater(
                 worldStateKeyValueStorage, blockchain, trieLogManager);
-        syncState.subscribeCompletionReached(reconstructor);
+        syncState.subscribeCompletionReached(flatDbMigrator);
       }
     }
 
@@ -1014,7 +1014,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
     return archiver;
   }
 
-  private BonsaiArchiveFlatDbReconstructor createBonsaiArchiveFlatDbReconstructor(
+  private BonsaiArchiveFlatDbMigrator createBonsaiArchiveFlatDbMigrater(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final Blockchain blockchain,
       final TrieLogManager trieLogManager) {
@@ -1022,10 +1022,10 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
     final ScheduledExecutorService reconstructionExecutor =
         newScheduledThreadPool("BonsaiArchiveReconstructor", 1, metricsSystem);
 
-    final BonsaiArchiveFlatDbReconstructor reconstructor =
-        new BonsaiArchiveFlatDbReconstructor(
+    final BonsaiArchiveFlatDbMigrator reconstructor =
+        new BonsaiArchiveFlatDbMigrator(
             worldStateStorage, blockchain, reconstructionExecutor, trieLogManager, metricsSystem);
-    LOG.info("Bonsai archive flat db reconstructor initialized");
+    LOG.info("Bonsai archive flat db migrater initialized");
     return reconstructor;
   }
 

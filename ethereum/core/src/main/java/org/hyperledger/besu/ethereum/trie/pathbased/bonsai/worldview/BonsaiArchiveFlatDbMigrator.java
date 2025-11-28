@@ -14,10 +14,15 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 
+import org.hyperledger.besu.datatypes.AccountValue;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage.Updater;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
@@ -31,18 +36,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Reconstructs the Bonsai archive flat database from trielogs after initial sync completes. This
- * allows sync to proceed at regular Bonsai performance, then builds the versioned archive state
- * once sync is complete.
+ * Migrates the Bonsai flat database from non-versioned format to versioned archive format after
+ * initial sync completes. This allows sync to proceed at regular Bonsai performance, then converts
+ * the flat DB to archive format once sync is complete.
  */
-@SuppressWarnings("UnusedVariable") // metricsSystem used for gauge registration
-public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionListener {
+public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListener {
 
-  private static final Logger LOG = LoggerFactory.getLogger(BonsaiArchiveFlatDbReconstructor.class);
+  private static final Logger LOG = LoggerFactory.getLogger(BonsaiArchiveFlatDbMigrator.class);
   private static final int BATCH_SIZE = 100;
   private static final long BATCH_DELAY_MS = 100; // 100ms delay between batches
 
@@ -55,7 +60,7 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
   private final AtomicLong totalBlocks = new AtomicLong(0);
 
   /**
-   * Creates a new BonsaiArchiveFlatDbReconstructor.
+   * Creates a new BonsaiArchiveFlatDbMigrater.
    *
    * @param worldStateStorage the world state storage
    * @param blockchain the blockchain
@@ -63,7 +68,7 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
    * @param trieLogManager the trie log manager
    * @param metricsSystem the metrics system
    */
-  public BonsaiArchiveFlatDbReconstructor(
+  public BonsaiArchiveFlatDbMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final Blockchain blockchain,
       final ScheduledExecutorService executorService,
@@ -76,78 +81,77 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
-        "archive_reconstruction_blocks_processed",
-        "Number of blocks processed during archive reconstruction",
+        "archive_migration_blocks_processed",
+        "Number of blocks processed during archive migration",
         blocksProcessed::get);
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
-        "archive_reconstruction_blocks_target",
-        "Target number of blocks to process during archive reconstruction",
+        "archive_migration_blocks_target",
+        "Target number of blocks to process during archive migration",
         totalBlocks::get);
   }
 
   @Override
   public void onInitialSyncCompleted() {
     LOG.info(
-        "Initial sync completed. Starting deferred archive reconstruction from trielogs in background...");
+        "Initial sync completed. Starting deferred archive migration from trielogs in background...");
 
     // Check if we're still in FULL mode (not yet upgraded to ARCHIVE)
     if (worldStateStorage.getFlatDbMode() == FlatDbMode.FULL) {
-      startReconstruction();
+      startmigration();
     } else {
-      LOG.info("Initial sync completed but already in ARCHIVE mode, skipping reconstruction");
+      LOG.info("Initial sync completed but already in ARCHIVE mode, skipping migration");
     }
   }
 
   @Override
   public void onInitialSyncRestart() {
     // No action needed on sync restart for deferred archive mode
-    LOG.debug("Initial sync restarted, deferred archive reconstruction will wait");
+    LOG.debug("Initial sync restarted, deferred archive migration will wait");
   }
 
   /**
-   * Starts the asynchronous reconstruction process using the provided executor. Processes all
-   * trielogs from the earliest available to the current chain head, building the versioned archive
-   * state.
+   * Starts the asynchronous migration process using the provided executor. Processes all trielogs
+   * from the earliest available to the current chain head, building the versioned archive state.
    */
-  private void startReconstruction() {
+  private void startmigration() {
     if (!isReconstructing.compareAndSet(false, true)) {
-      LOG.warn("Archive reconstruction is already in progress");
+      LOG.warn("Archive migration is already in progress");
       return;
     }
 
-    LOG.info("Starting asynchronous Bonsai archive reconstruction from trielogs");
+    LOG.info("Starting asynchronous Bonsai archive migration from trielogs");
 
-    // Submit reconstruction task to the executor service
+    // Submit migration task to the executor service
     executorService.execute(
         () -> {
           try {
-            performReconstruction();
+            performMigration();
             LOG.info(
-                "Bonsai archive reconstruction completed successfully. Processed {} blocks.",
+                "Bonsai archive migration completed successfully. Processed {} blocks.",
                 blocksProcessed.get());
 
-            // Schedule upgrade to ARCHIVE mode now that reconstruction is complete
+            // Schedule upgrade to ARCHIVE mode now that migration is complete
             executorService.execute(this::upgradeToArchiveMode);
           } catch (final Exception e) {
-            LOG.error("Error during archive reconstruction", e);
-            throw new RuntimeException("Archive reconstruction failed", e);
+            LOG.error("Error during archive migration", e);
+            throw new RuntimeException("Archive migration failed", e);
           } finally {
             isReconstructing.set(false);
           }
         });
   }
 
-  /** Upgrades the storage to ARCHIVE mode after reconstruction completes. */
+  /** Upgrades the storage to ARCHIVE mode after migration completes. */
   private void upgradeToArchiveMode() {
-    LOG.info("Archive reconstruction complete, upgrading to ARCHIVE flat db mode");
+    LOG.info("Archive migration complete, upgrading to ARCHIVE flat db mode");
     worldStateStorage.upgradeToArchiveFlatDbMode();
     LOG.info("Successfully upgraded to ARCHIVE mode");
   }
 
-  /** Performs the actual reconstruction work. This method is called by the executor service. */
-  private void performReconstruction() {
+  /** Performs the actual migration work. This method is called by the executor service. */
+  private void performMigration() {
     // Determine the range of blocks to process
     final long chainHeadNumber = blockchain.getChainHeadBlockNumber();
     final Optional<Long> latestArchivedFlatDbBlock =
@@ -158,19 +162,19 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
       // Resume from where we left off
       startBlock = latestArchivedFlatDbBlock.get() + 1;
       LOG.info(
-          "Resuming archive flat DB reconstruction from block {} (latest archived: {})",
+          "Resuming archive flat DB migration from block {} (latest archived: {})",
           startBlock,
           latestArchivedFlatDbBlock.get());
     } else {
       // Start from the earliest block we have trielogs for
       // In practice, this will typically be genesis or checkpoint
       startBlock = 0L;
-      LOG.info("Starting archive flat DB reconstruction from genesis (block 0)");
+      LOG.info("Starting archive flat DB migration from genesis (block 0)");
     }
 
     totalBlocks.set(chainHeadNumber - startBlock + 1);
     LOG.info(
-        "Archive reconstruction will process {} blocks (from {} to {})",
+        "Archive migration will process {} blocks (from {} to {})",
         totalBlocks.get(),
         startBlock,
         chainHeadNumber);
@@ -218,7 +222,7 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
   }
 
   /**
-   * Processes a single block, archiving its state changes.
+   * Processes a single block, rewriting its flat DB entries to versioned format.
    *
    * @param blockNumber the block number to process
    */
@@ -230,15 +234,22 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
     }
 
     final Hash blockHash = blockHeader.get().getHash();
-    final Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHash);
+    final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
 
-    if (trieLog.isEmpty()) {
+    if (maybeTrieLog.isEmpty()) {
       LOG.debug("No trielog found for block {}, skipping", blockNumber);
       return;
     }
 
-    archiveAccountChanges(blockNumber, blockHeader.get(), trieLog.get());
-    archiveStorageChanges(blockNumber, blockHeader.get(), trieLog.get());
+    // Set the world state block context to the parent block number
+    // This ensures the archive strategy writes with the correct block suffix
+    final long parentBlockNumber = blockNumber - 1;
+    setWorldStateBlockContext(parentBlockNumber);
+
+    // Rewrite flat DB entries with versioned keys
+    var trieLog = maybeTrieLog.get();
+    rewriteAccountChanges(trieLog);
+    rewriteStorageChanges(trieLog);
 
     worldStateStorage.setLatestArchivedFlatDbBlock(blockNumber);
     blocksProcessed.incrementAndGet();
@@ -247,64 +258,87 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
   }
 
   /**
-   * Archives account state changes from a trielog.
+   * Sets the world state block context for versioned flat DB writes.
    *
-   * @param blockNumber the current block number
-   * @param blockHeader the current block header
+   * @param blockNumber the block number to set as context
+   */
+  private void setWorldStateBlockContext(final long blockNumber) {
+    final Updater updater = worldStateStorage.updater();
+    updater
+        .getWorldStateTransaction()
+        .put(
+            KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE,
+            PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
+            Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+    updater.commit();
+  }
+
+  /**
+   * Rewrites account state changes from non-versioned to versioned flat DB format.
+   *
    * @param trieLog the trielog containing changes
    */
-  private void archiveAccountChanges(
-      final long blockNumber, final BlockHeader blockHeader, final TrieLog trieLog) {
-    if (blockNumber == 0) {
-      return; // No parent block to archive for genesis
-    }
-
-    final Optional<BlockHeader> parentHeader =
-        blockchain.getBlockHeader(blockHeader.getParentHash());
-    if (parentHeader.isEmpty()) {
-      return;
-    }
+  private void rewriteAccountChanges(final TrieLog trieLog) {
+    final BonsaiWorldStateKeyValueStorage.Updater updater = worldStateStorage.updater();
 
     trieLog
         .getAccountChanges()
         .forEach(
-            (address, ignoredChange) ->
-                worldStateStorage.archivePreviousAccountState(parentHeader, address.addressHash()));
+            (address, change) -> {
+              // Get the account value from the trielog's "prior" state
+              final AccountValue priorAccountValue =
+                  change.getPrior();
+              if (priorAccountValue != null) {
+                // Serialize the account value to RLP
+                final Bytes accountBytes = RLP.encode(priorAccountValue::writeTo);
+                // Write the account with versioned key (accountHash + blockNumber)
+                updater.putAccountInfoState(address.addressHash(), accountBytes);
+              } else {
+                // Account was created in this block, so prior state is non-existent (deleted)
+                updater.removeAccountInfoState(address.addressHash());
+              }
+            });
+
+    updater.commit();
   }
 
   /**
-   * Archives storage state changes from a trielog.
+   * Rewrites storage state changes from non-versioned to versioned flat DB format.
    *
-   * @param blockNumber the current block number
-   * @param blockHeader the current block header
    * @param trieLog the trielog containing changes
    */
-  private void archiveStorageChanges(
-      final long blockNumber, final BlockHeader blockHeader, final TrieLog trieLog) {
-    if (blockNumber == 0) {
-      return; // No parent block to archive for genesis
-    }
-
-    final Optional<BlockHeader> parentHeader =
-        blockchain.getBlockHeader(blockHeader.getParentHash());
-    if (parentHeader.isEmpty()) {
-      return;
-    }
+  private void rewriteStorageChanges(final TrieLog trieLog) {
+    final BonsaiWorldStateKeyValueStorage.Updater updater = worldStateStorage.updater();
 
     trieLog
         .getStorageChanges()
         .forEach(
             (address, storageChanges) ->
                 storageChanges.forEach(
-                    (slotKey, ignoredSlotValue) ->
-                        worldStateStorage.archivePreviousStorageState(
-                            parentHeader,
-                            org.apache.tuweni.bytes.Bytes.concatenate(
-                                address.addressHash(), slotKey.getSlotHash()))));
+                    (slotKey, slotValue) -> {
+                      // Get the storage value from the trielog's "prior" state
+                      final org.apache.tuweni.units.bigints.UInt256 priorValue =
+                          slotValue.getPrior();
+                      if (priorValue != null && !priorValue.isZero()) {
+                        // Write the storage with versioned key (accountHash + slotHash +
+                        // blockNumber)
+                        updater.putStorageValueBySlotHash(
+                            address.addressHash(),
+                            slotKey.getSlotHash(),
+                            Bytes.wrap(priorValue.toBytes()));
+                      } else {
+                        // Storage was created in this block or deleted, so prior state is
+                        // non-existent
+                        updater.removeStorageValueBySlotHash(
+                            address.addressHash(), slotKey.getSlotHash());
+                      }
+                    }));
+
+    updater.commit();
   }
 
   /**
-   * Logs reconstruction progress if the current block is a milestone.
+   * Logs migration progress if the current block is a milestone.
    *
    * @param blockNumber the current block number
    */
@@ -314,7 +348,7 @@ public class BonsaiArchiveFlatDbReconstructor implements InitialSyncCompletionLi
       final long total = totalBlocks.get();
       final double percentComplete = (total > 0) ? (100.0 * processed / total) : 0.0;
       LOG.info(
-          "Archive reconstruction progress: {}/{} blocks ({}% complete)",
+          "Archive migration progress: {}/{} blocks ({}% complete)",
           processed, total, String.format("%.2f", percentComplete));
     }
   }
