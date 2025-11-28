@@ -15,6 +15,8 @@
 package org.hyperledger.besu.ethereum.trie.common;
 
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig.createStatefulConfigWithTrie;
+import static org.hyperledger.besu.plugin.services.storage.DataStorageFormat.BONSAI;
+import static org.hyperledger.besu.plugin.services.storage.DataStorageFormat.X_BONSAI_ARCHIVE;
 
 import org.hyperledger.besu.ethereum.core.MutableWorldState;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStorageProvider;
@@ -46,15 +48,10 @@ public class GenesisWorldStateProvider {
    */
   public static MutableWorldState createGenesisWorldState(
       final DataStorageConfiguration dataStorageConfiguration, final CodeCache codeCache) {
-
-    if (Objects.requireNonNull(dataStorageConfiguration).getDataStorageFormat()
-        == DataStorageFormat.BONSAI) {
-      return createGenesisBonsaiWorldState(
-          DataStorageConfiguration.DEFAULT_BONSAI_CONFIG, codeCache);
-    } else if (Objects.requireNonNull(dataStorageConfiguration).getDataStorageFormat()
-        == DataStorageFormat.X_BONSAI_ARCHIVE) {
-      return createGenesisBonsaiWorldState(
-          DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG, codeCache);
+    final DataStorageFormat dataStorageFormat =
+        Objects.requireNonNull(dataStorageConfiguration).getDataStorageFormat();
+    if (dataStorageFormat == BONSAI || dataStorageFormat == X_BONSAI_ARCHIVE) {
+      return createGenesisBonsaiWorldState(dataStorageConfiguration, codeCache);
     } else {
       return createGenesisForestWorldState();
     }
