@@ -228,14 +228,15 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
             }
           });
 
-      CompletableFuture<Void> future;
-      if (fastSyncDownloader.isPresent()) {
-        future = fastSyncDownloader.get().start().thenCompose(this::handleSyncResult);
-      } else {
-        syncState.markInitialSyncPhaseAsDone();
-        future = startFullSync();
-      }
-      return future.thenApply(this::finalizeSync);
+      CompletableFuture<Void> future =
+          fastSyncDownloader
+              .map(downloader -> downloader.start().thenCompose(this::handleSyncResult))
+              .orElseGet(this::startFullSync);
+      return future.thenRun(
+          () -> {
+            syncState.markInitialSyncPhaseAsDone();
+            finalizeSync(null);
+          });
     } else {
       throw new IllegalStateException("Attempt to start an already started synchronizer.");
     }
