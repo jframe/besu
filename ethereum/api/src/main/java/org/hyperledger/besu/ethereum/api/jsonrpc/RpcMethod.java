@@ -37,6 +37,7 @@ public enum RpcMethod {
   DEBUG_METRICS("debug_metrics"),
   DEBUG_RESYNC_WORLDSTATE("debug_resyncWorldState"),
   DEBUG_SET_HEAD("debug_setHead"),
+  DEBUG_BONSAI_TRIGGER_ARCHIVE_MIGRATION("debug_bonsaiTriggerArchiveMigration"),
   DEBUG_REPLAY_BLOCK("debug_replayBlock"),
   DEBUG_STORAGE_RANGE_AT("debug_storageRangeAt"),
   DEBUG_TRACE_BLOCK("debug_traceBlock"),

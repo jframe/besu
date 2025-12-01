@@ -54,6 +54,9 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private static final int BATCH_SIZE = 100;
   private static final long BATCH_DELAY_MS = 100; // 100ms delay between batches
 
+  // Static instance reference for debug RPC access
+  private static volatile BonsaiArchiveFlatDbMigrator instance;
+
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final Blockchain blockchain;
   private final ScheduledExecutorService executorService;
@@ -86,6 +89,9 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     // Create strategy for writing versioned archive entries
     final CodeHashCodeStorageStrategy codeStorageStrategy = new CodeHashCodeStorageStrategy();
     this.writeStrategy = new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
+
+    // Store instance for debug RPC access
+    instance = this;
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
@@ -374,5 +380,14 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
           "Archive migration progress: {}/{} blocks ({}% complete)",
           processed, total, String.format("%.2f", percentComplete));
     }
+  }
+
+  /**
+   * Gets the current migrator instance, if available. This is primarily for debug RPC access.
+   *
+   * @return an Optional containing the migrator instance, or empty if not initialized
+   */
+  public static Optional<BonsaiArchiveFlatDbMigrator> getInstance() {
+    return Optional.ofNullable(instance);
   }
 }
