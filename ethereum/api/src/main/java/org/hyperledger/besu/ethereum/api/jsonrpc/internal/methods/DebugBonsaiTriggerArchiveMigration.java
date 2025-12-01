@@ -59,7 +59,7 @@ public class DebugBonsaiTriggerArchiveMigration implements JsonRpcMethod {
 
     try {
       LOG.info("Manually triggering Bonsai archive migration via debug RPC");
-      migrator.get().onInitialSyncCompleted();
+      migrator.get().triggerMigration();
       return new JsonRpcSuccessResponse(
           requestContext.getRequest().getId(),
           "Bonsai archive migration triggered successfully");

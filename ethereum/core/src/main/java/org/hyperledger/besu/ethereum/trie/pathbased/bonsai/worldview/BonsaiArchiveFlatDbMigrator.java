@@ -119,6 +119,15 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     }
   }
 
+  /**
+   * Triggers migration regardless of current flat DB mode. This is useful for testing and can be
+   * called via the debug RPC.
+   */
+  public void triggerMigration() {
+    LOG.info("Migration triggered manually");
+    startMigration();
+  }
+
   @Override
   public void onInitialSyncRestart() {
     // No action needed on sync restart for deferred archive mode
