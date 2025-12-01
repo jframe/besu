@@ -863,8 +863,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final PathBasedExtraStorageConfiguration subStorageConfiguration =
           dataStorageConfiguration.getPathBasedExtraStorageConfiguration();
       if (subStorageConfiguration.getLimitTrieLogsEnabled()) {
-        final TrieLogManager trieLogManager =
-            ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
+        final TrieLogManager trieLogManager = getBonsaiTrieLogManager(worldStateArchive);
         final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
             worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
         final TrieLogPruner trieLogPruner =
@@ -877,8 +876,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
         dataStorageConfiguration.getDataStorageFormat())) {
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
           worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
-      final TrieLogManager trieLogManager =
-          ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
+      final TrieLogManager trieLogManager = getBonsaiTrieLogManager(worldStateArchive);
 
       syncState.subscribeCompletionReached(
           new InitialSyncCompletionListener() {
@@ -1080,6 +1078,26 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       LOG.info("Bonsai archive flat db migrater initialized");
       return reconstructor;
     }
+  }
+
+  /**
+   * Helper method to get TrieLogManager from a WorldStateArchive that might be wrapped in
+   * SwappableWorldStateArchive.
+   *
+   * @param worldStateArchive the world state archive
+   * @return the TrieLogManager
+   */
+  private TrieLogManager getBonsaiTrieLogManager(
+      final org.hyperledger.besu.ethereum.worldstate.WorldStateArchive worldStateArchive) {
+    // Handle SwappableWorldStateArchive by getting its delegate
+    if (worldStateArchive
+        instanceof
+        org.hyperledger.besu.ethereum.trie.pathbased.bonsai.SwappableWorldStateArchive
+            swappableArchive) {
+      return ((BonsaiWorldStateProvider) swappableArchive.getDelegate()).getTrieLogManager();
+    }
+    // Direct BonsaiWorldStateProvider
+    return ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
   }
 
   /**
