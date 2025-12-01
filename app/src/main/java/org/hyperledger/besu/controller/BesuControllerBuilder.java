@@ -904,7 +904,10 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
           .getDeferArchiveUntilSyncComplete()) {
         final BonsaiArchiveFlatDbMigrator flatDbMigrator =
             createBonsaiArchiveFlatDbMigrater(
-                worldStateKeyValueStorage, blockchain, trieLogManager);
+                worldStateKeyValueStorage,
+                blockchain,
+                trieLogManager,
+                protocolContext.getWorldStateArchive());
         syncState.subscribeCompletionReached(flatDbMigrator);
       }
     }
@@ -1022,16 +1025,61 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
   private BonsaiArchiveFlatDbMigrator createBonsaiArchiveFlatDbMigrater(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final Blockchain blockchain,
-      final TrieLogManager trieLogManager) {
+      final TrieLogManager trieLogManager,
+      final org.hyperledger.besu.ethereum.worldstate.WorldStateArchive worldStateArchive) {
     // Create a dedicated scheduled executor for reconstruction with delays between batches
     final ScheduledExecutorService reconstructionExecutor =
         newScheduledThreadPool("BonsaiArchiveReconstructor", 1, metricsSystem);
 
-    final BonsaiArchiveFlatDbMigrator reconstructor =
-        new BonsaiArchiveFlatDbMigrator(
-            worldStateStorage, blockchain, reconstructionExecutor, trieLogManager, metricsSystem);
-    LOG.info("Bonsai archive flat db migrater initialized");
-    return reconstructor;
+    // Check if the world state archive is swappable (deferred archive mode)
+    if (worldStateArchive
+        instanceof
+        org.hyperledger.besu.ethereum.trie.pathbased.bonsai.SwappableWorldStateArchive
+            swappableArchive) {
+      // Create factory for BonsaiArchiveWorldStateProvider
+      final var archiveProviderFactory =
+          (java.util.function.Supplier<
+                  org.hyperledger.besu.ethereum.trie.pathbased.bonsai
+                      .BonsaiArchiveWorldStateProvider>)
+              () -> {
+                final var bonsaiCachedMerkleTrieLoader =
+                    besuComponent
+                        .map(BesuComponent::getCachedMerkleTrieLoader)
+                        .orElseGet(() -> new BonsaiCachedMerkleTrieLoader(metricsSystem));
+                return new org.hyperledger.besu.ethereum.trie.pathbased.bonsai
+                    .BonsaiArchiveWorldStateProvider(
+                    worldStateStorage,
+                    blockchain,
+                    java.util.Optional.of(
+                        dataStorageConfiguration
+                            .getPathBasedExtraStorageConfiguration()
+                            .getMaxLayersToLoad()),
+                    bonsaiCachedMerkleTrieLoader,
+                    besuComponent.map(BesuComponent::getBesuPluginContext).orElse(null),
+                    evmConfiguration,
+                    () -> null, // worldStateHealer not needed for archive provider
+                    codeCache);
+              };
+
+      final BonsaiArchiveFlatDbMigrator reconstructor =
+          new BonsaiArchiveFlatDbMigrator(
+              worldStateStorage,
+              blockchain,
+              reconstructionExecutor,
+              trieLogManager,
+              metricsSystem,
+              swappableArchive,
+              archiveProviderFactory);
+      LOG.info("Bonsai archive flat db migrater initialized with provider swapping");
+      return reconstructor;
+    } else {
+      // Not in deferred archive mode, use legacy constructor
+      final BonsaiArchiveFlatDbMigrator reconstructor =
+          new BonsaiArchiveFlatDbMigrator(
+              worldStateStorage, blockchain, reconstructionExecutor, trieLogManager, metricsSystem);
+      LOG.info("Bonsai archive flat db migrater initialized");
+      return reconstructor;
+    }
   }
 
   /**
@@ -1374,19 +1422,23 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             worldStateKeyValueStorage.getFlatDbMode() == FlatDbMode.ARCHIVE;
 
         if (useDeferredArchive && !isArchiveModeActive) {
-          // During sync: use regular Bonsai provider
-          yield new BonsaiWorldStateProvider(
-              worldStateKeyValueStorage,
-              blockchain,
-              Optional.of(
-                  dataStorageConfiguration
-                      .getPathBasedExtraStorageConfiguration()
-                      .getMaxLayersToLoad()),
-              bonsaiCachedMerkleTrieLoader,
-              besuComponent.map(BesuComponent::getBesuPluginContext).orElse(null),
-              evmConfiguration,
-              worldStateHealerSupplier,
-              codeCache);
+          // During sync: use regular Bonsai provider wrapped in SwappableWorldStateArchive
+          // This allows us to swap to archive provider after migration without restart
+          final var regularProvider =
+              new BonsaiWorldStateProvider(
+                  worldStateKeyValueStorage,
+                  blockchain,
+                  Optional.of(
+                      dataStorageConfiguration
+                          .getPathBasedExtraStorageConfiguration()
+                          .getMaxLayersToLoad()),
+                  bonsaiCachedMerkleTrieLoader,
+                  besuComponent.map(BesuComponent::getBesuPluginContext).orElse(null),
+                  evmConfiguration,
+                  worldStateHealerSupplier,
+                  codeCache);
+          yield new org.hyperledger.besu.ethereum.trie.pathbased.bonsai.SwappableWorldStateArchive(
+              regularProvider);
         } else {
           // Normal archive mode or after reconstruction: use archive provider
           yield new BonsaiArchiveWorldStateProvider(

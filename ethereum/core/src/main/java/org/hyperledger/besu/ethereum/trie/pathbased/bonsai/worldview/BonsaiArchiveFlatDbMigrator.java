@@ -20,6 +20,8 @@ import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiArchiveWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.SwappableWorldStateArchive;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage.Updater;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
@@ -65,6 +67,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private final AtomicBoolean isReconstructing = new AtomicBoolean(false);
   private final AtomicLong blocksProcessed = new AtomicLong(0);
   private final AtomicLong totalBlocks = new AtomicLong(0);
+  private final SwappableWorldStateArchive swappableArchive;
+  private final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory;
 
   /**
    * Creates a new BonsaiArchiveFlatDbMigrator.
@@ -74,17 +78,25 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    * @param executorService the scheduled executor service for async operations
    * @param trieLogManager the trie log manager
    * @param metricsSystem the metrics system
+   * @param swappableArchive optional swappable archive for provider swap (used in deferred archive
+   *     mode)
+   * @param archiveProviderFactory optional factory for creating archive provider (used in deferred
+   *     archive mode)
    */
   public BonsaiArchiveFlatDbMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final Blockchain blockchain,
       final ScheduledExecutorService executorService,
       final TrieLogManager trieLogManager,
-      final MetricsSystem metricsSystem) {
+      final MetricsSystem metricsSystem,
+      final SwappableWorldStateArchive swappableArchive,
+      final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory) {
     this.worldStateStorage = worldStateStorage;
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.trieLogManager = trieLogManager;
+    this.swappableArchive = swappableArchive;
+    this.archiveProviderFactory = archiveProviderFactory;
 
     // Create strategy for writing versioned archive entries
     final CodeHashCodeStorageStrategy codeStorageStrategy = new CodeHashCodeStorageStrategy();
@@ -104,6 +116,25 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         "archive_migration_blocks_target",
         "Target number of blocks to process during archive migration",
         totalBlocks::get);
+  }
+
+  /**
+   * Creates a new BonsaiArchiveFlatDbMigrator without provider swapping (legacy constructor for
+   * backwards compatibility and testing).
+   *
+   * @param worldStateStorage the world state storage
+   * @param blockchain the blockchain
+   * @param executorService the scheduled executor service for async operations
+   * @param trieLogManager the trie log manager
+   * @param metricsSystem the metrics system
+   */
+  public BonsaiArchiveFlatDbMigrator(
+      final BonsaiWorldStateKeyValueStorage worldStateStorage,
+      final Blockchain blockchain,
+      final ScheduledExecutorService executorService,
+      final TrieLogManager trieLogManager,
+      final MetricsSystem metricsSystem) {
+    this(worldStateStorage, blockchain, executorService, trieLogManager, metricsSystem, null, null);
   }
 
   @Override
@@ -188,6 +219,13 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
     worldStateStorage.upgradeToArchiveFlatDbMode();
     LOG.info("Successfully upgraded to ARCHIVE mode");
+
+    // If we have a swappable archive and factory, swap to the archive provider
+    if (swappableArchive != null && archiveProviderFactory != null) {
+      final var archiveProvider = archiveProviderFactory.get();
+      swappableArchive.swapProvider(archiveProvider);
+      LOG.info("Swapped to BonsaiArchiveWorldStateProvider for full archive functionality");
+    }
   }
 
   /** Performs the actual migration work. This method is called by the executor service. */
@@ -363,7 +401,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
               final Hash accountHash = address.addressHash();
               storageChanges.forEach(
                   (slotKey, slotValue) -> {
-                    // Get the storage value from the trielog's "updated" state (state after the block)
+                    // Get the storage value from the trielog's "updated" state (state after the
+                    // block)
                     final UInt256 updatedValue = slotValue.getUpdated();
                     if (updatedValue != null && !updatedValue.isZero()) {
                       // Write the storage with versioned key using BonsaiArchiveFlatDbStrategy

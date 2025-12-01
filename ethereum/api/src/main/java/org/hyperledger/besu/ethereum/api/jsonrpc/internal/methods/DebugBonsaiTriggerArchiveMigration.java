@@ -16,9 +16,9 @@ package org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods;
 
 import org.hyperledger.besu.ethereum.api.jsonrpc.RpcMethod;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequestContext;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcSuccessResponse;
-import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveFlatDbMigrator;
 
@@ -28,8 +28,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Debug RPC method to manually trigger the Bonsai archive flat DB migration.
- * This is useful for testing and debugging the migration process.
+ * Debug RPC method to manually trigger the Bonsai archive flat DB migration. This is useful for
+ * testing and debugging the migration process.
  */
 public class DebugBonsaiTriggerArchiveMigration implements JsonRpcMethod {
 
@@ -53,21 +53,18 @@ public class DebugBonsaiTriggerArchiveMigration implements JsonRpcMethod {
     if (migrator.isEmpty()) {
       LOG.warn("Bonsai archive migrator is not available");
       return new JsonRpcErrorResponse(
-          requestContext.getRequest().getId(),
-          RpcErrorType.INTERNAL_ERROR);
+          requestContext.getRequest().getId(), RpcErrorType.INTERNAL_ERROR);
     }
 
     try {
       LOG.info("Manually triggering Bonsai archive migration via debug RPC");
       migrator.get().triggerMigration();
       return new JsonRpcSuccessResponse(
-          requestContext.getRequest().getId(),
-          "Bonsai archive migration triggered successfully");
+          requestContext.getRequest().getId(), "Bonsai archive migration triggered successfully");
     } catch (final Exception e) {
       LOG.error("Failed to trigger Bonsai archive migration", e);
       return new JsonRpcErrorResponse(
-          requestContext.getRequest().getId(),
-          RpcErrorType.INTERNAL_ERROR);
+          requestContext.getRequest().getId(), RpcErrorType.INTERNAL_ERROR);
     }
   }
 }
