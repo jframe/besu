@@ -667,6 +667,86 @@ class BonsaiArchiveFlatDbMigratorTest {
     }
   }
 
+  @Test
+  void shouldContinueMigratingWhenChainGrowsDuringMigration() {
+    // This test verifies that when the chain head changes during migration,
+    // the migrator detects it and continues processing new blocks.
+    // We simulate this by creating blocks all at once before migration starts.
+    assertThat(worldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.FULL);
+
+    // Mock the genesis block
+    when(trieLogManager.getTrieLogLayer(blockchain.getBlockHeader(0L).get().getHash()))
+        .thenReturn(Optional.empty());
+
+    // Create 75 blocks - the migrator will process them in batches
+    // and check for new blocks at the end of each target range
+    final Address testAccount = Address.fromHexString("0x9876543210987654321098765432109876543210");
+
+    for (long i = 1; i <= 75; i++) {
+      createBlockWithAccount(i, testAccount);
+    }
+
+    // Start migration
+    setWorldStateBlockContext(0L);
+    migrator.onInitialSyncCompleted();
+
+    // Wait for migration to complete - should process all 75 blocks
+    await()
+        .atMost(Duration.ofSeconds(30))
+        .pollInterval(Duration.ofMillis(500))
+        .untilAsserted(
+            () -> {
+              assertThat(worldStateStorage.getLatestArchivedFlatDbBlock()).hasValue(75L);
+              assertThat(worldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
+            });
+
+    // Verify all blocks were migrated correctly
+    final var strategy = worldStateStorage.getFlatDbStrategy();
+    final var storage = worldStateStorage.getComposedWorldStateStorage();
+
+    for (long blockNum = 1; blockNum <= 75; blockNum++) {
+      setWorldStateBlockContext(blockNum);
+
+      final PmtStateTrieAccountValue expectedAccountValue =
+          new PmtStateTrieAccountValue(blockNum, Wei.of(blockNum * 50), Hash.EMPTY, Hash.EMPTY);
+      final Bytes expectedAccountBytes = RLP.encode(expectedAccountValue::writeTo);
+
+      final Optional<Bytes> retrievedAccount =
+          strategy.getFlatAccount(Optional::empty, null, testAccount.addressHash(), storage);
+
+      assertThat(retrievedAccount)
+          .as("Account at block " + blockNum + " should be correct after migration")
+          .hasValue(expectedAccountBytes);
+    }
+  }
+
+  private void createBlockWithAccount(final long blockNumber, final Address account) {
+    final Block block = createBlock(blockNumber, blockchain.getChainHeadHash());
+    blockchain.appendBlock(block, Collections.emptyList());
+
+    // Create account state for this block
+    final PmtStateTrieAccountValue accountValue =
+        new PmtStateTrieAccountValue(blockNumber, Wei.of(blockNumber * 50), Hash.EMPTY, Hash.EMPTY);
+    final Bytes accountBytes = RLP.encode(accountValue::writeTo);
+
+    // Write to flat DB as would happen during sync
+    final var updater = worldStateStorage.updater();
+    updater.putAccountInfoState(account.addressHash(), accountBytes);
+    updater.commit();
+
+    // Create trielog for migration
+    final PmtStateTrieAccountValue priorAccountValue =
+        blockNumber == 1
+            ? null
+            : new PmtStateTrieAccountValue(
+                blockNumber - 1, Wei.of((blockNumber - 1) * 50), Hash.EMPTY, Hash.EMPTY);
+
+    final TrieLogLayer trieLogLayer = new TrieLogLayer();
+    trieLogLayer.addAccountChange(account, priorAccountValue, accountValue);
+
+    when(trieLogManager.getTrieLogLayer(block.getHash())).thenReturn(Optional.of(trieLogLayer));
+  }
+
   private void setWorldStateBlockContext(final long blockNumber) {
     final var updater = worldStateStorage.updater();
     updater

@@ -231,8 +231,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
   /** Performs the actual migration work. This method is called by the executor service. */
   private void performMigration() {
-    // Determine the range of blocks to process
-    final long chainHeadNumber = blockchain.getChainHeadBlockNumber();
+    // Determine where to start
     final Optional<Long> latestArchivedFlatDbBlock =
         worldStateStorage.getLatestArchivedFlatDbBlock();
 
@@ -251,50 +250,44 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       LOG.info("Starting archive flat DB migration from genesis (block 0)");
     }
 
-    totalBlocks.set(chainHeadNumber - startBlock + 1);
-    LOG.info(
-        "Archive migration will process {} blocks (from {} to {})",
-        totalBlocks.get(),
-        startBlock,
-        chainHeadNumber);
-
     // Process first batch, which will schedule subsequent batches
-    processNextBatch(startBlock, chainHeadNumber);
+    processNextBatch(startBlock);
   }
 
   /**
-   * Processes the next batch of blocks and schedules the following batch if needed.
+   * Processes the next batch of blocks and schedules the following batch if needed. This method
+   * always checks the current chain head to pick up any new blocks that arrived.
    *
    * @param currentBlock the starting block for this batch
-   * @param chainHeadNumber the final block to process
    */
-  private void processNextBatch(final long currentBlock, final long chainHeadNumber) {
-    if (currentBlock > chainHeadNumber) {
-      return; // All batches processed
-    }
+  private void processNextBatch(final long currentBlock) {
+    // Always get the current chain head - this handles blocks arriving during migration
+    final long currentChainHead = blockchain.getChainHeadBlockNumber();
 
-    final long batchEnd = Math.min(currentBlock + BATCH_SIZE - 1, chainHeadNumber);
-    processBlockBatch(currentBlock, batchEnd);
-
-    final long nextBlock = batchEnd + 1;
-    if (nextBlock <= chainHeadNumber) {
-      // Schedule next batch with a delay to avoid overwhelming the system
-      executorService.schedule(
-          () -> processNextBatch(nextBlock, chainHeadNumber),
-          BATCH_DELAY_MS,
-          TimeUnit.MILLISECONDS);
-    } else {
-      // This was the last batch - migration is complete
+    if (currentBlock > currentChainHead) {
+      // Migration is complete - we're caught up with chain head
       LOG.info(
           "Bonsai archive migration completed successfully. Processed {} blocks.",
           blocksProcessed.get());
 
-      // Upgrade to ARCHIVE mode now that all batches are done
+      // Upgrade to ARCHIVE mode now that migration is complete
       executorService.execute(this::upgradeToArchiveMode);
 
       // Clear the reconstruction flag
       isReconstructing.set(false);
+      return;
     }
+
+    // Update metrics with current target
+    totalBlocks.set(currentChainHead + 1);
+
+    final long batchEnd = Math.min(currentBlock + BATCH_SIZE - 1, currentChainHead);
+    processBlockBatch(currentBlock, batchEnd);
+
+    // Schedule next batch with a delay to avoid overwhelming the system
+    final long nextBlock = batchEnd + 1;
+    executorService.schedule(
+        () -> processNextBatch(nextBlock), BATCH_DELAY_MS, TimeUnit.MILLISECONDS);
   }
 
   /**
