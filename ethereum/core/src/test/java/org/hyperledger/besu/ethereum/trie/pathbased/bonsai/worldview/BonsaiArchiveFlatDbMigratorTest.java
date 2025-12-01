@@ -428,7 +428,8 @@ class BonsaiArchiveFlatDbMigratorTest {
       updater.commit();
 
       final TrieLogLayer trieLogLayer = new TrieLogLayer();
-      trieLogLayer.addAccountChange(address, accountValue, accountValue);
+      // Prior state is null (account didn't exist before), updated state is the new value
+      trieLogLayer.addAccountChange(address, null, accountValue);
 
       when(trieLogManager.getTrieLogLayer(block.getHash())).thenReturn(Optional.of(trieLogLayer));
     }
@@ -463,6 +464,111 @@ class BonsaiArchiveFlatDbMigratorTest {
           .as("Account at block " + i + " should be migrated")
           .hasValue(expectedAccountBytes);
     }
+  }
+
+  @Test
+  void shouldPreserveDataAccessibilityBeforeAndAfterMigration() {
+    // This test simulates a full sync followed by migration, and verifies that:
+    // 1. Data written during sync (non-versioned) can be read before migration
+    // 2. Data can still be read after migration (versioned)
+    // 3. The values match at each block height
+
+    assertThat(worldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.FULL);
+
+    // Mock the genesis block
+    when(trieLogManager.getTrieLogLayer(blockchain.getBlockHeader(0L).get().getHash()))
+        .thenReturn(Optional.empty());
+
+    // Create 10 blocks with changing account state
+    // Each block updates the same account with a new nonce and balance
+    final Address testAccount = Address.fromHexString("0x1234567890123456789012345678901234567890");
+
+    for (long i = 1; i <= 10; i++) {
+      final Block block = createBlock(i, blockchain.getChainHeadHash());
+      blockchain.appendBlock(block, Collections.emptyList());
+
+      // Create account state for this block
+      final PmtStateTrieAccountValue accountValue =
+          new PmtStateTrieAccountValue(i, Wei.of(i * 1000), Hash.EMPTY, Hash.EMPTY);
+      final Bytes accountBytes = RLP.encode(accountValue::writeTo);
+
+      // Write to flat DB as would happen during sync (non-versioned in FULL mode)
+      final var updater = worldStateStorage.updater();
+      updater.putAccountInfoState(testAccount.addressHash(), accountBytes);
+      updater.commit();
+
+      // Create trielog for migration
+      // IMPORTANT: prior = previous state, updated = current state
+      final PmtStateTrieAccountValue priorAccountValue =
+          i == 1
+              ? null // Account created in block 1
+              : new PmtStateTrieAccountValue(i - 1, Wei.of((i - 1) * 1000), Hash.EMPTY, Hash.EMPTY);
+
+      final TrieLogLayer trieLogLayer = new TrieLogLayer();
+      trieLogLayer.addAccountChange(testAccount, priorAccountValue, accountValue);
+
+      when(trieLogManager.getTrieLogLayer(block.getHash())).thenReturn(Optional.of(trieLogLayer));
+    }
+
+    // Verify we can read the account before migration (at chain head)
+    setWorldStateBlockContext(10L);
+    final PmtStateTrieAccountValue expectedAtBlock10 =
+        new PmtStateTrieAccountValue(10, Wei.of(10 * 1000), Hash.EMPTY, Hash.EMPTY);
+    final Bytes expectedBytesAtBlock10 = RLP.encode(expectedAtBlock10::writeTo);
+
+    Optional<Bytes> retrievedBeforeMigration =
+        worldStateStorage
+            .getFlatDbStrategy()
+            .getFlatAccount(
+                Optional::empty,
+                null,
+                testAccount.addressHash(),
+                worldStateStorage.getComposedWorldStateStorage());
+
+    assertThat(retrievedBeforeMigration)
+        .as("Account should be readable before migration at chain head")
+        .hasValue(expectedBytesAtBlock10);
+
+    // Now perform migration
+    setWorldStateBlockContext(0L);
+    migrator.onInitialSyncCompleted();
+
+    await()
+        .atMost(Duration.ofSeconds(30))
+        .pollInterval(Duration.ofMillis(500))
+        .untilAsserted(
+            () -> assertThat(worldStateStorage.getLatestArchivedFlatDbBlock()).hasValue(10L));
+
+    assertThat(worldStateStorage.getLatestArchivedFlatDbBlock()).hasValue(10L);
+    assertThat(worldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
+
+    final var strategy = worldStateStorage.getFlatDbStrategy();
+    final var storage = worldStateStorage.getComposedWorldStateStorage();
+
+    // Verify we can read historical state at each block after migration
+    for (long blockNum = 1; blockNum <= 10; blockNum++) {
+      setWorldStateBlockContext(blockNum);
+
+      final PmtStateTrieAccountValue expectedAccountValue =
+          new PmtStateTrieAccountValue(blockNum, Wei.of(blockNum * 1000), Hash.EMPTY, Hash.EMPTY);
+      final Bytes expectedAccountBytes = RLP.encode(expectedAccountValue::writeTo);
+
+      final Optional<Bytes> retrievedAccount =
+          strategy.getFlatAccount(Optional::empty, null, testAccount.addressHash(), storage);
+
+      assertThat(retrievedAccount)
+          .as("Account at block " + blockNum + " should match expected state after migration")
+          .hasValue(expectedAccountBytes);
+    }
+
+    // Verify we can still read at chain head after migration
+    setWorldStateBlockContext(10L);
+    Optional<Bytes> retrievedAfterMigration =
+        strategy.getFlatAccount(Optional::empty, null, testAccount.addressHash(), storage);
+
+    assertThat(retrievedAfterMigration)
+        .as("Account should still be readable after migration at chain head")
+        .hasValue(expectedBytesAtBlock10);
   }
 
   private void setWorldStateBlockContext(final long blockNumber) {

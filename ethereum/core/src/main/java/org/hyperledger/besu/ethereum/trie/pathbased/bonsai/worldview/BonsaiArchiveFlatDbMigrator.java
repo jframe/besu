@@ -64,7 +64,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private final AtomicLong totalBlocks = new AtomicLong(0);
 
   /**
-   * Creates a new BonsaiArchiveFlatDbMigrater.
+   * Creates a new BonsaiArchiveFlatDbMigrator.
    *
    * @param worldStateStorage the world state storage
    * @param blockchain the blockchain
@@ -107,7 +107,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
     // Check if we're still in FULL mode (not yet upgraded to ARCHIVE)
     if (worldStateStorage.getFlatDbMode() == FlatDbMode.FULL) {
-      startmigration();
+      startMigration();
     } else {
       LOG.info("Initial sync completed but already in ARCHIVE mode, skipping migration");
     }
@@ -123,7 +123,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    * Starts the asynchronous migration process using the provided executor. Processes all trielogs
    * from the earliest available to the current chain head, building the versioned archive state.
    */
-  private void startmigration() {
+  private void startMigration() {
     if (!isReconstructing.compareAndSet(false, true)) {
       LOG.warn("Archive migration is already in progress");
       return;
@@ -154,6 +154,13 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   /** Upgrades the storage to ARCHIVE mode after migration completes. */
   private void upgradeToArchiveMode() {
     LOG.info("Archive migration complete, upgrading to ARCHIVE flat db mode");
+
+    // Reset WORLD_BLOCK_NUMBER_KEY to the chain head so future block imports work correctly
+    // During migration we set it to parent blocks, but after migration we need it at chain head
+    final long chainHeadNumber = blockchain.getChainHeadBlockNumber();
+    setWorldStateBlockContext(chainHeadNumber);
+    LOG.info("Reset world state block context to chain head: {}", chainHeadNumber);
+
     worldStateStorage.upgradeToArchiveFlatDbMode();
     LOG.info("Successfully upgraded to ARCHIVE mode");
   }
@@ -250,7 +257,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     }
 
     // Set the world state block context to the parent block number
-    // This ensures the archive strategy writes with the correct block suffix
+    // The archive write strategy adds +1 when writing, so setting context to blockNumber-1
+    // means data is written with suffix blockNumber, representing state after blockNumber
     final long parentBlockNumber = blockNumber - 1;
     setWorldStateBlockContext(parentBlockNumber);
 
@@ -297,15 +305,15 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
             (address, change) -> {
               final Hash accountHash = address.addressHash();
 
-              // Get the account value from the trielog's "prior" state
-              final AccountValue priorAccountValue = change.getPrior();
-              if (priorAccountValue != null) {
+              // Get the account value from the trielog's "updated" state (state after the block)
+              final AccountValue updatedAccountValue = change.getUpdated();
+              if (updatedAccountValue != null) {
                 // Serialize the account value to RLP
-                final Bytes accountBytes = RLP.encode(priorAccountValue::writeTo);
+                final Bytes accountBytes = RLP.encode(updatedAccountValue::writeTo);
                 // Write the account with versioned key using BonsaiArchiveFlatDbStrategy
                 writeStrategy.putFlatAccount(storage, transaction, accountHash, accountBytes);
               } else {
-                // Account was created in this block, so prior state is non-existent (deleted)
+                // Account was deleted in this block, so updated state is non-existent
                 writeStrategy.removeFlatAccount(storage, transaction, accountHash);
               }
             });
@@ -330,18 +338,18 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
               final Hash accountHash = address.addressHash();
               storageChanges.forEach(
                   (slotKey, slotValue) -> {
-                    // Get the storage value from the trielog's "prior" state
-                    final UInt256 priorValue = slotValue.getPrior();
-                    if (priorValue != null && !priorValue.isZero()) {
+                    // Get the storage value from the trielog's "updated" state (state after the block)
+                    final UInt256 updatedValue = slotValue.getUpdated();
+                    if (updatedValue != null && !updatedValue.isZero()) {
                       // Write the storage with versioned key using BonsaiArchiveFlatDbStrategy
                       writeStrategy.putFlatAccountStorageValueByStorageSlotHash(
                           storage,
                           transaction,
                           accountHash,
                           slotKey.getSlotHash(),
-                          Bytes.wrap(priorValue.toBytes()));
+                          Bytes.wrap(updatedValue.toBytes()));
                     } else {
-                      // Storage was created in this block or deleted, so prior state is
+                      // Storage was deleted in this block or set to zero, so updated state is
                       // non-existent
                       writeStrategy.removeFlatAccountStorageValueByStorageSlotHash(
                           storage, transaction, accountHash, slotKey.getSlotHash());
