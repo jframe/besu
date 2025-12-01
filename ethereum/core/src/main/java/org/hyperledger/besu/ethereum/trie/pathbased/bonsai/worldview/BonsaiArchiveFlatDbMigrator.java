@@ -192,17 +192,12 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         () -> {
           try {
             performMigration();
-            LOG.info(
-                "Bonsai archive migration completed successfully. Processed {} blocks.",
-                blocksProcessed.get());
-
-            // Schedule upgrade to ARCHIVE mode now that migration is complete
-            executorService.execute(this::upgradeToArchiveMode);
+            // Note: performMigration schedules batches asynchronously, so we don't call
+            // upgradeToArchiveMode here. It will be called when the last batch completes.
           } catch (final Exception e) {
             LOG.error("Error during archive migration", e);
-            throw new RuntimeException("Archive migration failed", e);
-          } finally {
             isReconstructing.set(false);
+            throw new RuntimeException("Archive migration failed", e);
           }
         });
   }
@@ -222,9 +217,15 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
     // If we have a swappable archive and factory, swap to the archive provider
     if (swappableArchive != null && archiveProviderFactory != null) {
+      LOG.info("Swapping world state provider to BonsaiArchiveWorldStateProvider...");
       final var archiveProvider = archiveProviderFactory.get();
       swappableArchive.swapProvider(archiveProvider);
-      LOG.info("Swapped to BonsaiArchiveWorldStateProvider for full archive functionality");
+      LOG.info("Successfully swapped to BonsaiArchiveWorldStateProvider for full archive functionality");
+    } else {
+      LOG.info(
+          "Provider swap not available (swappableArchive={}, archiveProviderFactory={}). This is expected if already in ARCHIVE mode or not using deferred archive.",
+          swappableArchive != null ? "present" : "null",
+          archiveProviderFactory != null ? "present" : "null");
     }
   }
 
@@ -282,6 +283,17 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
           () -> processNextBatch(nextBlock, chainHeadNumber),
           BATCH_DELAY_MS,
           TimeUnit.MILLISECONDS);
+    } else {
+      // This was the last batch - migration is complete
+      LOG.info(
+          "Bonsai archive migration completed successfully. Processed {} blocks.",
+          blocksProcessed.get());
+
+      // Upgrade to ARCHIVE mode now that all batches are done
+      executorService.execute(this::upgradeToArchiveMode);
+
+      // Clear the reconstruction flag
+      isReconstructing.set(false);
     }
   }
 
