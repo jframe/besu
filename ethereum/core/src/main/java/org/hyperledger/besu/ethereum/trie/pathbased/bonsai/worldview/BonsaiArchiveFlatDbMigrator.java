@@ -69,6 +69,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private final AtomicLong totalBlocks = new AtomicLong(0);
   private final SwappableWorldStateArchive swappableArchive;
   private final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory;
+  private final AtomicLong migrationTarget = new AtomicLong(0);
+  private long blockAddedObserverId;
 
   /**
    * Creates a new BonsaiArchiveFlatDbMigrator.
@@ -187,6 +189,17 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
     LOG.info("Starting asynchronous Bonsai archive migration from trielogs");
 
+    // Subscribe to block added events to track chain growth during migration
+    // Note: This will handle blocks added AFTER subscription starts
+    blockAddedObserverId =
+        blockchain.observeBlockAdded(
+            event -> {
+              // Update migration target when new blocks arrive
+              final long newHead = event.getBlock().getHeader().getNumber();
+              migrationTarget.updateAndGet(current -> Math.max(current, newHead));
+              LOG.debug("Migration target updated to {} due to new block", newHead);
+            });
+
     // Submit migration task to the executor service
     executorService.execute(
         () -> {
@@ -196,6 +209,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
             // upgradeToArchiveMode here. It will be called when the last batch completes.
           } catch (final Exception e) {
             LOG.error("Error during archive migration", e);
+            blockchain.removeObserver(blockAddedObserverId);
             isReconstructing.set(false);
             throw new RuntimeException("Archive migration failed", e);
           }
@@ -250,25 +264,37 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       LOG.info("Starting archive flat DB migration from genesis (block 0)");
     }
 
+    // Set initial migration target to current chain head
+    final long initialChainHead = blockchain.getChainHeadBlockNumber();
+    migrationTarget.set(initialChainHead);
+    totalBlocks.set(initialChainHead + 1);
+    LOG.info(
+        "Archive migration will process blocks from {} to {}. Target will update as chain grows.",
+        startBlock,
+        initialChainHead);
+
     // Process first batch, which will schedule subsequent batches
     processNextBatch(startBlock);
   }
 
   /**
    * Processes the next batch of blocks and schedules the following batch if needed. This method
-   * always checks the current chain head to pick up any new blocks that arrived.
+   * uses the migrationTarget which is updated by the block added observer.
    *
    * @param currentBlock the starting block for this batch
    */
   private void processNextBatch(final long currentBlock) {
-    // Always get the current chain head - this handles blocks arriving during migration
-    final long currentChainHead = blockchain.getChainHeadBlockNumber();
+    // Get the current migration target (updated by block observer)
+    final long target = migrationTarget.get();
 
-    if (currentBlock > currentChainHead) {
-      // Migration is complete - we're caught up with chain head
+    if (currentBlock > target) {
+      // Migration is complete - we've caught up with chain head
       LOG.info(
           "Bonsai archive migration completed successfully. Processed {} blocks.",
           blocksProcessed.get());
+
+      // Unsubscribe from block events
+      blockchain.removeObserver(blockAddedObserverId);
 
       // Upgrade to ARCHIVE mode now that migration is complete
       executorService.execute(this::upgradeToArchiveMode);
@@ -279,9 +305,9 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     }
 
     // Update metrics with current target
-    totalBlocks.set(currentChainHead + 1);
+    totalBlocks.set(target + 1);
 
-    final long batchEnd = Math.min(currentBlock + BATCH_SIZE - 1, currentChainHead);
+    final long batchEnd = Math.min(currentBlock + BATCH_SIZE - 1, target);
     processBlockBatch(currentBlock, batchEnd);
 
     // Schedule next batch with a delay to avoid overwhelming the system
