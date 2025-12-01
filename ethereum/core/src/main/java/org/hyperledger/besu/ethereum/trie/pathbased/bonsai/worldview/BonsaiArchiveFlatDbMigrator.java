@@ -121,10 +121,20 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
   /**
    * Triggers migration regardless of current flat DB mode. This is useful for testing and can be
-   * called via the debug RPC.
+   * called via the debug RPC. This will reset the migration progress and start from the first
+   * block.
    */
   public void triggerMigration() {
-    LOG.info("Migration triggered manually");
+    LOG.info("Migration triggered manually, resetting to start from first block");
+
+    // Reset the latest archived flat DB block to force restart from the first block
+    // Setting to 0 will cause performMigration to start from block 1 (startBlock = 0 + 1)
+    worldStateStorage.setLatestArchivedFlatDbBlock(0L);
+
+    // Reset metrics
+    blocksProcessed.set(0);
+    totalBlocks.set(0);
+
     startMigration();
   }
 
