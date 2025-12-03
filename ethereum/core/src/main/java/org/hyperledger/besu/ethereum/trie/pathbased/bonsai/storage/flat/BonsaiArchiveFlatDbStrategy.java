@@ -284,6 +284,29 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
 
+  /**
+   * Puts the account data for the given account hash at the specified block number. This version
+   * accepts an explicit block number instead of reading from storage, allowing batch processing of
+   * multiple blocks in a single transaction.
+   *
+   * @param transaction the transaction to write to
+   * @param accountHash the account hash
+   * @param accountValue the account value
+   * @param blockNumber the block number to write at
+   */
+  public void putFlatAccount(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final Hash accountHash,
+      final Bytes accountValue,
+      final long blockNumber) {
+
+    // key suffixed with explicit block number
+    byte[] keySuffixed =
+        calculateArchiveKeyWithMinSuffix(new BonsaiContext(blockNumber), accountHash.toArrayUnsafe());
+
+    transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
+  }
+
   @Override
   public void removeFlatAccount(
       final SegmentedKeyValueStorage storage,
@@ -294,6 +317,25 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(
             getStateArchiveContextForWrite(storage).get(), accountHash.toArrayUnsafe());
+
+    transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
+  }
+
+  /**
+   * Removes the account data for the given account hash at the specified block number.
+   *
+   * @param transaction the transaction to write to
+   * @param accountHash the account hash
+   * @param blockNumber the block number to write the deletion at
+   */
+  public void removeFlatAccount(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final Hash accountHash,
+      final long blockNumber) {
+
+    // insert a key suffixed with explicit block number, with 'deleted account' value
+    byte[] keySuffixed =
+        calculateArchiveKeyWithMinSuffix(new BonsaiContext(blockNumber), accountHash.toArrayUnsafe());
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
@@ -386,6 +428,32 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     transaction.put(ACCOUNT_STORAGE_STORAGE, keyNearest, storageValue.toArrayUnsafe());
   }
 
+  /**
+   * Puts the storage value for the given account hash and storage slot hash at the specified block
+   * number.
+   *
+   * @param transaction the transaction to write to
+   * @param accountHash the account hash
+   * @param slotHash the storage slot hash
+   * @param storageValue the storage value
+   * @param blockNumber the block number to write at
+   */
+  public void putFlatAccountStorageValueByStorageSlotHash(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final Hash accountHash,
+      final Hash slotHash,
+      final Bytes storageValue,
+      final long blockNumber) {
+
+    // get natural key from account hash and slot key
+    byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
+    // key suffixed with explicit block number
+    byte[] keyNearest =
+        calculateArchiveKeyWithMinSuffix(new BonsaiContext(blockNumber), naturalKey);
+
+    transaction.put(ACCOUNT_STORAGE_STORAGE, keyNearest, storageValue.toArrayUnsafe());
+  }
+
   /*
    * Removes the storage value for the given account hash and storage slot key, using the world state root hash supplier, storage root supplier, and node loader.
    */
@@ -401,6 +469,30 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     // insert a key suffixed with block context, with 'deleted account' value
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(getStateArchiveContextForWrite(storage).get(), naturalKey);
+
+    transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
+  }
+
+  /**
+   * Removes the storage value for the given account hash and storage slot hash at the specified
+   * block number.
+   *
+   * @param transaction the transaction to write to
+   * @param accountHash the account hash
+   * @param slotHash the storage slot hash
+   * @param blockNumber the block number to write the deletion at
+   */
+  public void removeFlatAccountStorageValueByStorageSlotHash(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final Hash accountHash,
+      final Hash slotHash,
+      final long blockNumber) {
+
+    // get natural key from account hash and slot key
+    byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
+    // insert a key suffixed with explicit block number, with 'deleted storage' value
+    byte[] keySuffixed =
+        calculateArchiveKeyWithMinSuffix(new BonsaiContext(blockNumber), naturalKey);
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
   }

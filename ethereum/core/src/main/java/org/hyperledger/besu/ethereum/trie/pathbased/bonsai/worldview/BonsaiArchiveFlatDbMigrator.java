@@ -32,6 +32,8 @@ import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.BesuEvents.InitialSyncCompletionListener;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
 import java.util.Optional;
@@ -131,39 +133,6 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         "BonsaiArchiveFlatDbMigrator configured with batchSize={}, batchDelayMs={}",
         batchSize,
         batchDelayMs);
-  }
-
-  /**
-   * Creates a new BonsaiArchiveFlatDbMigrator with default batch settings.
-   *
-   * @param worldStateStorage the world state storage
-   * @param blockchain the blockchain
-   * @param executorService the scheduled executor service for async operations
-   * @param trieLogManager the trie log manager
-   * @param metricsSystem the metrics system
-   * @param swappableArchive optional swappable archive for provider swap (used in deferred archive
-   *     mode)
-   * @param archiveProviderFactory optional factory for creating archive provider (used in deferred
-   *     archive mode)
-   */
-  public BonsaiArchiveFlatDbMigrator(
-      final BonsaiWorldStateKeyValueStorage worldStateStorage,
-      final Blockchain blockchain,
-      final ScheduledExecutorService executorService,
-      final TrieLogManager trieLogManager,
-      final MetricsSystem metricsSystem,
-      final SwappableWorldStateArchive swappableArchive,
-      final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory) {
-    this(
-        worldStateStorage,
-        blockchain,
-        executorService,
-        trieLogManager,
-        metricsSystem,
-        swappableArchive,
-        archiveProviderFactory,
-        DEFAULT_BATCH_SIZE,
-        DEFAULT_BATCH_DELAY_MS);
   }
 
   /**
@@ -409,19 +378,113 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    * @param startBlock the first block in the batch
    * @param endBlock the last block in the batch
    */
+  /**
+   * Processes a batch of blocks, moving their state changes to the archive segments. Uses a single
+   * transaction for the entire batch to minimize RocksDB commit overhead.
+   *
+   * @param startBlock the first block in the batch
+   * @param endBlock the last block in the batch (inclusive)
+   */
   private void processBlockBatch(final long startBlock, final long endBlock) {
     LOG.debug("Processing block batch: {} to {}", startBlock, endBlock);
 
-    for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
-      processBlock(blockNumber);
+    // Create a single updater/transaction for the entire batch
+    final Updater batchUpdater = worldStateStorage.updater();
+    final var batchTransaction = batchUpdater.getWorldStateTransaction();
+
+    try {
+      long lastProcessedBlock = startBlock - 1; // Track the last block that was actually processed
+
+      for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
+        if (processBlockInBatch(blockNumber, batchTransaction)) {
+          lastProcessedBlock = blockNumber;
+        }
+      }
+
+      // Only commit and update if we processed at least one block
+      if (lastProcessedBlock >= startBlock) {
+        // Commit once for the entire batch
+        batchUpdater.commit();
+
+        // Update the latest archived block AFTER successful commit
+        worldStateStorage.setLatestArchivedFlatDbBlock(lastProcessedBlock);
+
+        LOG.debug(
+            "Committed batch of {} blocks (from {} to {})",
+            lastProcessedBlock - startBlock + 1,
+            startBlock,
+            lastProcessedBlock);
+      } else {
+        // No blocks were processed, rollback empty transaction
+        batchUpdater.rollback();
+        LOG.debug("Batch from {} to {} contained no processable blocks", startBlock, endBlock);
+      }
+    } catch (Exception e) {
+      LOG.error(
+          "Error processing block batch from {} to {}, rolling back batch",
+          startBlock,
+          endBlock,
+          e);
+      batchUpdater.rollback();
+      throw e;
     }
   }
 
   /**
-   * Processes a single block, rewriting its flat DB entries to versioned format.
+   * Processes a single block within a batch transaction, rewriting its flat DB entries to
+   * versioned format without committing.
+   *
+   * @param blockNumber the block number to process
+   * @param batchTransaction the shared transaction for the batch
+   * @return true if the block was processed, false if it was skipped
+   */
+  private boolean processBlockInBatch(
+      final long blockNumber, final SegmentedKeyValueStorageTransaction batchTransaction) {
+    final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
+    if (blockHeader.isEmpty()) {
+      LOG.warn("Block header not found for block {}, skipping", blockNumber);
+      return false;
+    }
+
+    final Hash blockHash = blockHeader.get().getHash();
+    final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
+
+    if (maybeTrieLog.isEmpty()) {
+      LOG.debug("No trielog found for block {}, skipping", blockNumber);
+      return false;
+    }
+
+    // Set the world state block context to the parent block number
+    // The archive write strategy adds +1 when writing, so setting context to blockNumber-1
+    // means data is written with suffix blockNumber, representing state after blockNumber
+    final long parentBlockNumber = blockNumber - 1;
+    batchTransaction.put(
+        KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE,
+        PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
+        Bytes.ofUnsignedLong(parentBlockNumber).toArrayUnsafe());
+
+    // Rewrite flat DB entries with versioned keys (no commits inside)
+    var trieLog = maybeTrieLog.get();
+    rewriteAccountChangesInBatch(trieLog, batchTransaction, blockNumber);
+    rewriteStorageChangesInBatch(trieLog, batchTransaction, blockNumber);
+
+    // Don't set latestArchivedFlatDbBlock here - it's set after batch commit
+    blocksProcessed.incrementAndGet();
+
+    logProgressIfNeeded(blockNumber);
+    return true;
+  }
+
+  /**
+   * Processes a single block, rewriting its flat DB entries to versioned format. This method
+   * creates its own transaction and commits. Used for non-batch processing.
+   *
+   * <p>Note: This method is kept for reference/compatibility but batch processing via
+   * processBlockBatch is preferred for performance.
    *
    * @param blockNumber the block number to process
    */
+  @SuppressWarnings("unused")
   private void processBlock(final long blockNumber) {
     final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
     if (blockHeader.isEmpty()) {
@@ -468,6 +531,82 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
             PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
             Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
     updater.commit();
+  }
+
+  /**
+   * Rewrites account state changes from non-versioned to versioned flat DB format within a batch
+   * transaction (no commit). Uses explicit block number to avoid block context conflicts in batch.
+   *
+   * @param trieLog the trielog containing changes
+   * @param transaction the shared transaction for the batch
+   * @param blockNumber the block number to write at
+   */
+  private void rewriteAccountChangesInBatch(
+      final TrieLog trieLog,
+      final SegmentedKeyValueStorageTransaction transaction,
+      final long blockNumber) {
+
+    trieLog
+        .getAccountChanges()
+        .forEach(
+            (address, change) -> {
+              final Hash accountHash = address.addressHash();
+
+              // Get the account value from the trielog's "updated" state (state after the block)
+              final AccountValue updatedAccountValue = change.getUpdated();
+              if (updatedAccountValue != null) {
+                // Serialize the account value to RLP
+                final Bytes accountBytes = RLP.encode(updatedAccountValue::writeTo);
+                // Write the account with versioned key using explicit block number
+                writeStrategy.putFlatAccount(transaction, accountHash, accountBytes, blockNumber);
+              } else {
+                // Account was deleted in this block, so updated state is non-existent
+                writeStrategy.removeFlatAccount(transaction, accountHash, blockNumber);
+              }
+            });
+    // No commit - handled by batch
+  }
+
+  /**
+   * Rewrites storage state changes from non-versioned to versioned flat DB format within a batch
+   * transaction (no commit). Uses explicit block number to avoid block context conflicts in batch.
+   *
+   * @param trieLog the trielog containing changes
+   * @param transaction the shared transaction for the batch
+   * @param blockNumber the block number to write at
+   */
+  private void rewriteStorageChangesInBatch(
+      final TrieLog trieLog,
+      final SegmentedKeyValueStorageTransaction transaction,
+      final long blockNumber) {
+
+    trieLog
+        .getStorageChanges()
+        .forEach(
+            (address, storageChanges) -> {
+              final Hash accountHash = address.addressHash();
+              storageChanges.forEach(
+                  (slotKey, slotValue) -> {
+                    // Get the storage value from the trielog's "updated" state (state after the
+                    // block)
+                    final UInt256 updatedValue = slotValue.getUpdated();
+                    if (updatedValue != null && !updatedValue.isZero()) {
+                      // Write the storage with versioned key using explicit block number
+                      writeStrategy.putFlatAccountStorageValueByStorageSlotHash(
+                          transaction,
+                          accountHash,
+                          slotKey.getSlotHash(),
+                          Bytes.wrap(updatedValue.toBytes()),
+                          blockNumber);
+                    } else {
+                      // Storage was deleted in this block or set to zero, so updated state is
+                      // non-existent
+                      writeStrategy.removeFlatAccountStorageValueByStorageSlotHash(
+                          transaction, accountHash, slotKey.getSlotHash(), blockNumber);
+                    }
+                  });
+            });
+    // No commit - handled by batch
   }
 
   /**
