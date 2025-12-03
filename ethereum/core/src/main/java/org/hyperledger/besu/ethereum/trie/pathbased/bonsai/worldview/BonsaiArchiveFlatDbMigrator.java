@@ -380,13 +380,32 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    */
   /**
    * Processes a batch of blocks, moving their state changes to the archive segments. Uses a single
-   * transaction for the entire batch to minimize RocksDB commit overhead.
+   * transaction for the entire batch to minimize RocksDB commit overhead. Also prefetches all
+   * trielogs for the batch to minimize RocksDB read overhead.
    *
    * @param startBlock the first block in the batch
    * @param endBlock the last block in the batch (inclusive)
    */
   private void processBlockBatch(final long startBlock, final long endBlock) {
     LOG.debug("Processing block batch: {} to {}", startBlock, endBlock);
+
+    // Prefetch all trielogs for the batch to avoid individual RocksDB reads during processing
+    final var trieLogsByBlockNumber = new java.util.HashMap<Long, TrieLog>();
+    for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
+      final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
+      if (blockHeader.isPresent()) {
+        final Hash blockHash = blockHeader.get().getHash();
+        final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
+        if (maybeTrieLog.isPresent()) {
+          trieLogsByBlockNumber.put(blockNumber, maybeTrieLog.get());
+        }
+      }
+    }
+    LOG.debug(
+        "Prefetched {} trielogs for batch {} to {}",
+        trieLogsByBlockNumber.size(),
+        startBlock,
+        endBlock);
 
     // Create a single updater/transaction for the entire batch
     final Updater batchUpdater = worldStateStorage.updater();
@@ -396,7 +415,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       long lastProcessedBlock = startBlock - 1; // Track the last block that was actually processed
 
       for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
-        if (processBlockInBatch(blockNumber, batchTransaction)) {
+        if (processBlockInBatch(blockNumber, batchTransaction, trieLogsByBlockNumber)) {
           lastProcessedBlock = blockNumber;
         }
       }
@@ -436,18 +455,26 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    *
    * @param blockNumber the block number to process
    * @param batchTransaction the shared transaction for the batch
+   * @param prefetchedTrieLogs map of prefetched trielogs (may be empty if prefetch failed)
    * @return true if the block was processed, false if it was skipped
    */
   private boolean processBlockInBatch(
-      final long blockNumber, final SegmentedKeyValueStorageTransaction batchTransaction) {
+      final long blockNumber,
+      final SegmentedKeyValueStorageTransaction batchTransaction,
+      final java.util.Map<Long, TrieLog> prefetchedTrieLogs) {
     final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
     if (blockHeader.isEmpty()) {
       LOG.warn("Block header not found for block {}, skipping", blockNumber);
       return false;
     }
 
+    // Try to get trielog from prefetched map first, fall back to individual fetch
     final Hash blockHash = blockHeader.get().getHash();
-    final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
+    Optional<TrieLog> maybeTrieLog = Optional.ofNullable(prefetchedTrieLogs.get(blockNumber));
+    if (maybeTrieLog.isEmpty()) {
+      // Fallback to individual fetch if not in prefetched map
+      maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
+    }
 
     if (maybeTrieLog.isEmpty()) {
       LOG.debug("No trielog found for block {}, skipping", blockNumber);
