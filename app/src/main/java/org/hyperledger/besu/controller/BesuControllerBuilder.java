@@ -1029,6 +1029,11 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
     final ScheduledExecutorService reconstructionExecutor =
         newScheduledThreadPool("BonsaiArchiveReconstructor", 1, metricsSystem);
 
+    // Extract batch configuration from storage configuration
+    final var pathBasedConfig = dataStorageConfiguration.getPathBasedExtraStorageConfiguration();
+    final int batchSize = pathBasedConfig.getUnstable().getArchiveMigrationBatchSize();
+    final long batchDelayMs = pathBasedConfig.getUnstable().getArchiveMigrationBatchDelayMs();
+
     // Check if the world state archive is swappable (deferred archive mode)
     if (worldStateArchive
         instanceof
@@ -1067,14 +1072,22 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               trieLogManager,
               metricsSystem,
               swappableArchive,
-              archiveProviderFactory);
+              archiveProviderFactory,
+              batchSize,
+              batchDelayMs);
       LOG.info("Bonsai archive flat db migrater initialized with provider swapping");
       return reconstructor;
     } else {
       // Not in deferred archive mode, use legacy constructor
       final BonsaiArchiveFlatDbMigrator reconstructor =
           new BonsaiArchiveFlatDbMigrator(
-              worldStateStorage, blockchain, reconstructionExecutor, trieLogManager, metricsSystem);
+              worldStateStorage,
+              blockchain,
+              reconstructionExecutor,
+              trieLogManager,
+              metricsSystem,
+              batchSize,
+              batchDelayMs);
       LOG.info("Bonsai archive flat db migrater initialized");
       return reconstructor;
     }

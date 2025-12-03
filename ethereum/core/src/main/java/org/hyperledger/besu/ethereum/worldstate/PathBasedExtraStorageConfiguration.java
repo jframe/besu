@@ -81,6 +81,8 @@ public interface PathBasedExtraStorageConfiguration {
     boolean DEFAULT_FULL_FLAT_DB_ENABLED = true;
     boolean DEFAULT_CODE_USING_CODE_HASH_ENABLED = true;
     boolean DEFAULT_DEFER_ARCHIVE_UNTIL_SYNC_COMPLETE = false;
+    int DEFAULT_ARCHIVE_MIGRATION_BATCH_SIZE = 100;
+    long DEFAULT_ARCHIVE_MIGRATION_BATCH_DELAY_MS = 100;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -95,6 +97,16 @@ public interface PathBasedExtraStorageConfiguration {
     @Value.Default
     default boolean getDeferArchiveUntilSyncComplete() {
       return DEFAULT_DEFER_ARCHIVE_UNTIL_SYNC_COMPLETE;
+    }
+
+    @Value.Default
+    default int getArchiveMigrationBatchSize() {
+      return DEFAULT_ARCHIVE_MIGRATION_BATCH_SIZE;
+    }
+
+    @Value.Default
+    default long getArchiveMigrationBatchDelayMs() {
+      return DEFAULT_ARCHIVE_MIGRATION_BATCH_DELAY_MS;
     }
   }
 }

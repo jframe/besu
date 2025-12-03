@@ -53,8 +53,8 @@ import org.slf4j.LoggerFactory;
 public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListener {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiArchiveFlatDbMigrator.class);
-  private static final int BATCH_SIZE = 100;
-  private static final long BATCH_DELAY_MS = 100; // 100ms delay between batches
+  private static final int DEFAULT_BATCH_SIZE = 100;
+  private static final long DEFAULT_BATCH_DELAY_MS = 100; // 100ms delay between batches
 
   // Static instance reference for debug RPC access
   private static volatile BonsaiArchiveFlatDbMigrator instance;
@@ -71,6 +71,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory;
   private final AtomicLong migrationTarget = new AtomicLong(0);
   private long blockAddedObserverId;
+  private final int batchSize;
+  private final long batchDelayMs;
 
   /**
    * Creates a new BonsaiArchiveFlatDbMigrator.
@@ -84,6 +86,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    *     mode)
    * @param archiveProviderFactory optional factory for creating archive provider (used in deferred
    *     archive mode)
+   * @param batchSize number of blocks to process in each batch
+   * @param batchDelayMs delay in milliseconds between batches
    */
   public BonsaiArchiveFlatDbMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -92,13 +96,17 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       final TrieLogManager trieLogManager,
       final MetricsSystem metricsSystem,
       final SwappableWorldStateArchive swappableArchive,
-      final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory) {
+      final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory,
+      final int batchSize,
+      final long batchDelayMs) {
     this.worldStateStorage = worldStateStorage;
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.trieLogManager = trieLogManager;
     this.swappableArchive = swappableArchive;
     this.archiveProviderFactory = archiveProviderFactory;
+    this.batchSize = batchSize;
+    this.batchDelayMs = batchDelayMs;
 
     // Create strategy for writing versioned archive entries
     final CodeHashCodeStorageStrategy codeStorageStrategy = new CodeHashCodeStorageStrategy();
@@ -118,6 +126,44 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         "archive_migration_blocks_target",
         "Target number of blocks to process during archive migration",
         totalBlocks::get);
+
+    LOG.info(
+        "BonsaiArchiveFlatDbMigrator configured with batchSize={}, batchDelayMs={}",
+        batchSize,
+        batchDelayMs);
+  }
+
+  /**
+   * Creates a new BonsaiArchiveFlatDbMigrator with default batch settings.
+   *
+   * @param worldStateStorage the world state storage
+   * @param blockchain the blockchain
+   * @param executorService the scheduled executor service for async operations
+   * @param trieLogManager the trie log manager
+   * @param metricsSystem the metrics system
+   * @param swappableArchive optional swappable archive for provider swap (used in deferred archive
+   *     mode)
+   * @param archiveProviderFactory optional factory for creating archive provider (used in deferred
+   *     archive mode)
+   */
+  public BonsaiArchiveFlatDbMigrator(
+      final BonsaiWorldStateKeyValueStorage worldStateStorage,
+      final Blockchain blockchain,
+      final ScheduledExecutorService executorService,
+      final TrieLogManager trieLogManager,
+      final MetricsSystem metricsSystem,
+      final SwappableWorldStateArchive swappableArchive,
+      final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory) {
+    this(
+        worldStateStorage,
+        blockchain,
+        executorService,
+        trieLogManager,
+        metricsSystem,
+        swappableArchive,
+        archiveProviderFactory,
+        DEFAULT_BATCH_SIZE,
+        DEFAULT_BATCH_DELAY_MS);
   }
 
   /**
@@ -136,7 +182,48 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       final ScheduledExecutorService executorService,
       final TrieLogManager trieLogManager,
       final MetricsSystem metricsSystem) {
-    this(worldStateStorage, blockchain, executorService, trieLogManager, metricsSystem, null, null);
+    this(
+        worldStateStorage,
+        blockchain,
+        executorService,
+        trieLogManager,
+        metricsSystem,
+        null,
+        null,
+        DEFAULT_BATCH_SIZE,
+        DEFAULT_BATCH_DELAY_MS);
+  }
+
+  /**
+   * Creates a new BonsaiArchiveFlatDbMigrator without provider swapping with custom batch
+   * settings.
+   *
+   * @param worldStateStorage the world state storage
+   * @param blockchain the blockchain
+   * @param executorService the scheduled executor service for async operations
+   * @param trieLogManager the trie log manager
+   * @param metricsSystem the metrics system
+   * @param batchSize the number of blocks to process in each batch
+   * @param batchDelayMs the delay in milliseconds between batches
+   */
+  public BonsaiArchiveFlatDbMigrator(
+      final BonsaiWorldStateKeyValueStorage worldStateStorage,
+      final Blockchain blockchain,
+      final ScheduledExecutorService executorService,
+      final TrieLogManager trieLogManager,
+      final MetricsSystem metricsSystem,
+      final int batchSize,
+      final long batchDelayMs) {
+    this(
+        worldStateStorage,
+        blockchain,
+        executorService,
+        trieLogManager,
+        metricsSystem,
+        null,
+        null,
+        batchSize,
+        batchDelayMs);
   }
 
   @Override
@@ -307,13 +394,13 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     // Update metrics with current target
     totalBlocks.set(target + 1);
 
-    final long batchEnd = Math.min(currentBlock + BATCH_SIZE - 1, target);
+    final long batchEnd = Math.min(currentBlock + batchSize - 1, target);
     processBlockBatch(currentBlock, batchEnd);
 
     // Schedule next batch with a delay to avoid overwhelming the system
     final long nextBlock = batchEnd + 1;
     executorService.schedule(
-        () -> processNextBatch(nextBlock), BATCH_DELAY_MS, TimeUnit.MILLISECONDS);
+        () -> processNextBatch(nextBlock), batchDelayMs, TimeUnit.MILLISECONDS);
   }
 
   /**

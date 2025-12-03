@@ -115,6 +115,25 @@ public class PathBasedExtraStorageOptions
             "When using X_BONSAI_ARCHIVE storage format, defer archive state reconstruction until initial sync is complete. During sync, operates as regular Bonsai for better performance. (default: ${DEFAULT-VALUE})")
     private boolean deferArchiveUntilSyncComplete = DEFAULT_DEFER_ARCHIVE_UNTIL_SYNC_COMPLETE;
 
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-archive-migration-batch-size"},
+        paramLabel = "<INTEGER>",
+        description =
+            "Number of blocks to process in each batch during archive migration. Larger values may speed up migration but increase memory usage. (default: ${DEFAULT-VALUE})")
+    private int archiveMigrationBatchSize =
+        PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ARCHIVE_MIGRATION_BATCH_SIZE;
+
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-archive-migration-batch-delay"},
+        paramLabel = "<LONG>",
+        description =
+            "Delay in milliseconds between processing batches during archive migration. Lower values speed up migration but may impact node responsiveness. (default: ${DEFAULT-VALUE})")
+    private long archiveMigrationBatchDelayMs =
+        PathBasedExtraStorageConfiguration.PathBasedUnstable
+            .DEFAULT_ARCHIVE_MIGRATION_BATCH_DELAY_MS;
+
     /** Default Constructor. */
     Unstable() {}
   }
@@ -184,6 +203,10 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getCodeStoredByCodeHashEnabled();
     dataStorageOptions.unstableOptions.deferArchiveUntilSyncComplete =
         domainObject.getUnstable().getDeferArchiveUntilSyncComplete();
+    dataStorageOptions.unstableOptions.archiveMigrationBatchSize =
+        domainObject.getUnstable().getArchiveMigrationBatchSize();
+    dataStorageOptions.unstableOptions.archiveMigrationBatchDelayMs =
+        domainObject.getUnstable().getArchiveMigrationBatchDelayMs();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
 
@@ -202,6 +225,8 @@ public class PathBasedExtraStorageOptions
                 .fullFlatDbEnabled(unstableOptions.fullFlatDbEnabled)
                 .codeStoredByCodeHashEnabled(unstableOptions.codeUsingCodeHashEnabled)
                 .deferArchiveUntilSyncComplete(unstableOptions.deferArchiveUntilSyncComplete)
+                .archiveMigrationBatchSize(unstableOptions.archiveMigrationBatchSize)
+                .archiveMigrationBatchDelayMs(unstableOptions.archiveMigrationBatchDelayMs)
                 .build())
         .build();
   }

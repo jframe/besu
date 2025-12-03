@@ -192,6 +192,13 @@ class BonsaiArchiveFlatDbMigratorTest {
         .untilAsserted(
             () -> assertThat(worldStateStorage.getLatestArchivedFlatDbBlock()).hasValue(1L));
 
+    // Wait for the mode to switch to ARCHIVE (happens after last block is processed)
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .pollInterval(Duration.ofMillis(100))
+        .untilAsserted(
+            () -> assertThat(worldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE));
+
     assertThat(worldStateStorage.getLatestArchivedFlatDbBlock()).hasValue(1L);
     assertThat(worldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
 
@@ -348,6 +355,13 @@ class BonsaiArchiveFlatDbMigratorTest {
         .pollInterval(Duration.ofMillis(100))
         .untilAsserted(
             () -> assertThat(worldStateStorage.getLatestArchivedFlatDbBlock()).hasValue(1L));
+
+    // Wait for the mode to switch to ARCHIVE (happens after last block is processed)
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .pollInterval(Duration.ofMillis(100))
+        .untilAsserted(
+            () -> assertThat(worldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE));
 
     assertThat(worldStateStorage.getLatestArchivedFlatDbBlock()).hasValue(1L);
     assertThat(worldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
