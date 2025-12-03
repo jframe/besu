@@ -302,7 +302,8 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
     // key suffixed with explicit block number
     byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(new BonsaiContext(blockNumber), accountHash.toArrayUnsafe());
+        calculateArchiveKeyWithMinSuffix(
+            new BonsaiContext(blockNumber), accountHash.toArrayUnsafe());
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
@@ -335,7 +336,8 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
     // insert a key suffixed with explicit block number, with 'deleted account' value
     byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(new BonsaiContext(blockNumber), accountHash.toArrayUnsafe());
+        calculateArchiveKeyWithMinSuffix(
+            new BonsaiContext(blockNumber), accountHash.toArrayUnsafe());
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
