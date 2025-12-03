@@ -36,7 +36,11 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -389,23 +393,63 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private void processBlockBatch(final long startBlock, final long endBlock) {
     LOG.debug("Processing block batch: {} to {}", startBlock, endBlock);
 
-    // Prefetch all trielogs for the batch to avoid individual RocksDB reads during processing
-    final var trieLogsByBlockNumber = new java.util.HashMap<Long, TrieLog>();
-    for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
-      final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
-      if (blockHeader.isPresent()) {
-        final Hash blockHash = blockHeader.get().getHash();
-        final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
-        if (maybeTrieLog.isPresent()) {
-          trieLogsByBlockNumber.put(blockNumber, maybeTrieLog.get());
+    // Prefetch all trielogs in parallel to avoid individual RocksDB reads during processing
+    // Use ConcurrentHashMap for thread-safe access
+    final var trieLogsByBlockNumber = new ConcurrentHashMap<Long, TrieLog>();
+
+    // Check if we can use parallel prefetching (requires multi-threaded executor)
+    final boolean useParallelPrefetch = !(executorService instanceof java.util.concurrent.ScheduledThreadPoolExecutor &&
+        ((java.util.concurrent.ScheduledThreadPoolExecutor) executorService).getCorePoolSize() == 1);
+
+    if (useParallelPrefetch) {
+      // Parallel prefetch for production with multi-threaded executor
+      final List<CompletableFuture<Void>> prefetchFutures = new ArrayList<>();
+
+      for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
+        final long blockNum = blockNumber; // Capture for lambda
+        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+          try {
+            final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNum);
+            if (blockHeader.isPresent()) {
+              final Hash blockHash = blockHeader.get().getHash();
+              final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
+              if (maybeTrieLog.isPresent()) {
+                trieLogsByBlockNumber.put(blockNum, maybeTrieLog.get());
+              }
+            }
+          } catch (Exception e) {
+            LOG.warn("Failed to prefetch trielog for block {}: {}", blockNum, e.getMessage());
+          }
+        }, executorService);
+        prefetchFutures.add(future);
+      }
+
+      // Wait for all prefetch operations to complete
+      try {
+        CompletableFuture.allOf(prefetchFutures.toArray(new CompletableFuture<?>[0])).join();
+      } catch (Exception e) {
+        LOG.warn("Some trielog prefetch operations failed, continuing with available trielogs", e);
+      }
+    } else {
+      // Serial prefetch for single-threaded executor (tests)
+      for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
+        final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
+        if (blockHeader.isPresent()) {
+          final Hash blockHash = blockHeader.get().getHash();
+          final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
+          if (maybeTrieLog.isPresent()) {
+            trieLogsByBlockNumber.put(blockNumber, maybeTrieLog.get());
+          }
         }
       }
     }
+
     LOG.debug(
-        "Prefetched {} trielogs for batch {} to {}",
+        "Prefetched {} trielogs for batch {} to {} (parallel={})",
         trieLogsByBlockNumber.size(),
         startBlock,
-        endBlock);
+        endBlock,
+        useParallelPrefetch);
 
     // Create a single updater/transaction for the entire batch
     final Updater batchUpdater = worldStateStorage.updater();
