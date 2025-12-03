@@ -75,6 +75,13 @@ public class SegmentedKeyValueStorageAdapter implements KeyValueStorage {
   }
 
   @Override
+  public java.util.List<Optional<byte[]>> multiGet(final java.util.List<byte[]> keys)
+      throws StorageException {
+    throwIfClosed();
+    return storage.multiGet(segmentIdentifier, keys);
+  }
+
+  @Override
   public Set<byte[]> getAllKeysThat(final Predicate<byte[]> returnCondition) {
     throwIfClosed();
     return storage.getAllKeysThat(segmentIdentifier, returnCondition);
