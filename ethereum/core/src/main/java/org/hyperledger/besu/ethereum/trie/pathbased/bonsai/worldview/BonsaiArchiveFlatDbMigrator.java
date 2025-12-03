@@ -32,7 +32,6 @@ import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.BesuEvents.InitialSyncCompletionListener;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
-import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
@@ -42,7 +41,6 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -59,8 +57,6 @@ import org.slf4j.LoggerFactory;
 public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListener {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiArchiveFlatDbMigrator.class);
-  private static final int DEFAULT_BATCH_SIZE = 100;
-  private static final long DEFAULT_BATCH_DELAY_MS = 100; // 100ms delay between batches
 
   // Static instance reference for debug RPC access
   private static volatile BonsaiArchiveFlatDbMigrator instance;
@@ -78,7 +74,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private final AtomicLong migrationTarget = new AtomicLong(0);
   private long blockAddedObserverId;
   private final int batchSize;
-  private final long batchDelayMs;
+  private final long startBlockOverride;
 
   /**
    * Creates a new BonsaiArchiveFlatDbMigrator.
@@ -93,7 +89,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    * @param archiveProviderFactory optional factory for creating archive provider (used in deferred
    *     archive mode)
    * @param batchSize number of blocks to process in each batch
-   * @param batchDelayMs delay in milliseconds between batches
+   * @param startBlockOverride override start block (-1 for auto-detect)
    */
   public BonsaiArchiveFlatDbMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -104,7 +100,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       final SwappableWorldStateArchive swappableArchive,
       final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory,
       final int batchSize,
-      final long batchDelayMs) {
+      final long startBlockOverride) {
     this.worldStateStorage = worldStateStorage;
     this.blockchain = blockchain;
     this.executorService = executorService;
@@ -112,7 +108,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     this.swappableArchive = swappableArchive;
     this.archiveProviderFactory = archiveProviderFactory;
     this.batchSize = batchSize;
-    this.batchDelayMs = batchDelayMs;
+    this.startBlockOverride = startBlockOverride;
 
     // Create strategy for writing versioned archive entries
     final CodeHashCodeStorageStrategy codeStorageStrategy = new CodeHashCodeStorageStrategy();
@@ -133,43 +129,11 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         "Target number of blocks to process during archive migration",
         totalBlocks::get);
 
-    LOG.info(
-        "BonsaiArchiveFlatDbMigrator configured with batchSize={}, batchDelayMs={}",
-        batchSize,
-        batchDelayMs);
+    LOG.info("BonsaiArchiveFlatDbMigrator configured with batchSize={}", batchSize);
   }
 
   /**
-   * Creates a new BonsaiArchiveFlatDbMigrator without provider swapping (legacy constructor for
-   * backwards compatibility and testing).
-   *
-   * @param worldStateStorage the world state storage
-   * @param blockchain the blockchain
-   * @param executorService the scheduled executor service for async operations
-   * @param trieLogManager the trie log manager
-   * @param metricsSystem the metrics system
-   */
-  public BonsaiArchiveFlatDbMigrator(
-      final BonsaiWorldStateKeyValueStorage worldStateStorage,
-      final Blockchain blockchain,
-      final ScheduledExecutorService executorService,
-      final TrieLogManager trieLogManager,
-      final MetricsSystem metricsSystem) {
-    this(
-        worldStateStorage,
-        blockchain,
-        executorService,
-        trieLogManager,
-        metricsSystem,
-        null,
-        null,
-        DEFAULT_BATCH_SIZE,
-        DEFAULT_BATCH_DELAY_MS);
-  }
-
-  /**
-   * Creates a new BonsaiArchiveFlatDbMigrator without provider swapping with custom batch
-   * settings.
+   * Creates a new BonsaiArchiveFlatDbMigrator without provider swapping (for testing).
    *
    * @param worldStateStorage the world state storage
    * @param blockchain the blockchain
@@ -177,7 +141,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    * @param trieLogManager the trie log manager
    * @param metricsSystem the metrics system
    * @param batchSize the number of blocks to process in each batch
-   * @param batchDelayMs the delay in milliseconds between batches
+   * @param startBlockOverride override start block (-1 for auto-detect)
    */
   public BonsaiArchiveFlatDbMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -186,7 +150,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       final TrieLogManager trieLogManager,
       final MetricsSystem metricsSystem,
       final int batchSize,
-      final long batchDelayMs) {
+      final long startBlockOverride) {
     this(
         worldStateStorage,
         blockchain,
@@ -196,7 +160,35 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         null,
         null,
         batchSize,
-        batchDelayMs);
+        startBlockOverride);
+  }
+
+  /**
+   * Creates a new BonsaiArchiveFlatDbMigrator without provider swapping and auto-detect start block
+   * (for testing).
+   *
+   * @param worldStateStorage the world state storage
+   * @param blockchain the blockchain
+   * @param executorService the scheduled executor service for async operations
+   * @param trieLogManager the trie log manager
+   * @param metricsSystem the metrics system
+   * @param batchSize the number of blocks to process in each batch
+   */
+  public BonsaiArchiveFlatDbMigrator(
+      final BonsaiWorldStateKeyValueStorage worldStateStorage,
+      final Blockchain blockchain,
+      final ScheduledExecutorService executorService,
+      final TrieLogManager trieLogManager,
+      final MetricsSystem metricsSystem,
+      final int batchSize) {
+    this(
+        worldStateStorage,
+        blockchain,
+        executorService,
+        trieLogManager,
+        metricsSystem,
+        batchSize,
+        -1L); // Auto-detect start block for tests
   }
 
   @Override
@@ -294,7 +286,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       LOG.info("Swapping world state provider to BonsaiArchiveWorldStateProvider...");
       final var archiveProvider = archiveProviderFactory.get();
       swappableArchive.swapProvider(archiveProvider);
-      LOG.info("Successfully swapped to BonsaiArchiveWorldStateProvider for full archive functionality");
+      LOG.info(
+          "Successfully swapped to BonsaiArchiveWorldStateProvider for full archive functionality");
     } else {
       LOG.info(
           "Provider swap not available (swappableArchive={}, archiveProviderFactory={}). This is expected if already in ARCHIVE mode or not using deferred archive.",
@@ -306,22 +299,30 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   /** Performs the actual migration work. This method is called by the executor service. */
   private void performMigration() {
     // Determine where to start
-    final Optional<Long> latestArchivedFlatDbBlock =
-        worldStateStorage.getLatestArchivedFlatDbBlock();
-
     final long startBlock;
-    if (latestArchivedFlatDbBlock.isPresent()) {
-      // Resume from where we left off
-      startBlock = latestArchivedFlatDbBlock.get() + 1;
-      LOG.info(
-          "Resuming archive flat DB migration from block {} (latest archived: {})",
-          startBlock,
-          latestArchivedFlatDbBlock.get());
+
+    if (startBlockOverride >= 0) {
+      // Use override if specified (for testing)
+      startBlock = startBlockOverride;
+      LOG.info("Starting archive flat DB migration from block {} (override)", startBlock);
     } else {
-      // Start from the earliest block we have trielogs for
-      // In practice, this will typically be genesis or checkpoint
-      startBlock = 0L;
-      LOG.info("Starting archive flat DB migration from genesis (block 0)");
+      // Auto-detect start block
+      final Optional<Long> latestArchivedFlatDbBlock =
+          worldStateStorage.getLatestArchivedFlatDbBlock();
+
+      if (latestArchivedFlatDbBlock.isPresent()) {
+        // Resume from where we left off
+        startBlock = latestArchivedFlatDbBlock.get() + 1;
+        LOG.info(
+            "Resuming archive flat DB migration from block {} (latest archived: {})",
+            startBlock,
+            latestArchivedFlatDbBlock.get());
+      } else {
+        // Start from the earliest block we have trielogs for
+        // In practice, this will typically be genesis or checkpoint
+        startBlock = 0L;
+        LOG.info("Starting archive flat DB migration from genesis (block 0)");
+      }
     }
 
     // Set initial migration target to current chain head
@@ -370,10 +371,9 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     final long batchEnd = Math.min(currentBlock + batchSize - 1, target);
     processBlockBatch(currentBlock, batchEnd);
 
-    // Schedule next batch with a delay to avoid overwhelming the system
+    // Schedule next batch immediately for maximum throughput
     final long nextBlock = batchEnd + 1;
-    executorService.schedule(
-        () -> processNextBatch(nextBlock), batchDelayMs, TimeUnit.MILLISECONDS);
+    executorService.execute(() -> processNextBatch(nextBlock));
   }
 
   /**
@@ -398,8 +398,11 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     final var trieLogsByBlockNumber = new ConcurrentHashMap<Long, TrieLog>();
 
     // Check if we can use parallel prefetching (requires multi-threaded executor)
-    final boolean useParallelPrefetch = !(executorService instanceof java.util.concurrent.ScheduledThreadPoolExecutor &&
-        ((java.util.concurrent.ScheduledThreadPoolExecutor) executorService).getCorePoolSize() == 1);
+    final boolean useParallelPrefetch =
+        !(executorService instanceof java.util.concurrent.ScheduledThreadPoolExecutor
+            && ((java.util.concurrent.ScheduledThreadPoolExecutor) executorService)
+                    .getCorePoolSize()
+                == 1);
 
     if (useParallelPrefetch) {
       // Parallel prefetch for production with multi-threaded executor
@@ -407,20 +410,25 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
       for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
         final long blockNum = blockNumber; // Capture for lambda
-        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-          try {
-            final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNum);
-            if (blockHeader.isPresent()) {
-              final Hash blockHash = blockHeader.get().getHash();
-              final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
-              if (maybeTrieLog.isPresent()) {
-                trieLogsByBlockNumber.put(blockNum, maybeTrieLog.get());
-              }
-            }
-          } catch (Exception e) {
-            LOG.warn("Failed to prefetch trielog for block {}: {}", blockNum, e.getMessage());
-          }
-        }, executorService);
+        CompletableFuture<Void> future =
+            CompletableFuture.runAsync(
+                () -> {
+                  try {
+                    final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNum);
+                    if (blockHeader.isPresent()) {
+                      final Hash blockHash = blockHeader.get().getHash();
+                      final Optional<TrieLog> maybeTrieLog =
+                          trieLogManager.getTrieLogLayer(blockHash);
+                      if (maybeTrieLog.isPresent()) {
+                        trieLogsByBlockNumber.put(blockNum, maybeTrieLog.get());
+                      }
+                    }
+                  } catch (Exception e) {
+                    LOG.warn(
+                        "Failed to prefetch trielog for block {}: {}", blockNum, e.getMessage());
+                  }
+                },
+                executorService);
         prefetchFutures.add(future);
       }
 
@@ -494,8 +502,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   }
 
   /**
-   * Processes a single block within a batch transaction, rewriting its flat DB entries to
-   * versioned format without committing.
+   * Processes a single block within a batch transaction, rewriting its flat DB entries to versioned
+   * format without committing.
    *
    * @param blockNumber the block number to process
    * @param batchTransaction the shared transaction for the batch
@@ -525,16 +533,9 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       return false;
     }
 
-    // Set the world state block context to the parent block number
-    // The archive write strategy adds +1 when writing, so setting context to blockNumber-1
-    // means data is written with suffix blockNumber, representing state after blockNumber
-    final long parentBlockNumber = blockNumber - 1;
-    batchTransaction.put(
-        KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE,
-        PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
-        Bytes.ofUnsignedLong(parentBlockNumber).toArrayUnsafe());
-
-    // Rewrite flat DB entries with versioned keys (no commits inside)
+    // Rewrite flat DB entries with versioned keys using explicit block numbers
+    // (no commits inside, no need to set WORLD_BLOCK_NUMBER_KEY since we pass blockNumber
+    // explicitly)
     var trieLog = maybeTrieLog.get();
     rewriteAccountChangesInBatch(trieLog, batchTransaction, blockNumber);
     rewriteStorageChangesInBatch(trieLog, batchTransaction, blockNumber);

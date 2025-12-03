@@ -92,7 +92,8 @@ class BonsaiArchiveFlatDbMigratorTest {
             blockchain,
             executorService,
             trieLogManager,
-            new NoOpMetricsSystem());
+            new NoOpMetricsSystem(),
+            10); // Small batch size for tests
   }
 
   private MutableBlockchain createBlockchain() {

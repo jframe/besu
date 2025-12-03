@@ -134,6 +134,14 @@ public class PathBasedExtraStorageOptions
         PathBasedExtraStorageConfiguration.PathBasedUnstable
             .DEFAULT_ARCHIVE_MIGRATION_BATCH_DELAY_MS;
 
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-archive-migration-start-block"},
+        paramLabel = "<LONG>",
+        description =
+            "Override the starting block for archive migration. Use -1 for auto-detect (resume from last archived block or start from 0), or specify a block number to start from. Useful for testing. (default: ${DEFAULT-VALUE})")
+    private long archiveMigrationStartBlock = -1L;
+
     /** Default Constructor. */
     Unstable() {}
   }
@@ -207,6 +215,8 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getArchiveMigrationBatchSize();
     dataStorageOptions.unstableOptions.archiveMigrationBatchDelayMs =
         domainObject.getUnstable().getArchiveMigrationBatchDelayMs();
+    dataStorageOptions.unstableOptions.archiveMigrationStartBlock =
+        domainObject.getUnstable().getArchiveMigrationStartBlock();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
 
@@ -227,6 +237,7 @@ public class PathBasedExtraStorageOptions
                 .deferArchiveUntilSyncComplete(unstableOptions.deferArchiveUntilSyncComplete)
                 .archiveMigrationBatchSize(unstableOptions.archiveMigrationBatchSize)
                 .archiveMigrationBatchDelayMs(unstableOptions.archiveMigrationBatchDelayMs)
+                .archiveMigrationStartBlock(unstableOptions.archiveMigrationStartBlock)
                 .build())
         .build();
   }

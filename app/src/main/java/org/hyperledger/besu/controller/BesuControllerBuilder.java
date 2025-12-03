@@ -1032,7 +1032,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
     // Extract batch configuration from storage configuration
     final var pathBasedConfig = dataStorageConfiguration.getPathBasedExtraStorageConfiguration();
     final int batchSize = pathBasedConfig.getUnstable().getArchiveMigrationBatchSize();
-    final long batchDelayMs = pathBasedConfig.getUnstable().getArchiveMigrationBatchDelayMs();
+    final long startBlockOverride = pathBasedConfig.getUnstable().getArchiveMigrationStartBlock();
 
     // Check if the world state archive is swappable (deferred archive mode)
     if (worldStateArchive
@@ -1074,11 +1074,11 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               swappableArchive,
               archiveProviderFactory,
               batchSize,
-              batchDelayMs);
+              startBlockOverride);
       LOG.info("Bonsai archive flat db migrater initialized with provider swapping");
       return reconstructor;
     } else {
-      // Not in deferred archive mode, use legacy constructor
+      // Not in deferred archive mode, use test constructor
       final BonsaiArchiveFlatDbMigrator reconstructor =
           new BonsaiArchiveFlatDbMigrator(
               worldStateStorage,
@@ -1087,7 +1087,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               trieLogManager,
               metricsSystem,
               batchSize,
-              batchDelayMs);
+              startBlockOverride);
       LOG.info("Bonsai archive flat db migrater initialized");
       return reconstructor;
     }

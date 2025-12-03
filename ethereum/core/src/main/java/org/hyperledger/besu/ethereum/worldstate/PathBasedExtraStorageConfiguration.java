@@ -108,5 +108,10 @@ public interface PathBasedExtraStorageConfiguration {
     default long getArchiveMigrationBatchDelayMs() {
       return DEFAULT_ARCHIVE_MIGRATION_BATCH_DELAY_MS;
     }
+
+    @Value.Default
+    default long getArchiveMigrationStartBlock() {
+      return -1L; // -1 means auto-detect (resume from last archived or start from 0)
+    }
   }
 }
