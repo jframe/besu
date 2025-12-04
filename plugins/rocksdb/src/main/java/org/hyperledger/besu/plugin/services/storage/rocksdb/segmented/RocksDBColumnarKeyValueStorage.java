@@ -312,6 +312,8 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setLogFileTimeToRoll(TIME_TO_ROLL_LOG_FILE)
         .setKeepLogFileNum(NUMBER_OF_LOG_FILES_TO_KEEP)
         .setEnv(Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()))
+        .setMaxBackgroundJobs(configuration.getMaxBackgroundJobs())
+        .setMaxBackgroundCompactions(configuration.getMaxBackgroundCompactions())
         .setMaxTotalWalSize(WAL_MAX_TOTAL_SIZE)
         .setRecycleLogFileNum(WAL_MAX_TOTAL_SIZE / EXPECTED_WAL_FILE_SIZE);
   }

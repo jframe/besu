@@ -21,6 +21,8 @@ public class RocksDBFactoryConfiguration {
 
   private final int maxOpenFiles;
   private final int backgroundThreadCount;
+  private final int maxBackgroundJobs;
+  private final int maxBackgroundCompactions;
   private final long cacheCapacity;
   private final boolean isHighSpec;
   private final boolean enableReadCacheForSnapshots;
@@ -33,6 +35,8 @@ public class RocksDBFactoryConfiguration {
    *
    * @param maxOpenFiles the max open files
    * @param backgroundThreadCount the background thread count
+   * @param maxBackgroundJobs the max background jobs
+   * @param maxBackgroundCompactions the max background compactions
    * @param cacheCapacity the cache capacity
    * @param isHighSpec the is high spec
    * @param enableReadCacheForSnapshots whether read caching is enabled for snapshots
@@ -44,6 +48,8 @@ public class RocksDBFactoryConfiguration {
   public RocksDBFactoryConfiguration(
       final int maxOpenFiles,
       final int backgroundThreadCount,
+      final int maxBackgroundJobs,
+      final int maxBackgroundCompactions,
       final long cacheCapacity,
       final boolean isHighSpec,
       final boolean enableReadCacheForSnapshots,
@@ -51,6 +57,8 @@ public class RocksDBFactoryConfiguration {
       final Optional<Double> blobGarbageCollectionAgeCutoff,
       final Optional<Double> blobGarbageCollectionForceThreshold) {
     this.backgroundThreadCount = backgroundThreadCount;
+    this.maxBackgroundJobs = maxBackgroundJobs;
+    this.maxBackgroundCompactions = maxBackgroundCompactions;
     this.maxOpenFiles = maxOpenFiles;
     this.cacheCapacity = cacheCapacity;
     this.isHighSpec = isHighSpec;
@@ -76,6 +84,24 @@ public class RocksDBFactoryConfiguration {
    */
   public int getBackgroundThreadCount() {
     return backgroundThreadCount;
+  }
+
+  /**
+   * Gets max background jobs.
+   *
+   * @return the max background jobs
+   */
+  public int getMaxBackgroundJobs() {
+    return maxBackgroundJobs;
+  }
+
+  /**
+   * Gets max background compactions.
+   *
+   * @return the max background compactions
+   */
+  public int getMaxBackgroundCompactions() {
+    return maxBackgroundCompactions;
   }
 
   /**
