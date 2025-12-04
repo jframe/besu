@@ -84,7 +84,7 @@ class BonsaiArchiveFlatDbMigratorTest {
 
     blockchain = createBlockchain();
 
-    executorService = Executors.newScheduledThreadPool(1);
+    executorService = Executors.newScheduledThreadPool(2); // Use 2 threads for parallel processing
 
     migrator =
         new BonsaiArchiveFlatDbMigrator(
