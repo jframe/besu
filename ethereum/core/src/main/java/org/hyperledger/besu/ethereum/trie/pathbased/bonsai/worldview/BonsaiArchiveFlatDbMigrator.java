@@ -37,6 +37,7 @@ import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
@@ -490,7 +491,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private boolean processBlockInBatch(
       final long blockNumber,
       final SegmentedKeyValueStorageTransaction batchTransaction,
-      final java.util.Map<Long, TrieLog> prefetchedTrieLogs) {
+      final Map<Long, TrieLog> prefetchedTrieLogs) {
     final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
     if (blockHeader.isEmpty()) {
       LOG.warn("Block header not found for block {}, skipping", blockNumber);
