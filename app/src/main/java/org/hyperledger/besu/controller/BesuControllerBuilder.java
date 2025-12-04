@@ -905,7 +905,8 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
                 worldStateKeyValueStorage,
                 blockchain,
                 trieLogManager,
-                protocolContext.getWorldStateArchive());
+                protocolContext.getWorldStateArchive(),
+                null); // No callback for deferred archive mode
         syncState.subscribeCompletionReached(flatDbMigrator);
       }
     }
@@ -922,11 +923,16 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       LOG.info(
           "Archive migration enabled, will migrate existing Bonsai node to Bonsai Archive format");
 
-      // Enable BonsaiArchiver to maintain archive state going forward
-      final BonsaiArchiver archiver =
-          createBonsaiArchiver(worldStateKeyValueStorage, blockchain, scheduler, trieLogManager);
-      blockchain.observeBlockAdded(archiver);
-      LOG.info("BonsaiArchiver enabled for maintaining archive state");
+      // Create callback to enable BonsaiArchiver after migration completes
+      final Runnable enableArchiver =
+          () -> {
+            LOG.info("Migration complete, enabling BonsaiArchiver for maintaining archive state");
+            final BonsaiArchiver archiver =
+                createBonsaiArchiver(
+                    worldStateKeyValueStorage, blockchain, scheduler, trieLogManager);
+            blockchain.observeBlockAdded(archiver);
+            LOG.info("BonsaiArchiver enabled");
+          };
 
       // Create and trigger the migrator to reconstruct historical archive state
       final BonsaiArchiveFlatDbMigrator flatDbMigrator =
@@ -934,7 +940,8 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               worldStateKeyValueStorage,
               blockchain,
               trieLogManager,
-              protocolContext.getWorldStateArchive());
+              protocolContext.getWorldStateArchive(),
+              enableArchiver);
 
       // Trigger migration immediately on startup
       flatDbMigrator.triggerMigration();
@@ -1055,7 +1062,8 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final Blockchain blockchain,
       final TrieLogManager trieLogManager,
-      final org.hyperledger.besu.ethereum.worldstate.WorldStateArchive worldStateArchive) {
+      final org.hyperledger.besu.ethereum.worldstate.WorldStateArchive worldStateArchive,
+      final Runnable onMigrationComplete) {
     // Create a dedicated scheduled executor for reconstruction with delays between batches
     final ScheduledExecutorService reconstructionExecutor =
         newScheduledThreadPool("BonsaiArchiveReconstructor", 1, metricsSystem);
@@ -1105,11 +1113,12 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               swappableArchive,
               archiveProviderFactory,
               batchSize,
-              startBlockOverride);
+              startBlockOverride,
+              onMigrationComplete);
       LOG.info("Bonsai archive flat db migrater initialized with provider swapping");
       return reconstructor;
     } else {
-      // Not in deferred archive mode, use test constructor
+      // Not in deferred archive mode
       final BonsaiArchiveFlatDbMigrator reconstructor =
           new BonsaiArchiveFlatDbMigrator(
               worldStateStorage,
@@ -1117,8 +1126,11 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               reconstructionExecutor,
               trieLogManager,
               metricsSystem,
+              null,
+              null,
               batchSize,
-              startBlockOverride);
+              startBlockOverride,
+              onMigrationComplete);
       LOG.info("Bonsai archive flat db migrater initialized");
       return reconstructor;
     }

@@ -74,6 +74,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private long blockAddedObserverId;
   private final int batchSize;
   private final long startBlockOverride;
+  private final Runnable onMigrationComplete;
 
   /**
    * Creates a new BonsaiArchiveFlatDbMigrator.
@@ -89,6 +90,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
    *     archive mode)
    * @param batchSize number of blocks to process in each batch
    * @param startBlockOverride override start block (-1 for auto-detect)
+   * @param onMigrationComplete optional callback to run when migration completes
    */
   public BonsaiArchiveFlatDbMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -99,7 +101,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       final SwappableWorldStateArchive swappableArchive,
       final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory,
       final int batchSize,
-      final long startBlockOverride) {
+      final long startBlockOverride,
+      final Runnable onMigrationComplete) {
     this.worldStateStorage = worldStateStorage;
     this.blockchain = blockchain;
     this.executorService = executorService;
@@ -108,6 +111,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     this.archiveProviderFactory = archiveProviderFactory;
     this.batchSize = batchSize;
     this.startBlockOverride = startBlockOverride;
+    this.onMigrationComplete = onMigrationComplete;
 
     // Create strategy for writing versioned archive entries
     final CodeHashCodeStorageStrategy codeStorageStrategy = new CodeHashCodeStorageStrategy();
@@ -159,7 +163,8 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         null,
         null,
         batchSize,
-        startBlockOverride);
+        startBlockOverride,
+        null);
   }
 
   /**
@@ -186,8 +191,11 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         executorService,
         trieLogManager,
         metricsSystem,
+        null,
+        null,
         batchSize,
-        -1L); // Auto-detect start block for tests
+        -1L, // Auto-detect start block for tests
+        null);
   }
 
   @Override
@@ -292,6 +300,12 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
           "Provider swap not available (swappableArchive={}, archiveProviderFactory={}). This is expected if already in ARCHIVE mode or not using deferred archive.",
           swappableArchive != null ? "present" : "null",
           archiveProviderFactory != null ? "present" : "null");
+    }
+
+    // Execute completion callback if provided
+    if (onMigrationComplete != null) {
+      LOG.info("Executing migration completion callback");
+      onMigrationComplete.run();
     }
   }
 
