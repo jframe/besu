@@ -423,12 +423,31 @@ public abstract class PathBasedWorldStateKeyValueStorage
         .map(Bytes::toLong);
   }
 
-  public void setLatestArchivedFlatDbBlock(final Long blockNumber) {
-    SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
-    tx.put(
+  /**
+   * Updates the latest archived flat DB block checkpoint using an existing transaction. This avoids
+   * creating a new transaction and commit, allowing the checkpoint to be updated as part of a
+   * larger batch operation.
+   *
+   * @param transaction the existing transaction to use
+   * @param blockNumber the block number to set as the latest archived block
+   */
+  public void setLatestArchivedFlatDbBlock(
+      final SegmentedKeyValueStorageTransaction transaction, final Long blockNumber) {
+    transaction.put(
         ACCOUNT_INFO_STATE_ARCHIVE,
         ARCHIVED_FLAT_DB_LAST_BLOCK,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+  }
+
+  /**
+   * Updates the latest archived flat DB block checkpoint, creating and committing a new
+   * transaction.
+   *
+   * @param blockNumber the block number to set as the latest archived block
+   */
+  public void setLatestArchivedFlatDbBlock(final Long blockNumber) {
+    SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
+    setLatestArchivedFlatDbBlock(tx, blockNumber);
     tx.commit();
   }
 

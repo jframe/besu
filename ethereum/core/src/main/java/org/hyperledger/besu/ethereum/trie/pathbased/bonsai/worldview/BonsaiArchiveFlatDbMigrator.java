@@ -451,14 +451,14 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
       // Only commit and update if we processed at least one block
       if (lastProcessedBlock >= startBlock) {
-        // Commit once for the entire batch
+        // Include checkpoint update in the same transaction to avoid extra commit
+        worldStateStorage.setLatestArchivedFlatDbBlock(batchTransaction, lastProcessedBlock);
+
+        // Single commit for the entire batch including checkpoint
         batchUpdater.commit();
 
-        // Update the latest archived block AFTER successful commit
-        worldStateStorage.setLatestArchivedFlatDbBlock(lastProcessedBlock);
-
         LOG.debug(
-            "Committed batch of {} blocks (from {} to {})",
+            "Committed batch of {} blocks (from {} to {}) including checkpoint",
             lastProcessedBlock - startBlock + 1,
             startBlock,
             lastProcessedBlock);
