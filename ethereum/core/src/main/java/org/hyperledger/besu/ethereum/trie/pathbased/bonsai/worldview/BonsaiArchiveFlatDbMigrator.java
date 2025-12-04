@@ -283,7 +283,14 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     // Reset WORLD_BLOCK_NUMBER_KEY to the chain head so future block imports work correctly
     // During migration we set it to parent blocks, but after migration we need it at chain head
     final long chainHeadNumber = blockchain.getChainHeadBlockNumber();
-    setWorldStateBlockContext(chainHeadNumber);
+    final Updater updater = worldStateStorage.updater();
+    updater
+        .getWorldStateTransaction()
+        .put(
+            KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE,
+            PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
+            Bytes.ofUnsignedLong(chainHeadNumber).toArrayUnsafe());
+    updater.commit();
     LOG.info("Reset world state block context to chain head: {}", chainHeadNumber);
 
     worldStateStorage.upgradeToArchiveFlatDbMode();
@@ -526,64 +533,6 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   }
 
   /**
-   * Processes a single block, rewriting its flat DB entries to versioned format. This method
-   * creates its own transaction and commits. Used for non-batch processing.
-   *
-   * <p>Note: This method is kept for reference/compatibility but batch processing via
-   * processBlockBatch is preferred for performance.
-   *
-   * @param blockNumber the block number to process
-   */
-  @SuppressWarnings("unused")
-  private void processBlock(final long blockNumber) {
-    final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
-    if (blockHeader.isEmpty()) {
-      LOG.warn("Block header not found for block {}, skipping", blockNumber);
-      return;
-    }
-
-    final Hash blockHash = blockHeader.get().getHash();
-    final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
-
-    if (maybeTrieLog.isEmpty()) {
-      LOG.debug("No trielog found for block {}, skipping", blockNumber);
-      return;
-    }
-
-    // Set the world state block context to the parent block number
-    // The archive write strategy adds +1 when writing, so setting context to blockNumber-1
-    // means data is written with suffix blockNumber, representing state after blockNumber
-    final long parentBlockNumber = blockNumber - 1;
-    setWorldStateBlockContext(parentBlockNumber);
-
-    // Rewrite flat DB entries with versioned keys
-    var trieLog = maybeTrieLog.get();
-    rewriteAccountChanges(trieLog);
-    rewriteStorageChanges(trieLog);
-
-    worldStateStorage.setLatestArchivedFlatDbBlock(blockNumber);
-    blocksProcessed.incrementAndGet();
-
-    logProgressIfNeeded(blockNumber);
-  }
-
-  /**
-   * Sets the world state block context for versioned flat DB writes.
-   *
-   * @param blockNumber the block number to set as context
-   */
-  private void setWorldStateBlockContext(final long blockNumber) {
-    final Updater updater = worldStateStorage.updater();
-    updater
-        .getWorldStateTransaction()
-        .put(
-            KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE,
-            PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
-            Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
-    updater.commit();
-  }
-
-  /**
    * Rewrites account state changes from non-versioned to versioned flat DB format within a batch
    * transaction (no commit). Uses explicit block number to avoid block context conflicts in batch.
    *
@@ -657,78 +606,6 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
                   });
             });
     // No commit - handled by batch
-  }
-
-  /**
-   * Rewrites account state changes from non-versioned to versioned flat DB format.
-   *
-   * @param trieLog the trielog containing changes
-   */
-  private void rewriteAccountChanges(final TrieLog trieLog) {
-    final Updater updater = worldStateStorage.updater();
-    final var transaction = updater.getWorldStateTransaction();
-    final var storage = worldStateStorage.getComposedWorldStateStorage();
-
-    trieLog
-        .getAccountChanges()
-        .forEach(
-            (address, change) -> {
-              final Hash accountHash = address.addressHash();
-
-              // Get the account value from the trielog's "updated" state (state after the block)
-              final AccountValue updatedAccountValue = change.getUpdated();
-              if (updatedAccountValue != null) {
-                // Serialize the account value to RLP
-                final Bytes accountBytes = RLP.encode(updatedAccountValue::writeTo);
-                // Write the account with versioned key using BonsaiArchiveFlatDbStrategy
-                writeStrategy.putFlatAccount(storage, transaction, accountHash, accountBytes);
-              } else {
-                // Account was deleted in this block, so updated state is non-existent
-                writeStrategy.removeFlatAccount(storage, transaction, accountHash);
-              }
-            });
-
-    updater.commit();
-  }
-
-  /**
-   * Rewrites storage state changes from non-versioned to versioned flat DB format.
-   *
-   * @param trieLog the trielog containing changes
-   */
-  private void rewriteStorageChanges(final TrieLog trieLog) {
-    final Updater updater = worldStateStorage.updater();
-    final var transaction = updater.getWorldStateTransaction();
-    final var storage = worldStateStorage.getComposedWorldStateStorage();
-
-    trieLog
-        .getStorageChanges()
-        .forEach(
-            (address, storageChanges) -> {
-              final Hash accountHash = address.addressHash();
-              storageChanges.forEach(
-                  (slotKey, slotValue) -> {
-                    // Get the storage value from the trielog's "updated" state (state after the
-                    // block)
-                    final UInt256 updatedValue = slotValue.getUpdated();
-                    if (updatedValue != null && !updatedValue.isZero()) {
-                      // Write the storage with versioned key using BonsaiArchiveFlatDbStrategy
-                      writeStrategy.putFlatAccountStorageValueByStorageSlotHash(
-                          storage,
-                          transaction,
-                          accountHash,
-                          slotKey.getSlotHash(),
-                          Bytes.wrap(updatedValue.toBytes()));
-                    } else {
-                      // Storage was deleted in this block or set to zero, so updated state is
-                      // non-existent
-                      writeStrategy.removeFlatAccountStorageValueByStorageSlotHash(
-                          storage, transaction, accountHash, slotKey.getSlotHash());
-                    }
-                  });
-            });
-
-    updater.commit();
   }
 
   /**
