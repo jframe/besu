@@ -910,6 +910,37 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       }
     }
 
+    // Setup archive migration for upgrading existing Bonsai nodes to Bonsai Archive
+    if (dataStorageConfiguration
+        .getPathBasedExtraStorageConfiguration()
+        .getUnstable()
+        .getArchiveMigrationEnabled()) {
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
+          worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
+      final TrieLogManager trieLogManager = getBonsaiTrieLogManager(worldStateArchive);
+
+      LOG.info(
+          "Archive migration enabled, will migrate existing Bonsai node to Bonsai Archive format");
+
+      // Enable BonsaiArchiver to maintain archive state going forward
+      final BonsaiArchiver archiver =
+          createBonsaiArchiver(worldStateKeyValueStorage, blockchain, scheduler, trieLogManager);
+      blockchain.observeBlockAdded(archiver);
+      LOG.info("BonsaiArchiver enabled for maintaining archive state");
+
+      // Create and trigger the migrator to reconstruct historical archive state
+      final BonsaiArchiveFlatDbMigrator flatDbMigrator =
+          createBonsaiArchiveFlatDbMigrater(
+              worldStateKeyValueStorage,
+              blockchain,
+              trieLogManager,
+              protocolContext.getWorldStateArchive());
+
+      // Trigger migration immediately on startup
+      flatDbMigrator.triggerMigration();
+      LOG.info("Archive migration triggered, will process historical blocks in background");
+    }
+
     final List<Closeable> closeables = new ArrayList<>();
     closeables.add(protocolContext.getWorldStateArchive());
     closeables.add(storageProvider);

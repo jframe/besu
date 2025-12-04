@@ -142,6 +142,14 @@ public class PathBasedExtraStorageOptions
             "Override the starting block for archive migration. Use -1 for auto-detect (resume from last archived block or start from 0), or specify a block number to start from. Useful for testing. (default: ${DEFAULT-VALUE})")
     private long archiveMigrationStartBlock = -1L;
 
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-archive-migration-enabled"},
+        arity = "1",
+        description =
+            "Enables migration of an existing Bonsai node to Bonsai Archive format. The migrator will reconstruct archive state from trielogs when the node starts. This also enables the BonsaiArchiver for maintaining archive state. (default: ${DEFAULT-VALUE})")
+    private boolean archiveMigrationEnabled = false;
+
     /** Default Constructor. */
     Unstable() {}
   }
@@ -217,6 +225,8 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getArchiveMigrationBatchDelayMs();
     dataStorageOptions.unstableOptions.archiveMigrationStartBlock =
         domainObject.getUnstable().getArchiveMigrationStartBlock();
+    dataStorageOptions.unstableOptions.archiveMigrationEnabled =
+        domainObject.getUnstable().getArchiveMigrationEnabled();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
 
@@ -238,6 +248,7 @@ public class PathBasedExtraStorageOptions
                 .archiveMigrationBatchSize(unstableOptions.archiveMigrationBatchSize)
                 .archiveMigrationBatchDelayMs(unstableOptions.archiveMigrationBatchDelayMs)
                 .archiveMigrationStartBlock(unstableOptions.archiveMigrationStartBlock)
+                .archiveMigrationEnabled(unstableOptions.archiveMigrationEnabled)
                 .build())
         .build();
   }

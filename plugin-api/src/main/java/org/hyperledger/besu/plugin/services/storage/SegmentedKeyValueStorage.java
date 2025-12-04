@@ -49,7 +49,9 @@ public interface SegmentedKeyValueStorage extends Closeable {
   default java.util.List<Optional<byte[]>> multiGet(
       final SegmentIdentifier segment, final java.util.List<byte[]> keys) throws StorageException {
     // Default implementation for backward compatibility - fetches one at a time
-    return keys.stream().map(key -> get(segment, key)).collect(java.util.stream.Collectors.toList());
+    return keys.stream()
+        .map(key -> get(segment, key))
+        .collect(java.util.stream.Collectors.toList());
   }
 
   /**
