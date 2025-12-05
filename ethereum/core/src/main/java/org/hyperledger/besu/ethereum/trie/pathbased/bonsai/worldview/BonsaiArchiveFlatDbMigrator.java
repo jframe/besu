@@ -39,6 +39,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -134,38 +135,6 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
         totalBlocks::get);
 
     LOG.info("BonsaiArchiveFlatDbMigrator configured with batchSize={}", batchSize);
-  }
-
-  /**
-   * Creates a new BonsaiArchiveFlatDbMigrator without provider swapping (for testing).
-   *
-   * @param worldStateStorage the world state storage
-   * @param blockchain the blockchain
-   * @param executorService the scheduled executor service for async operations
-   * @param trieLogManager the trie log manager
-   * @param metricsSystem the metrics system
-   * @param batchSize the number of blocks to process in each batch
-   * @param startBlockOverride override start block (-1 for auto-detect)
-   */
-  public BonsaiArchiveFlatDbMigrator(
-      final BonsaiWorldStateKeyValueStorage worldStateStorage,
-      final Blockchain blockchain,
-      final ScheduledExecutorService executorService,
-      final TrieLogManager trieLogManager,
-      final MetricsSystem metricsSystem,
-      final int batchSize,
-      final long startBlockOverride) {
-    this(
-        worldStateStorage,
-        blockchain,
-        executorService,
-        trieLogManager,
-        metricsSystem,
-        null,
-        null,
-        batchSize,
-        startBlockOverride,
-        null);
   }
 
   /**
@@ -398,12 +367,6 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   }
 
   /**
-   * Processes a batch of blocks, moving their state changes to the archive segments.
-   *
-   * @param startBlock the first block in the batch
-   * @param endBlock the last block in the batch
-   */
-  /**
    * Processes a batch of blocks, moving their state changes to the archive segments. Uses a single
    * transaction for the entire batch to minimize RocksDB commit overhead. Also prefetches all
    * trielogs for the batch to minimize RocksDB read overhead.
@@ -519,11 +482,22 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     }
 
     // Rewrite flat DB entries with versioned keys using explicit block numbers
-    // (no commits inside, no need to set WORLD_BLOCK_NUMBER_KEY since we pass blockNumber
-    // explicitly)
+    // Process account and storage changes in parallel since they write to different column families
+    // The RocksDB transaction is thread-safe for concurrent writes
     var trieLog = maybeTrieLog.get();
-    rewriteAccountChangesInBatch(trieLog, batchTransaction, blockNumber);
-    rewriteStorageChangesInBatch(trieLog, batchTransaction, blockNumber);
+
+    final CompletableFuture<Void> accountFuture =
+        CompletableFuture.runAsync(
+            () -> migrateAccountChangesInBatch(trieLog, batchTransaction, blockNumber),
+            executorService);
+
+    final CompletableFuture<Void> storageFuture =
+        CompletableFuture.runAsync(
+            () -> migrateStorageChangesInBatch(trieLog, batchTransaction, blockNumber),
+            executorService);
+
+    // Wait for both to complete
+    CompletableFuture.allOf(accountFuture, storageFuture).join();
 
     // Don't set latestArchivedFlatDbBlock here - it's set after batch commit
     blocksProcessed.incrementAndGet();
@@ -533,14 +507,14 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   }
 
   /**
-   * Rewrites account state changes from non-versioned to versioned flat DB format within a batch
+   * Migrates account state changes from non-versioned to versioned flat DB format within a batch
    * transaction (no commit). Uses explicit block number to avoid block context conflicts in batch.
    *
    * @param trieLog the trielog containing changes
    * @param transaction the shared transaction for the batch
    * @param blockNumber the block number to write at
    */
-  private void rewriteAccountChangesInBatch(
+  private void migrateAccountChangesInBatch(
       final TrieLog trieLog,
       final SegmentedKeyValueStorageTransaction transaction,
       final long blockNumber) {
@@ -567,14 +541,14 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   }
 
   /**
-   * Rewrites storage state changes from non-versioned to versioned flat DB format within a batch
+   * Migrates storage state changes from non-versioned to versioned flat DB format within a batch
    * transaction (no commit). Uses explicit block number to avoid block context conflicts in batch.
    *
    * @param trieLog the trielog containing changes
    * @param transaction the shared transaction for the batch
    * @param blockNumber the block number to write at
    */
-  private void rewriteStorageChangesInBatch(
+  private void migrateStorageChangesInBatch(
       final TrieLog trieLog,
       final SegmentedKeyValueStorageTransaction transaction,
       final long blockNumber) {
