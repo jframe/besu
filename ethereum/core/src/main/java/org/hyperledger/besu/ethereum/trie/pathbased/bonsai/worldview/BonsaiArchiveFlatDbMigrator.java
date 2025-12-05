@@ -632,4 +632,13 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   public static Optional<BonsaiArchiveFlatDbMigrator> getInstance() {
     return Optional.ofNullable(instance);
   }
+
+  /**
+   * Checks if archive migration is currently in progress.
+   *
+   * @return true if migration is running, false otherwise
+   */
+  public boolean isMigrationInProgress() {
+    return isReconstructing.get();
+  }
 }

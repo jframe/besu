@@ -28,6 +28,7 @@ import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveFlatDbMigrator;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.util.Subscribers;
 
@@ -112,6 +113,17 @@ public class BackwardSyncContext {
         .orElse(Boolean.FALSE);
   }
 
+  /**
+   * Checks if archive migration is currently in progress.
+   *
+   * @return true if migration is running, false otherwise
+   */
+  private boolean isArchiveMigrationInProgress() {
+    return BonsaiArchiveFlatDbMigrator.getInstance()
+        .map(BonsaiArchiveFlatDbMigrator::isMigrationInProgress)
+        .orElse(false);
+  }
+
   public synchronized void maybeUpdateTargetHeight(final Hash headHash) {
     if (!Hash.ZERO.equals(headHash)) {
       Optional<Status> maybeCurrentStatus = Optional.ofNullable(currentBackwardSyncStatus.get());
@@ -131,6 +143,13 @@ public class BackwardSyncContext {
   }
 
   public synchronized CompletableFuture<Void> syncBackwardsUntil(final Hash newBlockHash) {
+    if (isArchiveMigrationInProgress()) {
+      LOG.warn("Backward sync blocked: archive migration in progress");
+      return CompletableFuture.failedFuture(
+          new BackwardSyncException(
+              "Archive migration in progress, backward sync disabled", false));
+    }
+
     if (isReady()) {
       if (!isTrusted(newBlockHash)) {
         LOG.atDebug()
@@ -152,6 +171,13 @@ public class BackwardSyncContext {
   }
 
   public synchronized CompletableFuture<Void> syncBackwardsUntil(final Block newPivot) {
+    if (isArchiveMigrationInProgress()) {
+      LOG.warn("Backward sync blocked: archive migration in progress");
+      return CompletableFuture.failedFuture(
+          new BackwardSyncException(
+              "Archive migration in progress, backward sync disabled", false));
+    }
+
     if (!isTrusted(newPivot.getHash())) {
       backwardChain.appendTrustedBlock(newPivot);
     }
