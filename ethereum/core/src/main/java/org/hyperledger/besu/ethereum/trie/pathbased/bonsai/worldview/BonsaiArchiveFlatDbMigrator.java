@@ -484,17 +484,16 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     // Rewrite flat DB entries with versioned keys using explicit block numbers
     // Process account and storage changes in parallel since they write to different column families
     // The RocksDB transaction is thread-safe for concurrent writes
+    // Use ForkJoinPool.commonPool() instead of executorService to avoid deadlock
     var trieLog = maybeTrieLog.get();
 
     final CompletableFuture<Void> accountFuture =
         CompletableFuture.runAsync(
-            () -> migrateAccountChangesInBatch(trieLog, batchTransaction, blockNumber),
-            executorService);
+            () -> migrateAccountChangesInBatch(trieLog, batchTransaction, blockNumber));
 
     final CompletableFuture<Void> storageFuture =
         CompletableFuture.runAsync(
-            () -> migrateStorageChangesInBatch(trieLog, batchTransaction, blockNumber),
-            executorService);
+            () -> migrateStorageChangesInBatch(trieLog, batchTransaction, blockNumber));
 
     // Wait for both to complete
     CompletableFuture.allOf(accountFuture, storageFuture).join();
