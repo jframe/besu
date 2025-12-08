@@ -31,12 +31,6 @@ public class RocksDBCLIOptions {
   /** The constant DEFAULT_BACKGROUND_THREAD_COUNT. */
   public static final int DEFAULT_BACKGROUND_THREAD_COUNT = 4;
 
-  /** The constant DEFAULT_MAX_BACKGROUND_JOBS. */
-  public static final int DEFAULT_MAX_BACKGROUND_JOBS = 8;
-
-  /** The constant DEFAULT_MAX_BACKGROUND_COMPACTIONS. */
-  public static final int DEFAULT_MAX_BACKGROUND_COMPACTIONS = 6;
-
   /** The constant DEFAULT_IS_HIGH_SPEC. */
   public static final boolean DEFAULT_IS_HIGH_SPEC = false;
 
@@ -52,14 +46,6 @@ public class RocksDBCLIOptions {
   /** The constant BACKGROUND_THREAD_COUNT_FLAG. */
   public static final String BACKGROUND_THREAD_COUNT_FLAG =
       "--Xplugin-rocksdb-background-thread-count";
-
-  /** The constant MAX_BACKGROUND_JOBS_FLAG. */
-  public static final String MAX_BACKGROUND_JOBS_FLAG =
-      "--Xplugin-rocksdb-max-background-jobs";
-
-  /** The constant MAX_BACKGROUND_COMPACTIONS_FLAG. */
-  public static final String MAX_BACKGROUND_COMPACTIONS_FLAG =
-      "--Xplugin-rocksdb-max-background-compactions";
 
   /** The constant IS_HIGH_SPEC. */
   public static final String IS_HIGH_SPEC = "--Xplugin-rocksdb-high-spec-enabled";
@@ -106,26 +92,6 @@ public class RocksDBCLIOptions {
       paramLabel = "<INTEGER>",
       description = "Number of RocksDB background threads (default: ${DEFAULT-VALUE})")
   int backgroundThreadCount;
-
-  /** The Max background jobs. */
-  @CommandLine.Option(
-      names = {MAX_BACKGROUND_JOBS_FLAG},
-      hidden = true,
-      defaultValue = "8",
-      paramLabel = "<INTEGER>",
-      description =
-          "Maximum number of concurrent RocksDB background jobs (flushes + compactions) (default: ${DEFAULT-VALUE})")
-  int maxBackgroundJobs;
-
-  /** The Max background compactions. */
-  @CommandLine.Option(
-      names = {MAX_BACKGROUND_COMPACTIONS_FLAG},
-      hidden = true,
-      defaultValue = "6",
-      paramLabel = "<INTEGER>",
-      description =
-          "Maximum number of concurrent RocksDB background compactions (default: ${DEFAULT-VALUE})")
-  int maxBackgroundCompactions;
 
   /** The Is high spec. */
   @CommandLine.Option(
@@ -200,8 +166,6 @@ public class RocksDBCLIOptions {
     options.maxOpenFiles = config.getMaxOpenFiles();
     options.cacheCapacity = config.getCacheCapacity();
     options.backgroundThreadCount = config.getBackgroundThreadCount();
-    options.maxBackgroundJobs = config.getMaxBackgroundJobs();
-    options.maxBackgroundCompactions = config.getMaxBackgroundCompactions();
     options.isHighSpec = config.isHighSpec();
     options.enableReadCacheForSnapshots = config.isReadCacheEnabledForSnapshots();
     options.isBlockchainGarbageCollectionEnabled = config.isBlockchainGarbageCollectionEnabled();
@@ -219,8 +183,6 @@ public class RocksDBCLIOptions {
     return new RocksDBFactoryConfiguration(
         maxOpenFiles,
         backgroundThreadCount,
-        maxBackgroundJobs,
-        maxBackgroundCompactions,
         cacheCapacity,
         isHighSpec,
         enableReadCacheForSnapshots,
@@ -256,8 +218,6 @@ public class RocksDBCLIOptions {
         .add("maxOpenFiles", maxOpenFiles)
         .add("cacheCapacity", cacheCapacity)
         .add("backgroundThreadCount", backgroundThreadCount)
-        .add("maxBackgroundJobs", maxBackgroundJobs)
-        .add("maxBackgroundCompactions", maxBackgroundCompactions)
         .add("isHighSpec", isHighSpec)
         .add("enableReadCacheForSnapshots", enableReadCacheForSnapshots)
         .add("isBlockchainGarbageCollectionEnabled", isBlockchainGarbageCollectionEnabled)

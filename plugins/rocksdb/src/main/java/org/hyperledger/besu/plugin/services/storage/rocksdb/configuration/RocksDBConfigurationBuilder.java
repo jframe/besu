@@ -18,8 +18,6 @@ import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_CACHE_CAPACITY;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_ENABLE_READ_CACHE_FOR_SNAPSHOTS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_IS_HIGH_SPEC;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_BACKGROUND_COMPACTIONS;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_BACKGROUND_JOBS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_OPEN_FILES;
 
 import java.nio.file.Path;
@@ -33,8 +31,6 @@ public class RocksDBConfigurationBuilder {
   private int maxOpenFiles = DEFAULT_MAX_OPEN_FILES;
   private long cacheCapacity = DEFAULT_CACHE_CAPACITY;
   private int backgroundThreadCount = DEFAULT_BACKGROUND_THREAD_COUNT;
-  private int maxBackgroundJobs = DEFAULT_MAX_BACKGROUND_JOBS;
-  private int maxBackgroundCompactions = DEFAULT_MAX_BACKGROUND_COMPACTIONS;
   private boolean isHighSpec = DEFAULT_IS_HIGH_SPEC;
   private boolean enableReadCacheForSnapshots = DEFAULT_ENABLE_READ_CACHE_FOR_SNAPSHOTS;
   private boolean isBlockchainGarbageCollectionEnabled = false;
@@ -96,28 +92,6 @@ public class RocksDBConfigurationBuilder {
    */
   public RocksDBConfigurationBuilder backgroundThreadCount(final int backgroundThreadCount) {
     this.backgroundThreadCount = backgroundThreadCount;
-    return this;
-  }
-
-  /**
-   * Max background jobs.
-   *
-   * @param maxBackgroundJobs the max background jobs
-   * @return the rocks db configuration builder
-   */
-  public RocksDBConfigurationBuilder maxBackgroundJobs(final int maxBackgroundJobs) {
-    this.maxBackgroundJobs = maxBackgroundJobs;
-    return this;
-  }
-
-  /**
-   * Max background compactions.
-   *
-   * @param maxBackgroundCompactions the max background compactions
-   * @return the rocks db configuration builder
-   */
-  public RocksDBConfigurationBuilder maxBackgroundCompactions(final int maxBackgroundCompactions) {
-    this.maxBackgroundCompactions = maxBackgroundCompactions;
     return this;
   }
 
@@ -189,8 +163,6 @@ public class RocksDBConfigurationBuilder {
   public static RocksDBConfigurationBuilder from(final RocksDBFactoryConfiguration configuration) {
     return new RocksDBConfigurationBuilder()
         .backgroundThreadCount(configuration.getBackgroundThreadCount())
-        .maxBackgroundJobs(configuration.getMaxBackgroundJobs())
-        .maxBackgroundCompactions(configuration.getMaxBackgroundCompactions())
         .cacheCapacity(configuration.getCacheCapacity())
         .maxOpenFiles(configuration.getMaxOpenFiles())
         .isHighSpec(configuration.isHighSpec())
@@ -211,8 +183,6 @@ public class RocksDBConfigurationBuilder {
         databaseDir,
         maxOpenFiles,
         backgroundThreadCount,
-        maxBackgroundJobs,
-        maxBackgroundCompactions,
         cacheCapacity,
         label,
         isHighSpec,
