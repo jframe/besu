@@ -39,22 +39,6 @@ public interface SegmentedKeyValueStorage extends Closeable {
   Optional<byte[]> get(SegmentIdentifier segment, byte[] key) throws StorageException;
 
   /**
-   * Get multiple values from the associated segment and keys in a single operation.
-   *
-   * @param segment the segment
-   * @param keys list of keys to fetch
-   * @return list of optional values in the same order as keys
-   * @throws StorageException the storage exception
-   */
-  default java.util.List<Optional<byte[]>> multiGet(
-      final SegmentIdentifier segment, final java.util.List<byte[]> keys) throws StorageException {
-    // Default implementation for backward compatibility - fetches one at a time
-    return keys.stream()
-        .map(key -> get(segment, key))
-        .collect(java.util.stream.Collectors.toList());
-  }
-
-  /**
    * Finds the key and corresponding value that is "nearest before" the specified key. "Nearest
    * before" is defined as the closest key that is either exactly matching the supplied key or
    * lexicographically before it.

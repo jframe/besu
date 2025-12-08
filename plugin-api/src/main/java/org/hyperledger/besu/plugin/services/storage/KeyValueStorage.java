@@ -64,19 +64,6 @@ public interface KeyValueStorage extends Closeable {
   Optional<byte[]> get(byte[] key) throws StorageException;
 
   /**
-   * Retrieves multiple values associated with given keys in a single operation.
-   *
-   * @param keys list of keys whose associated values are being retrieved.
-   * @return list of optional values in the same order as keys
-   * @throws StorageException problem encountered during the retrieval attempt.
-   */
-  default java.util.List<Optional<byte[]>> multiGet(final java.util.List<byte[]> keys)
-      throws StorageException {
-    // Default implementation for backward compatibility - fetches one at a time
-    return keys.stream().map(this::get).collect(java.util.stream.Collectors.toList());
-  }
-
-  /**
    * Returns a stream of all keys and values.
    *
    * @return A stream of all keys and values in storage.

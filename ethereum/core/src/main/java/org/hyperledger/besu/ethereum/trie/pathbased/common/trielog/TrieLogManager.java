@@ -129,13 +129,6 @@ public class TrieLogManager {
     return rootWorldStateStorage.getTrieLog(blockHash).map(trieLogFactory::deserialize);
   }
 
-  public java.util.List<Optional<TrieLog>> multiGetTrieLogLayers(
-      final java.util.List<Hash> blockHashes) {
-    return rootWorldStateStorage.multiGetTrieLogs(blockHashes).stream()
-        .map(optBytes -> optBytes.map(trieLogFactory::deserialize))
-        .collect(java.util.stream.Collectors.toList());
-  }
-
   public synchronized long subscribe(final TrieLogEvent.TrieLogObserver sub) {
     return trieLogObservers.subscribe(sub);
   }

@@ -119,12 +119,6 @@ public abstract class PathBasedWorldStateKeyValueStorage
     return trieLogStorage.get(blockHash.toArrayUnsafe());
   }
 
-  public java.util.List<Optional<byte[]>> multiGetTrieLogs(final java.util.List<Hash> blockHashes) {
-    final java.util.List<byte[]> keys =
-        blockHashes.stream().map(Hash::toArrayUnsafe).collect(java.util.stream.Collectors.toList());
-    return trieLogStorage.multiGet(keys);
-  }
-
   public Stream<byte[]> streamTrieLogKeys(final long limit) {
     return trieLogStorage.streamKeys().limit(limit);
   }
