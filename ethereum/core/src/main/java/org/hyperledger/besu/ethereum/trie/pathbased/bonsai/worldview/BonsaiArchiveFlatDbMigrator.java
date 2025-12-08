@@ -35,12 +35,8 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -368,44 +364,14 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
   /**
    * Processes a batch of blocks, moving their state changes to the archive segments. Uses a single
-   * transaction for the entire batch to minimize RocksDB commit overhead. Also prefetches all
-   * trielogs for the batch to minimize RocksDB read overhead.
+   * transaction for the entire batch to minimize RocksDB commit overhead. Processes TrieLogs one
+   * at a time (streaming) to minimize memory usage.
    *
    * @param startBlock the first block in the batch
    * @param endBlock the last block in the batch (inclusive)
    */
   private void processBlockBatch(final long startBlock, final long endBlock) {
     LOG.debug("Processing block batch: {} to {}", startBlock, endBlock);
-
-    // Prefetch all trielogs using RocksDB multiGet to minimize read overhead
-    final var trieLogsByBlockNumber = new ConcurrentHashMap<Long, TrieLog>();
-
-    // First, collect all block hashes for the batch
-    final List<Hash> blockHashes = new ArrayList<>();
-    final List<Long> blockNumbers = new ArrayList<>();
-    for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
-      final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
-      if (blockHeader.isPresent()) {
-        blockHashes.add(blockHeader.get().getHash());
-        blockNumbers.add(blockNumber);
-      }
-    }
-
-    // Use multiGet to fetch all trielogs in a single RocksDB operation
-    final List<Optional<TrieLog>> trielogs = trieLogManager.multiGetTrieLogLayers(blockHashes);
-
-    // Populate the map with fetched trielogs
-    for (int i = 0; i < trielogs.size(); i++) {
-      if (trielogs.get(i).isPresent()) {
-        trieLogsByBlockNumber.put(blockNumbers.get(i), trielogs.get(i).get());
-      }
-    }
-
-    LOG.debug(
-        "Prefetched {} trielogs for batch {} to {} using multiGet",
-        trieLogsByBlockNumber.size(),
-        startBlock,
-        endBlock);
 
     // Create a single updater/transaction for the entire batch
     final Updater batchUpdater = worldStateStorage.updater();
@@ -414,10 +380,45 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     try {
       long lastProcessedBlock = startBlock - 1; // Track the last block that was actually processed
 
+      // Stream processing: Load and process one TrieLog at a time
       for (long blockNumber = startBlock; blockNumber <= endBlock; blockNumber++) {
-        if (processBlockInBatch(blockNumber, batchTransaction, trieLogsByBlockNumber)) {
-          lastProcessedBlock = blockNumber;
+        final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
+        if (blockHeader.isEmpty()) {
+          LOG.warn("Block header not found for block {}, skipping", blockNumber);
+          continue;
         }
+
+        // Fetch single TrieLog
+        final Hash blockHash = blockHeader.get().getHash();
+        final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
+
+        if (maybeTrieLog.isEmpty()) {
+          LOG.debug("No trielog found for block {}, skipping", blockNumber);
+          continue;
+        }
+
+        // Process this TrieLog
+        final var trieLog = maybeTrieLog.get();
+        final long currentBlockNumber = blockNumber; // Make effectively final for lambda
+
+        // Process account and storage changes in parallel since they write to different column
+        // families. The RocksDB transaction is thread-safe for concurrent writes.
+        // Use ForkJoinPool.commonPool() instead of executorService to avoid deadlock
+        final CompletableFuture<Void> accountFuture =
+            CompletableFuture.runAsync(
+                () -> migrateAccountChangesInBatch(trieLog, batchTransaction, currentBlockNumber));
+
+        final CompletableFuture<Void> storageFuture =
+            CompletableFuture.runAsync(
+                () -> migrateStorageChangesInBatch(trieLog, batchTransaction, currentBlockNumber));
+
+        // Wait for both to complete
+        CompletableFuture.allOf(accountFuture, storageFuture).join();
+
+        // TrieLog is now eligible for GC after this iteration
+        lastProcessedBlock = blockNumber;
+        blocksProcessed.incrementAndGet();
+        logProgressIfNeeded(blockNumber);
       }
 
       // Only commit and update if we processed at least one block
@@ -449,61 +450,6 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     }
   }
 
-  /**
-   * Processes a single block within a batch transaction, rewriting its flat DB entries to versioned
-   * format without committing.
-   *
-   * @param blockNumber the block number to process
-   * @param batchTransaction the shared transaction for the batch
-   * @param prefetchedTrieLogs map of prefetched trielogs (may be empty if prefetch failed)
-   * @return true if the block was processed, false if it was skipped
-   */
-  private boolean processBlockInBatch(
-      final long blockNumber,
-      final SegmentedKeyValueStorageTransaction batchTransaction,
-      final Map<Long, TrieLog> prefetchedTrieLogs) {
-    final Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(blockNumber);
-    if (blockHeader.isEmpty()) {
-      LOG.warn("Block header not found for block {}, skipping", blockNumber);
-      return false;
-    }
-
-    // Try to get trielog from prefetched map first, fall back to individual fetch
-    final Hash blockHash = blockHeader.get().getHash();
-    Optional<TrieLog> maybeTrieLog = Optional.ofNullable(prefetchedTrieLogs.get(blockNumber));
-    if (maybeTrieLog.isEmpty()) {
-      // Fallback to individual fetch if not in prefetched map
-      maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
-    }
-
-    if (maybeTrieLog.isEmpty()) {
-      LOG.debug("No trielog found for block {}, skipping", blockNumber);
-      return false;
-    }
-
-    // Rewrite flat DB entries with versioned keys using explicit block numbers
-    // Process account and storage changes in parallel since they write to different column families
-    // The RocksDB transaction is thread-safe for concurrent writes
-    // Use ForkJoinPool.commonPool() instead of executorService to avoid deadlock
-    var trieLog = maybeTrieLog.get();
-
-    final CompletableFuture<Void> accountFuture =
-        CompletableFuture.runAsync(
-            () -> migrateAccountChangesInBatch(trieLog, batchTransaction, blockNumber));
-
-    final CompletableFuture<Void> storageFuture =
-        CompletableFuture.runAsync(
-            () -> migrateStorageChangesInBatch(trieLog, batchTransaction, blockNumber));
-
-    // Wait for both to complete
-    CompletableFuture.allOf(accountFuture, storageFuture).join();
-
-    // Don't set latestArchivedFlatDbBlock here - it's set after batch commit
-    blocksProcessed.incrementAndGet();
-
-    logProgressIfNeeded(blockNumber);
-    return true;
-  }
 
   /**
    * Migrates account state changes from non-versioned to versioned flat DB format within a batch
