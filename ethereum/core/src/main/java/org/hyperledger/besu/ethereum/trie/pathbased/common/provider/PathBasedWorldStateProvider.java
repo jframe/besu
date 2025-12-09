@@ -336,6 +336,18 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
     return worldStateConfig;
   }
 
+  /**
+   * Enables or disables the trie for the world state. When the trie is disabled, the world state
+   * will only work with the flat database and not the trie. In this mode, it's impossible to verify
+   * the state root.
+   *
+   * @param enabled true to enable the trie, false to disable it
+   */
+  public void setTrieEnabled(final boolean enabled) {
+    this.worldStateConfig.setTrieDisabled(!enabled);
+    LOG.info("Trie {} for path-based world state", enabled ? "enabled" : "disabled");
+  }
+
   public PathBasedWorldStateKeyValueStorage getWorldStateKeyValueStorage() {
     return worldStateKeyValueStorage;
   }

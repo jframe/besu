@@ -20,6 +20,7 @@ import org.hyperledger.besu.consensus.merge.ForkchoiceEvent;
 import org.hyperledger.besu.consensus.merge.UnverifiedForkchoiceListener;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.ProtocolContext;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Synchronizer;
 import org.hyperledger.besu.ethereum.eth.manager.ChainHeadEstimate;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
@@ -38,6 +39,8 @@ import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.PathBasedWorldStateProvider;
+import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
@@ -76,6 +79,8 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
   private final ProtocolContext protocolContext;
   private final PivotBlockSelector pivotBlockSelector;
   private final SyncTerminationCondition terminationCondition;
+  private final SynchronizerConfiguration syncConfig;
+  private boolean trieRebuildNeeded = false;
 
   public DefaultSynchronizer(
       final SynchronizerConfiguration syncConfig,
@@ -96,6 +101,7 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
     this.pivotBlockSelector = pivotBlockSelector;
     this.protocolContext = protocolContext;
     this.terminationCondition = terminationCondition;
+    this.syncConfig = syncConfig;
 
     ChainHeadTracker.trackChainHeadForPeers(
         ethContext,
@@ -221,6 +227,12 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
 
       syncDurationMetrics.startTimer(SyncDurationMetrics.Labels.TOTAL_SYNC_DURATION);
 
+      // Disable trie for full sync optimization if enabled
+      if (syncConfig.isFullSyncDisableTrieEnabled()
+          && SyncMode.isFullSync(syncConfig.getSyncMode())) {
+        disableTrieForFullSync();
+      }
+
       blockPropagationManager.ifPresent(
           manager -> {
             if (!manager.isRunning()) {
@@ -292,6 +304,12 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
   }
 
   private CompletableFuture<Void> startFullSync() {
+    // Disable trie for full sync optimization if transitioning from fast sync
+    if (syncConfig.isFullSyncDisableTrieEnabled()
+        && SyncMode.isFullSync(syncConfig.getSyncMode())) {
+      disableTrieForFullSync();
+    }
+
     return fullSyncDownloader
         .map(FullSyncDownloader::start)
         .orElse(CompletableFuture.completedFuture(null))
@@ -427,6 +445,14 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
     LOG.info("Stopping block propagation.");
     blockPropagationManager.ifPresent(BlockPropagationManager::stop);
     LOG.info("Stopping the pruner.");
+
+    // If trie rebuild is needed after full sync, trigger world state healing
+    if (trieRebuildNeeded && syncConfig.isFullSyncDisableTrieEnabled()) {
+      LOG.info(
+          "Full sync completed with trie disabled. Starting world state healing to rebuild trie from peers...");
+      triggerTrieRebuild();
+    }
+
     running.set(false);
 
     syncDurationMetrics.stopTimer(SyncDurationMetrics.Labels.FLAT_DB_HEAL);
@@ -439,6 +465,77 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
   public void onNewUnverifiedForkchoice(final ForkchoiceEvent event) {
     if (this.blockPropagationManager.isPresent()) {
       this.blockPropagationManager.get().onNewUnverifiedForkchoice(event);
+    }
+  }
+
+  /**
+   * Disables the trie for full sync to improve sync performance. The trie will not be built during
+   * block import, and state roots will not be verified. This is safe during full sync as the flat
+   * database contains all necessary state data.
+   *
+   * <p>After full sync completes, a world state healing process will be triggered to rebuild the
+   * trie from peers using snap sync mechanisms.
+   */
+  private void disableTrieForFullSync() {
+    final WorldStateArchive worldStateArchive = protocolContext.getWorldStateArchive();
+    if (worldStateArchive instanceof PathBasedWorldStateProvider) {
+      ((PathBasedWorldStateProvider) worldStateArchive).setTrieEnabled(false);
+      trieRebuildNeeded = true;
+      LOG.info(
+          "Trie disabled for full sync optimization. Sync performance improved by skipping trie operations. "
+              + "After sync completes, world state healing will rebuild the trie from peers.");
+    }
+  }
+
+  /**
+   * Triggers a world state healing process to rebuild the trie after full sync. This re-enables the
+   * trie and uses the snap sync healing mechanisms to download trie nodes from peers and
+   * reconstruct the full trie structure.
+   *
+   * <p>This method re-enables the trie first, then triggers the existing healWorldState mechanism
+   * which will start a snap sync to download the world state (including trie nodes) from peers.
+   */
+  private void triggerTrieRebuild() {
+    try {
+      // Get the current chain head to use as the healing target
+      final BlockHeader chainHead = protocolContext.getBlockchain().getChainHeadHeader();
+
+      LOG.info(
+          "Triggering world state healing to rebuild trie for block {} at height {}...",
+          chainHead.getHash(),
+          chainHead.getNumber());
+
+      // Re-enable trie before starting the healing process
+      final WorldStateArchive worldStateArchive = protocolContext.getWorldStateArchive();
+      if (worldStateArchive instanceof PathBasedWorldStateProvider) {
+        ((PathBasedWorldStateProvider) worldStateArchive).setTrieEnabled(true);
+        LOG.info("Trie re-enabled for world state healing process.");
+      }
+
+      // Stop the synchronizer and trigger a snap sync healing process
+      // This will download trie nodes from peers
+      running.set(false);
+      healWorldState(Optional.empty(), org.apache.tuweni.bytes.Bytes.EMPTY);
+
+      LOG.info(
+          "World state healing initiated. Snap sync will download trie nodes from peers. "
+              + "This process may take some time depending on network conditions and chain size.");
+
+    } catch (Exception e) {
+      LOG.error("Failed to trigger trie rebuild after full sync", e);
+      LOG.warn(
+          "Trie reconstruction failed. Node will continue operating with flat database only. "
+              + "You can manually trigger healing using the debug_healWorldState RPC or by restarting "
+              + "with SNAP sync mode.");
+
+      // If healing fails, keep trie disabled
+      final WorldStateArchive worldStateArchive = protocolContext.getWorldStateArchive();
+      if (worldStateArchive instanceof PathBasedWorldStateProvider) {
+        ((PathBasedWorldStateProvider) worldStateArchive).setTrieEnabled(false);
+        LOG.info("Trie disabled due to healing failure. Flat database will be used.");
+      }
+    } finally {
+      trieRebuildNeeded = false;
     }
   }
 }

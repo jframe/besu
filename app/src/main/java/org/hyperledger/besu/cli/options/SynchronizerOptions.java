@@ -98,6 +98,9 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private static final String ERA1_IMPORT_PREPIPELINE_CONCURRENCY_FLAG =
       "--era1-import-prepipeline-concurrency";
 
+  private static final String FULL_SYNC_DISABLE_TRIE_ENABLED_FLAG =
+      "--Xbonsai-full-sync-disable-trie-enabled";
+
   /**
    * Parse block propagation range.
    *
@@ -370,6 +373,17 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private Integer era1ImportPrepipelineConcurrency =
       SynchronizerConfiguration.DEFAULT_ERA1_IMPORT_PREPIPELINE_CONCURRENCY;
 
+  @CommandLine.Option(
+      names = FULL_SYNC_DISABLE_TRIE_ENABLED_FLAG,
+      hidden = true,
+      paramLabel = "<Boolean>",
+      arity = "0..1",
+      fallbackValue = "true",
+      description =
+          "Enable disabling the trie during full sync for improved performance. The trie will be automatically re-enabled after sync completes. (default: ${DEFAULT-VALUE})")
+  private Boolean fullSyncDisableTrieEnabled =
+      SynchronizerConfiguration.DEFAULT_FULL_SYNC_DISABLE_TRIE_ENABLED;
+
   private SynchronizerOptions() {}
 
   /**
@@ -447,6 +461,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     options.era1ImportPrepipelineEnabled = config.era1ImportPrepipelineEnabled();
     options.era1DataUri = config.era1DataUri();
     options.era1ImportPrepipelineConcurrency = config.era1ImportPrepipelineConcurrency();
+    options.fullSyncDisableTrieEnabled = config.isFullSyncDisableTrieEnabled();
     return options;
   }
 
@@ -488,6 +503,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     builder.era1ImportPrepipelineEnabled(era1ImportPrepipelineEnabled);
     builder.era1DataUri(era1DataUri);
     builder.era1ImportPrepipelineConcurrency(era1ImportPrepipelineConcurrency);
+    builder.fullSyncDisableTrieEnabled(fullSyncDisableTrieEnabled);
     return builder;
   }
 
@@ -552,7 +568,9 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             ERA1_DATA_URI_FLAG,
             OptionParser.format(era1DataUri),
             ERA1_IMPORT_PREPIPELINE_CONCURRENCY_FLAG,
-            OptionParser.format(era1ImportPrepipelineConcurrency));
+            OptionParser.format(era1ImportPrepipelineConcurrency),
+            FULL_SYNC_DISABLE_TRIE_ENABLED_FLAG,
+            OptionParser.format(fullSyncDisableTrieEnabled));
     return value;
   }
 }
