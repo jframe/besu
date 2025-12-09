@@ -92,6 +92,24 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
     return bonsaiCachedMerkleTrieLoader;
   }
 
+  @Override
+  public void setTrieEnabled(final boolean enabled) {
+    super.setTrieEnabled(enabled);
+
+    if (headWorldState instanceof BonsaiWorldState) {
+      BonsaiWorldState bonsaiWorldState = (BonsaiWorldState) headWorldState;
+      if (enabled) {
+        // Re-enable the cache loader when trie is enabled
+        bonsaiWorldState.setBonsaiCachedMerkleTrieLoader(bonsaiCachedMerkleTrieLoader);
+        LOG.info("Bonsai cached merkle trie loader re-enabled");
+      } else {
+        // Disable the cache loader when trie is disabled to avoid unnecessary DB operations
+        bonsaiWorldState.disableCacheMerkleTrieLoader();
+        LOG.info("Bonsai cached merkle trie loader disabled to avoid unnecessary database operations");
+      }
+    }
+  }
+
   private BonsaiWorldStateKeyValueStorage getBonsaiWorldStateKeyValueStorage() {
     return (BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage;
   }

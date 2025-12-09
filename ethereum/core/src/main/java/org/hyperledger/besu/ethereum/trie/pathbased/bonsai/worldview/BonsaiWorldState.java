@@ -467,6 +467,11 @@ public class BonsaiWorldState extends PathBasedWorldState {
     this.bonsaiCachedMerkleTrieLoader = new NoopBonsaiCachedMerkleTrieLoader();
   }
 
+  public void setBonsaiCachedMerkleTrieLoader(
+      final BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader) {
+    this.bonsaiCachedMerkleTrieLoader = bonsaiCachedMerkleTrieLoader;
+  }
+
   private MerkleTrie<Bytes, Bytes> createTrie(final NodeLoader nodeLoader, final Bytes32 rootHash) {
     if (worldStateConfig.isTrieDisabled()) {
       return new NoOpMerkleTrie<>();
