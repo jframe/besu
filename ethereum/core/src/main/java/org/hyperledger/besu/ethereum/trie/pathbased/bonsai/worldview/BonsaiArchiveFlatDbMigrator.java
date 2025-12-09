@@ -36,7 +36,6 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -399,21 +398,11 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
         // Process this TrieLog
         final var trieLog = maybeTrieLog.get();
-        final long currentBlockNumber = blockNumber; // Make effectively final for lambda
 
-        // Process account and storage changes in parallel since they write to different column
-        // families. The RocksDB transaction is thread-safe for concurrent writes.
-        // Use ForkJoinPool.commonPool() instead of executorService to avoid deadlock
-        final CompletableFuture<Void> accountFuture =
-            CompletableFuture.runAsync(
-                () -> migrateAccountChangesInBatch(trieLog, batchTransaction, currentBlockNumber));
-
-        final CompletableFuture<Void> storageFuture =
-            CompletableFuture.runAsync(
-                () -> migrateStorageChangesInBatch(trieLog, batchTransaction, currentBlockNumber));
-
-        // Wait for both to complete
-        CompletableFuture.allOf(accountFuture, storageFuture).join();
+        // Process account and storage changes sequentially to avoid RocksDB transaction corruption
+        // RocksDB transactions are NOT thread-safe for concurrent writes at the JNI level
+        migrateAccountChangesInBatch(trieLog, batchTransaction, blockNumber);
+        migrateStorageChangesInBatch(trieLog, batchTransaction, blockNumber);
 
         // TrieLog is now eligible for GC after this iteration
         lastProcessedBlock = blockNumber;
