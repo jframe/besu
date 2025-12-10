@@ -144,7 +144,7 @@ public class BackwardSyncContext {
 
   public synchronized CompletableFuture<Void> syncBackwardsUntil(final Hash newBlockHash) {
     if (isArchiveMigrationInProgress()) {
-      LOG.warn("Backward sync blocked: archive migration in progress");
+      LOG.debug("Backward sync blocked: archive migration in progress");
       return CompletableFuture.failedFuture(
           new BackwardSyncException(
               "Archive migration in progress, backward sync disabled", false));
@@ -172,7 +172,7 @@ public class BackwardSyncContext {
 
   public synchronized CompletableFuture<Void> syncBackwardsUntil(final Block newPivot) {
     if (isArchiveMigrationInProgress()) {
-      LOG.warn("Backward sync blocked: archive migration in progress");
+      LOG.debug("Backward sync blocked: archive migration in progress");
       return CompletableFuture.failedFuture(
           new BackwardSyncException(
               "Archive migration in progress, backward sync disabled", false));
