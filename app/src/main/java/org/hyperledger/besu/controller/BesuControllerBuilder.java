@@ -1000,16 +1000,17 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       final BonsaiArchiveStateIndex index = new BonsaiArchiveStateIndex();
       archiveIndex = Optional.of(index);
 
+      // Create index builder for both batch building and incremental updates
+      final BonsaiArchiveIndexBuilder indexBuilder =
+          new BonsaiArchiveIndexBuilder(
+              pathBasedStorage.getComposedWorldStateStorage(), index, trieLogManager, blockchain);
+
       // Check if index needs to be built
       final boolean isIndexBuilt =
           index.isIndexBuilt(pathBasedStorage.getComposedWorldStateStorage());
 
       if (!isIndexBuilt && buildOnStartup) {
         LOG.info("Archive index not found. Starting background index build...");
-
-        final BonsaiArchiveIndexBuilder indexBuilder =
-            new BonsaiArchiveIndexBuilder(
-                pathBasedStorage.getComposedWorldStateStorage(), index, trieLogManager, blockchain);
 
         // Start index build in background
         scheduler.executeServiceTask(
@@ -1034,6 +1035,28 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       } else {
         LOG.info("Archive index build on startup is disabled");
       }
+
+      // Subscribe to trielog events for real-time index updates (including head blocks)
+      trieLogManager.subscribe(
+          event -> {
+            try {
+              final var trieLog = event.layer();
+              trieLog
+                  .getBlockNumber()
+                  .ifPresent(
+                      blockNumber -> {
+                        try {
+                          indexBuilder.updateForNewBlock(blockNumber, trieLog);
+                          LOG.debug("Updated archive index for block {}", blockNumber);
+                        } catch (Exception e) {
+                          LOG.error("Failed to update archive index for block {}", blockNumber, e);
+                        }
+                      });
+            } catch (Exception e) {
+              LOG.error("Failed to process trielog event for index update", e);
+            }
+          });
+      LOG.info("Subscribed to trielog events for real-time archive index updates");
     }
 
     final BonsaiArchiver archiver =
