@@ -18,10 +18,12 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiArchiveStateIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
 import java.util.Optional;
@@ -55,6 +57,7 @@ public class BonsaiArchiver implements BlockAddedObserver {
   private static final int DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE = 10;
   private final TrieLogManager trieLogManager;
   protected final MetricsSystem metricsSystem;
+  private final Optional<BonsaiArchiveStateIndex> archiveIndex;
 
   // For logging progress. Saves doing a DB read just to record our progress
   final AtomicLong latestArchivedBlock = new AtomicLong(0);
@@ -65,11 +68,28 @@ public class BonsaiArchiver implements BlockAddedObserver {
       final Consumer<Runnable> executeAsync,
       final TrieLogManager trieLogManager,
       final MetricsSystem metricsSystem) {
+    this(
+        rootWorldStateStorage,
+        blockchain,
+        executeAsync,
+        trieLogManager,
+        metricsSystem,
+        Optional.empty());
+  }
+
+  public BonsaiArchiver(
+      final PathBasedWorldStateKeyValueStorage rootWorldStateStorage,
+      final Blockchain blockchain,
+      final Consumer<Runnable> executeAsync,
+      final TrieLogManager trieLogManager,
+      final MetricsSystem metricsSystem,
+      final Optional<BonsaiArchiveStateIndex> archiveIndex) {
     this.rootWorldStateStorage = rootWorldStateStorage;
     this.blockchain = blockchain;
     this.executeAsync = executeAsync;
     this.trieLogManager = trieLogManager;
     this.metricsSystem = metricsSystem;
+    this.archiveIndex = archiveIndex;
 
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
@@ -147,6 +167,59 @@ public class BonsaiArchiver implements BlockAddedObserver {
                     .log();
                 Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHash);
                 if (trieLog.isPresent()) {
+                  final long blockNumber = block.getKey();
+
+                  // Update the archive index if enabled
+                  archiveIndex.ifPresent(
+                      index -> {
+                        SegmentedKeyValueStorageTransaction indexTransaction =
+                            rootWorldStateStorage.getComposedWorldStateStorage().startTransaction();
+                        try {
+                          // Index all account modifications
+                          trieLog
+                              .get()
+                              .getAccountChanges()
+                              .forEach(
+                                  (address, change) -> {
+                                    index.addAccountModification(
+                                        rootWorldStateStorage.getComposedWorldStateStorage(),
+                                        indexTransaction,
+                                        Hash.hash(address),
+                                        blockNumber);
+                                  });
+
+                          // Index all storage modifications
+                          trieLog
+                              .get()
+                              .getStorageChanges()
+                              .forEach(
+                                  (address, storageSlotKeys) -> {
+                                    Hash accountHash = Hash.hash(address);
+                                    storageSlotKeys.forEach(
+                                        (slotKey, slotValue) -> {
+                                          index.addStorageModification(
+                                              rootWorldStateStorage.getComposedWorldStateStorage(),
+                                              indexTransaction,
+                                              accountHash,
+                                              slotKey.getSlotHash(),
+                                              blockNumber);
+                                        });
+                                  });
+
+                          // Update the latest indexed block
+                          index.updateLatestIndexedBlock(indexTransaction, blockNumber);
+                          indexTransaction.commit();
+
+                          LOG.atTrace()
+                              .setMessage("Updated archive index for block {}")
+                              .addArgument(blockNumber)
+                              .log();
+                        } catch (Exception e) {
+                          indexTransaction.rollback();
+                          LOG.error("Failed to update archive index for block " + blockNumber, e);
+                        }
+                      });
+
                   trieLog
                       .get()
                       .getAccountChanges()

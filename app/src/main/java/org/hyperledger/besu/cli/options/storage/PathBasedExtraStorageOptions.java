@@ -106,6 +106,22 @@ public class PathBasedExtraStorageOptions
             "Enables code storage using code hash instead of by account hash. (default: ${DEFAULT-VALUE})")
     private boolean codeUsingCodeHashEnabled = DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-archive-index-enabled"},
+        arity = "1",
+        description =
+            "Enables archive state index for faster historical state queries. (default: ${DEFAULT-VALUE})")
+    private Boolean archiveIndexEnabled = false;
+
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-archive-index-build-on-startup"},
+        arity = "1",
+        description =
+            "Builds archive index on startup if not already built. (default: ${DEFAULT-VALUE})")
+    private Boolean archiveIndexBuildOnStartup = true;
+
     /** Default Constructor. */
     Unstable() {}
   }
@@ -173,6 +189,10 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getFullFlatDbEnabled();
     dataStorageOptions.unstableOptions.codeUsingCodeHashEnabled =
         domainObject.getUnstable().getCodeStoredByCodeHashEnabled();
+    dataStorageOptions.unstableOptions.archiveIndexEnabled =
+        domainObject.getUnstable().getArchiveIndexEnabled();
+    dataStorageOptions.unstableOptions.archiveIndexBuildOnStartup =
+        domainObject.getUnstable().getArchiveIndexBuildOnStartup();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
 
@@ -190,6 +210,8 @@ public class PathBasedExtraStorageOptions
             ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                 .fullFlatDbEnabled(unstableOptions.fullFlatDbEnabled)
                 .codeStoredByCodeHashEnabled(unstableOptions.codeUsingCodeHashEnabled)
+                .archiveIndexEnabled(unstableOptions.archiveIndexEnabled)
+                .archiveIndexBuildOnStartup(unstableOptions.archiveIndexBuildOnStartup)
                 .build())
         .build();
   }

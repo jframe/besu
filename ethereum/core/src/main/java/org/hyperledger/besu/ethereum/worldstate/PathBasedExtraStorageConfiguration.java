@@ -80,6 +80,8 @@ public interface PathBasedExtraStorageConfiguration {
 
     boolean DEFAULT_FULL_FLAT_DB_ENABLED = true;
     boolean DEFAULT_CODE_USING_CODE_HASH_ENABLED = true;
+    boolean DEFAULT_ARCHIVE_INDEX_ENABLED = false;
+    boolean DEFAULT_ARCHIVE_INDEX_BUILD_ON_STARTUP = true;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -89,6 +91,16 @@ public interface PathBasedExtraStorageConfiguration {
     @Value.Default
     default boolean getCodeStoredByCodeHashEnabled() {
       return DEFAULT_CODE_USING_CODE_HASH_ENABLED;
+    }
+
+    @Value.Default
+    default boolean getArchiveIndexEnabled() {
+      return DEFAULT_ARCHIVE_INDEX_ENABLED;
+    }
+
+    @Value.Default
+    default boolean getArchiveIndexBuildOnStartup() {
+      return DEFAULT_ARCHIVE_INDEX_BUILD_ON_STARTUP;
     }
   }
 }

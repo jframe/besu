@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiArchiveStateIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategyProvider;
@@ -94,7 +95,20 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
     if (flatDbMode == FlatDbMode.FULL) {
       return new BonsaiFullFlatDbStrategy(metricsSystem, codeStorageStrategy);
     } else if (flatDbMode == FlatDbMode.ARCHIVE) {
-      return new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
+      // Check if archive index is enabled
+      boolean archiveIndexEnabled =
+          dataStorageConfiguration
+              .getPathBasedExtraStorageConfiguration()
+              .getUnstable()
+              .getArchiveIndexEnabled();
+
+      if (archiveIndexEnabled) {
+        LOG.info("Creating indexed archive flat DB strategy");
+        BonsaiArchiveStateIndex index = new BonsaiArchiveStateIndex();
+        return new BonsaiArchiveIndexedFlatDbStrategy(metricsSystem, codeStorageStrategy, index);
+      } else {
+        return new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
+      }
     } else {
       return new BonsaiPartialFlatDbStrategy(metricsSystem, codeStorageStrategy);
     }
