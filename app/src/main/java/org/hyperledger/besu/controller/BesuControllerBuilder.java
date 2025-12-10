@@ -91,6 +91,8 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiArchiveWorldSta
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiArchiveIndexBuilder;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiArchiveStateIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiver;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
@@ -973,13 +975,75 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       final Blockchain blockchain,
       final EthScheduler scheduler,
       final TrieLogManager trieLogManager) {
+
+    final PathBasedWorldStateKeyValueStorage pathBasedStorage =
+        (PathBasedWorldStateKeyValueStorage) worldStateStorage;
+
+    // Check if archive index is enabled
+    final boolean archiveIndexEnabled =
+        dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getArchiveIndexEnabled();
+
+    final boolean buildOnStartup =
+        dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getArchiveIndexBuildOnStartup();
+
+    Optional<BonsaiArchiveStateIndex> archiveIndex = Optional.empty();
+
+    if (archiveIndexEnabled) {
+      LOG.info("Archive state index is enabled");
+
+      final BonsaiArchiveStateIndex index = new BonsaiArchiveStateIndex();
+      archiveIndex = Optional.of(index);
+
+      // Check if index needs to be built
+      final boolean isIndexBuilt =
+          index.isIndexBuilt(pathBasedStorage.getComposedWorldStateStorage());
+
+      if (!isIndexBuilt && buildOnStartup) {
+        LOG.info("Archive index not found. Starting background index build...");
+
+        final BonsaiArchiveIndexBuilder indexBuilder =
+            new BonsaiArchiveIndexBuilder(
+                pathBasedStorage.getComposedWorldStateStorage(), index, trieLogManager, blockchain);
+
+        // Start index build in background
+        scheduler.executeServiceTask(
+            () -> {
+              try {
+                final long chainHead = blockchain.getChainHeadBlockNumber();
+                LOG.info("Beginning archive index build from block 0 to block {}", chainHead);
+                indexBuilder.resumeBuild(chainHead);
+                LOG.info("Archive index build complete");
+              } catch (Exception e) {
+                LOG.error("Failed to build archive index", e);
+              }
+            });
+      } else if (isIndexBuilt) {
+        index
+            .getLatestIndexedBlock(pathBasedStorage.getComposedWorldStateStorage())
+            .ifPresent(
+                latestIndexedBlock ->
+                    LOG.info(
+                        "Archive index already built. Latest indexed block: {}",
+                        latestIndexedBlock));
+      } else {
+        LOG.info("Archive index build on startup is disabled");
+      }
+    }
+
     final BonsaiArchiver archiver =
         new BonsaiArchiver(
-            (PathBasedWorldStateKeyValueStorage) worldStateStorage,
+            pathBasedStorage,
             blockchain,
             scheduler::executeServiceTask,
             trieLogManager,
-            metricsSystem);
+            metricsSystem,
+            archiveIndex);
 
     archiver.initialize();
     LOG.info("Bonsai archiver initialised");
