@@ -288,7 +288,8 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           transactionUpdater.commit();
         }
         blockUpdater.commit();
-        blockUpdater.markTransactionBoundary();
+        // NOTE: markTransactionBoundary() moved outside loop to preserve intra-block state visibility
+        // blockUpdater.markTransactionBoundary();
 
         currentGasUsed += transaction.getGasLimit() - transactionProcessingResult.getGasRemaining();
         final var optionalVersionedHashes = transaction.getVersionedHashes();
@@ -310,6 +311,10 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           nbParallelTx++;
         }
       }
+
+      // Mark transaction boundary ONCE after all transactions to clear tracking collections
+      blockUpdater.markTransactionBoundary();
+
       final var optionalHeaderBlobGasUsed = blockHeader.getBlobGasUsed();
       if (optionalHeaderBlobGasUsed.isPresent()) {
         final long headerBlobGasUsed = optionalHeaderBlobGasUsed.get();
