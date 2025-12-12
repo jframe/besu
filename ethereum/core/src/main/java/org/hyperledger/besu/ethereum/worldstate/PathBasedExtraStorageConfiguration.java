@@ -84,6 +84,7 @@ public interface PathBasedExtraStorageConfiguration {
     int DEFAULT_ARCHIVE_MIGRATION_BATCH_SIZE = 100;
     long DEFAULT_ARCHIVE_MIGRATION_BATCH_DELAY_MS = 100;
     boolean DEFAULT_ARCHIVE_MIGRATION_ENABLED = false;
+    boolean DEFAULT_ARCHIVE_MIGRATION_FORCE_ON_STARTUP = false;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -118,6 +119,11 @@ public interface PathBasedExtraStorageConfiguration {
     @Value.Default
     default boolean getArchiveMigrationEnabled() {
       return DEFAULT_ARCHIVE_MIGRATION_ENABLED;
+    }
+
+    @Value.Default
+    default boolean getArchiveMigrationForceOnStartup() {
+      return DEFAULT_ARCHIVE_MIGRATION_FORCE_ON_STARTUP;
     }
   }
 }
