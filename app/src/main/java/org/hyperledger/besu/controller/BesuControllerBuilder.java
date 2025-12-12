@@ -920,11 +920,27 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
           worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
       final TrieLogManager trieLogManager = getBonsaiTrieLogManager(worldStateArchive);
 
-      LOG.info(
-          "Archive migration enabled, will migrate existing Bonsai node to Bonsai Archive format");
+      final boolean alreadyInArchiveMode = DataStorageFormat.X_BONSAI_ARCHIVE.equals(
+          dataStorageConfiguration.getDataStorageFormat());
+      final boolean forceOnStartup = dataStorageConfiguration
+          .getPathBasedExtraStorageConfiguration()
+          .getUnstable()
+          .getArchiveMigrationForceOnStartup();
+
+      if (alreadyInArchiveMode && !forceOnStartup) {
+        LOG.info(
+            "Archive migration enabled on node already in archive mode - migrator available for manual trigger via debug RPC");
+      } else if (alreadyInArchiveMode && forceOnStartup) {
+        LOG.info(
+            "Archive migration force-on-startup enabled - will re-run migration on already archived node");
+      } else {
+        LOG.info(
+            "Archive migration enabled, will migrate existing Bonsai node to Bonsai Archive format");
+      }
 
       // Create callback to enable BonsaiArchiver after migration completes
-      final Runnable enableArchiver =
+      // Only enable archiver if not already in archive mode (since it would already be running)
+      final Runnable enableArchiver = alreadyInArchiveMode ? null :
           () -> {
             LOG.info("Migration complete, enabling BonsaiArchiver for maintaining archive state");
             final BonsaiArchiver archiver =
@@ -934,7 +950,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             LOG.info("BonsaiArchiver enabled");
           };
 
-      // Create and trigger the migrator to reconstruct historical archive state
+      // Create the migrator to allow manual triggering via debug RPC
       final BonsaiArchiveFlatDbMigrator flatDbMigrator =
           createBonsaiArchiveFlatDbMigrater(
               worldStateKeyValueStorage,
@@ -943,9 +959,15 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
               protocolContext.getWorldStateArchive(),
               enableArchiver);
 
-      // Trigger migration immediately on startup
-      flatDbMigrator.triggerMigration();
-      LOG.info("Archive migration triggered, will process historical blocks in background");
+      // Auto-trigger migration on startup if:
+      // 1. Not in archive mode yet (normal migration path), OR
+      // 2. In archive mode but forceOnStartup is enabled (for testing/re-migration)
+      if (!alreadyInArchiveMode || forceOnStartup) {
+        flatDbMigrator.triggerMigration();
+        LOG.info("Archive migration triggered, will process historical blocks in background");
+      } else {
+        LOG.info("Migrator ready for manual trigger via debug_bonsaiTriggerArchiveMigration RPC");
+      }
     }
 
     final List<Closeable> closeables = new ArrayList<>();
