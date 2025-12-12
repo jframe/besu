@@ -237,13 +237,8 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
       boolean parallelizedTxFound = false;
       int nbParallelTx = 0;
 
-      // Create block updater ONCE for all transactions to ensure intra-block state visibility.
-      // Each transaction's changes accumulate in this shared updater so that subsequent
-      // transactions can see state modifications from earlier transactions in the same block.
-      // This is critical for bonsai archive mode where the flat DB uses block number suffixes.
-      final WorldUpdater blockUpdater = worldState.updater();
-
       for (int i = 0; i < transactions.size(); i++) {
+        final WorldUpdater blockUpdater = worldState.updater();
         final Transaction transaction = transactions.get(i);
         WorldUpdater transactionUpdater = blockUpdater.updater();
         if (!(transactionUpdater instanceof StackedUpdater<?, ?>)) {
@@ -288,8 +283,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           transactionUpdater.commit();
         }
         blockUpdater.commit();
-        // NOTE: markTransactionBoundary() moved outside loop to preserve intra-block state visibility
-        // blockUpdater.markTransactionBoundary();
+        blockUpdater.markTransactionBoundary();
 
         currentGasUsed += transaction.getGasLimit() - transactionProcessingResult.getGasRemaining();
         final var optionalVersionedHashes = transaction.getVersionedHashes();
@@ -311,10 +305,6 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           nbParallelTx++;
         }
       }
-
-      // Mark transaction boundary ONCE after all transactions to clear tracking collections
-      blockUpdater.markTransactionBoundary();
-
       final var optionalHeaderBlobGasUsed = blockHeader.getBlobGasUsed();
       if (optionalHeaderBlobGasUsed.isPresent()) {
         final long headerBlobGasUsed = optionalHeaderBlobGasUsed.get();
