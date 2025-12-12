@@ -19,7 +19,6 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.CODE_STORAGE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_LOG_STORAGE;
 
 import org.hyperledger.besu.cli.subcommands.storage.Inconsistency.InconsistencyType;
 import org.hyperledger.besu.datatypes.AccountValue;
@@ -32,6 +31,7 @@ import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogFactoryImpl;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.PathBasedValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
+import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage.NearestKeyValue;
 
@@ -53,7 +53,7 @@ public class FlatDbConsistencyChecker {
 
   private final Blockchain blockchain;
   private final SegmentedKeyValueStorage composedStorage;
-  private final SegmentedKeyValueStorage trieLogStorage;
+  private final KeyValueStorage trieLogStorage;
   private final InconsistencyReporter reporter;
   private final TrieLogFactoryImpl trieLogFactory;
 
@@ -62,13 +62,13 @@ public class FlatDbConsistencyChecker {
    *
    * @param blockchain the blockchain
    * @param composedStorage the world state storage
-   * @param trieLogStorage the trielog storage
+   * @param trieLogStorage the trielog storage (KeyValueStorage, not segmented)
    * @param reporter the inconsistency reporter
    */
   public FlatDbConsistencyChecker(
       final Blockchain blockchain,
       final SegmentedKeyValueStorage composedStorage,
-      final SegmentedKeyValueStorage trieLogStorage,
+      final KeyValueStorage trieLogStorage,
       final InconsistencyReporter reporter) {
     this.blockchain = blockchain;
     this.composedStorage = composedStorage;
@@ -126,7 +126,7 @@ public class FlatDbConsistencyChecker {
    */
   private Optional<TrieLogLayer> getTrieLog(final Hash blockHash) {
     return trieLogStorage
-        .get(TRIE_LOG_STORAGE, blockHash.toArrayUnsafe())
+        .get(blockHash.toArrayUnsafe())
         .flatMap(
             bytes -> {
               try {

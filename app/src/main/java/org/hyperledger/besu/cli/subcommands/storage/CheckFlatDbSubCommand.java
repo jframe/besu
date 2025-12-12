@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableDataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutablePathBasedExtraStorageConfiguration;
+import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 
 import java.io.IOException;
@@ -139,8 +140,8 @@ public class CheckFlatDbSubCommand implements Runnable {
         // Get storage references
         final SegmentedKeyValueStorage composedStorage =
             worldStateStorage.getComposedWorldStateStorage();
-        final SegmentedKeyValueStorage trieLogStorage =
-            (SegmentedKeyValueStorage) storageProvider.getStorageBySegmentIdentifier(
+        final KeyValueStorage trieLogStorage =
+            storageProvider.getStorageBySegmentIdentifier(
                 org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier
                     .TRIE_LOG_STORAGE);
 
