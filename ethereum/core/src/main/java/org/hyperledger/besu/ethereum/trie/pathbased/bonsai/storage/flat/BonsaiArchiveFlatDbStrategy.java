@@ -81,10 +81,16 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     Optional<byte[]> archiveContext = storage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
     if (archiveContext.isPresent()) {
       try {
+        long storedBlockNumber = Bytes.wrap(archiveContext.get()).toLong();
+        long writeBlockNumber = storedBlockNumber + 1;
+        LOG.info(
+            "FlatDB Write Context: WORLD_BLOCK_NUMBER_KEY={}, calculated write block={}",
+            storedBlockNumber,
+            writeBlockNumber);
         return Optional.of(
             // The context for flat-DB PUTs is the block number recorded in the specified world
             // state, + 1
-            new BonsaiContext(Bytes.wrap(archiveContext.get()).toLong() + 1));
+            new BonsaiContext(writeBlockNumber));
       } catch (NumberFormatException e) {
         throw new IllegalStateException(
             "World state archive context invalid format: "
@@ -92,6 +98,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       }
     } else {
       // No context exists - this is genesis block, use suffix 0
+      LOG.info("FlatDB Write Context: WORLD_BLOCK_NUMBER_KEY not found, using block 0 (genesis)");
       return Optional.of(new BonsaiContext(0L));
     }
   }
@@ -277,9 +284,15 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Bytes accountValue) {
 
     // key suffixed with block context, or MIN_BLOCK_SUFFIX if we have no context:
+    BonsaiContext context = getStateArchiveContextForWrite(storage).get();
     byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(
-            getStateArchiveContextForWrite(storage).get(), accountHash.toArrayUnsafe());
+        calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+
+    LOG.info(
+        "FlatDB PUT account: address={}, block={}, valueSize={}",
+        accountHash,
+        context.getBlockNumber().orElse(-1L),
+        accountValue.size());
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
@@ -315,9 +328,14 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Hash accountHash) {
 
     // insert a key suffixed with block context, with 'deleted account' value
+    BonsaiContext context = getStateArchiveContextForWrite(storage).get();
     byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(
-            getStateArchiveContextForWrite(storage).get(), accountHash.toArrayUnsafe());
+        calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+
+    LOG.info(
+        "FlatDB REMOVE account: address={}, block={}",
+        accountHash,
+        context.getBlockNumber().orElse(-1L));
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
@@ -424,8 +442,15 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     // keyNearest, use MIN_BLOCK_SUFFIX in the absence of a block context:
-    byte[] keyNearest =
-        calculateArchiveKeyWithMinSuffix(getStateArchiveContextForWrite(storage).get(), naturalKey);
+    BonsaiContext context = getStateArchiveContextForWrite(storage).get();
+    byte[] keyNearest = calculateArchiveKeyWithMinSuffix(context, naturalKey);
+
+    LOG.info(
+        "FlatDB PUT storage: account={}, slot={}, block={}, valueSize={}",
+        accountHash,
+        slotHash,
+        context.getBlockNumber().orElse(-1L),
+        storageValue.size());
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keyNearest, storageValue.toArrayUnsafe());
   }
