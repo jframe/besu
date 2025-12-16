@@ -178,15 +178,25 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
 
   /**
    * Triggers migration regardless of current flat DB mode. This is useful for testing and can be
-   * called via the debug RPC. This will reset the migration progress and start from the first
-   * block.
+   * called via the debug RPC. This will reset the migration progress. If startBlockOverride is
+   * configured, migration will start from that block; otherwise it starts from the first block.
    */
   public void triggerMigration() {
-    LOG.info("Migration triggered manually, resetting to start from first block");
-
-    // Reset the latest archived flat DB block to force restart from the first block
-    // Setting to 0 will cause performMigration to start from block 1 (startBlock = 0 + 1)
-    worldStateStorage.setLatestArchivedFlatDbBlock(0L);
+    // Respect the startBlockOverride configuration when resetting
+    if (startBlockOverride >= 0) {
+      // User configured a specific start block, so set checkpoint to the block before
+      // This ensures performMigration() will start from startBlockOverride
+      final long checkpointBlock = startBlockOverride > 0 ? startBlockOverride - 1 : 0;
+      worldStateStorage.setLatestArchivedFlatDbBlock(checkpointBlock);
+      LOG.info(
+          "Migration triggered with override, starting from block {} (checkpoint set to {})",
+          startBlockOverride,
+          checkpointBlock);
+    } else {
+      // No override, reset to start from first block
+      worldStateStorage.setLatestArchivedFlatDbBlock(0L);
+      LOG.info("Migration triggered, resetting to start from first block");
+    }
 
     // Reset metrics
     blocksProcessed.set(0);
