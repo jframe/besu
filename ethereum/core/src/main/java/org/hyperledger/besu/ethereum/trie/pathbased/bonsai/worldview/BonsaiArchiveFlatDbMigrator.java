@@ -68,6 +68,7 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
   private final SwappableWorldStateArchive swappableArchive;
   private final java.util.function.Supplier<BonsaiArchiveWorldStateProvider> archiveProviderFactory;
   private final AtomicLong migrationTarget = new AtomicLong(0);
+  private final AtomicLong migrationStartBlock = new AtomicLong(0);
   private long blockAddedObserverId;
   private final int batchSize;
   private final long startBlockOverride;
@@ -320,12 +321,18 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
       }
     }
 
+    // Store the migration start block for progress calculation
+    migrationStartBlock.set(startBlock);
+
     // Set initial migration target to current chain head
     final long initialChainHead = blockchain.getChainHeadBlockNumber();
     migrationTarget.set(initialChainHead);
-    totalBlocks.set(initialChainHead + 1);
+    // Calculate the actual number of blocks to process from startBlock to chain head
+    final long blocksToProcess = Math.max(0, initialChainHead - startBlock + 1);
+    totalBlocks.set(blocksToProcess);
     LOG.info(
-        "Archive migration will process blocks from {} to {}. Target will update as chain grows.",
+        "Archive migration will process {} blocks from {} to {}. Target will update as chain grows.",
+        blocksToProcess,
         startBlock,
         initialChainHead);
 
@@ -361,7 +368,9 @@ public class BonsaiArchiveFlatDbMigrator implements InitialSyncCompletionListene
     }
 
     // Update metrics with current target
-    totalBlocks.set(target + 1);
+    // Calculate total blocks to process based on the range from migrationStartBlock to target
+    final long blocksToProcess = Math.max(0, target - migrationStartBlock.get() + 1);
+    totalBlocks.set(blocksToProcess);
 
     final long batchEnd = Math.min(currentBlock + batchSize - 1, target);
     processBlockBatch(currentBlock, batchEnd);
