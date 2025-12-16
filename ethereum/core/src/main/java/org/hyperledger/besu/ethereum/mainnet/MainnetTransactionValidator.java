@@ -310,8 +310,8 @@ public class MainnetTransactionValidator implements TransactionValidator {
       return ValidationResult.invalid(
           TransactionInvalidReason.NONCE_TOO_LOW,
           String.format(
-              "transaction nonce %s below sender account nonce %s",
-              transaction.getNonce(), senderNonce));
+              "transaction nonce %s below sender account nonce %s for sender %s.",
+              transaction.getNonce(), senderNonce, sender));
     }
 
     if (!validationParams.isAllowFutureNonce() && senderNonce != transaction.getNonce()) {
