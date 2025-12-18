@@ -115,7 +115,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
   }
 
   @Override
-  protected Hash calculateRootHash(
+  public Hash calculateRootHash(
       final Optional<PathBasedWorldStateKeyValueStorage.Updater> maybeStateUpdater,
       final PathBasedWorldStateUpdateAccumulator<?> worldStateUpdater) {
     return internalCalculateRootHash(
