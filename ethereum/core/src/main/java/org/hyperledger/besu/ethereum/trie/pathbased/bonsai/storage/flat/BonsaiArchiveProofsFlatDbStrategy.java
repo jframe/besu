@@ -111,8 +111,9 @@ public class BonsaiArchiveProofsFlatDbStrategy extends BonsaiArchiveFlatDbStrate
                 + new String(archiveContext.get(), StandardCharsets.UTF_8));
       }
     } else {
-      // Archive flat-db entries cannot be PUT if we don't have block context
-      throw new IllegalStateException("World state missing archive context");
+      // Genesis block - use context 0 since WORLD_BLOCK_NUMBER_KEY doesn't exist yet
+      LOG.debug("No world state archive context found, using context 0 for genesis block");
+      return Optional.of(new BonsaiContext(0L));
     }
   }
 
