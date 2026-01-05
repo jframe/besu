@@ -16,15 +16,14 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
-import org.hyperledger.besu.datatypes.Address;
-import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
-import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
@@ -39,38 +38,39 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Converts a Bonsai FULL flat database to ARCHIVE format.
+ * Migrates a Bonsai FULL flat database to ARCHIVE format.
  *
- * <p>This converter processes trie logs from genesis to head, adding block number suffixes to all
- * state keys to create a versioned archive. The conversion happens in batches with periodic
+ * <p>This migrator processes trie logs from genesis to head, adding block number suffixes to all
+ * state keys to create a versioned archive. The migration happens in batches with periodic
  * checkpointing for resumability.
  *
  * <p>Key features: - Processes blocks sequentially from start to end - Batches writes for
  * performance (default 10,000 operations) - Checkpoints progress every 10,000 blocks - Resumable
  * from last checkpoint - Updates FLAT_DB_MODE to ARCHIVE on completion
  */
-public class BonsaiFlatDbToArchiveConverter {
-  private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveConverter.class);
+public class BonsaiFlatDbToArchiveMigrator {
+  private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
 
   private static final int BATCH_SIZE = 10_000;
   private static final int CHECKPOINT_INTERVAL = 10_000;
-  private static final byte[] CONVERSION_PROGRESS_KEY =
-      "ARCHIVE_CONVERSION_PROGRESS".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] MIGRATION_PROGRESS_KEY =
+      "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
 
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final TrieLogManager trieLogManager;
   private final Blockchain blockchain;
   private final ScheduledExecutorService executorService;
+  private final BonsaiArchiveFlatDbStrategy archiveStrategy;
 
   /**
-   * Creates a new BonsaiFlatDbToArchiveConverter.
+   * Creates a new BonsaiFlatDbToArchiveMigrator.
    *
    * @param worldStateStorage the Bonsai world state storage
    * @param trieLogManager the trie log manager for reading trie logs
    * @param blockchain the blockchain for reading block headers
-   * @param executorService the executor service for running conversion on a separate thread
+   * @param executorService the executor service for running migration on a separate thread
    */
-  public BonsaiFlatDbToArchiveConverter(
+  public BonsaiFlatDbToArchiveMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final TrieLogManager trieLogManager,
       final Blockchain blockchain,
@@ -79,29 +79,31 @@ public class BonsaiFlatDbToArchiveConverter {
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
     this.executorService = executorService;
+    this.archiveStrategy =
+        new BonsaiArchiveFlatDbStrategy(new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy());
   }
 
   /**
-   * Converts FULL flat DB to ARCHIVE format by processing trie logs from startBlock to endBlock.
+   * Migrates FULL flat DB to ARCHIVE format by processing trie logs from startBlock to endBlock.
    *
-   * <p>The conversion runs asynchronously on the provided executor service. It: 1. Loads progress
-   * or starts fresh 2. Processes blocks sequentially, writing archive keys 3. Checkpoints progress
+   * <p>The migration runs asynchronously on the provided executor service. It: 1. Loads progress or
+   * starts fresh 2. Processes blocks sequentially, writing archive keys 3. Checkpoints progress
    * periodically 4. Updates FLAT_DB_MODE to ARCHIVE on completion
    *
    * @param startBlock the starting block number (inclusive)
    * @param endBlock the ending block number (inclusive)
-   * @return a CompletableFuture that completes when conversion finishes
+   * @return a CompletableFuture that completes when migration finishes
    */
-  public CompletableFuture<Void> convert(final long startBlock, final long endBlock) {
+  public CompletableFuture<Void> migrate(final long startBlock, final long endBlock) {
     return CompletableFuture.runAsync(
         () -> {
-          LOG.info("Starting archive conversion from block {} to {}", startBlock, endBlock);
+          LOG.info("Starting archive migration from block {} to {}", startBlock, endBlock);
 
           long currentBlock = loadProgress().orElse(startBlock);
 
           if (currentBlock > startBlock) {
             LOG.info(
-                "Resuming conversion from block {} (previously started at {})",
+                "Resuming migration from block {} (previously started at {})",
                 currentBlock,
                 startBlock);
           }
@@ -137,12 +139,12 @@ public class BonsaiFlatDbToArchiveConverter {
 
             if (currentBlock % CHECKPOINT_INTERVAL == 0) {
               saveProgress(currentBlock);
-              long progressPercent = ((currentBlock - startBlock) * 100) / (endBlock - startBlock);
+              long totalBlocks = endBlock - startBlock;
+              long progressPercent =
+                  totalBlocks > 0 ? ((currentBlock - startBlock) * 100) / totalBlocks : 100;
               LOG.info(
-                  "Archive conversion progress: {}% (block {}/{})",
-                  progressPercent,
-                  currentBlock,
-                  endBlock);
+                  "Archive migration progress: {}% (block {}/{})",
+                  progressPercent, currentBlock, endBlock);
             }
 
             currentBlock++;
@@ -155,7 +157,7 @@ public class BonsaiFlatDbToArchiveConverter {
           worldStateStorage.upgradeToArchiveDbMode();
           saveProgress(endBlock);
 
-          LOG.info("Archive conversion completed. Processed {} blocks.", endBlock - startBlock + 1);
+          LOG.info("Archive migration completed. Processed {} blocks.", endBlock - startBlock + 1);
         },
         executorService);
   }
@@ -168,9 +170,7 @@ public class BonsaiFlatDbToArchiveConverter {
    * @param tx the transaction to write to
    */
   private void processBlock(
-      final TrieLog trieLog,
-      final long blockNumber,
-      final SegmentedKeyValueStorageTransaction tx) {
+      final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
 
     BonsaiContext context = new BonsaiContext(blockNumber);
     processAccountChanges(trieLog, context, tx);
@@ -193,10 +193,13 @@ public class BonsaiFlatDbToArchiveConverter {
         .getAccountChanges()
         .forEach(
             (address, accountChange) -> {
-              if (accountChange.getPrior() != null) {
-                Bytes accountBytes = RLP.encode(accountChange.getPrior()::writeTo);
+              if (accountChange.getUpdated() != null) {
+                Bytes accountBytes = RLP.encode(accountChange.getUpdated()::writeTo);
                 BonsaiArchiveFlatDbStrategy.putFlatAccountWithContext(
                     tx, context, address.addressHash(), accountBytes);
+              } else {
+                // Account was deleted - use the remove method with explicit context
+                archiveStrategy.removeFlatAccountWithContext(tx, context, address.addressHash());
               }
             });
   }
@@ -219,32 +222,36 @@ public class BonsaiFlatDbToArchiveConverter {
             (address, storageMap) -> {
               storageMap.forEach(
                   (slotKey, storageChange) -> {
-                    if (storageChange.getPrior() != null) {
+                    if (storageChange.getUpdated() != null) {
                       BonsaiArchiveFlatDbStrategy.putFlatAccountStorageValueWithContext(
                           tx,
                           context,
                           address.addressHash(),
                           slotKey.getSlotHash(),
-                          storageChange.getPrior().toBytes());
+                          storageChange.getUpdated().toBytes());
+                    } else {
+                      // Storage was deleted - use the remove method with explicit context
+                      archiveStrategy.removeFlatAccountStorageValueByStorageSlotHashWithContext(
+                          tx, context, address.addressHash(), slotKey.getSlotHash());
                     }
                   });
             });
   }
 
   /**
-   * Loads the conversion progress from storage.
+   * Loads the migration progress from storage.
    *
    * @return the last processed block number, or empty if no progress exists
    */
   private Optional<Long> loadProgress() {
     return worldStateStorage
         .getComposedWorldStateStorage()
-        .get(TRIE_BRANCH_STORAGE, CONVERSION_PROGRESS_KEY)
+        .get(TRIE_BRANCH_STORAGE, MIGRATION_PROGRESS_KEY)
         .map(bytes -> Bytes.wrap(bytes).toLong());
   }
 
   /**
-   * Saves the conversion progress to storage.
+   * Saves the migration progress to storage.
    *
    * @param blockNumber the last successfully processed block number
    */
@@ -253,7 +260,7 @@ public class BonsaiFlatDbToArchiveConverter {
     SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     tx.put(
         TRIE_BRANCH_STORAGE,
-        CONVERSION_PROGRESS_KEY,
+        MIGRATION_PROGRESS_KEY,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
     tx.commit();
   }

@@ -298,6 +298,22 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
 
+  /**
+   * Removes a flat account with an explicit block context.
+   *
+   * @param transaction the transaction to write to
+   * @param context the block context for versioning
+   * @param accountHash the account hash
+   */
+  public void removeFlatAccountWithContext(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final BonsaiContext context,
+      final Hash accountHash) {
+
+    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+    transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
+  }
+
   private byte[] trimSuffix(final byte[] suffixedAddress) {
     return Arrays.copyOfRange(suffixedAddress, 0, suffixedAddress.length - 8);
   }
@@ -402,6 +418,25 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(getStateArchiveContextForWrite(storage).get(), naturalKey);
 
+    transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
+  }
+
+  /**
+   * Removes a flat account storage value with an explicit block context.
+   *
+   * @param transaction the transaction to write to
+   * @param context the block context for versioning
+   * @param accountHash the account hash
+   * @param slotHash the storage slot hash
+   */
+  public void removeFlatAccountStorageValueByStorageSlotHashWithContext(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final BonsaiContext context,
+      final Hash accountHash,
+      final Hash slotHash) {
+
+    byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
+    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, naturalKey);
     transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
   }
 
