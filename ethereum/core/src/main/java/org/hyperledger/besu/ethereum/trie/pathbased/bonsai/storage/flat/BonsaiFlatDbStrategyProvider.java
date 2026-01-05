@@ -86,6 +86,21 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
     loadFlatDbStrategy(composedWorldStateStorage); // force reload of flat db reader strategy
   }
 
+  /**
+   * Upgrades the FLAT_DB_MODE to ARCHIVE mode and reloads the strategy.
+   *
+   * @param composedWorldStateStorage the world state storage
+   */
+  public void upgradeToArchiveDbMode(final SegmentedKeyValueStorage composedWorldStateStorage) {
+    LOG.info("Upgrading FLAT_DB_MODE to ARCHIVE");
+    final SegmentedKeyValueStorageTransaction transaction =
+        composedWorldStateStorage.startTransaction();
+    transaction.put(
+        TRIE_BRANCH_STORAGE, FLAT_DB_MODE, FlatDbMode.ARCHIVE.getVersion().toArrayUnsafe());
+    transaction.commit();
+    loadFlatDbStrategy(composedWorldStateStorage); // force reload of flat db reader strategy
+  }
+
   @Override
   protected FlatDbStrategy createFlatDbStrategy(
       final FlatDbMode flatDbMode,

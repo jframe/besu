@@ -427,6 +427,43 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     return Bytes.of(calculateArchiveKeyWithSuffix(context, naturalKey, MAX_BLOCK_SUFFIX));
   }
 
+  /**
+   * Writes an account value to the archive storage with an explicit block context.
+   *
+   * @param transaction the transaction to write to
+   * @param context the block context for versioning
+   * @param accountHash the account hash
+   * @param accountValue the serialized account value
+   */
+  public static void putFlatAccountWithContext(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final BonsaiContext context,
+      final Hash accountHash,
+      final Bytes accountValue) {
+    byte[] archiveKey = calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+    transaction.put(ACCOUNT_INFO_STATE, archiveKey, accountValue.toArrayUnsafe());
+  }
+
+  /**
+   * Writes a storage value to the archive storage with an explicit block context.
+   *
+   * @param transaction the transaction to write to
+   * @param context the block context for versioning
+   * @param accountHash the account hash
+   * @param slotHash the storage slot hash
+   * @param storageValue the storage value
+   */
+  public static void putFlatAccountStorageValueWithContext(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final BonsaiContext context,
+      final Hash accountHash,
+      final Hash slotHash,
+      final Bytes storageValue) {
+    byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
+    byte[] archiveKey = calculateArchiveKeyWithMinSuffix(context, naturalKey);
+    transaction.put(ACCOUNT_STORAGE_STORAGE, archiveKey, storageValue.toArrayUnsafe());
+  }
+
   // TODO JF: move this out of this class so can be used with ArchiveCodeStorageStrategy without
   // being static
   public static byte[] calculateArchiveKeyWithSuffix(
