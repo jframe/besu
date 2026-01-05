@@ -27,6 +27,7 @@ import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
+import org.hyperledger.besu.util.Subscribers;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
@@ -61,6 +62,27 @@ public class BonsaiFlatDbToArchiveMigrator {
   private final Blockchain blockchain;
   private final ScheduledExecutorService executorService;
   private final BonsaiArchiveFlatDbStrategy archiveStrategy;
+  private final Subscribers<MigrationCompletionListener> completionListeners = Subscribers.create();
+
+  /** Listener interface for migration completion events. */
+  public interface MigrationCompletionListener {
+    /**
+     * Called when the archive migration completes successfully.
+     *
+     * @param startBlock the starting block number of the migration
+     * @param endBlock the ending block number of the migration
+     */
+    void onMigrationComplete(long startBlock, long endBlock);
+
+    /**
+     * Called when the archive migration fails with an error.
+     *
+     * @param startBlock the starting block number of the migration
+     * @param endBlock the ending block number of the migration
+     * @param error the error that caused the failure
+     */
+    void onMigrationFailed(long startBlock, long endBlock, Throwable error);
+  }
 
   /**
    * Creates a new BonsaiFlatDbToArchiveMigrator.
@@ -84,6 +106,26 @@ public class BonsaiFlatDbToArchiveMigrator {
   }
 
   /**
+   * Subscribe to migration completion events.
+   *
+   * @param listener the listener to notify on migration completion
+   * @return the subscription ID that can be used to unsubscribe
+   */
+  public long subscribe(final MigrationCompletionListener listener) {
+    return completionListeners.subscribe(listener);
+  }
+
+  /**
+   * Unsubscribe from migration completion events.
+   *
+   * @param subscriptionId the subscription ID returned from subscribe
+   * @return true if the listener was found and removed
+   */
+  public boolean unsubscribe(final long subscriptionId) {
+    return completionListeners.unsubscribe(subscriptionId);
+  }
+
+  /**
    * Migrates FULL flat DB to ARCHIVE format by processing trie logs from startBlock to endBlock.
    *
    * <p>The migration runs asynchronously on the provided executor service. It: 1. Loads progress or
@@ -97,67 +139,81 @@ public class BonsaiFlatDbToArchiveMigrator {
   public CompletableFuture<Void> migrate(final long startBlock, final long endBlock) {
     return CompletableFuture.runAsync(
         () -> {
-          LOG.info("Starting archive migration from block {} to {}", startBlock, endBlock);
+          try {
+            LOG.info("Starting archive migration from block {} to {}", startBlock, endBlock);
 
-          long currentBlock = loadProgress().orElse(startBlock);
+            long currentBlock = loadProgress().orElse(startBlock);
 
-          if (currentBlock > startBlock) {
-            LOG.info(
-                "Resuming migration from block {} (previously started at {})",
-                currentBlock,
-                startBlock);
-          }
-
-          int batchCount = 0;
-          SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
-          SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-
-          while (currentBlock <= endBlock) {
-            Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(currentBlock);
-            if (blockHeader.isEmpty()) {
-              LOG.warn("Missing block header for block {}, skipping", currentBlock);
-              currentBlock++;
-              continue;
-            }
-
-            Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHeader.get().getHash());
-
-            if (trieLog.isEmpty()) {
-              LOG.warn("Missing trie log for block {}, skipping", currentBlock);
-              currentBlock++;
-              continue;
-            }
-
-            processBlock(trieLog.get(), currentBlock, tx);
-            batchCount++;
-
-            if (batchCount >= BATCH_SIZE) {
-              tx.commit();
-              tx = storage.startTransaction();
-              batchCount = 0;
-            }
-
-            if (currentBlock % CHECKPOINT_INTERVAL == 0) {
-              saveProgress(currentBlock);
-              long totalBlocks = endBlock - startBlock;
-              long progressPercent =
-                  totalBlocks > 0 ? ((currentBlock - startBlock) * 100) / totalBlocks : 100;
+            if (currentBlock > startBlock) {
               LOG.info(
-                  "Archive migration progress: {}% (block {}/{})",
-                  progressPercent, currentBlock, endBlock);
+                  "Resuming migration from block {} (previously started at {})",
+                  currentBlock,
+                  startBlock);
             }
 
-            currentBlock++;
+            int batchCount = 0;
+            SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
+            SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+
+            while (currentBlock <= endBlock) {
+              Optional<BlockHeader> blockHeader = blockchain.getBlockHeader(currentBlock);
+              if (blockHeader.isEmpty()) {
+                LOG.warn("Missing block header for block {}, skipping", currentBlock);
+                currentBlock++;
+                continue;
+              }
+
+              Optional<TrieLog> trieLog =
+                  trieLogManager.getTrieLogLayer(blockHeader.get().getHash());
+
+              if (trieLog.isEmpty()) {
+                LOG.warn("Missing trie log for block {}, skipping", currentBlock);
+                currentBlock++;
+                continue;
+              }
+
+              processBlock(trieLog.get(), currentBlock, tx);
+              batchCount++;
+
+              if (batchCount >= BATCH_SIZE) {
+                tx.commit();
+                tx = storage.startTransaction();
+                batchCount = 0;
+              }
+
+              if (currentBlock % CHECKPOINT_INTERVAL == 0) {
+                saveProgress(currentBlock);
+                long totalBlocks = endBlock - startBlock;
+                long progressPercent =
+                    totalBlocks > 0 ? ((currentBlock - startBlock) * 100) / totalBlocks : 100;
+                LOG.info(
+                    "Archive migration progress: {}% (block {}/{})",
+                    progressPercent, currentBlock, endBlock);
+              }
+
+              currentBlock++;
+            }
+
+            if (batchCount > 0) {
+              tx.commit();
+            }
+
+            worldStateStorage.upgradeToArchiveDbMode();
+            saveProgress(endBlock);
+
+            LOG.info(
+                "Archive migration completed. Processed {} blocks.", endBlock - startBlock + 1);
+
+            // Notify all listeners of successful completion
+            completionListeners.forEach(
+                listener -> listener.onMigrationComplete(startBlock, endBlock));
+          } catch (final Exception e) {
+            LOG.error("Archive migration failed", e);
+            // Notify all listeners of failure
+            completionListeners.forEach(
+                listener -> listener.onMigrationFailed(startBlock, endBlock, e));
+            throw e;
           }
-
-          if (batchCount > 0) {
-            tx.commit();
-          }
-
-          worldStateStorage.upgradeToArchiveDbMode();
-          saveProgress(endBlock);
-
-          LOG.info("Archive migration completed. Processed {} blocks.", endBlock - startBlock + 1);
         },
         executorService);
   }

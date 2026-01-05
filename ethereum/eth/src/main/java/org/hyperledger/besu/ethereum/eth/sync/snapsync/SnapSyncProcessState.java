@@ -30,6 +30,7 @@ public class SnapSyncProcessState extends FastSyncState {
 
   private boolean isHealTrieInProgress;
   private boolean isHealFlatDatabaseInProgress;
+  private boolean isArchiveMigrationInProgress;
   private boolean isWaitingBlockchain;
 
   public SnapSyncProcessState(final FastSyncState fastSyncState) {
@@ -54,6 +55,14 @@ public class SnapSyncProcessState extends FastSyncState {
 
   public void setHealFlatDatabaseInProgress(final boolean healFlatDatabaseInProgress) {
     isHealFlatDatabaseInProgress = healFlatDatabaseInProgress;
+  }
+
+  public boolean isArchiveMigrationInProgress() {
+    return isArchiveMigrationInProgress;
+  }
+
+  public void setArchiveMigrationInProgress(final boolean archiveMigrationInProgress) {
+    isArchiveMigrationInProgress = archiveMigrationInProgress;
   }
 
   public boolean isWaitingBlockchain() {
