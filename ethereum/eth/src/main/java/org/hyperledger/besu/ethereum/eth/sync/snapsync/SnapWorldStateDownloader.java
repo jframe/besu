@@ -29,8 +29,6 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.worldstate.WorldStateDownloader;
 import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.PathBasedWorldStateProvider;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
@@ -143,16 +141,6 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
       final SnapSyncMetricsManager snapsyncMetricsManager =
           new SnapSyncMetricsManager(metricsSystem, ethContext);
 
-      // Get TrieLogManager for archive migration support
-      final TrieLogManager trieLogManager;
-      if (protocolContext.getWorldStateArchive() instanceof PathBasedWorldStateProvider) {
-        trieLogManager =
-            ((PathBasedWorldStateProvider) protocolContext.getWorldStateArchive())
-                .getTrieLogManager();
-      } else {
-        trieLogManager = null;
-      }
-
       final SnapWorldDownloadState newDownloadState =
           new SnapWorldDownloadState(
               worldStateStorageCoordinator,
@@ -165,8 +153,7 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
               snapsyncMetricsManager,
               clock,
               ethContext,
-              syncDurationMetrics,
-              trieLogManager);
+              syncDurationMetrics);
 
       final Map<Bytes32, Bytes32> ranges = RangeManager.generateAllRanges(16);
       snapsyncMetricsManager.initRange(ranges);

@@ -32,8 +32,6 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.StorageFlatD
 import org.hyperledger.besu.ethereum.eth.sync.worldstate.WorldDownloadState;
 import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbToArchiveMigrator;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
@@ -52,14 +50,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
@@ -96,10 +91,6 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
   private final Long blockObserverId;
   private final EthContext ethContext;
 
-  // archive migration support
-  private final TrieLogManager trieLogManager;
-  private BonsaiFlatDbToArchiveMigrator archiveMigrator;
-
   // metrics around the snapsync
   private final SnapSyncMetricsManager metricsManager;
 
@@ -116,8 +107,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
       final SnapSyncMetricsManager metricsManager,
       final Clock clock,
       final EthContext ethContext,
-      final SyncDurationMetrics syncDurationMetrics,
-      final TrieLogManager trieLogManager) {
+      final SyncDurationMetrics syncDurationMetrics) {
     super(
         worldStateStorageCoordinator,
         pendingRequests,
@@ -131,7 +121,6 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
     this.metricsManager = metricsManager;
     this.blockObserverId = blockchain.observeBlockAdded(createBlockchainObserver());
     this.ethContext = ethContext;
-    this.trieLogManager = trieLogManager;
 
     final MetricsSystem metricsSystem = metricsManager.getMetricsSystem();
     metricsSystem.createLongGauge(
@@ -206,16 +195,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
                 || worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.ARCHIVE))) {
           startFlatDatabaseHeal(header);
         }
-        // If the archive migration is not in progress, data storage format is X_BONSAI_ARCHIVE, and
-        // flat database mode is FULL (needs migration)
-        else if (!snapSyncState.isArchiveMigrationInProgress()
-            && worldStateStorageCoordinator
-                .getDataStorageFormat()
-                .equals(DataStorageFormat.X_BONSAI_ARCHIVE)
-            && worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)) {
-          startArchiveMigration(header);
-        }
-        // If the flat database healing and archive migration are both complete
+        // If the flat database healing is complete
         else {
           final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
           applyForStrategy(
@@ -304,64 +284,6 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
         (key, value) ->
             enqueueRequest(
                 createAccountFlatHealingRangeRequest(header.getStateRoot(), key, value)));
-  }
-
-  /**
-   * Starts the archive migration process, converting FULL flat database to ARCHIVE format. This is
-   * a non-blocking operation that processes all blocks from genesis to the current head
-   * asynchronously. Only triggered when the data storage format is X_BONSAI_ARCHIVE and flat DB
-   * mode is FULL. Completion is detected via the MigrationCompletionListener callback. This method
-   * is called from checkCompletion() which is already synchronized.
-   *
-   * @param header the current block header
-   */
-  public void startArchiveMigration(final BlockHeader header) {
-    // If migration is already running, don't start another
-    if (archiveMigrator != null) {
-      return;
-    }
-
-    LOG.info("Starting archive migration from FULL to ARCHIVE flat database mode");
-    snapSyncState.setArchiveMigrationInProgress(true);
-
-    final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
-        worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
-
-    // Create a single-threaded executor for the migration
-    final ScheduledExecutorService migrationExecutor =
-        Executors.newSingleThreadScheduledExecutor(
-            new ThreadFactoryBuilder().setNameFormat("archive-migrator-%d").build());
-
-    archiveMigrator =
-        new BonsaiFlatDbToArchiveMigrator(
-            worldStateKeyValueStorage, trieLogManager, blockchain, migrationExecutor);
-
-    // Subscribe to migration completion events
-    archiveMigrator.subscribe(
-        new BonsaiFlatDbToArchiveMigrator.MigrationCompletionListener() {
-          @Override
-          public void onMigrationComplete(final long startBlock, final long endBlock) {
-            LOG.info("Archive migration completed successfully");
-            migrationExecutor.shutdown();
-            snapSyncState.setArchiveMigrationInProgress(false);
-            archiveMigrator = null;
-            // Re-trigger checkCompletion to move to final completion phase
-            checkCompletion(header);
-          }
-
-          @Override
-          public void onMigrationFailed(
-              final long startBlock, final long endBlock, final Throwable error) {
-            LOG.error("Archive migration failed", error);
-            migrationExecutor.shutdown();
-            snapSyncState.setArchiveMigrationInProgress(false);
-            archiveMigrator = null;
-          }
-        });
-
-    // Run migration asynchronously (non-blocking) from genesis to current head
-    final long chainHead = blockchain.getChainHeadBlockNumber();
-    archiveMigrator.migrate(0L, chainHead);
   }
 
   @Override
