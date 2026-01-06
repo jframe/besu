@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
+import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
@@ -222,6 +223,12 @@ public class BonsaiArchiver implements BlockAddedObserver {
   @Override
   public void onBlockAdded(final BlockAddedEvent addedBlockContext) {
     initialize();
+
+    // Skip archiving if the flat DB mode is not ARCHIVE yet
+    if (rootWorldStateStorage.getFlatDbMode() != FlatDbMode.ARCHIVE) {
+      return;
+    }
+
     final Optional<Long> blockNumber = Optional.of(addedBlockContext.getHeader().getNumber());
     blockNumber.ifPresent(
         blockNum -> {
