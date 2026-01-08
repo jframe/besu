@@ -108,7 +108,6 @@ import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 import org.hyperledger.besu.plugin.ServiceManager;
-import org.hyperledger.besu.plugin.services.BesuEvents.InitialSyncCompletionListener;
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.services.BesuPluginContextImpl;
@@ -125,6 +124,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -830,26 +830,21 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       ethPeers.snapServerPeersNeeded(false);
     }
 
-    // Subscribe to initial sync completion to trigger archive migration if needed
     if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(dataStorageConfiguration.getDataStorageFormat())
         && worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)) {
       final BonsaiFlatDbToArchiveMigrator archiveMigrator =
           createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
+      final AtomicBoolean migrationStarted = new AtomicBoolean(false);
 
-      synchronizer.subscribeInitialSync(
-          new InitialSyncCompletionListener() {
-            @Override
-            public void onInitialSyncCompleted() {
-              LOG.info("Starting Bonsai archive migration from genesis to chain head");
+      synchronizer.subscribeInSync(
+          (inSync) -> {
+            if (inSync && migrationStarted.compareAndSet(false, true)) {
+              LOG.info("Starting Bonsai archive migration");
               final long chainHead = blockchain.getChainHeadBlockNumber();
               archiveMigrator.migrate(0L, chainHead);
             }
-
-            @Override
-            public void onInitialSyncRestart() {
-              // No action needed on restart
-            }
-          });
+          },
+          0);
     }
 
     final Optional<SnapProtocolManager> maybeSnapProtocolManager =

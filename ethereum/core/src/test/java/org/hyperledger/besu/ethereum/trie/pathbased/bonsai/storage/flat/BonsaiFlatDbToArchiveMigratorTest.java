@@ -17,6 +17,8 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -51,6 +53,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -433,6 +436,31 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     Optional<byte[]> progress = storage.get(TRIE_BRANCH_STORAGE, MIGRATION_PROGRESS_KEY);
     assertThat(progress).isPresent();
     assertThat(Bytes.wrap(progress.get()).toLong()).isEqualTo(100L);
+  }
+
+  @Test
+  void upgradeToArchiveModeIsCalledBeforeBlockProcessing() {
+    // Set up multiple blocks so we can verify the order
+    for (long i = 0; i < 5; i++) {
+      BlockHeader header = createBlockHeader(i);
+      when(blockchain.getBlockHeader(i)).thenReturn(Optional.of(header));
+
+      Address testAddress = Address.fromHexString("0x1234567890123456789012345678901234567890");
+      PmtStateTrieAccountValue accountValue =
+          new PmtStateTrieAccountValue(
+              i, Wei.of(100 + i), Hash.hash(Bytes.of((byte) i)), Hash.EMPTY);
+      TrieLogLayer trieLog = createTrieLogWithAccountChange(testAddress, null, accountValue);
+      when(trieLogManager.getTrieLogLayer(header.getHash())).thenReturn(Optional.of(trieLog));
+    }
+
+    CompletableFuture<Void> future = migrator.migrate(0L, 4L);
+    Awaitility.await().until(future::isDone);
+
+    // Verify upgradeToArchiveDbMode is called before any block header is fetched
+    // This ensures the archive mode is set before migration processing begins
+    InOrder inOrder = inOrder(worldStateStorage, blockchain);
+    inOrder.verify(worldStateStorage).upgradeToArchiveDbMode();
+    inOrder.verify(blockchain).getBlockHeader(anyLong());
   }
 
   private TrieLogLayer createEmptyTrieLog() {

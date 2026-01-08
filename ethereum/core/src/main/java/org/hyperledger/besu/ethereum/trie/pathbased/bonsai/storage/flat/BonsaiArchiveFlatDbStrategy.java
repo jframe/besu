@@ -146,6 +146,13 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       if (accountFound.isPresent()) {
         getAccountFromArchiveCounter.inc();
       } else {
+        // Fallback to non-archive lookup
+        final Optional<Bytes> nonArchiveAccount =
+            storage.get(ACCOUNT_INFO_STATE, accountHash.toArrayUnsafe()).map(Bytes::wrap);
+        if (nonArchiveAccount.isPresent()) {
+          getAccountFoundInFlatDatabaseCounter.inc();
+          return nonArchiveAccount;
+        }
         getAccountNotFoundInFlatDatabaseCounter.inc();
       }
     } else {
@@ -360,6 +367,13 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       if (storageFound.isPresent()) {
         getStorageFromArchiveCounter.inc();
       } else {
+        // Fallback to non-archive lookup
+        final Optional<Bytes> nonArchiveStorage =
+            storage.get(ACCOUNT_STORAGE_STORAGE, naturalKey).map(Bytes::wrap);
+        if (nonArchiveStorage.isPresent()) {
+          getStorageValueFlatDatabaseCounter.inc();
+          return nonArchiveStorage;
+        }
         getStorageValueNotFoundInFlatDatabaseCounter.inc();
       }
     } else {

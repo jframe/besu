@@ -16,11 +16,13 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -189,5 +191,176 @@ public class BonsaiArchiveFlatDbStrategyTest {
         WORLD_BLOCK_NUMBER_KEY,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
     tx.commit();
+  }
+
+  @Test
+  public void getFlatAccountFallsBackToNonArchiveWhenArchiveNotFound() {
+    // Set world block number so archive strategy looks for suffixed keys
+    setWorldBlockNumber(5);
+
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000006").addressHash();
+    final Bytes accountValue = Bytes.fromHexString("0xDEADBEEF");
+
+    // Store value using non-archive format (simple key without suffix)
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(ACCOUNT_INFO_STATE, accountHash.toArrayUnsafe(), accountValue.toArrayUnsafe());
+    tx.commit();
+
+    // Verify no archive-formatted key exists
+    final byte[] archiveKey =
+        Bytes.concatenate(accountHash, Bytes.ofUnsignedLong(5)).toArrayUnsafe();
+    assertThat(storage.get(ACCOUNT_INFO_STATE, archiveKey)).isEmpty();
+
+    // getFlatAccount should fallback to non-archive lookup and find the value
+    final Optional<Bytes> result =
+        archiveFlatDbStrategy.getFlatAccount(
+            Optional::empty, (location, hash) -> Optional.empty(), accountHash, storage);
+
+    assertThat(result).isPresent();
+    assertThat(result.get()).isEqualTo(accountValue);
+  }
+
+  @Test
+  public void getFlatAccountReturnsArchiveValueWhenBothExist() {
+    // Set world block number so archive strategy looks for suffixed keys
+    setWorldBlockNumber(5);
+
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000007").addressHash();
+    final Bytes nonArchiveValue = Bytes.fromHexString("0x01020304");
+    final Bytes archiveValue = Bytes.fromHexString("0x05060708");
+
+    // Store value using non-archive format
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(ACCOUNT_INFO_STATE, accountHash.toArrayUnsafe(), nonArchiveValue.toArrayUnsafe());
+    tx.commit();
+
+    // Store value using archive format with block 5 suffix
+    final byte[] archiveKey =
+        Bytes.concatenate(accountHash, Bytes.ofUnsignedLong(5)).toArrayUnsafe();
+    tx = storage.startTransaction();
+    tx.put(ACCOUNT_INFO_STATE, archiveKey, archiveValue.toArrayUnsafe());
+    tx.commit();
+
+    // getFlatAccount should return the archive value, not the non-archive fallback
+    final Optional<Bytes> result =
+        archiveFlatDbStrategy.getFlatAccount(
+            Optional::empty, (location, hash) -> Optional.empty(), accountHash, storage);
+
+    assertThat(result).isPresent();
+    assertThat(result.get()).isEqualTo(archiveValue);
+  }
+
+  @Test
+  public void getFlatStorageValueFallsBackToNonArchiveWhenArchiveNotFound() {
+    // Set world block number so archive strategy looks for suffixed keys
+    setWorldBlockNumber(5);
+
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000008").addressHash();
+    final Hash slotHash = Hash.hash(Bytes.of(1, 2, 3));
+    final StorageSlotKey slotKey = new StorageSlotKey(slotHash, Optional.empty());
+    final Bytes storageValue = Bytes.fromHexString("0xCAFEBABE");
+
+    // Store value using non-archive format (account hash + slot hash, no suffix)
+    final byte[] nonArchiveKey = Bytes.concatenate(accountHash, slotHash).toArrayUnsafe();
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(ACCOUNT_STORAGE_STORAGE, nonArchiveKey, storageValue.toArrayUnsafe());
+    tx.commit();
+
+    // Verify no archive-formatted key exists
+    final byte[] archiveKey =
+        Bytes.concatenate(accountHash, slotHash, Bytes.ofUnsignedLong(5)).toArrayUnsafe();
+    assertThat(storage.get(ACCOUNT_STORAGE_STORAGE, archiveKey)).isEmpty();
+
+    // getFlatStorageValueByStorageSlotKey should fallback to non-archive lookup
+    final Optional<Bytes> result =
+        archiveFlatDbStrategy.getFlatStorageValueByStorageSlotKey(
+            Optional::empty,
+            Optional::empty,
+            (location, hash) -> Optional.empty(),
+            accountHash,
+            slotKey,
+            storage);
+
+    assertThat(result).isPresent();
+    assertThat(result.get()).isEqualTo(storageValue);
+  }
+
+  @Test
+  public void getFlatStorageValueReturnsArchiveValueWhenBothExist() {
+    // Set world block number so archive strategy looks for suffixed keys
+    setWorldBlockNumber(5);
+
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000009").addressHash();
+    final Hash slotHash = Hash.hash(Bytes.of(4, 5, 6));
+    final StorageSlotKey slotKey = new StorageSlotKey(slotHash, Optional.empty());
+    final Bytes nonArchiveValue = Bytes.fromHexString("0xAA11BB22");
+    final Bytes archiveValue = Bytes.fromHexString("0xCC33DD44");
+
+    // Store value using non-archive format
+    final byte[] nonArchiveKey = Bytes.concatenate(accountHash, slotHash).toArrayUnsafe();
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(ACCOUNT_STORAGE_STORAGE, nonArchiveKey, nonArchiveValue.toArrayUnsafe());
+    tx.commit();
+
+    // Store value using archive format with block 5 suffix
+    final byte[] archiveKey =
+        Bytes.concatenate(accountHash, slotHash, Bytes.ofUnsignedLong(5)).toArrayUnsafe();
+    tx = storage.startTransaction();
+    tx.put(ACCOUNT_STORAGE_STORAGE, archiveKey, archiveValue.toArrayUnsafe());
+    tx.commit();
+
+    // getFlatStorageValueByStorageSlotKey should return archive value, not fallback
+    final Optional<Bytes> result =
+        archiveFlatDbStrategy.getFlatStorageValueByStorageSlotKey(
+            Optional::empty,
+            Optional::empty,
+            (location, hash) -> Optional.empty(),
+            accountHash,
+            slotKey,
+            storage);
+
+    assertThat(result).isPresent();
+    assertThat(result.get()).isEqualTo(archiveValue);
+  }
+
+  @Test
+  public void getFlatAccountReturnsEmptyWhenNeitherArchiveNorNonArchiveExists() {
+    setWorldBlockNumber(5);
+
+    final Hash accountHash =
+        Address.fromHexString("0x000000000000000000000000000000000000000A").addressHash();
+
+    // Don't store any value
+    final Optional<Bytes> result =
+        archiveFlatDbStrategy.getFlatAccount(
+            Optional::empty, (location, hash) -> Optional.empty(), accountHash, storage);
+
+    assertThat(result).isEmpty();
+  }
+
+  @Test
+  public void getFlatStorageValueReturnsEmptyWhenNeitherArchiveNorNonArchiveExists() {
+    setWorldBlockNumber(5);
+
+    final Hash accountHash =
+        Address.fromHexString("0x000000000000000000000000000000000000000B").addressHash();
+    final Hash slotHash = Hash.hash(Bytes.of(7, 8, 9));
+    final StorageSlotKey slotKey = new StorageSlotKey(slotHash, Optional.empty());
+
+    // Don't store any value
+    final Optional<Bytes> result =
+        archiveFlatDbStrategy.getFlatStorageValueByStorageSlotKey(
+            Optional::empty,
+            Optional::empty,
+            (location, hash) -> Optional.empty(),
+            accountHash,
+            slotKey,
+            storage);
+
+    assertThat(result).isEmpty();
   }
 }

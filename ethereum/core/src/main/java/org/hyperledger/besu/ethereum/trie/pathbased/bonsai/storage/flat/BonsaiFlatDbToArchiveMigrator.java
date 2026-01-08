@@ -142,6 +142,10 @@ public class BonsaiFlatDbToArchiveMigrator {
           try {
             LOG.info("Starting archive migration from block {} to {}", startBlock, endBlock);
 
+            // Upgrade to archive mode before starting migration so new writes use archive format
+            // The archive strategy will fallback to non-archive lookup for data not yet migrated
+            worldStateStorage.upgradeToArchiveDbMode();
+
             long currentBlock = loadProgress().orElse(startBlock);
 
             if (currentBlock > startBlock) {
@@ -198,7 +202,6 @@ public class BonsaiFlatDbToArchiveMigrator {
               tx.commit();
             }
 
-            worldStateStorage.upgradeToArchiveDbMode();
             saveProgress(endBlock);
 
             LOG.info(
