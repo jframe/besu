@@ -137,25 +137,24 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       final PathBasedWorldState mutableState, final Hash blockHash) {
 
     // Before rolling, ensure WORLD_BLOCK_NUMBER_KEY is correct for the target block.
-    // The archive flat DB strategy calculates write block = WORLD_BLOCK_NUMBER_KEY + 1,
-    // so we need to set it to targetBlockNumber - 1.
+    // After rolling to block P (the parent), WORLD_BLOCK_NUMBER_KEY should be P.
+    // Then when persist() runs for block P+1, the archive flat DB strategy calculates
+    // write block = WORLD_BLOCK_NUMBER_KEY + 1 = P + 1, which is correct.
     blockchain
         .getBlockHeader(blockHash)
         .ifPresent(
             targetHeader -> {
               final long targetBlockNumber = targetHeader.getNumber();
-              final long requiredStoredBlockNumber =
-                  targetBlockNumber > 0 ? targetBlockNumber - 1 : 0;
 
               final long currentStoredBlockNumber =
                   worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(-1L);
 
-              if (currentStoredBlockNumber != requiredStoredBlockNumber) {
+              if (currentStoredBlockNumber != targetBlockNumber) {
                 LOG.debug(
                     "Archive rollback to block {}: updating WORLD_BLOCK_NUMBER_KEY from {} to {}",
                     targetBlockNumber,
                     currentStoredBlockNumber,
-                    requiredStoredBlockNumber);
+                    targetBlockNumber);
 
                 // Commit the update directly to storage before the parent's persist
                 final PathBasedWorldStateKeyValueStorage.Updater updater =
@@ -165,7 +164,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
                     .put(
                         TRIE_BRANCH_STORAGE,
                         WORLD_BLOCK_NUMBER_KEY,
-                        Bytes.ofUnsignedLong(requiredStoredBlockNumber).toArrayUnsafe());
+                        Bytes.ofUnsignedLong(targetBlockNumber).toArrayUnsafe());
                 updater.commitComposedOnly();
               }
             });
