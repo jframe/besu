@@ -29,7 +29,9 @@ import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncDownloader;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.FastSyncState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.NoSyncRequiredState;
 import org.hyperledger.besu.ethereum.eth.sync.fastsync.worldstate.FastDownloaderFactory;
+import org.hyperledger.besu.ethereum.eth.sync.fullsync.FlexibleBlockHashTerminalCondition;
 import org.hyperledger.besu.ethereum.eth.sync.fullsync.FullSyncDownloader;
+import org.hyperledger.besu.ethereum.eth.sync.fullsync.FullSyncTargetBlockSelector;
 import org.hyperledger.besu.ethereum.eth.sync.fullsync.SyncTerminationCondition;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapDownloaderFactory;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.context.SnapSyncStatePersistenceManager;
@@ -76,6 +78,7 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
   private final ProtocolContext protocolContext;
   private final PivotBlockSelector pivotBlockSelector;
   private final SyncTerminationCondition terminationCondition;
+  private final Optional<FullSyncTargetBlockSelector> fullSyncTargetSelector;
 
   public DefaultSynchronizer(
       final SynchronizerConfiguration syncConfig,
@@ -91,7 +94,8 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
       final Clock clock,
       final MetricsSystem metricsSystem,
       final SyncTerminationCondition terminationCondition,
-      final PivotBlockSelector pivotBlockSelector) {
+      final PivotBlockSelector pivotBlockSelector,
+      final Optional<Supplier<Optional<ForkchoiceEvent>>> forkchoiceStateSupplier) {
     this.syncState = syncState;
     this.pivotBlockSelector = pivotBlockSelector;
     this.protocolContext = protocolContext;
@@ -110,8 +114,28 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
       SnapServerChecker.createAndSetSnapServerChecker(ethContext, metricsSystem);
     }
 
+    // For post-merge full sync, create the target selector and don't skip downloader creation
+    final boolean isPostMergeFullSync =
+        terminationCondition instanceof FlexibleBlockHashTerminalCondition
+            && forkchoiceStateSupplier.isPresent();
+
+    if (isPostMergeFullSync) {
+      this.fullSyncTargetSelector =
+          Optional.of(
+              new FullSyncTargetBlockSelector(
+                  forkchoiceStateSupplier.get(),
+                  (FlexibleBlockHashTerminalCondition) terminationCondition));
+      LOG.info("Post-merge full sync mode enabled");
+    } else {
+      this.fullSyncTargetSelector = Optional.empty();
+    }
+
+    // Skip creating downloaders if sync should stop (unless post-merge full sync)
+    final boolean skipDownloaders =
+        terminationCondition.shouldStopDownload() && !isPostMergeFullSync;
+
     this.blockPropagationManager =
-        terminationCondition.shouldStopDownload()
+        skipDownloaders
             ? Optional.empty()
             : Optional.of(
                 new BlockPropagationManager(
@@ -127,7 +151,7 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
     syncDurationMetrics = new SyncDurationMetrics(metricsSystem);
 
     this.fullSyncDownloader =
-        terminationCondition.shouldStopDownload()
+        skipDownloaders
             ? Optional.empty()
             : Optional.of(
                 new FullSyncDownloader(
@@ -230,8 +254,13 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
 
       CompletableFuture<Void> future;
       if (fastSyncDownloader.isPresent()) {
+        // SNAP/FAST/CHECKPOINT sync path
         future = fastSyncDownloader.get().start().thenCompose(this::handleSyncResult);
+      } else if (fullSyncTargetSelector.isPresent()) {
+        // Post-merge full sync path
+        future = startPostMergeFullSync();
       } else {
+        // Pre-merge full sync path
         syncState.markInitialSyncPhaseAsDone();
         future = startFullSync();
       }
@@ -258,6 +287,23 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
 
   @Override
   public void awaitStop() {}
+
+  private CompletableFuture<Void> startPostMergeFullSync() {
+    LOG.info("Starting post-merge full sync, waiting for target from consensus layer");
+    return fullSyncTargetSelector
+        .orElseThrow(() -> new IllegalStateException("Full sync target selector not available"))
+        .waitForTarget()
+        .thenCompose(
+            targetHash -> {
+              LOG.info("Full sync target received: {}", targetHash);
+              return startFullSync();
+            })
+        .thenRun(
+            () -> {
+              syncState.markInitialSyncPhaseAsDone();
+              LOG.info("Post-merge full sync complete, initial sync phase done");
+            });
+  }
 
   private CompletableFuture<Void> handleSyncResult(final FastSyncState result) {
     if (!running.get()) {
@@ -437,8 +483,7 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
 
   @Override
   public void onNewUnverifiedForkchoice(final ForkchoiceEvent event) {
-    if (this.blockPropagationManager.isPresent()) {
-      this.blockPropagationManager.get().onNewUnverifiedForkchoice(event);
-    }
+    fullSyncTargetSelector.ifPresent(selector -> selector.onNewForkchoiceEvent(event));
+    blockPropagationManager.ifPresent(manager -> manager.onNewUnverifiedForkchoice(event));
   }
 }

@@ -21,6 +21,7 @@ import org.hyperledger.besu.components.BesuComponent;
 import org.hyperledger.besu.config.CheckpointConfigOptions;
 import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.config.GenesisConfigOptions;
+import org.hyperledger.besu.consensus.merge.ForkchoiceEvent;
 import org.hyperledger.besu.consensus.merge.MergeContext;
 import org.hyperledger.besu.consensus.merge.UnverifiedForkchoiceSupplier;
 import org.hyperledger.besu.consensus.qbft.BFTPivotSelectorFromPeers;
@@ -1009,6 +1010,10 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       final EthProtocolManager ethProtocolManager,
       final PivotBlockSelector pivotBlockSelector) {
 
+    // For post-merge full sync, set up forkchoice supplier for sync target selection
+    final Optional<Supplier<Optional<ForkchoiceEvent>>> forkchoiceSupplier =
+        createForkchoiceSupplierForFullSync(protocolContext);
+
     return new DefaultSynchronizer(
         syncConfig,
         protocolSchedule,
@@ -1023,7 +1028,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         clock,
         metricsSystem,
         getFullSyncTerminationCondition(protocolContext.getBlockchain()),
-        pivotBlockSelector);
+        pivotBlockSelector,
+        forkchoiceSupplier);
   }
 
   private PivotBlockSelector createPivotSelector(
@@ -1073,12 +1079,66 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
   }
 
   /**
+   * Creates a forkchoice supplier for post-merge full sync. Only creates the supplier when doing
+   * full sync on a post-merge-at-genesis network.
+   *
+   * @param protocolContext the protocol context
+   * @return Optional containing the forkchoice supplier, or empty if not needed
+   */
+  private Optional<Supplier<Optional<ForkchoiceEvent>>> createForkchoiceSupplierForFullSync(
+      final ProtocolContext protocolContext) {
+    if (!SyncMode.isFullSync(syncConfig.getSyncMode())) {
+      return Optional.empty();
+    }
+    if (!isPostMergeAtGenesis(protocolContext.getBlockchain())) {
+      return Optional.empty();
+    }
+
+    final MergeContext mergeContext = protocolContext.getConsensusContext(MergeContext.class);
+    final UnverifiedForkchoiceSupplier forkchoiceSupplier = new UnverifiedForkchoiceSupplier();
+    mergeContext.addNewUnverifiedForkchoiceListener(forkchoiceSupplier);
+    LOG.info("Created forkchoice supplier for post-merge full sync");
+    return Optional.of(forkchoiceSupplier);
+  }
+
+  /**
+   * Checks if this is a post-merge network at genesis (TTD already reached at block 0).
+   *
+   * @param blockchain the blockchain
+   * @return true if the network is post-merge at genesis
+   */
+  protected boolean isPostMergeAtGenesis(final Blockchain blockchain) {
+    var maybeTtd = genesisConfigOptions.getTerminalTotalDifficulty();
+    if (maybeTtd.isEmpty()) {
+      return false;
+    }
+
+    var ttd = Difficulty.of(maybeTtd.get());
+    // Post-merge at genesis if TTD is zero or genesis block difficulty >= TTD
+    Optional<BlockHeader> maybeGenesis = blockchain.getBlockHeader(0);
+    if (maybeGenesis.isEmpty()) {
+      return false;
+    }
+
+    BlockHeader genesis = maybeGenesis.get();
+    return ttd.equals(Difficulty.ZERO) || genesis.getDifficulty().greaterOrEqualThan(ttd);
+  }
+
+  /**
    * Gets full sync termination condition.
    *
    * @param blockchain the blockchain
    * @return the full sync termination condition
    */
   protected SyncTerminationCondition getFullSyncTerminationCondition(final Blockchain blockchain) {
+    // Check if this is a post-merge-at-genesis network
+    if (isPostMergeAtGenesis(blockchain)) {
+      // Use flexible block hash - will be updated when we receive FCU
+      // Starting with Hash.ZERO means no target is set yet
+      return SyncTerminationCondition.blockHash(Hash.ZERO, blockchain);
+    }
+
+    // Normal pre-merge or transitioning network behavior
     return genesisConfigOptions
         .getTerminalTotalDifficulty()
         .map(difficulty -> SyncTerminationCondition.difficulty(difficulty, blockchain))
