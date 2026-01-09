@@ -285,8 +285,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
     // key suffixed with block context, or MIN_BLOCK_SUFFIX if we have no context:
     BonsaiContext context = getStateArchiveContextForWrite(storage).get();
-    byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
 
     LOG.info(
         "FlatDB PUT account: address={}, block={}, valueSize={}",
@@ -305,8 +304,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
     // insert a key suffixed with block context, with 'deleted account' value
     BonsaiContext context = getStateArchiveContextForWrite(storage).get();
-    byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
 
     LOG.info(
         "FlatDB REMOVE account: address={}, block={}",

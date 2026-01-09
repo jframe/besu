@@ -14,6 +14,9 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
+
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -24,6 +27,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedWor
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
@@ -33,6 +37,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -112,6 +117,60 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       }
       return super.getWorldState(queryParams);
     }
+  }
+
+  /**
+   * Overrides the parent rollFullWorldStateToBlockHash to ensure WORLD_BLOCK_NUMBER_KEY is correct
+   * before flat DB writes occur during persist.
+   *
+   * <p>This is critical during reorgs where WORLD_BLOCK_NUMBER_KEY in committed storage may be
+   * stale. For example, if block N (v1) was persisted and then block N (v2) arrives as a reorg, the
+   * committed WORLD_BLOCK_NUMBER_KEY would still be N from v1. Without this preparation, the
+   * archive flat DB strategy would calculate write block = N + 1, which is incorrect.
+   *
+   * @param mutableState the mutable world state to roll
+   * @param blockHash the target block hash to roll to
+   * @return the rolled world state, or empty if rolling failed
+   */
+  @Override
+  protected Optional<MutableWorldState> rollFullWorldStateToBlockHash(
+      final PathBasedWorldState mutableState, final Hash blockHash) {
+
+    // Before rolling, ensure WORLD_BLOCK_NUMBER_KEY is correct for the target block.
+    // The archive flat DB strategy calculates write block = WORLD_BLOCK_NUMBER_KEY + 1,
+    // so we need to set it to targetBlockNumber - 1.
+    blockchain
+        .getBlockHeader(blockHash)
+        .ifPresent(
+            targetHeader -> {
+              final long targetBlockNumber = targetHeader.getNumber();
+              final long requiredStoredBlockNumber =
+                  targetBlockNumber > 0 ? targetBlockNumber - 1 : 0;
+
+              final long currentStoredBlockNumber =
+                  worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(-1L);
+
+              if (currentStoredBlockNumber != requiredStoredBlockNumber) {
+                LOG.debug(
+                    "Archive rollback to block {}: updating WORLD_BLOCK_NUMBER_KEY from {} to {}",
+                    targetBlockNumber,
+                    currentStoredBlockNumber,
+                    requiredStoredBlockNumber);
+
+                // Commit the update directly to storage before the parent's persist
+                final PathBasedWorldStateKeyValueStorage.Updater updater =
+                    worldStateKeyValueStorage.updater();
+                updater
+                    .getWorldStateTransaction()
+                    .put(
+                        TRIE_BRANCH_STORAGE,
+                        WORLD_BLOCK_NUMBER_KEY,
+                        Bytes.ofUnsignedLong(requiredStoredBlockNumber).toArrayUnsafe());
+                updater.commitComposedOnly();
+              }
+            });
+
+    return super.rollFullWorldStateToBlockHash(mutableState, blockHash);
   }
 
   // Archive-specific rollback behaviour. There is no trie-log roll forward/backward, we just roll
