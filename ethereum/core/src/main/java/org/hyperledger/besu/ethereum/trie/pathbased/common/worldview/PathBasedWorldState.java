@@ -221,8 +221,6 @@ public abstract class PathBasedWorldState
     Runnable cacheWorldState = () -> {};
 
     try {
-      final long blockNumber = blockHeader == null ? 0L : blockHeader.getNumber();
-      LOG.info("Computing root and committing flat DB updates for block {}", blockNumber);
       final Hash calculatedRootHash =
           committer.computeRootAndCommit(this, stateUpdater, blockHeader, worldStateConfig);
 
@@ -251,17 +249,13 @@ public abstract class PathBasedWorldState
           .getWorldStateTransaction()
           .put(TRIE_BRANCH_STORAGE, WORLD_ROOT_HASH_KEY, calculatedRootHash.toArrayUnsafe());
 
-      LOG.info(
-          "Persisting world state: writing WORLD_BLOCK_NUMBER_KEY={} to transaction for block {}",
-          blockNumber,
-          blockHeader == null ? "null" : blockHeader.getHash());
-
       stateUpdater
           .getWorldStateTransaction()
           .put(
               TRIE_BRANCH_STORAGE,
               WORLD_BLOCK_NUMBER_KEY,
-              Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+              Bytes.ofUnsignedLong(blockHeader == null ? 0L : blockHeader.getNumber())
+                  .toArrayUnsafe());
       worldStateRootHash = calculatedRootHash;
       success = true;
     } finally {
