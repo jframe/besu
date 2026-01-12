@@ -830,21 +830,25 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       ethPeers.snapServerPeersNeeded(false);
     }
 
-    if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(dataStorageConfiguration.getDataStorageFormat())
-        && worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)) {
+    if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(
+        dataStorageConfiguration.getDataStorageFormat())) {
       final BonsaiFlatDbToArchiveMigrator archiveMigrator =
           createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
-      final AtomicBoolean migrationStarted = new AtomicBoolean(false);
+      synchronizer.setBonsaiArchiveMigrator(archiveMigrator);
 
-      synchronizer.subscribeInSync(
-          (inSync) -> {
-            if (inSync && migrationStarted.compareAndSet(false, true)) {
-              LOG.info("Starting Bonsai archive migration");
-              final long chainHead = blockchain.getChainHeadBlockNumber();
-              archiveMigrator.migrate(0L, chainHead);
-            }
-          },
-          0);
+      if (worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)) {
+        final AtomicBoolean migrationStarted = new AtomicBoolean(false);
+
+        synchronizer.subscribeInSync(
+            (inSync) -> {
+              if (inSync && migrationStarted.compareAndSet(false, true)) {
+                LOG.info("Starting Bonsai archive migration");
+                final long chainHead = blockchain.getChainHeadBlockNumber();
+                archiveMigrator.migrate(0L, chainHead);
+              }
+            },
+            0);
+      }
     }
 
     final Optional<SnapProtocolManager> maybeSnapProtocolManager =

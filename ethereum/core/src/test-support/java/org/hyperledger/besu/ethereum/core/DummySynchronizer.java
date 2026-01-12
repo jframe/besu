@@ -100,4 +100,14 @@ public class DummySynchronizer implements Synchronizer {
   public boolean unsubscribeInitialSync(final long listenerId) {
     return false;
   }
+
+  @Override
+  public boolean migrateToBonsaiArchive(final long startBlock, final long endBlock) {
+    return false;
+  }
+
+  @Override
+  public boolean isBonsaiArchiveMigrationSupported() {
+    return false;
+  }
 }

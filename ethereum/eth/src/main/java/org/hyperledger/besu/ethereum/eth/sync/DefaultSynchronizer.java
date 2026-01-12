@@ -38,6 +38,7 @@ import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
@@ -76,6 +77,7 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
   private final ProtocolContext protocolContext;
   private final PivotBlockSelector pivotBlockSelector;
   private final SyncTerminationCondition terminationCondition;
+  private Optional<BonsaiFlatDbToArchiveMigrator> bonsaiArchiveMigrator = Optional.empty();
 
   public DefaultSynchronizer(
       final SynchronizerConfiguration syncConfig,
@@ -421,6 +423,27 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
   @Override
   public boolean unsubscribeInitialSync(final long listenerId) {
     return syncState.unsubscribeInitialConditionReached(listenerId);
+  }
+
+  /**
+   * Sets the Bonsai archive migrator for this synchronizer.
+   *
+   * @param migrator the migrator to use for archive migration
+   */
+  public void setBonsaiArchiveMigrator(final BonsaiFlatDbToArchiveMigrator migrator) {
+    this.bonsaiArchiveMigrator = Optional.ofNullable(migrator);
+  }
+
+  @Override
+  public boolean migrateToBonsaiArchive(final long startBlock, final long endBlock) {
+    if (bonsaiArchiveMigrator.isEmpty()) {
+      LOG.warn("Bonsai archive migration not supported - migrator not configured");
+      return false;
+    }
+
+    LOG.info("Starting Bonsai archive migration from block {} to block {}", startBlock, endBlock);
+    bonsaiArchiveMigrator.get().migrate(startBlock, endBlock);
+    return true;
   }
 
   private Void finalizeSync(final Void unused) {

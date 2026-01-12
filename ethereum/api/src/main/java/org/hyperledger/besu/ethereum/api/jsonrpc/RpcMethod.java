@@ -52,6 +52,7 @@ public enum RpcMethod {
   DEBUG_GET_RAW_BLOCK("debug_getRawBlock"),
   DEBUG_GET_RAW_RECEIPTS("debug_getRawReceipts"),
   DEBUG_GET_RAW_TRANSACTION("debug_getRawTransaction"),
+  DEBUG_MIGRATE_BONSAI_ARCHIVE("debug_migrateBonsaiArchive"),
   ENGINE_GET_BLOBS_V1("engine_getBlobsV1"),
   ENGINE_GET_BLOBS_V2("engine_getBlobsV2"),
   ENGINE_GET_PAYLOAD_V1("engine_getPayloadV1"),
