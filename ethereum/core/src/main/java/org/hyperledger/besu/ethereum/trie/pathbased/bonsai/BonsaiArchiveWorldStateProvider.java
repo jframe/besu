@@ -27,7 +27,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedWor
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
@@ -135,40 +134,17 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   @Override
   protected Optional<MutableWorldState> rollFullWorldStateToBlockHash(
       final PathBasedWorldState mutableState, final Hash blockHash) {
-
-    // Before rolling, ensure WORLD_BLOCK_NUMBER_KEY is correct for the target block.
-    // After rolling to block P (the parent), WORLD_BLOCK_NUMBER_KEY should be P.
-    // Then when persist() runs for block P+1, the archive flat DB strategy calculates
-    // write block = WORLD_BLOCK_NUMBER_KEY + 1 = P + 1, which is correct.
-    blockchain
-        .getBlockHeader(blockHash)
-        .ifPresent(
-            targetHeader -> {
-              final long targetBlockNumber = targetHeader.getNumber();
-
-              final long currentStoredBlockNumber =
-                  worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(-1L);
-
-              if (currentStoredBlockNumber != targetBlockNumber) {
-                LOG.debug(
-                    "Archive rollback to block {}: updating WORLD_BLOCK_NUMBER_KEY from {} to {}",
-                    targetBlockNumber,
-                    currentStoredBlockNumber,
-                    targetBlockNumber);
-
-                // Commit the update directly to storage before the parent's persist
-                final PathBasedWorldStateKeyValueStorage.Updater updater =
-                    worldStateKeyValueStorage.updater();
-                updater
-                    .getWorldStateTransaction()
-                    .put(
-                        TRIE_BRANCH_STORAGE,
-                        WORLD_BLOCK_NUMBER_KEY,
-                        Bytes.ofUnsignedLong(targetBlockNumber).toArrayUnsafe());
-                updater.commitComposedOnly();
-              }
-            });
-
+    var targetBlockNumber = blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber);
+    var currentWorldStateBlockNumber = worldStateKeyValueStorage.getWorldStateBlockNumber();
+    if (targetBlockNumber.isPresent() && !currentWorldStateBlockNumber.equals(targetBlockNumber)) {
+      var updater = worldStateKeyValueStorage.updater();
+      var worldStateTransaction = updater.getWorldStateTransaction();
+      worldStateTransaction.put(
+          TRIE_BRANCH_STORAGE,
+          WORLD_BLOCK_NUMBER_KEY,
+          Bytes.ofUnsignedLong(targetBlockNumber.get()).toArrayUnsafe());
+      updater.commitComposedOnly();
+    }
     return super.rollFullWorldStateToBlockHash(mutableState, blockHash);
   }
 
