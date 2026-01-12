@@ -28,6 +28,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.WorldStatePreimageKeyValue
 import org.hyperledger.besu.ethereum.trie.forest.ForestWorldStateArchive;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.forest.worldview.ForestMutableWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiArchiveWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
@@ -116,6 +117,25 @@ public class InMemoryKeyValueStorageProvider extends KeyValueStorageProvider {
         bonsaiCachedMerkleTrieLoader,
         serviceManager,
         evmConfiguration,
+        throwingWorldStateHealerSupplier(),
+        new CodeCache());
+  }
+
+  public static BonsaiArchiveWorldStateProvider createBonsaiArchiveInMemoryWorldStateArchive(
+      final Blockchain blockchain) {
+    final InMemoryKeyValueStorageProvider inMemoryKeyValueStorageProvider =
+        new InMemoryKeyValueStorageProvider();
+    final BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader =
+        new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem());
+    return new BonsaiArchiveWorldStateProvider(
+        (BonsaiWorldStateKeyValueStorage)
+            inMemoryKeyValueStorageProvider.createWorldStateStorage(
+                DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG),
+        blockchain,
+        Optional.of(512L),
+        bonsaiCachedMerkleTrieLoader,
+        null,
+        EvmConfiguration.DEFAULT,
         throwingWorldStateHealerSupplier(),
         new CodeCache());
   }

@@ -88,6 +88,10 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   @Override
   public Optional<MutableWorldState> getWorldState(final WorldStateQueryParams queryParams) {
     if (queryParams.shouldWorldStateUpdateHead()) {
+      // For archive mode, we must ensure WORLD_BLOCK_NUMBER_KEY is set to the block number for the
+      // requested world state before processing a new block. This is critical during reorgs where
+      // the WORLD_BLOCK_NUMBER_KEY may need to be moved to a prior block number
+      updateWorldBlockNumber(queryParams.getBlockHash());
       return getFullWorldState(queryParams);
     } else {
       // If we are creating a world state for a historic/archive block, we have 2 options:
@@ -118,22 +122,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     }
   }
 
-  /**
-   * Overrides the parent rollFullWorldStateToBlockHash to ensure WORLD_BLOCK_NUMBER_KEY is correct
-   * before flat DB writes occur during persist.
-   *
-   * <p>This is critical during reorgs where WORLD_BLOCK_NUMBER_KEY in committed storage may be
-   * stale. For example, if block N (v1) was persisted and then block N (v2) arrives as a reorg, the
-   * committed WORLD_BLOCK_NUMBER_KEY would still be N from v1. Without this preparation, the
-   * archive flat DB strategy would calculate write block = N + 1, which is incorrect.
-   *
-   * @param mutableState the mutable world state to roll
-   * @param blockHash the target block hash to roll to
-   * @return the rolled world state, or empty if rolling failed
-   */
-  @Override
-  protected Optional<MutableWorldState> rollFullWorldStateToBlockHash(
-      final PathBasedWorldState mutableState, final Hash blockHash) {
+  private void updateWorldBlockNumber(final Hash blockHash) {
     var targetBlockNumber = blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber);
     var currentWorldStateBlockNumber = worldStateKeyValueStorage.getWorldStateBlockNumber();
     if (targetBlockNumber.isPresent() && !currentWorldStateBlockNumber.equals(targetBlockNumber)) {
@@ -145,7 +134,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
           Bytes.ofUnsignedLong(targetBlockNumber.get()).toArrayUnsafe());
       updater.commitComposedOnly();
     }
-    return super.rollFullWorldStateToBlockHash(mutableState, blockHash);
   }
 
   // Archive-specific rollback behaviour. There is no trie-log roll forward/backward, we just roll
