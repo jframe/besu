@@ -39,6 +39,7 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbToArchiveMigrator;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbToArchiveMigrator.MigrationStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiver;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
@@ -438,14 +439,21 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
 
   @Override
   public boolean migrateToBonsaiArchive(
-      final long startBlock, final long endBlock, final boolean resetProgress) {
+      final long startBlock,
+      final long endBlock,
+      final boolean resetProgress,
+      final MigrationStrategy strategy) {
     if (bonsaiArchiveMigrator.isEmpty()) {
       LOG.warn("Bonsai archive migration not supported - migrator not configured");
       return false;
     }
 
-    LOG.info("Starting Bonsai archive migration from block {} to block {}", startBlock, endBlock);
-    bonsaiArchiveMigrator.get().migrate(startBlock, endBlock, resetProgress);
+    LOG.info(
+        "Starting Bonsai archive migration from block {} to block {} using {} strategy",
+        startBlock,
+        endBlock,
+        strategy);
+    bonsaiArchiveMigrator.get().migrate(startBlock, endBlock, resetProgress, strategy);
     return true;
   }
 

@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.core;
 
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbToArchiveMigrator.MigrationStrategy;
 import org.hyperledger.besu.plugin.data.SyncStatus;
 import org.hyperledger.besu.plugin.services.BesuEvents;
 
@@ -103,7 +104,10 @@ public class DummySynchronizer implements Synchronizer {
 
   @Override
   public boolean migrateToBonsaiArchive(
-      final long startBlock, final long endBlock, final boolean resetProgress) {
+      final long startBlock,
+      final long endBlock,
+      final boolean resetProgress,
+      final MigrationStrategy strategy) {
     return false;
   }
 
