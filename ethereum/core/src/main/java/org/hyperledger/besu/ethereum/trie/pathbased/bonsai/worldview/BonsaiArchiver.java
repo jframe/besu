@@ -28,6 +28,7 @@ import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import java.util.Optional;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
@@ -60,6 +61,10 @@ public class BonsaiArchiver implements BlockAddedObserver {
   // For logging progress. Saves doing a DB read just to record our progress
   final AtomicLong latestArchivedBlock = new AtomicLong(0);
 
+  // Tracks whether archive migration is in progress. Archiver should not run until migration
+  // completes.
+  private final AtomicBoolean migrationInProgress = new AtomicBoolean(false);
+
   public BonsaiArchiver(
       final PathBasedWorldStateKeyValueStorage rootWorldStateStorage,
       final Blockchain blockchain,
@@ -82,6 +87,32 @@ public class BonsaiArchiver implements BlockAddedObserver {
   public void initialize() {
     // Read from the DB where we got to previously
     latestArchivedBlock.set(rootWorldStateStorage.getLatestArchivedBlock().orElse(0L));
+  }
+
+  /**
+   * Sets the migration in progress flag. When true, the archiver will not process blocks until
+   * migration completes.
+   *
+   * @param inProgress true if migration is in progress, false when complete
+   */
+  public void setMigrationInProgress(final boolean inProgress) {
+    migrationInProgress.set(inProgress);
+    if (inProgress) {
+      LOG.info("Archive migration in progress, archiver will wait for completion");
+    } else {
+      LOG.info("Archive migration complete, archiver is now active");
+    }
+  }
+
+  /**
+   * Returns whether the archiver is ready to process blocks. The archiver is ready when the flat DB
+   * is in ARCHIVE mode and no migration is in progress.
+   *
+   * @return true if the archiver is ready to process blocks
+   */
+  public boolean isReady() {
+    return rootWorldStateStorage.getFlatDbMode() == FlatDbMode.ARCHIVE
+        && !migrationInProgress.get();
   }
 
   public long getPendingBlocksCount() {
@@ -224,8 +255,8 @@ public class BonsaiArchiver implements BlockAddedObserver {
   public void onBlockAdded(final BlockAddedEvent addedBlockContext) {
     initialize();
 
-    // Skip archiving if the flat DB mode is not ARCHIVE yet
-    if (rootWorldStateStorage.getFlatDbMode() != FlatDbMode.ARCHIVE) {
+    // Skip archiving if not ready (not in ARCHIVE mode or migration in progress)
+    if (!isReady()) {
       return;
     }
 

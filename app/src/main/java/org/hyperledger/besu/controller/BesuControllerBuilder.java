@@ -830,15 +830,44 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       ethPeers.snapServerPeersNeeded(false);
     }
 
+    // Create archiver early so we can wire it up with migration completion events
     if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(
         dataStorageConfiguration.getDataStorageFormat())) {
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
+          worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
+      final BonsaiArchiver archiver =
+          createBonsaiArchiver(
+              worldStateKeyValueStorage,
+              blockchain,
+              scheduler,
+              ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager());
+      blockchain.observeBlockAdded(archiver);
+
       final BonsaiFlatDbToArchiveMigrator archiveMigrator =
           createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
       synchronizer.setBonsaiArchiveMigrator(archiveMigrator);
 
       if (worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)) {
-        final AtomicBoolean migrationStarted = new AtomicBoolean(false);
+        // Migration is needed - block archiver until migration completes
+        archiver.setMigrationInProgress(true);
 
+        // Subscribe to migration completion to enable archiver
+        archiveMigrator.subscribe(
+            new BonsaiFlatDbToArchiveMigrator.MigrationCompletionListener() {
+              @Override
+              public void onMigrationComplete(final long startBlock, final long endBlock) {
+                archiver.setMigrationInProgress(false);
+              }
+
+              @Override
+              public void onMigrationFailed(
+                  final long startBlock, final long endBlock, final Throwable error) {
+                LOG.error(
+                    "Archive migration failed, archiver will remain disabled until restart", error);
+              }
+            });
+
+        final AtomicBoolean migrationStarted = new AtomicBoolean(false);
         synchronizer.subscribeInSync(
             (inSync) -> {
               if (inSync && migrationStarted.compareAndSet(false, true)) {
@@ -886,19 +915,6 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             createTrieLogPruner(worldStateKeyValueStorage, blockchain, scheduler);
         trieLogManager.subscribe(trieLogPruner);
       }
-    }
-
-    if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(
-        dataStorageConfiguration.getDataStorageFormat())) {
-      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
-          worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
-      final BonsaiArchiver archiver =
-          createBonsaiArchiver(
-              worldStateKeyValueStorage,
-              blockchain,
-              scheduler,
-              ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager());
-      blockchain.observeBlockAdded(archiver);
     }
 
     final List<Closeable> closeables = new ArrayList<>();
