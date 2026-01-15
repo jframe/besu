@@ -28,6 +28,7 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugGetRawTra
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugMetrics;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugMigrateBonsaiArchive;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugResyncWorldstate;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugStartBonsaiArchiver;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugSetHead;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugStandardTraceBadBlockToFile;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugStandardTraceBlockToFile;
@@ -122,6 +123,7 @@ public class DebugJsonRpcMethods extends ApiGroupJsonRpcMethods {
         new DebugGetRawReceipts(blockchainQueries),
         new DebugGetRawTransaction(blockchainQueries),
         new DebugTraceCall(blockchainQueries, protocolSchedule, transactionSimulator),
-        new DebugMigrateBonsaiArchive(protocolContext.getBlockchain(), synchronizer));
+        new DebugMigrateBonsaiArchive(protocolContext.getBlockchain(), synchronizer),
+        new DebugStartBonsaiArchiver(synchronizer));
   }
 }

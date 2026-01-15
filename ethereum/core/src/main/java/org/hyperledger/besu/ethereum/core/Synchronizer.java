@@ -136,6 +136,13 @@ public interface Synchronizer {
   boolean migrateToBonsaiArchive(
       final long startBlock, final long endBlock, final boolean resetProgress);
 
+  /**
+   * Forces the Bonsai archiver to start, bypassing normal readiness checks.
+   *
+   * @return true if archiver was started, false if not supported or unable to start
+   */
+  boolean forceStartBonsaiArchiver();
+
   @FunctionalInterface
   interface InSyncListener {
     void onInSyncStatusChange(boolean newSyncStatus);

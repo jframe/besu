@@ -846,6 +846,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       final BonsaiFlatDbToArchiveMigrator archiveMigrator =
           createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
       synchronizer.setBonsaiArchiveMigrator(archiveMigrator);
+      synchronizer.setBonsaiArchiver(archiver);
 
       if (worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)) {
         // Migration is needed - block archiver until migration completes

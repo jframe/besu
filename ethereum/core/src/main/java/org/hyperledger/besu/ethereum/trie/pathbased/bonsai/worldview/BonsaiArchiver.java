@@ -115,6 +115,35 @@ public class BonsaiArchiver implements BlockAddedObserver {
         && !migrationInProgress.get();
   }
 
+  /**
+   * Forces the archiver to start, bypassing the normal readiness checks. This clears the migration
+   * in progress flag and triggers archiving. Use with caution - should only be called when you're
+   * certain the database is in a consistent state.
+   *
+   * @return true if archiving was triggered, false if already running or unable to start
+   */
+  public boolean forceStart() {
+    if (rootWorldStateStorage.getFlatDbMode() != FlatDbMode.ARCHIVE) {
+      LOG.warn("Cannot force start archiver - flat DB mode is not ARCHIVE");
+      return false;
+    }
+
+    LOG.info("Force starting archiver, clearing migration in progress flag");
+    migrationInProgress.set(false);
+
+    if (archiveMutex.tryLock()) {
+      try {
+        executeAsync.accept(this::moveBlockStateToArchive);
+        return true;
+      } finally {
+        archiveMutex.unlock();
+      }
+    } else {
+      LOG.info("Archiver is already running");
+      return true;
+    }
+  }
+
   public long getPendingBlocksCount() {
     return blockchain.getChainHeadBlockNumber() - latestArchivedBlock.get();
   }

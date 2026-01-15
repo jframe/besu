@@ -107,6 +107,11 @@ public class DummySynchronizer implements Synchronizer {
     return false;
   }
 
+  @Override
+  public boolean forceStartBonsaiArchiver() {
+    return false;
+  }
+
   public boolean isBonsaiArchiveMigrationSupported() {
     return false;
   }
