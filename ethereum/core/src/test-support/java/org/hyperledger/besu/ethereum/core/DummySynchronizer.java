@@ -102,7 +102,8 @@ public class DummySynchronizer implements Synchronizer {
   }
 
   @Override
-  public boolean migrateToBonsaiArchive(final long startBlock, final long endBlock) {
+  public boolean migrateToBonsaiArchive(
+      final long startBlock, final long endBlock, final boolean resetProgress) {
     return false;
   }
 

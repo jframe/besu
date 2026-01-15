@@ -129,6 +129,7 @@ public class BonsaiFlatDbToArchiveMigrator {
 
   /**
    * Migrates FULL flat DB to ARCHIVE format by processing trie logs from startBlock to endBlock.
+   * Resumes from saved progress if available.
    *
    * <p>The migration runs asynchronously on the provided executor service. It: 1. Loads progress or
    * starts fresh 2. Processes blocks sequentially, writing archive keys 3. Checkpoints progress
@@ -139,6 +140,23 @@ public class BonsaiFlatDbToArchiveMigrator {
    * @return a CompletableFuture that completes when migration finishes
    */
   public CompletableFuture<Void> migrate(final long startBlock, final long endBlock) {
+    return migrate(startBlock, endBlock, false);
+  }
+
+  /**
+   * Migrates FULL flat DB to ARCHIVE format by processing trie logs from startBlock to endBlock.
+   *
+   * <p>The migration runs asynchronously on the provided executor service. It: 1. Loads progress or
+   * starts fresh (depending on resetProgress) 2. Processes blocks sequentially, writing archive
+   * keys 3. Checkpoints progress periodically 4. Updates FLAT_DB_MODE to ARCHIVE on completion
+   *
+   * @param startBlock the starting block number (inclusive)
+   * @param endBlock the ending block number (inclusive)
+   * @param resetProgress if true, ignores any saved progress and starts from startBlock
+   * @return a CompletableFuture that completes when migration finishes
+   */
+  public CompletableFuture<Void> migrate(
+      final long startBlock, final long endBlock, final boolean resetProgress) {
     return CompletableFuture.runAsync(
         () -> {
           try {
@@ -149,13 +167,18 @@ public class BonsaiFlatDbToArchiveMigrator {
             // The archive strategy will fallback to non-archive lookup for data not yet migrated
             worldStateStorage.upgradeToArchiveDbMode();
 
-            long currentBlock = loadProgress().orElse(startBlock);
-
-            if (currentBlock > startBlock) {
-              LOG.info(
-                  "Resuming migration from block {} (previously started at {})",
-                  currentBlock,
-                  startBlock);
+            long currentBlock;
+            if (resetProgress) {
+              currentBlock = startBlock;
+              LOG.info("Resetting migration progress, starting from block {}", startBlock);
+            } else {
+              currentBlock = loadProgress().orElse(startBlock);
+              if (currentBlock > startBlock) {
+                LOG.info(
+                    "Resuming migration from block {} (previously started at {})",
+                    currentBlock,
+                    startBlock);
+              }
             }
 
             int batchCount = 0;

@@ -97,7 +97,8 @@ public class DebugMigrateBonsaiArchive implements JsonRpcMethod {
               "End block exceeds chain head (" + chainHeadNumber + ")"));
     }
 
-    final boolean started = synchronizer.migrateToBonsaiArchive(startBlock, endBlock);
+    // Pass resetProgress=true to override any saved progress when explicitly called via RPC
+    final boolean started = synchronizer.migrateToBonsaiArchive(startBlock, endBlock, true);
     if (!started) {
       return new JsonRpcErrorResponse(
           request.getRequest().getId(),

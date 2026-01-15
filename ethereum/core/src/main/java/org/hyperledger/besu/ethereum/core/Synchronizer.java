@@ -114,13 +114,27 @@ public interface Synchronizer {
   boolean unsubscribeInitialSync(final long listenerId);
 
   /**
-   * Triggers migration of Bonsai flat DB from FULL mode to ARCHIVE mode.
+   * Triggers migration of Bonsai flat DB from FULL mode to ARCHIVE mode. Resumes from saved
+   * progress if available.
    *
    * @param startBlock the starting block number for the migration
    * @param endBlock the ending block number for the migration
    * @return true if migration was started, false if not supported or already in progress
    */
-  boolean migrateToBonsaiArchive(final long startBlock, final long endBlock);
+  default boolean migrateToBonsaiArchive(final long startBlock, final long endBlock) {
+    return migrateToBonsaiArchive(startBlock, endBlock, false);
+  }
+
+  /**
+   * Triggers migration of Bonsai flat DB from FULL mode to ARCHIVE mode.
+   *
+   * @param startBlock the starting block number for the migration
+   * @param endBlock the ending block number for the migration
+   * @param resetProgress if true, ignores any saved progress and starts from startBlock
+   * @return true if migration was started, false if not supported or already in progress
+   */
+  boolean migrateToBonsaiArchive(
+      final long startBlock, final long endBlock, final boolean resetProgress);
 
   @FunctionalInterface
   interface InSyncListener {

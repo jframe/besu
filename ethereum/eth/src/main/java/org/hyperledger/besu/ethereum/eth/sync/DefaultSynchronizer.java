@@ -435,14 +435,15 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
   }
 
   @Override
-  public boolean migrateToBonsaiArchive(final long startBlock, final long endBlock) {
+  public boolean migrateToBonsaiArchive(
+      final long startBlock, final long endBlock, final boolean resetProgress) {
     if (bonsaiArchiveMigrator.isEmpty()) {
       LOG.warn("Bonsai archive migration not supported - migrator not configured");
       return false;
     }
 
     LOG.info("Starting Bonsai archive migration from block {} to block {}", startBlock, endBlock);
-    bonsaiArchiveMigrator.get().migrate(startBlock, endBlock);
+    bonsaiArchiveMigrator.get().migrate(startBlock, endBlock, resetProgress);
     return true;
   }
 
