@@ -106,7 +106,6 @@ public class DummySynchronizer implements Synchronizer {
     return false;
   }
 
-  @Override
   public boolean isBonsaiArchiveMigrationSupported() {
     return false;
   }

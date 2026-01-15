@@ -30,6 +30,8 @@ import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.util.Subscribers;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
@@ -140,6 +142,7 @@ public class BonsaiFlatDbToArchiveMigrator {
     return CompletableFuture.runAsync(
         () -> {
           try {
+            final Instant migrationStartTime = Instant.now();
             LOG.info("Starting archive migration from block {} to {}", startBlock, endBlock);
 
             // Upgrade to archive mode before starting migration so new writes use archive format
@@ -204,8 +207,11 @@ public class BonsaiFlatDbToArchiveMigrator {
 
             saveProgress(endBlock);
 
+            final Duration migrationDuration = Duration.between(migrationStartTime, Instant.now());
             LOG.info(
-                "Archive migration completed. Processed {} blocks.", endBlock - startBlock + 1);
+                "Archive migration completed. Processed {} blocks in {}.",
+                endBlock - startBlock + 1,
+                formatDuration(migrationDuration));
 
             // Notify all listeners of successful completion
             completionListeners.forEach(
@@ -322,5 +328,25 @@ public class BonsaiFlatDbToArchiveMigrator {
         MIGRATION_PROGRESS_KEY,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
     tx.commit();
+  }
+
+  /**
+   * Formats a duration into a human-readable string.
+   *
+   * @param duration the duration to format
+   * @return formatted string like "4h 16m 36s" or "5m 30s" or "45s"
+   */
+  private static String formatDuration(final Duration duration) {
+    long hours = duration.toHours();
+    long minutes = duration.toMinutesPart();
+    long seconds = duration.toSecondsPart();
+
+    if (hours > 0) {
+      return String.format("%dh %dm %ds", hours, minutes, seconds);
+    } else if (minutes > 0) {
+      return String.format("%dm %ds", minutes, seconds);
+    } else {
+      return String.format("%ds", seconds);
+    }
   }
 }
