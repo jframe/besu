@@ -42,8 +42,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.LongStream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -225,14 +223,14 @@ public class BonsaiFlatDbToArchiveMigrator {
             // Tracking state for batch commits
             final SegmentedKeyValueStorage storage =
                 worldStateStorage.getComposedWorldStateStorage();
-            final AtomicInteger batchCount = new AtomicInteger(0);
-            final AtomicLong lastCheckpointBlock = new AtomicLong(currentBlock);
-            final Object txLock = new Object();
-            final SegmentedKeyValueStorageTransaction[] currentTx =
-                new SegmentedKeyValueStorageTransaction[] {storage.startTransaction()};
-
             final long finalCurrentBlock = currentBlock;
             final long totalBlocks = endBlock - startBlock;
+
+            // Mutable state for the single-threaded andFinishWith stage
+            // No synchronization needed as andFinishWith processes items sequentially
+            final int[] batchCount = {0};
+            final long[] lastCheckpointBlock = {currentBlock};
+            final SegmentedKeyValueStorageTransaction[] currentTx = {storage.startTransaction()};
 
             // Create and run pipeline
             PipelineBuilder.createPipelineFrom(
@@ -258,46 +256,42 @@ public class BonsaiFlatDbToArchiveMigrator {
                         return;
                       }
 
-                      // Process the block synchronously in order
-                      synchronized (txLock) {
-                        processBlock(
-                            prefetchedBlock.trieLog().get(),
+                      // Process the block - no synchronization needed as andFinishWith is
+                      // single-threaded
+                      processBlock(
+                          prefetchedBlock.trieLog().get(),
+                          prefetchedBlock.blockNumber(),
+                          currentTx[0]);
+                      batchCount[0]++;
+
+                      if (batchCount[0] >= BATCH_SIZE) {
+                        currentTx[0].commit();
+                        currentTx[0] = storage.startTransaction();
+                        batchCount[0] = 0;
+                      }
+
+                      // Checkpoint progress
+                      if (prefetchedBlock.blockNumber() % CHECKPOINT_INTERVAL == 0
+                          && prefetchedBlock.blockNumber() > lastCheckpointBlock[0]) {
+                        saveProgress(prefetchedBlock.blockNumber());
+                        lastCheckpointBlock[0] = prefetchedBlock.blockNumber();
+                        long progressPercent =
+                            totalBlocks > 0
+                                ? ((prefetchedBlock.blockNumber() - startBlock) * 100) / totalBlocks
+                                : 100;
+                        LOG.info(
+                            "Archive migration progress: {}% (block {}/{})",
+                            progressPercent,
                             prefetchedBlock.blockNumber(),
-                            currentTx[0]);
-                        int count = batchCount.incrementAndGet();
-
-                        if (count >= BATCH_SIZE) {
-                          currentTx[0].commit();
-                          currentTx[0] = storage.startTransaction();
-                          batchCount.set(0);
-                        }
-
-                        // Checkpoint progress
-                        if (prefetchedBlock.blockNumber() % CHECKPOINT_INTERVAL == 0
-                            && prefetchedBlock.blockNumber() > lastCheckpointBlock.get()) {
-                          saveProgress(prefetchedBlock.blockNumber());
-                          lastCheckpointBlock.set(prefetchedBlock.blockNumber());
-                          long progressPercent =
-                              totalBlocks > 0
-                                  ? ((prefetchedBlock.blockNumber() - startBlock) * 100)
-                                      / totalBlocks
-                                  : 100;
-                          LOG.info(
-                              "Archive migration progress: {}% (block {}/{})",
-                              progressPercent,
-                              prefetchedBlock.blockNumber(),
-                              endBlock);
-                        }
+                            endBlock);
                       }
                     })
                 .start(pipelineExecutor)
                 .get();
 
             // Commit any remaining batch
-            synchronized (txLock) {
-              if (batchCount.get() > 0) {
-                currentTx[0].commit();
-              }
+            if (batchCount[0] > 0) {
+              currentTx[0].commit();
             }
 
             saveProgress(endBlock);
