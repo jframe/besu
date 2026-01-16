@@ -15,7 +15,6 @@
 package org.hyperledger.besu.ethereum.core;
 
 import org.hyperledger.besu.datatypes.Address;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbToArchiveMigrator.MigrationStrategy;
 import org.hyperledger.besu.plugin.data.SyncStatus;
 import org.hyperledger.besu.plugin.services.BesuEvents;
 import org.hyperledger.besu.plugin.services.BesuEvents.InitialSyncCompletionListener;
@@ -134,26 +133,8 @@ public interface Synchronizer {
    * @param resetProgress if true, ignores any saved progress and starts from startBlock
    * @return true if migration was started, false if not supported or already in progress
    */
-  default boolean migrateToBonsaiArchive(
-      final long startBlock, final long endBlock, final boolean resetProgress) {
-    return migrateToBonsaiArchive(startBlock, endBlock, resetProgress, MigrationStrategy.SEQUENTIAL);
-  }
-
-  /**
-   * Triggers migration of Bonsai flat DB from FULL mode to ARCHIVE mode using the specified
-   * strategy.
-   *
-   * @param startBlock the starting block number for the migration
-   * @param endBlock the ending block number for the migration
-   * @param resetProgress if true, ignores any saved progress and starts from startBlock
-   * @param strategy the migration strategy to use (SEQUENTIAL, PREFETCH, or FULL_PIPELINE)
-   * @return true if migration was started, false if not supported or already in progress
-   */
   boolean migrateToBonsaiArchive(
-      final long startBlock,
-      final long endBlock,
-      final boolean resetProgress,
-      final MigrationStrategy strategy);
+      final long startBlock, final long endBlock, final boolean resetProgress);
 
   /**
    * Forces the Bonsai archiver to start, bypassing normal readiness checks.
