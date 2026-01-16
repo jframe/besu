@@ -20,6 +20,7 @@ import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.rlp.SimpleNoCopyRlpEncoder;
 import org.hyperledger.besu.evm.log.Log;
 import org.hyperledger.besu.evm.log.LogTopic;
 import org.hyperledger.besu.evm.log.LogsBloomFilter;
@@ -32,13 +33,26 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+/**
+ * Tests for the lazy SyncTransactionReceipt design.
+ *
+ * <p>These tests verify that:
+ *
+ * <ul>
+ *   <li>The decoder stores raw bytes without parsing
+ *   <li>The encoder produces canonical output for receipts root calculation
+ *   <li>The canonical output matches what TransactionReceipt produces
+ * </ul>
+ */
 public class SyncTransactionReceiptDecoderTest {
 
   private SyncTransactionReceiptDecoder syncTransactionReceiptDecoder;
+  private SyncTransactionReceiptEncoder syncTransactionReceiptEncoder;
 
   @BeforeEach
   public void beforeTest() {
     syncTransactionReceiptDecoder = new SyncTransactionReceiptDecoder();
+    syncTransactionReceiptEncoder = new SyncTransactionReceiptEncoder(new SimpleNoCopyRlpEncoder());
   }
 
   @Test
@@ -71,14 +85,20 @@ public class SyncTransactionReceiptDecoderTest {
     SyncTransactionReceipt syncTransactionReceipt =
         syncTransactionReceiptDecoder.decode(encodedReceipt);
 
+    // Verify raw bytes are stored
     Assertions.assertEquals(encodedReceipt, syncTransactionReceipt.getRlpBytes());
-    Assertions.assertEquals(
-        Bytes.of(TransactionType.FRONTIER.getSerializedType()),
-        syncTransactionReceipt.getTransactionTypeCode());
-    Assertions.assertEquals(stateRoot, syncTransactionReceipt.getStatusOrStateRoot());
-    Assertions.assertEquals(
-        Bytes.of((byte) cumulativeGasUsed), syncTransactionReceipt.getCumulativeGasUsed());
-    Assertions.assertEquals(bloomFilter, syncTransactionReceipt.getBloomFilter());
+
+    // Verify canonical encoding matches expected output for receipts root calculation
+    Bytes canonicalEncoding =
+        syncTransactionReceiptEncoder.encodeForRootCalculation(syncTransactionReceipt);
+    Bytes expectedCanonical =
+        RLP.encode(
+            (rlpOut) ->
+                TransactionReceiptEncoder.writeTo(
+                    transactionReceipt,
+                    rlpOut,
+                    TransactionReceiptEncodingConfiguration.TRIE_ROOT));
+    Assertions.assertEquals(expectedCanonical, canonicalEncoding);
   }
 
   @Test
@@ -94,6 +114,7 @@ public class SyncTransactionReceiptDecoderTest {
     TransactionReceipt transactionReceipt =
         new TransactionReceipt(stateRoot, cumulativeGasUsed, logs, Optional.empty());
 
+    // Encode in eth/69 compacted format (no bloom filter)
     Bytes encodedReceipt =
         RLP.encode(
             (rlpOut) ->
@@ -105,19 +126,30 @@ public class SyncTransactionReceiptDecoderTest {
     SyncTransactionReceipt syncTransactionReceipt =
         syncTransactionReceiptDecoder.decode(encodedReceipt);
 
+    // Verify raw bytes are stored
     Assertions.assertEquals(encodedReceipt, syncTransactionReceipt.getRlpBytes());
-    Assertions.assertEquals(
-        Bytes.of(TransactionType.FRONTIER.getEthSerializedType()),
-        syncTransactionReceipt.getTransactionTypeCode());
-    Assertions.assertEquals(stateRoot, syncTransactionReceipt.getStatusOrStateRoot());
-    Assertions.assertEquals(
-        Bytes.of((byte) cumulativeGasUsed), syncTransactionReceipt.getCumulativeGasUsed());
-    Assertions.assertEquals(1, syncTransactionReceipt.getLogs().size());
-    Assertions.assertEquals(3, syncTransactionReceipt.getLogs().getFirst().size());
-    String expectedBloomFilterHex =
-        "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000010800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000020";
-    Assertions.assertEquals(
-        expectedBloomFilterHex, syncTransactionReceipt.getBloomFilter().toHexString());
+
+    // Verify canonical encoding includes computed bloom filter
+    Bytes canonicalEncoding =
+        syncTransactionReceiptEncoder.encodeForRootCalculation(syncTransactionReceipt);
+    // Expected canonical form is standard eth/68 format with bloom filter
+    LogsBloomFilter computedBloom = LogsBloomFilter.builder().insertLogs(logs).build();
+    TransactionReceipt canonicalReceipt =
+        new TransactionReceipt(
+            TransactionType.FRONTIER,
+            stateRoot,
+            cumulativeGasUsed,
+            logs,
+            computedBloom,
+            Optional.empty());
+    Bytes expectedCanonical =
+        RLP.encode(
+            (rlpOut) ->
+                TransactionReceiptEncoder.writeTo(
+                    canonicalReceipt,
+                    rlpOut,
+                    TransactionReceiptEncodingConfiguration.TRIE_ROOT));
+    Assertions.assertEquals(expectedCanonical, canonicalEncoding);
   }
 
   @Test
@@ -146,13 +178,67 @@ public class SyncTransactionReceiptDecoderTest {
     SyncTransactionReceipt syncTransactionReceipt =
         syncTransactionReceiptDecoder.decode(encodedReceipt);
 
+    // Verify raw bytes are stored
     Assertions.assertEquals(encodedReceipt, syncTransactionReceipt.getRlpBytes());
-    Assertions.assertEquals(
-        Bytes.of(transactionType.getSerializedType()),
-        syncTransactionReceipt.getTransactionTypeCode());
-    Assertions.assertEquals(stateRoot, syncTransactionReceipt.getStatusOrStateRoot());
-    Assertions.assertEquals(
-        Bytes.of((byte) cumulativeGasUsed), syncTransactionReceipt.getCumulativeGasUsed());
-    Assertions.assertEquals(bloomFilter, syncTransactionReceipt.getBloomFilter());
+
+    // Verify canonical encoding matches expected output
+    Bytes canonicalEncoding =
+        syncTransactionReceiptEncoder.encodeForRootCalculation(syncTransactionReceipt);
+    Bytes expectedCanonical =
+        RLP.encode(
+            (rlpOut) ->
+                TransactionReceiptEncoder.writeTo(
+                    transactionReceipt,
+                    rlpOut,
+                    TransactionReceiptEncodingConfiguration.TRIE_ROOT));
+    Assertions.assertEquals(expectedCanonical, canonicalEncoding);
+  }
+
+  @Test
+  public void testDecodeTypedCompactedReceipt() {
+    final TransactionType transactionType = TransactionType.EIP1559;
+    final Hash stateRoot = Hash.hash(Bytes.random(32));
+    final long cumulativeGasUsed = 2;
+    final List<Log> logs =
+        List.of(
+            new Log(
+                Address.fromHexString("03"),
+                Bytes.fromHexStringLenient("04"),
+                List.of(LogTopic.fromHexString("05"))));
+    final LogsBloomFilter computedBloom = LogsBloomFilter.builder().insertLogs(logs).build();
+    TransactionReceipt transactionReceipt =
+        new TransactionReceipt(
+            transactionType, stateRoot, cumulativeGasUsed, logs, computedBloom, Optional.empty());
+
+    // Create compacted typed receipt configuration (no bloom filter)
+    TransactionReceiptEncodingConfiguration compactedTypedConfig =
+        new TransactionReceiptEncodingConfiguration.Builder()
+            .withBloomFilter(false)
+            .withRevertReason(false)
+            .build();
+
+    // Encode in compacted format (no bloom filter)
+    Bytes encodedReceipt =
+        RLP.encode(
+            (rlpOut) ->
+                TransactionReceiptEncoder.writeTo(transactionReceipt, rlpOut, compactedTypedConfig));
+
+    SyncTransactionReceipt syncTransactionReceipt =
+        syncTransactionReceiptDecoder.decode(encodedReceipt);
+
+    // Verify raw bytes are stored
+    Assertions.assertEquals(encodedReceipt, syncTransactionReceipt.getRlpBytes());
+
+    // Verify canonical encoding includes computed bloom filter
+    Bytes canonicalEncoding =
+        syncTransactionReceiptEncoder.encodeForRootCalculation(syncTransactionReceipt);
+    Bytes expectedCanonical =
+        RLP.encode(
+            (rlpOut) ->
+                TransactionReceiptEncoder.writeTo(
+                    transactionReceipt,
+                    rlpOut,
+                    TransactionReceiptEncodingConfiguration.TRIE_ROOT));
+    Assertions.assertEquals(expectedCanonical, canonicalEncoding);
   }
 }
