@@ -856,13 +856,12 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         archiveMigrator.subscribe(
             new BonsaiFlatDbToArchiveMigrator.MigrationCompletionListener() {
               @Override
-              public void onMigrationComplete(final long startBlock, final long endBlock) {
+              public void onMigrationComplete() {
                 archiver.setMigrationInProgress(false);
               }
 
               @Override
-              public void onMigrationFailed(
-                  final long startBlock, final long endBlock, final Throwable error) {
+              public void onMigrationFailed(final Throwable error) {
                 LOG.error(
                     "Archive migration failed, archiver will remain disabled until restart", error);
               }
@@ -1039,7 +1038,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
     final ScheduledExecutorService migrationExecutor =
         MonitoredExecutors.newScheduledThreadPool("archive-migrator", 1, metricsSystem);
     return new BonsaiFlatDbToArchiveMigrator(
-        worldStateKeyValueStorage, trieLogManager, blockchain, migrationExecutor);
+        worldStateKeyValueStorage, trieLogManager, blockchain, migrationExecutor, metricsSystem);
   }
 
   /**

@@ -18,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -78,7 +79,11 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     executorService = Executors.newSingleThreadScheduledExecutor();
     migrator =
         new BonsaiFlatDbToArchiveMigrator(
-            worldStateStorage, trieLogManager, blockchain, executorService);
+            worldStateStorage,
+            trieLogManager,
+            blockchain,
+            executorService,
+            new org.hyperledger.besu.metrics.noop.NoOpMetricsSystem());
     archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(
             new org.hyperledger.besu.metrics.noop.NoOpMetricsSystem(),
@@ -453,6 +458,9 @@ public class BonsaiFlatDbToArchiveMigratorTest {
       when(trieLogManager.getTrieLogLayer(header.getHash())).thenReturn(Optional.of(trieLog));
     }
 
+    // Clear mock invocations from when() stub setup
+    org.mockito.Mockito.clearInvocations(worldStateStorage, blockchain, trieLogManager);
+
     CompletableFuture<Void> future = migrator.migrate(0L, 4L);
     Awaitility.await().until(future::isDone);
 
@@ -460,7 +468,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     // This ensures the archive mode is set before migration processing begins
     InOrder inOrder = inOrder(worldStateStorage, blockchain);
     inOrder.verify(worldStateStorage).upgradeToArchiveDbMode();
-    inOrder.verify(blockchain).getBlockHeader(anyLong());
+    inOrder.verify(blockchain, atLeastOnce()).getBlockHeader(anyLong());
   }
 
   private TrieLogLayer createEmptyTrieLog() {

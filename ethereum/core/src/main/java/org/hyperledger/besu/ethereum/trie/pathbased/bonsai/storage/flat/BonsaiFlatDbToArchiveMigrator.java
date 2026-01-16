@@ -17,14 +17,12 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
-import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
@@ -59,52 +57,44 @@ import org.slf4j.LoggerFactory;
  *
  * <ul>
  *   <li>Uses a pipeline to prefetch trie logs asynchronously while processing
- *   <li>Batches writes for performance (default 10,000 operations)
- *   <li>Checkpoints progress every 10,000 blocks for resumability
+ *   <li>Processes blocks in parallel batches for improved throughput
+ *   <li>Saves progress after each block for resumability
  *   <li>Updates FLAT_DB_MODE to ARCHIVE on completion
  * </ul>
  */
 public class BonsaiFlatDbToArchiveMigrator {
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
 
-  private static final int BATCH_SIZE = 10_000;
-  private static final int CHECKPOINT_INTERVAL = 10_000;
+  /** Record to hold a block number and its associated trie log through the pipeline. */
+  private record PrefetchedTrieLog(long blockNumber, Optional<TrieLog> trieLog) {}
+
+  private static final int LOG_INTERVAL = 10_000;
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
 
   // Pipeline configuration
-  private static final int PREFETCH_BUFFER_SIZE = 100;
-  private static final int PREFETCH_CONCURRENCY = 4;
-
-  /** Holds prefetched block data for the migration pipeline. */
-  private record PrefetchedBlock(
-      long blockNumber, Optional<BlockHeader> header, Optional<TrieLog> trieLog) {}
+  private static final int PREFETCH_BUFFER_SIZE = 200;
+  private static final int PREFETCH_CONCURRENCY = 8;
 
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final TrieLogManager trieLogManager;
   private final Blockchain blockchain;
   private final ScheduledExecutorService executorService;
+  private final MetricsSystem metricsSystem;
   private final BonsaiArchiveFlatDbStrategy archiveStrategy;
   private final Subscribers<MigrationCompletionListener> completionListeners = Subscribers.create();
 
   /** Listener interface for migration completion events. */
   public interface MigrationCompletionListener {
-    /**
-     * Called when the archive migration completes successfully.
-     *
-     * @param startBlock the starting block number of the migration
-     * @param endBlock the ending block number of the migration
-     */
-    void onMigrationComplete(long startBlock, long endBlock);
+    /** Called when the archive migration completes successfully. */
+    void onMigrationComplete();
 
     /**
      * Called when the archive migration fails with an error.
      *
-     * @param startBlock the starting block number of the migration
-     * @param endBlock the ending block number of the migration
      * @param error the error that caused the failure
      */
-    void onMigrationFailed(long startBlock, long endBlock, Throwable error);
+    void onMigrationFailed(Throwable error);
   }
 
   /**
@@ -114,18 +104,21 @@ public class BonsaiFlatDbToArchiveMigrator {
    * @param trieLogManager the trie log manager for reading trie logs
    * @param blockchain the blockchain for reading block headers
    * @param executorService the executor service for running migration on a separate thread
+   * @param metricsSystem the metrics system for tracking migration progress
    */
   public BonsaiFlatDbToArchiveMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final TrieLogManager trieLogManager,
       final Blockchain blockchain,
-      final ScheduledExecutorService executorService) {
+      final ScheduledExecutorService executorService,
+      final MetricsSystem metricsSystem) {
     this.worldStateStorage = worldStateStorage;
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
     this.executorService = executorService;
+    this.metricsSystem = metricsSystem;
     this.archiveStrategy =
-        new BonsaiArchiveFlatDbStrategy(new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy());
+        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
   }
 
   /**
@@ -169,8 +162,8 @@ public class BonsaiFlatDbToArchiveMigrator {
    *
    * <ol>
    *   <li>Source: Stream of block numbers
-   *   <li>Prefetch: Async fetch of block headers and trie logs
-   *   <li>Process: Write archive keys and batch commits
+   *   <li>Prefetch: Async fetch of trie logs in parallel
+   *   <li>Process: Write archive keys in batches
    * </ol>
    *
    * @param startBlock the starting block number (inclusive)
@@ -211,7 +204,6 @@ public class BonsaiFlatDbToArchiveMigrator {
               }
             }
 
-            final MetricsSystem metricsSystem = new NoOpMetricsSystem();
             final LabelledMetric<Counter> outputCounter =
                 metricsSystem.createLabelledCounter(
                     BesuMetricCategory.SYNCHRONIZER,
@@ -220,17 +212,10 @@ public class BonsaiFlatDbToArchiveMigrator {
                     "stage",
                     "action");
 
-            // Tracking state for batch commits
             final SegmentedKeyValueStorage storage =
                 worldStateStorage.getComposedWorldStateStorage();
             final long finalCurrentBlock = currentBlock;
             final long totalBlocks = endBlock - startBlock;
-
-            // Mutable state for the single-threaded andFinishWith stage
-            // No synchronization needed as andFinishWith processes items sequentially
-            final int[] batchCount = {0};
-            final long[] lastCheckpointBlock = {currentBlock};
-            final SegmentedKeyValueStorageTransaction[] currentTx = {storage.startTransaction()};
 
             // Create and run pipeline
             PipelineBuilder.createPipelineFrom(
@@ -244,57 +229,41 @@ public class BonsaiFlatDbToArchiveMigrator {
                     "fetch-trielog",
                     blockNumber ->
                         CompletableFuture.supplyAsync(
-                            () -> prefetchBlock(blockNumber), pipelineExecutor),
+                            () ->
+                                new PrefetchedTrieLog(blockNumber, fetchTrieLog(blockNumber)),
+                            pipelineExecutor),
                     PREFETCH_CONCURRENCY)
                 .andFinishWith(
                     "process-block",
-                    prefetchedBlock -> {
-                      if (prefetchedBlock.header().isEmpty()
-                          || prefetchedBlock.trieLog().isEmpty()) {
-                        LOG.warn(
-                            "Missing data for block {}, skipping", prefetchedBlock.blockNumber());
+                    prefetched -> {
+                      if (prefetched.trieLog().isEmpty()) {
                         return;
                       }
 
-                      // Process the block - no synchronization needed as andFinishWith is
-                      // single-threaded
-                      processBlock(
-                          prefetchedBlock.trieLog().get(),
-                          prefetchedBlock.blockNumber(),
-                          currentTx[0]);
-                      batchCount[0]++;
+                      final TrieLog trieLog = prefetched.trieLog().get();
+                      final long blockNumber = prefetched.blockNumber();
 
-                      if (batchCount[0] >= BATCH_SIZE) {
-                        currentTx[0].commit();
-                        currentTx[0] = storage.startTransaction();
-                        batchCount[0] = 0;
-                      }
+                      // Process and commit each block individually
+                      final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+                      processBlock(trieLog, blockNumber, tx);
+                      saveProgress(blockNumber, tx);
+                      tx.commit();
 
-                      // Checkpoint progress
-                      if (prefetchedBlock.blockNumber() % CHECKPOINT_INTERVAL == 0
-                          && prefetchedBlock.blockNumber() > lastCheckpointBlock[0]) {
-                        saveProgress(prefetchedBlock.blockNumber());
-                        lastCheckpointBlock[0] = prefetchedBlock.blockNumber();
+                      // Log progress periodically
+                      if (blockNumber % LOG_INTERVAL == 0) {
                         long progressPercent =
                             totalBlocks > 0
-                                ? ((prefetchedBlock.blockNumber() - startBlock) * 100) / totalBlocks
+                                ? ((blockNumber - startBlock) * 100) / totalBlocks
                                 : 100;
                         LOG.info(
                             "Archive migration progress: {}% (block {}/{})",
                             progressPercent,
-                            prefetchedBlock.blockNumber(),
+                            blockNumber,
                             endBlock);
                       }
                     })
                 .start(pipelineExecutor)
                 .get();
-
-            // Commit any remaining batch
-            if (batchCount[0] > 0) {
-              currentTx[0].commit();
-            }
-
-            saveProgress(endBlock);
 
             final Duration migrationDuration = Duration.between(migrationStartTime, Instant.now());
             LOG.info(
@@ -302,12 +271,10 @@ public class BonsaiFlatDbToArchiveMigrator {
                 endBlock - startBlock + 1,
                 formatDuration(migrationDuration));
 
-            completionListeners.forEach(
-                listener -> listener.onMigrationComplete(startBlock, endBlock));
+            completionListeners.forEach(MigrationCompletionListener::onMigrationComplete);
           } catch (final Exception e) {
             LOG.error("Archive migration failed", e);
-            completionListeners.forEach(
-                listener -> listener.onMigrationFailed(startBlock, endBlock, e));
+            completionListeners.forEach(listener -> listener.onMigrationFailed(e));
             throw new RuntimeException(e);
           } finally {
             pipelineExecutor.shutdownNow();
@@ -317,16 +284,15 @@ public class BonsaiFlatDbToArchiveMigrator {
   }
 
   /**
-   * Prefetches a block's header and trie log.
+   * Fetches the trie log for a block.
    *
-   * @param blockNumber the block number to prefetch
-   * @return the prefetched block data
+   * @param blockNumber the block number to fetch
+   * @return the trie log, or empty if not found
    */
-  private PrefetchedBlock prefetchBlock(final long blockNumber) {
-    Optional<BlockHeader> header = blockchain.getBlockHeader(blockNumber);
-    Optional<TrieLog> trieLog =
-        header.map(BlockHeader::getHash).flatMap(trieLogManager::getTrieLogLayer);
-    return new PrefetchedBlock(blockNumber, header, trieLog);
+  private Optional<TrieLog> fetchTrieLog(final long blockNumber) {
+    return blockchain
+        .getBlockHeader(blockNumber)
+        .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
   }
 
   /**
@@ -338,8 +304,7 @@ public class BonsaiFlatDbToArchiveMigrator {
    */
   private void processBlock(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-
-    BonsaiContext context = new BonsaiContext(blockNumber);
+    final BonsaiContext context = new BonsaiContext(blockNumber);
     processAccountChanges(trieLog, context, tx);
     processStorageChanges(trieLog, context, tx);
   }
@@ -355,17 +320,15 @@ public class BonsaiFlatDbToArchiveMigrator {
       final TrieLog trieLog,
       final BonsaiContext context,
       final SegmentedKeyValueStorageTransaction tx) {
-
     trieLog
         .getAccountChanges()
         .forEach(
             (address, accountChange) -> {
               if (accountChange.getUpdated() != null) {
-                Bytes accountBytes = RLP.encode(accountChange.getUpdated()::writeTo);
+                final Bytes accountBytes = RLP.encode(accountChange.getUpdated()::writeTo);
                 BonsaiArchiveFlatDbStrategy.putFlatAccountWithContext(
                     tx, context, address.addressHash(), accountBytes);
               } else {
-                // Account was deleted - use the remove method with explicit context
                 archiveStrategy.removeFlatAccountWithContext(tx, context, address.addressHash());
               }
             });
@@ -382,7 +345,6 @@ public class BonsaiFlatDbToArchiveMigrator {
       final TrieLog trieLog,
       final BonsaiContext context,
       final SegmentedKeyValueStorageTransaction tx) {
-
     trieLog
         .getStorageChanges()
         .forEach(
@@ -397,7 +359,6 @@ public class BonsaiFlatDbToArchiveMigrator {
                           slotKey.getSlotHash(),
                           storageChange.getUpdated().toBytes());
                     } else {
-                      // Storage was deleted - use the remove method with explicit context
                       archiveStrategy.removeFlatAccountStorageValueByStorageSlotHashWithContext(
                           tx, context, address.addressHash(), slotKey.getSlotHash());
                     }
@@ -418,18 +379,16 @@ public class BonsaiFlatDbToArchiveMigrator {
   }
 
   /**
-   * Saves the migration progress to storage.
+   * Saves the migration progress to storage within the given transaction.
    *
    * @param blockNumber the last successfully processed block number
+   * @param tx the transaction to write to
    */
-  private void saveProgress(final long blockNumber) {
-    SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
-    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+  private void saveProgress(final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
     tx.put(
         TRIE_BRANCH_STORAGE,
         MIGRATION_PROGRESS_KEY,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
-    tx.commit();
   }
 
   /**
