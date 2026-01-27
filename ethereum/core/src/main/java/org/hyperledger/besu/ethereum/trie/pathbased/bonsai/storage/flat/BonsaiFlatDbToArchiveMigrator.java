@@ -27,6 +27,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.util.Subscribers;
+import org.hyperledger.besu.util.log.LogUtil;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -34,6 +35,7 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -56,7 +58,7 @@ import org.slf4j.LoggerFactory;
 public class BonsaiFlatDbToArchiveMigrator {
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
 
-  private static final int LOG_INTERVAL = 10_000;
+  private static final int LOG_REPEAT_DELAY_SECONDS = 10;
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
 
@@ -66,6 +68,7 @@ public class BonsaiFlatDbToArchiveMigrator {
   private final ScheduledExecutorService executorService;
   private final BonsaiArchiveFlatDbStrategy archiveStrategy;
   private final Subscribers<MigrationCompletionListener> completionListeners = Subscribers.create();
+  private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
 
   /** Listener interface for migration completion events. */
   public interface MigrationCompletionListener {
@@ -182,15 +185,21 @@ public class BonsaiFlatDbToArchiveMigrator {
               saveProgress(blockNumber, tx);
               tx.commit();
 
-              if (blockNumber % LOG_INTERVAL == 0) {
-                long progressPercent =
-                    totalBlocks > 0 ? ((blockNumber - startBlock) * 100) / totalBlocks : 100;
-                LOG.info(
-                    "Archive migration progress: {}% (block {}/{})",
-                    progressPercent,
-                    blockNumber,
-                    endBlock);
-              }
+              final long currentBlockNum = blockNumber;
+              LogUtil.throttledLog(
+                  () -> {
+                    long progressPercent =
+                        totalBlocks > 0
+                            ? ((currentBlockNum - startBlock) * 100) / totalBlocks
+                            : 100;
+                    LOG.info(
+                        "Archive migration progress: {}% (block {}/{})",
+                        progressPercent,
+                        currentBlockNum,
+                        endBlock);
+                  },
+                  shouldLogProgress,
+                  LOG_REPEAT_DELAY_SECONDS);
             }
 
             final Duration migrationDuration = Duration.between(migrationStartTime, Instant.now());
