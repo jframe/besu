@@ -22,14 +22,10 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldSt
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
-import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
-import org.hyperledger.besu.plugin.services.metrics.Counter;
-import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
-import org.hyperledger.besu.services.pipeline.PipelineBuilder;
 import org.hyperledger.besu.util.Subscribers;
 
 import java.nio.charset.StandardCharsets;
@@ -37,10 +33,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.stream.LongStream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -50,14 +43,12 @@ import org.slf4j.LoggerFactory;
  * Migrates a Bonsai FULL flat database to ARCHIVE format.
  *
  * <p>This migrator processes trie logs from genesis to head, adding block number suffixes to all
- * state keys to create a versioned archive. The migration uses a pipeline-based approach with
- * prefetching for optimal performance.
+ * state keys to create a versioned archive.
  *
  * <p>Key features:
  *
  * <ul>
- *   <li>Uses a pipeline to prefetch trie logs asynchronously while processing
- *   <li>Processes blocks in parallel batches for improved throughput
+ *   <li>Processes blocks sequentially from start to end
  *   <li>Saves progress after each block for resumability
  *   <li>Updates FLAT_DB_MODE to ARCHIVE on completion
  * </ul>
@@ -65,22 +56,14 @@ import org.slf4j.LoggerFactory;
 public class BonsaiFlatDbToArchiveMigrator {
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
 
-  /** Record to hold a block number and its associated trie log through the pipeline. */
-  private record PrefetchedTrieLog(long blockNumber, Optional<TrieLog> trieLog) {}
-
   private static final int LOG_INTERVAL = 10_000;
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
-
-  // Pipeline configuration
-  private static final int PREFETCH_BUFFER_SIZE = 200;
-  private static final int PREFETCH_CONCURRENCY = 8;
 
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final TrieLogManager trieLogManager;
   private final Blockchain blockchain;
   private final ScheduledExecutorService executorService;
-  private final MetricsSystem metricsSystem;
   private final BonsaiArchiveFlatDbStrategy archiveStrategy;
   private final Subscribers<MigrationCompletionListener> completionListeners = Subscribers.create();
 
@@ -116,7 +99,6 @@ public class BonsaiFlatDbToArchiveMigrator {
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
     this.executorService = executorService;
-    this.metricsSystem = metricsSystem;
     this.archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
   }
@@ -154,17 +136,7 @@ public class BonsaiFlatDbToArchiveMigrator {
   }
 
   /**
-   * Migrates FULL flat DB to ARCHIVE format using a pipeline-based approach. This method uses a
-   * Besu Pipeline to prefetch trie logs asynchronously while processing, providing optimal
-   * performance by overlapping I/O with CPU work.
-   *
-   * <p>Pipeline stages:
-   *
-   * <ol>
-   *   <li>Source: Stream of block numbers
-   *   <li>Prefetch: Async fetch of trie logs in parallel
-   *   <li>Process: Write archive keys in batches
-   * </ol>
+   * Migrates FULL flat DB to ARCHIVE format by processing trie logs sequentially.
    *
    * @param startBlock the starting block number (inclusive)
    * @param endBlock the ending block number (inclusive)
@@ -175,15 +147,6 @@ public class BonsaiFlatDbToArchiveMigrator {
       final long startBlock, final long endBlock, final boolean resetProgress) {
     return CompletableFuture.runAsync(
         () -> {
-          final ExecutorService pipelineExecutor =
-              Executors.newFixedThreadPool(
-                  PREFETCH_CONCURRENCY + 2,
-                  r -> {
-                    Thread t = new Thread(r, "archive-migration-pipeline");
-                    t.setDaemon(true);
-                    return t;
-                  });
-
           try {
             final Instant migrationStartTime = Instant.now();
             LOG.info("Starting archive migration from block {} to {}", startBlock, endBlock);
@@ -204,66 +167,31 @@ public class BonsaiFlatDbToArchiveMigrator {
               }
             }
 
-            final LabelledMetric<Counter> outputCounter =
-                metricsSystem.createLabelledCounter(
-                    BesuMetricCategory.SYNCHRONIZER,
-                    "archive_migration_pipeline",
-                    "Pipeline blocks for archive migration",
-                    "stage",
-                    "action");
-
             final SegmentedKeyValueStorage storage =
                 worldStateStorage.getComposedWorldStateStorage();
-            final long finalCurrentBlock = currentBlock;
             final long totalBlocks = endBlock - startBlock;
 
-            // Create and run pipeline
-            PipelineBuilder.createPipelineFrom(
-                    "block-numbers",
-                    LongStream.rangeClosed(finalCurrentBlock, endBlock).boxed().iterator(),
-                    PREFETCH_BUFFER_SIZE,
-                    outputCounter,
-                    false,
-                    "archive-migration")
-                .thenProcessAsyncOrdered(
-                    "fetch-trielog",
-                    blockNumber ->
-                        CompletableFuture.supplyAsync(
-                            () ->
-                                new PrefetchedTrieLog(blockNumber, fetchTrieLog(blockNumber)),
-                            pipelineExecutor),
-                    PREFETCH_CONCURRENCY)
-                .andFinishWith(
-                    "process-block",
-                    prefetched -> {
-                      if (prefetched.trieLog().isEmpty()) {
-                        return;
-                      }
+            for (long blockNumber = currentBlock; blockNumber <= endBlock; blockNumber++) {
+              final Optional<TrieLog> maybeTrieLog = fetchTrieLog(blockNumber);
+              if (maybeTrieLog.isEmpty()) {
+                continue;
+              }
 
-                      final TrieLog trieLog = prefetched.trieLog().get();
-                      final long blockNumber = prefetched.blockNumber();
+              final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+              processBlock(maybeTrieLog.get(), blockNumber, tx);
+              saveProgress(blockNumber, tx);
+              tx.commit();
 
-                      // Process and commit each block individually
-                      final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-                      processBlock(trieLog, blockNumber, tx);
-                      saveProgress(blockNumber, tx);
-                      tx.commit();
-
-                      // Log progress periodically
-                      if (blockNumber % LOG_INTERVAL == 0) {
-                        long progressPercent =
-                            totalBlocks > 0
-                                ? ((blockNumber - startBlock) * 100) / totalBlocks
-                                : 100;
-                        LOG.info(
-                            "Archive migration progress: {}% (block {}/{})",
-                            progressPercent,
-                            blockNumber,
-                            endBlock);
-                      }
-                    })
-                .start(pipelineExecutor)
-                .get();
+              if (blockNumber % LOG_INTERVAL == 0) {
+                long progressPercent =
+                    totalBlocks > 0 ? ((blockNumber - startBlock) * 100) / totalBlocks : 100;
+                LOG.info(
+                    "Archive migration progress: {}% (block {}/{})",
+                    progressPercent,
+                    blockNumber,
+                    endBlock);
+              }
+            }
 
             final Duration migrationDuration = Duration.between(migrationStartTime, Instant.now());
             LOG.info(
@@ -276,8 +204,6 @@ public class BonsaiFlatDbToArchiveMigrator {
             LOG.error("Archive migration failed", e);
             completionListeners.forEach(listener -> listener.onMigrationFailed(e));
             throw new RuntimeException(e);
-          } finally {
-            pipelineExecutor.shutdownNow();
           }
         },
         executorService);
