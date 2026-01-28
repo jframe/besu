@@ -37,6 +37,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.apache.commons.lang3.time.DurationFormatUtils;
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -194,9 +195,7 @@ public class BonsaiFlatDbToArchiveMigrator {
                             : 100;
                     LOG.info(
                         "Archive migration progress: {}% (block {}/{})",
-                        progressPercent,
-                        currentBlockNum,
-                        endBlock);
+                        progressPercent, currentBlockNum, endBlock);
                   },
                   shouldLogProgress,
                   LOG_REPEAT_DELAY_SECONDS);
@@ -206,7 +205,8 @@ public class BonsaiFlatDbToArchiveMigrator {
             LOG.info(
                 "Archive migration completed. Processed {} blocks in {}.",
                 endBlock - startBlock + 1,
-                formatDuration(migrationDuration));
+                DurationFormatUtils.formatDurationWords(
+                    migrationDuration.toMillis(), false, false));
 
             completionListeners.forEach(MigrationCompletionListener::onMigrationComplete);
           } catch (final Exception e) {
@@ -324,25 +324,5 @@ public class BonsaiFlatDbToArchiveMigrator {
         TRIE_BRANCH_STORAGE,
         MIGRATION_PROGRESS_KEY,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
-  }
-
-  /**
-   * Formats a duration into a human-readable string.
-   *
-   * @param duration the duration to format
-   * @return formatted string like "4h 16m 36s" or "5m 30s" or "45s"
-   */
-  private static String formatDuration(final Duration duration) {
-    long hours = duration.toHours();
-    long minutes = duration.toMinutesPart();
-    long seconds = duration.toSecondsPart();
-
-    if (hours > 0) {
-      return String.format("%dh %dm %ds", hours, minutes, seconds);
-    } else if (minutes > 0) {
-      return String.format("%dm %ds", minutes, seconds);
-    } else {
-      return String.format("%ds", seconds);
-    }
   }
 }
