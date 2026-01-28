@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.VARIABLES;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.rlp.RLP;
@@ -59,7 +59,7 @@ import org.slf4j.LoggerFactory;
 public class BonsaiFlatDbToArchiveMigrator {
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
 
-  private static final int LOG_REPEAT_DELAY_SECONDS = 10;
+  private static final int PRINT_DELAY_SECONDS = 30;
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
 
@@ -157,23 +157,9 @@ public class BonsaiFlatDbToArchiveMigrator {
 
             worldStateStorage.upgradeToArchiveDbMode();
 
-            long currentBlock;
-            if (resetProgress) {
-              currentBlock = startBlock;
-              LOG.info("Resetting migration progress, starting from block {}", startBlock);
-            } else {
-              currentBlock = loadProgress().orElse(startBlock);
-              if (currentBlock > startBlock) {
-                LOG.info(
-                    "Resuming migration from block {} (previously started at {})",
-                    currentBlock,
-                    startBlock);
-              }
-            }
-
+            final long currentBlock = determineStartBlock(startBlock, resetProgress);
             final SegmentedKeyValueStorage storage =
                 worldStateStorage.getComposedWorldStateStorage();
-            final long totalBlocks = endBlock - startBlock;
 
             for (long blockNumber = currentBlock; blockNumber <= endBlock; blockNumber++) {
               final Optional<TrieLog> maybeTrieLog = fetchTrieLog(blockNumber);
@@ -186,28 +172,10 @@ public class BonsaiFlatDbToArchiveMigrator {
               saveProgress(blockNumber, tx);
               tx.commit();
 
-              final long currentBlockNum = blockNumber;
-              LogUtil.throttledLog(
-                  () -> {
-                    long progressPercent =
-                        totalBlocks > 0
-                            ? ((currentBlockNum - startBlock) * 100) / totalBlocks
-                            : 100;
-                    LOG.info(
-                        "Archive migration progress: {}% (block {}/{})",
-                        progressPercent, currentBlockNum, endBlock);
-                  },
-                  shouldLogProgress,
-                  LOG_REPEAT_DELAY_SECONDS);
+              logProgress(blockNumber, startBlock, endBlock);
             }
 
-            final Duration migrationDuration = Duration.between(migrationStartTime, Instant.now());
-            LOG.info(
-                "Archive migration completed. Processed {} blocks in {}.",
-                endBlock - startBlock + 1,
-                DurationFormatUtils.formatDurationWords(
-                    migrationDuration.toMillis(), false, false));
-
+            logCompletion(startBlock, endBlock, migrationStartTime);
             completionListeners.forEach(MigrationCompletionListener::onMigrationComplete);
           } catch (final Exception e) {
             LOG.error("Archive migration failed", e);
@@ -216,6 +184,42 @@ public class BonsaiFlatDbToArchiveMigrator {
           }
         },
         executorService);
+  }
+
+  private long determineStartBlock(final long startBlock, final boolean resetProgress) {
+    if (resetProgress) {
+      LOG.info("Resetting migration progress, starting from block {}", startBlock);
+      return startBlock;
+    }
+    final long currentBlock = loadProgress().orElse(startBlock);
+    if (currentBlock > startBlock) {
+      LOG.info(
+          "Resuming migration from block {} (previously started at {})", currentBlock, startBlock);
+    }
+    return currentBlock;
+  }
+
+  private void logProgress(final long blockNumber, final long startBlock, final long endBlock) {
+    final long totalBlocks = endBlock - startBlock;
+    LogUtil.throttledLog(
+        () -> {
+          long progressPercent =
+              totalBlocks > 0 ? ((blockNumber - startBlock) * 100) / totalBlocks : 100;
+          LOG.info(
+              "Archive migration progress: {}% (block {}/{})",
+              progressPercent, blockNumber, endBlock);
+        },
+        shouldLogProgress,
+        PRINT_DELAY_SECONDS);
+  }
+
+  private void logCompletion(
+      final long startBlock, final long endBlock, final Instant migrationStartTime) {
+    final Duration migrationDuration = Duration.between(migrationStartTime, Instant.now());
+    LOG.info(
+        "Archive migration completed. Processed {} blocks in {}.",
+        endBlock - startBlock + 1,
+        DurationFormatUtils.formatDurationWords(migrationDuration.toMillis(), false, false));
   }
 
   private Optional<TrieLog> fetchTrieLog(final long blockNumber) {
@@ -277,14 +281,11 @@ public class BonsaiFlatDbToArchiveMigrator {
   private Optional<Long> loadProgress() {
     return worldStateStorage
         .getComposedWorldStateStorage()
-        .get(TRIE_BRANCH_STORAGE, MIGRATION_PROGRESS_KEY)
+        .get(VARIABLES, MIGRATION_PROGRESS_KEY)
         .map(bytes -> Bytes.wrap(bytes).toLong());
   }
 
   private void saveProgress(final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    tx.put(
-        TRIE_BRANCH_STORAGE,
-        MIGRATION_PROGRESS_KEY,
-        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+    tx.put(VARIABLES, MIGRATION_PROGRESS_KEY, Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
   }
 }
