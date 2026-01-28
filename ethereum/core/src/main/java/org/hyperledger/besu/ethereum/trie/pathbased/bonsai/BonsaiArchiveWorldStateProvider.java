@@ -87,11 +87,12 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
   @Override
   public Optional<MutableWorldState> getWorldState(final WorldStateQueryParams queryParams) {
+    // For archive mode, always ensure WORLD_BLOCK_NUMBER_KEY is set to the target block number.
+    // This is critical because the archive flat DB strategy uses WORLD_BLOCK_NUMBER_KEY + 1
+    // as the block context for writes during persist().
+    updateWorldBlockNumber(queryParams.getBlockHash());
+
     if (queryParams.shouldWorldStateUpdateHead()) {
-      // For archive mode, we must ensure WORLD_BLOCK_NUMBER_KEY is set to the block number for the
-      // requested world state before processing a new block. This is critical during reorgs where
-      // the WORLD_BLOCK_NUMBER_KEY may need to be moved to a prior block number
-      updateWorldBlockNumber(queryParams.getBlockHash());
       return getFullWorldState(queryParams);
     } else {
       // If we are creating a world state for a historic/archive block, we have 2 options:
