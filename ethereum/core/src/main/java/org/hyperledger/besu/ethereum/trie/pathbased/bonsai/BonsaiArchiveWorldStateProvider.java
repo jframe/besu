@@ -87,13 +87,24 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
   @Override
   public Optional<MutableWorldState> getWorldState(final WorldStateQueryParams queryParams) {
+    LOG.info(
+        "Getting world state for stateRoot={}. blockHash={}, blockNumber={}, shouldWorldStateUpdateHead={}",
+        queryParams.getStateRoot(),
+        queryParams.getBlockHash(),
+        queryParams.getBlockHeader().getNumber(),
+        queryParams.shouldWorldStateUpdateHead());
+
     // For archive mode, always ensure WORLD_BLOCK_NUMBER_KEY is set to the target block number.
     // This is critical because the archive flat DB strategy uses WORLD_BLOCK_NUMBER_KEY + 1
     // as the block context for writes during persist().
     updateWorldBlockNumber(queryParams.getBlockHash());
 
     if (queryParams.shouldWorldStateUpdateHead()) {
-      return getFullWorldState(queryParams);
+      var result = getFullWorldState(queryParams);
+      LOG.info(
+          "[DIAG] getWorldState (updateHead=true): result={}",
+          result.isPresent() ? "present" : "EMPTY");
+      return result;
     } else {
       // If we are creating a world state for a historic/archive block, we have 2 options:
       // 1. Roll back and create a layered world state. We can do this as far back as 512 blocks by

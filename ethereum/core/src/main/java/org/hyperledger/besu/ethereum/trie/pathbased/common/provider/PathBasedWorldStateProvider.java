@@ -198,6 +198,19 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
    * @return the full world state, if available
    */
   private Optional<MutableWorldState> getFullWorldStateFromHead(final Hash blockHash) {
+    final long headBlockNum =
+        blockchain
+            .getBlockHeader(headWorldState.blockHash())
+            .map(BlockHeader::getNumber)
+            .orElse(-1L);
+    final long targetBlockNum =
+        blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber).orElse(-1L);
+    LOG.info(
+        "[DIAG] getFullWorldStateFromHead: headWorldState at block {} ({}), target block {} ({})",
+        headBlockNum,
+        headWorldState.blockHash().toShortHexString(),
+        targetBlockNum,
+        blockHash.toShortHexString());
     return rollFullWorldStateToBlockHash(headWorldState, blockHash);
   }
 
@@ -236,7 +249,19 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
 
   private Optional<MutableWorldState> rollFullWorldStateToBlockHash(
       final PathBasedWorldState mutableState, final Hash blockHash) {
+    final long mutableBlockNum =
+        blockchain.getBlockHeader(mutableState.blockHash()).map(BlockHeader::getNumber).orElse(-1L);
+    final long targetBlockNum =
+        blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber).orElse(-1L);
+    LOG.info(
+        "[DIAG] rollFullWorldStateToBlockHash: from block {} ({}) to block {} ({})",
+        mutableBlockNum,
+        mutableState.blockHash().toShortHexString(),
+        targetBlockNum,
+        blockHash.toShortHexString());
+
     if (blockHash.equals(mutableState.blockHash())) {
+      LOG.info("[DIAG] rollFullWorldStateToBlockHash: already at target block");
       return Optional.of(mutableState);
     } else {
       try {
@@ -247,15 +272,30 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         final List<TrieLog> rollBacks = new ArrayList<>();
         final List<TrieLog> rollForwards = new ArrayList<>();
         if (maybePersistedHeader.isEmpty()) {
+          LOG.info(
+              "[DIAG] rollFullWorldStateToBlockHash: mutableState block {} not found in blockchain!",
+              mutableState.blockHash().toShortHexString());
           trieLogManager.getTrieLogLayer(mutableState.blockHash()).ifPresent(rollBacks::add);
         } else {
           BlockHeader targetHeader = blockchain.getBlockHeader(blockHash).get();
           BlockHeader persistedHeader = maybePersistedHeader.get();
+          LOG.info(
+              "[DIAG] rollFullWorldStateToBlockHash: persistedHeader={}, targetHeader={}",
+              persistedHeader.getNumber(),
+              targetHeader.getNumber());
           // roll back from persisted to even with target
           Hash persistedBlockHash = persistedHeader.getBlockHash();
           while (persistedHeader.getNumber() > targetHeader.getNumber()) {
             LOG.debug("Rollback {}", persistedBlockHash);
-            rollBacks.add(trieLogManager.getTrieLogLayer(persistedBlockHash).get());
+            var trieLog = trieLogManager.getTrieLogLayer(persistedBlockHash);
+            if (trieLog.isEmpty()) {
+              LOG.error(
+                  "[DIAG] MISSING trie log for rollback block {} ({})",
+                  persistedHeader.getNumber(),
+                  persistedBlockHash.toShortHexString());
+              throw new RuntimeException("Missing trie log for block " + persistedBlockHash);
+            }
+            rollBacks.add(trieLog.get());
             persistedHeader = blockchain.getBlockHeader(persistedHeader.getParentHash()).get();
             persistedBlockHash = persistedHeader.getBlockHash();
           }
@@ -263,7 +303,15 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
           Hash targetBlockHash = targetHeader.getBlockHash();
           while (persistedHeader.getNumber() < targetHeader.getNumber()) {
             LOG.debug("Rollforward {}", targetBlockHash);
-            rollForwards.add(trieLogManager.getTrieLogLayer(targetBlockHash).get());
+            var trieLog = trieLogManager.getTrieLogLayer(targetBlockHash);
+            if (trieLog.isEmpty()) {
+              LOG.error(
+                  "[DIAG] MISSING trie log for rollforward block {} ({})",
+                  targetHeader.getNumber(),
+                  targetBlockHash.toShortHexString());
+              throw new RuntimeException("Missing trie log for block " + targetBlockHash);
+            }
+            rollForwards.add(trieLog.get());
             targetHeader = blockchain.getBlockHeader(targetHeader.getParentHash()).get();
             targetBlockHash = targetHeader.getBlockHash();
           }
@@ -281,6 +329,10 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             targetBlockHash = targetHeader.getBlockHash();
             persistedBlockHash = persistedHeader.getBlockHash();
           }
+          LOG.info(
+              "[DIAG] rollFullWorldStateToBlockHash: will apply {} rollbacks, {} rollforwards",
+              rollBacks.size(),
+              rollForwards.size());
         }
 
         // attempt the state rolling
@@ -297,31 +349,33 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             pathBasedUpdater.rollForward(forward);
           }
           pathBasedUpdater.commit();
+          LOG.info(
+              "[DIAG] rollFullWorldStateToBlockHash: trie log operations committed, now persisting");
 
           mutableState.persist(blockchain.getBlockHeader(blockHash).get());
 
-          LOG.debug(
-              "Archive rolling finished, {} now at {}",
+          LOG.info(
+              "[DIAG] rollFullWorldStateToBlockHash: SUCCESS - {} now at block {}",
               mutableState.getWorldStateStorage().getClass().getSimpleName(),
-              blockHash);
+              blockHash.toShortHexString());
           return Optional.of(mutableState);
         } catch (final MerkleTrieException re) {
           // need to throw to trigger the heal
+          LOG.error("[DIAG] rollFullWorldStateToBlockHash: MerkleTrieException during rolling", re);
           throw re;
         } catch (final Exception e) {
           // if we fail we must clean up the updater
           pathBasedUpdater.reset();
-          LOG.atDebug()
-              .setMessage("State rolling failed on {} for block hash {}")
-              .addArgument(mutableState.getWorldStateStorage().getClass().getSimpleName())
-              .addArgument(blockHash)
-              .addArgument(e)
-              .log();
+          LOG.error(
+              "[DIAG] rollFullWorldStateToBlockHash: FAILED during trie operations for block {}",
+              blockHash.toShortHexString(),
+              e);
 
           return Optional.empty();
         }
       } catch (final RuntimeException re) {
-        LOG.info("Archive rolling failed for block hash " + blockHash, re);
+        LOG.error(
+            "[DIAG] rollFullWorldStateToBlockHash: RuntimeException for block " + blockHash, re);
         if (re instanceof MerkleTrieException) {
           // need to throw to trigger the heal
           throw re;
