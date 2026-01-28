@@ -218,25 +218,12 @@ public class BonsaiFlatDbToArchiveMigrator {
         executorService);
   }
 
-  /**
-   * Fetches the trie log for a block.
-   *
-   * @param blockNumber the block number to fetch
-   * @return the trie log, or empty if not found
-   */
   private Optional<TrieLog> fetchTrieLog(final long blockNumber) {
     return blockchain
         .getBlockHeader(blockNumber)
         .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
   }
 
-  /**
-   * Processes a single block's trie log, writing archive keys for all state changes.
-   *
-   * @param trieLog the trie log containing state changes
-   * @param blockNumber the block number for versioning
-   * @param tx the transaction to write to
-   */
   private void processBlock(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
     final BonsaiContext context = new BonsaiContext(blockNumber);
@@ -244,13 +231,6 @@ public class BonsaiFlatDbToArchiveMigrator {
     processStorageChanges(trieLog, context, tx);
   }
 
-  /**
-   * Processes account changes from a trie log, writing archive keys for historical account state.
-   *
-   * @param trieLog the trie log containing account changes
-   * @param context the Bonsai context with block number for versioning
-   * @param tx the transaction to write to
-   */
   private void processAccountChanges(
       final TrieLog trieLog,
       final BonsaiContext context,
@@ -269,13 +249,6 @@ public class BonsaiFlatDbToArchiveMigrator {
             });
   }
 
-  /**
-   * Processes storage changes from a trie log, writing archive keys for historical storage state.
-   *
-   * @param trieLog the trie log containing storage changes
-   * @param context the Bonsai context with block number for versioning
-   * @param tx the transaction to write to
-   */
   private void processStorageChanges(
       final TrieLog trieLog,
       final BonsaiContext context,
@@ -301,11 +274,6 @@ public class BonsaiFlatDbToArchiveMigrator {
             });
   }
 
-  /**
-   * Loads the migration progress from storage.
-   *
-   * @return the last processed block number, or empty if no progress exists
-   */
   private Optional<Long> loadProgress() {
     return worldStateStorage
         .getComposedWorldStateStorage()
@@ -313,12 +281,6 @@ public class BonsaiFlatDbToArchiveMigrator {
         .map(bytes -> Bytes.wrap(bytes).toLong());
   }
 
-  /**
-   * Saves the migration progress to storage within the given transaction.
-   *
-   * @param blockNumber the last successfully processed block number
-   * @param tx the transaction to write to
-   */
   private void saveProgress(final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
     tx.put(
         TRIE_BRANCH_STORAGE,
