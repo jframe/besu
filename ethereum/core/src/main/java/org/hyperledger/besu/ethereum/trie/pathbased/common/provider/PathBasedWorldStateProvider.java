@@ -243,6 +243,13 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         .getWorldState(blockHeader.getHash())
         .or(() -> cachedWorldStorageManager.getNearestWorldState(blockHeader))
         .or(() -> cachedWorldStorageManager.getHeadWorldState(blockchain::getBlockHeader))
+        .map(
+            worldState -> {
+              LOG.info(
+                  "[DIAG] getFullWorldStateFromCache: got worldState with storage={}",
+                  worldState.getWorldStateStorage().getClass().getSimpleName());
+              return worldState;
+            })
         .flatMap(worldState -> rollFullWorldStateToBlockHash(worldState, blockHeader.getHash()))
         .map(MutableWorldState::freezeStorage);
   }
