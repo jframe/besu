@@ -83,8 +83,10 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       try {
         long storedBlockNum = Bytes.wrap(archiveContext.get()).toLong();
         long writeContext = storedBlockNum + 1;
-        LOG.info("[DIAG] getStateArchiveContextForWrite: WORLD_BLOCK_NUMBER_KEY={}, writeContext={}",
-            storedBlockNum, writeContext);
+        LOG.info(
+            "[DIAG] getStateArchiveContextForWrite: WORLD_BLOCK_NUMBER_KEY={}, writeContext={}",
+            storedBlockNum,
+            writeContext);
         return Optional.of(
             // The context for flat-DB PUTs is the block number recorded in the specified world
             // state, + 1
@@ -96,7 +98,8 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       }
     } else {
       // No context exists - this is genesis block, use suffix 0
-      LOG.info("[DIAG] getStateArchiveContextForWrite: WORLD_BLOCK_NUMBER_KEY not present, using context 0");
+      LOG.info(
+          "[DIAG] getStateArchiveContextForWrite: WORLD_BLOCK_NUMBER_KEY not present, using context 0");
       return Optional.of(new BonsaiContext(0L));
     }
   }
