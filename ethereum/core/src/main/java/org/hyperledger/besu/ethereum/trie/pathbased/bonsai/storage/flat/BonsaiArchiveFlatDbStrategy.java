@@ -84,8 +84,9 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
         long storedBlockNum = Bytes.wrap(archiveContext.get()).toLong();
         long writeContext = storedBlockNum + 1;
         LOG.info(
-            "[DIAG] getStateArchiveContextForWrite: storage={}, WORLD_BLOCK_NUMBER_KEY={}, writeContext={}",
+            "[DIAG] getStateArchiveContextForWrite: storage={}@{}, WORLD_BLOCK_NUMBER_KEY={}, writeContext={}",
             storage.getClass().getSimpleName(),
+            Integer.toHexString(System.identityHashCode(storage)),
             storedBlockNum,
             writeContext);
         return Optional.of(
@@ -100,8 +101,9 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     } else {
       // No context exists - this is genesis block, use suffix 0
       LOG.info(
-          "[DIAG] getStateArchiveContextForWrite: storage={}, WORLD_BLOCK_NUMBER_KEY not present, using context 0",
-          storage.getClass().getSimpleName());
+          "[DIAG] getStateArchiveContextForWrite: storage={}@{}, WORLD_BLOCK_NUMBER_KEY not present, using context 0",
+          storage.getClass().getSimpleName(),
+          Integer.toHexString(System.identityHashCode(storage)));
       return Optional.of(new BonsaiContext(0L));
     }
   }
@@ -114,8 +116,9 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       try {
         long blockNum = Bytes.wrap(archiveContext.get()).toLong();
         LOG.info(
-            "[DIAG] getStateArchiveContextForRead: storage={}, WORLD_BLOCK_NUMBER_KEY={}",
+            "[DIAG] getStateArchiveContextForRead: storage={}@{}, WORLD_BLOCK_NUMBER_KEY={}",
             storage.getClass().getSimpleName(),
+            Integer.toHexString(System.identityHashCode(storage)),
             blockNum);
         return Optional.of(
             // The context for flat-DB PUTs is the block number recorded in the specified world

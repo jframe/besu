@@ -87,12 +87,15 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
   @Override
   public Optional<MutableWorldState> getWorldState(final WorldStateQueryParams queryParams) {
+    // Log the current WORLD_BLOCK_NUMBER_KEY value BEFORE updating
+    var currentWBN = worldStateKeyValueStorage.getWorldStateBlockNumber();
     LOG.info(
-        "Getting world state for stateRoot={}. blockHash={}, blockNumber={}, shouldWorldStateUpdateHead={}",
+        "[DIAG] getWorldState: stateRoot={}, blockHash={}, blockNumber={}, shouldWorldStateUpdateHead={}, currentWORLD_BLOCK_NUMBER_KEY={}",
         queryParams.getStateRoot(),
-        queryParams.getBlockHash(),
+        queryParams.getBlockHash().toShortHexString(),
         queryParams.getBlockHeader().getNumber(),
-        queryParams.shouldWorldStateUpdateHead());
+        queryParams.shouldWorldStateUpdateHead(),
+        currentWBN.orElse(-1L));
 
     // For archive mode, ensure WORLD_BLOCK_NUMBER_KEY is set to (target - 1) before rolling.
     // This is critical because the archive flat DB strategy uses (WORLD_BLOCK_NUMBER_KEY + 1)
@@ -168,6 +171,12 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
           WORLD_BLOCK_NUMBER_KEY,
           Bytes.ofUnsignedLong(requiredBlockNumber).toArrayUnsafe());
       updater.commitComposedOnly();
+
+      // Verify the update was successful by reading it back
+      var verifyWBN = worldStateKeyValueStorage.getWorldStateBlockNumber();
+      LOG.info(
+          "[DIAG] updateWorldBlockNumber: verified write - WORLD_BLOCK_NUMBER_KEY now reads as {}",
+          verifyWBN.orElse(-1L));
     } else {
       LOG.info(
           "[DIAG] updateWorldBlockNumber: no change needed, current={}, required={} (target={})",

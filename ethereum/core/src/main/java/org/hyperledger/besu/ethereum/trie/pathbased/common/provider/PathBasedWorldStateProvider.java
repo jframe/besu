@@ -245,9 +245,11 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         .or(() -> cachedWorldStorageManager.getHeadWorldState(blockchain::getBlockHeader))
         .map(
             worldState -> {
+              var storage = worldState.getWorldStateStorage();
               LOG.info(
-                  "[DIAG] getFullWorldStateFromCache: got worldState with storage={}",
-                  worldState.getWorldStateStorage().getClass().getSimpleName());
+                  "[DIAG] getFullWorldStateFromCache: got worldState with storage={}@{}",
+                  storage.getClass().getSimpleName(),
+                  Integer.toHexString(System.identityHashCode(storage)));
               return worldState;
             })
         .flatMap(worldState -> rollFullWorldStateToBlockHash(worldState, blockHeader.getHash()))
@@ -260,12 +262,18 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         blockchain.getBlockHeader(mutableState.blockHash()).map(BlockHeader::getNumber).orElse(-1L);
     final long targetBlockNum =
         blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber).orElse(-1L);
+    // Read WORLD_BLOCK_NUMBER_KEY from this world state's storage to see what it sees
+    var storage = mutableState.getWorldStateStorage();
+    var storageWBN = storage.getWorldStateBlockNumber().orElse(-1L);
     LOG.info(
-        "[DIAG] rollFullWorldStateToBlockHash: from block {} ({}) to block {} ({})",
+        "[DIAG] rollFullWorldStateToBlockHash: from block {} ({}) to block {} ({}), storage={}@{}, storageWBN={}",
         mutableBlockNum,
         mutableState.blockHash().toShortHexString(),
         targetBlockNum,
-        blockHash.toShortHexString());
+        blockHash.toShortHexString(),
+        storage.getClass().getSimpleName(),
+        Integer.toHexString(System.identityHashCode(storage)),
+        storageWBN);
 
     if (blockHash.equals(mutableState.blockHash())) {
       LOG.info("[DIAG] rollFullWorldStateToBlockHash: already at target block");

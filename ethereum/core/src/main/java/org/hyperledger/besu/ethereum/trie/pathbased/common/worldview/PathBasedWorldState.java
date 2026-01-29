@@ -208,6 +208,13 @@ public abstract class PathBasedWorldState
   public void persist(final BlockHeader blockHeader, final StateRootCommitter committer) {
 
     final Optional<BlockHeader> maybeBlockHeader = Optional.ofNullable(blockHeader);
+    LOG.info(
+        "[DIAG] persist: block={}, hash={}, storage={}@{}, currentWBN={}",
+        blockHeader == null ? "null" : blockHeader.getNumber(),
+        blockHeader == null ? "null" : blockHeader.getHash().toShortHexString(),
+        worldStateKeyValueStorage.getClass().getSimpleName(),
+        Integer.toHexString(System.identityHashCode(worldStateKeyValueStorage)),
+        worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(-1L));
     LOG.atDebug()
         .setMessage("Persist world state for block {}")
         .addArgument(maybeBlockHeader)
@@ -264,6 +271,9 @@ public abstract class PathBasedWorldState
         saveTrieLog.run();
         // commit only the composed worldstate, as trielog transaction is already complete:
         stateUpdater.commitComposedOnly();
+        LOG.info(
+            "[DIAG] persist: committed successfully, finalWBN={}",
+            worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(-1L));
         if (!isStorageFrozen) {
           // optionally save the committed worldstate state in the cache
           cacheWorldState.run();
