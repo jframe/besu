@@ -97,12 +97,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         queryParams.shouldWorldStateUpdateHead(),
         currentWBN.orElse(-1L));
 
-    // For archive mode, ensure WORLD_BLOCK_NUMBER_KEY is set to (target - 1) before rolling.
-    // This is critical because the archive flat DB strategy uses (WORLD_BLOCK_NUMBER_KEY + 1)
-    // as the write context. When writing state for block N, we need write context = N,
-    // so WORLD_BLOCK_NUMBER_KEY must be N-1.
-    updateWorldBlockNumber(queryParams.getBlockHash());
-
     if (queryParams.shouldWorldStateUpdateHead()) {
       var result = getFullWorldState(queryParams);
       LOG.info(
@@ -135,54 +129,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             .map(MutableWorldState::freezeStorage);
       }
       return super.getWorldState(queryParams);
-    }
-  }
-
-  /**
-   * Updates WORLD_BLOCK_NUMBER_KEY to the parent block number (target - 1) before rolling to target
-   * block. This ensures the archive flat DB write context is correct: - Write context =
-   * WORLD_BLOCK_NUMBER_KEY + 1 - When writing state for block N, we want write context = N - So
-   * WORLD_BLOCK_NUMBER_KEY must be N-1 before writes
-   */
-  private void updateWorldBlockNumber(final Hash blockHash) {
-    var maybeTargetBlockNumber = blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber);
-    if (maybeTargetBlockNumber.isEmpty()) {
-      LOG.warn("[DIAG] updateWorldBlockNumber: could not find block header for {}", blockHash);
-      return;
-    }
-
-    var targetBlockNumber = maybeTargetBlockNumber.get();
-    // We need WORLD_BLOCK_NUMBER_KEY to be at target-1 so writes use context target
-    var requiredBlockNumber = targetBlockNumber - 1;
-    var currentWorldStateBlockNumber = worldStateKeyValueStorage.getWorldStateBlockNumber();
-
-    if (currentWorldStateBlockNumber.isEmpty()
-        || !currentWorldStateBlockNumber.get().equals(requiredBlockNumber)) {
-      LOG.info(
-          "[DIAG] updateWorldBlockNumber: changing WORLD_BLOCK_NUMBER_KEY from {} to {} (target block={}, hash={})",
-          currentWorldStateBlockNumber.orElse(-1L),
-          requiredBlockNumber,
-          targetBlockNumber,
-          blockHash.toShortHexString());
-      var updater = worldStateKeyValueStorage.updater();
-      var worldStateTransaction = updater.getWorldStateTransaction();
-      worldStateTransaction.put(
-          TRIE_BRANCH_STORAGE,
-          WORLD_BLOCK_NUMBER_KEY,
-          Bytes.ofUnsignedLong(requiredBlockNumber).toArrayUnsafe());
-      updater.commitComposedOnly();
-
-      // Verify the update was successful by reading it back
-      var verifyWBN = worldStateKeyValueStorage.getWorldStateBlockNumber();
-      LOG.info(
-          "[DIAG] updateWorldBlockNumber: verified write - WORLD_BLOCK_NUMBER_KEY now reads as {}",
-          verifyWBN.orElse(-1L));
-    } else {
-      LOG.info(
-          "[DIAG] updateWorldBlockNumber: no change needed, current={}, required={} (target={})",
-          currentWorldStateBlockNumber.orElse(-1L),
-          requiredBlockNumber,
-          targetBlockNumber);
     }
   }
 
