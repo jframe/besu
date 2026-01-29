@@ -138,6 +138,11 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     var targetBlockNumber = blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber);
     var currentWorldStateBlockNumber = worldStateKeyValueStorage.getWorldStateBlockNumber();
     if (targetBlockNumber.isPresent() && !currentWorldStateBlockNumber.equals(targetBlockNumber)) {
+      LOG.info(
+          "[DIAG] updateWorldBlockNumber: changing WORLD_BLOCK_NUMBER_KEY from {} to {} for block {}",
+          currentWorldStateBlockNumber.orElse(-1L),
+          targetBlockNumber.get(),
+          blockHash.toShortHexString());
       var updater = worldStateKeyValueStorage.updater();
       var worldStateTransaction = updater.getWorldStateTransaction();
       worldStateTransaction.put(
@@ -145,6 +150,11 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
           WORLD_BLOCK_NUMBER_KEY,
           Bytes.ofUnsignedLong(targetBlockNumber.get()).toArrayUnsafe());
       updater.commitComposedOnly();
+    } else {
+      LOG.info(
+          "[DIAG] updateWorldBlockNumber: no change needed, current={}, target={}",
+          currentWorldStateBlockNumber.orElse(-1L),
+          targetBlockNumber.orElse(-1L));
     }
   }
 

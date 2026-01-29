@@ -81,10 +81,14 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     Optional<byte[]> archiveContext = storage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
     if (archiveContext.isPresent()) {
       try {
+        long storedBlockNum = Bytes.wrap(archiveContext.get()).toLong();
+        long writeContext = storedBlockNum + 1;
+        LOG.info("[DIAG] getStateArchiveContextForWrite: WORLD_BLOCK_NUMBER_KEY={}, writeContext={}",
+            storedBlockNum, writeContext);
         return Optional.of(
             // The context for flat-DB PUTs is the block number recorded in the specified world
             // state, + 1
-            new BonsaiContext(Bytes.wrap(archiveContext.get()).toLong() + 1));
+            new BonsaiContext(writeContext));
       } catch (NumberFormatException e) {
         throw new IllegalStateException(
             "World state archive context invalid format: "
@@ -92,6 +96,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       }
     } else {
       // No context exists - this is genesis block, use suffix 0
+      LOG.info("[DIAG] getStateArchiveContextForWrite: WORLD_BLOCK_NUMBER_KEY not present, using context 0");
       return Optional.of(new BonsaiContext(0L));
     }
   }
@@ -102,16 +107,19 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     Optional<byte[]> archiveContext = storage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
     if (archiveContext.isPresent()) {
       try {
+        long blockNum = Bytes.wrap(archiveContext.get()).toLong();
+        LOG.info("[DIAG] getStateArchiveContextForRead: WORLD_BLOCK_NUMBER_KEY={}", blockNum);
         return Optional.of(
             // The context for flat-DB PUTs is the block number recorded in the specified world
             // state
-            new BonsaiContext(Bytes.wrap(archiveContext.get()).toLong()));
+            new BonsaiContext(blockNum));
       } catch (NumberFormatException e) {
         throw new IllegalStateException(
             "World state archive context invalid format: "
                 + new String(archiveContext.get(), StandardCharsets.UTF_8));
       }
     }
+    LOG.info("[DIAG] getStateArchiveContextForRead: WORLD_BLOCK_NUMBER_KEY not present");
     return Optional.empty();
   }
 
