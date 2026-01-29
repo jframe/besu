@@ -189,13 +189,13 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
         syncDurationMetrics.stopTimer(SyncDurationMetrics.Labels.CHAIN_DOWNLOAD_DURATION);
 
         // If the flat database healing process is not in progress and the flat database mode is
-        // FULL
+        // FULL or ARCHIVE
         if (!snapSyncState.isHealFlatDatabaseInProgress()
             && (worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)
                 || worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.ARCHIVE))) {
           startFlatDatabaseHeal(header);
         }
-        // If the flat database healing process is in progress or the flat database mode is not FULL
+        // If the flat database healing is complete
         else {
           final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
           applyForStrategy(

@@ -114,7 +114,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
       final FlatDbMode flatDbMode, final boolean useCodeHashStorage) {
     if (flatDbMode.equals(FlatDbMode.ARCHIVE)) {
       storage = emptyArchiveStorage(useCodeHashStorage);
-      storage.upgradeToFullFlatDbMode();
+      storage.upgradeToArchiveDbMode();
     } else if (flatDbMode.equals(FlatDbMode.FULL)) {
       storage = emptyStorage(useCodeHashStorage);
       storage.upgradeToFullFlatDbMode();

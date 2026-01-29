@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
+import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
@@ -27,6 +28,7 @@ import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import java.util.Optional;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
@@ -59,6 +61,10 @@ public class BonsaiArchiver implements BlockAddedObserver {
   // For logging progress. Saves doing a DB read just to record our progress
   final AtomicLong latestArchivedBlock = new AtomicLong(0);
 
+  // Tracks whether archive migration is in progress. Archiver should not run until migration
+  // completes.
+  private final AtomicBoolean migrationInProgress = new AtomicBoolean(false);
+
   public BonsaiArchiver(
       final PathBasedWorldStateKeyValueStorage rootWorldStateStorage,
       final Blockchain blockchain,
@@ -81,6 +87,61 @@ public class BonsaiArchiver implements BlockAddedObserver {
   public void initialize() {
     // Read from the DB where we got to previously
     latestArchivedBlock.set(rootWorldStateStorage.getLatestArchivedBlock().orElse(0L));
+  }
+
+  /**
+   * Sets the migration in progress flag. When true, the archiver will not process blocks until
+   * migration completes.
+   *
+   * @param inProgress true if migration is in progress, false when complete
+   */
+  public void setMigrationInProgress(final boolean inProgress) {
+    migrationInProgress.set(inProgress);
+    if (inProgress) {
+      LOG.info("Archive migration in progress, archiver will wait for completion");
+    } else {
+      LOG.info("Archive migration complete, archiver is now active");
+    }
+  }
+
+  /**
+   * Returns whether the archiver is ready to process blocks. The archiver is ready when the flat DB
+   * is in ARCHIVE mode and no migration is in progress.
+   *
+   * @return true if the archiver is ready to process blocks
+   */
+  public boolean isReady() {
+    return rootWorldStateStorage.getFlatDbMode() == FlatDbMode.ARCHIVE
+        && !migrationInProgress.get();
+  }
+
+  /**
+   * Forces the archiver to start, bypassing the normal readiness checks. This clears the migration
+   * in progress flag and triggers archiving. Use with caution - should only be called when you're
+   * certain the database is in a consistent state.
+   *
+   * @return true if archiving was triggered, false if already running or unable to start
+   */
+  public boolean forceStart() {
+    if (rootWorldStateStorage.getFlatDbMode() != FlatDbMode.ARCHIVE) {
+      LOG.warn("Cannot force start archiver - flat DB mode is not ARCHIVE");
+      return false;
+    }
+
+    LOG.info("Force starting archiver, clearing migration in progress flag");
+    migrationInProgress.set(false);
+
+    if (archiveMutex.tryLock()) {
+      try {
+        executeAsync.accept(this::moveBlockStateToArchive);
+        return true;
+      } finally {
+        archiveMutex.unlock();
+      }
+    } else {
+      LOG.info("Archiver is already running");
+      return true;
+    }
   }
 
   public long getPendingBlocksCount() {
@@ -222,6 +283,12 @@ public class BonsaiArchiver implements BlockAddedObserver {
   @Override
   public void onBlockAdded(final BlockAddedEvent addedBlockContext) {
     initialize();
+
+    // Skip archiving if not ready (not in ARCHIVE mode or migration in progress)
+    if (!isReady()) {
+      return;
+    }
+
     final Optional<Long> blockNumber = Optional.of(addedBlockContext.getHeader().getNumber());
     blockNumber.ifPresent(
         blockNum -> {

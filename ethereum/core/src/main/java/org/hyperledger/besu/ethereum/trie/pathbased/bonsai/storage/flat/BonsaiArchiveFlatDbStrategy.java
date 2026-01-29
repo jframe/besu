@@ -154,6 +154,13 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       if (accountFound.isPresent()) {
         getAccountFromArchiveCounter.inc();
       } else {
+        // Fallback to non-archive lookup
+        final Optional<Bytes> nonArchiveAccount =
+            storage.get(ACCOUNT_INFO_STATE, accountHash.toArrayUnsafe()).map(Bytes::wrap);
+        if (nonArchiveAccount.isPresent()) {
+          getAccountFoundInFlatDatabaseCounter.inc();
+          return nonArchiveAccount;
+        }
         getAccountNotFoundInFlatDatabaseCounter.inc();
       }
     } else {
@@ -306,6 +313,22 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
 
+  /**
+   * Removes a flat account with an explicit block context.
+   *
+   * @param transaction the transaction to write to
+   * @param context the block context for versioning
+   * @param accountHash the account hash
+   */
+  public void removeFlatAccountWithContext(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final BonsaiContext context,
+      final Hash accountHash) {
+
+    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+    transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
+  }
+
   private byte[] trimSuffix(final byte[] suffixedAddress) {
     return Arrays.copyOfRange(suffixedAddress, 0, suffixedAddress.length - 8);
   }
@@ -352,6 +375,13 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       if (storageFound.isPresent()) {
         getStorageFromArchiveCounter.inc();
       } else {
+        // Fallback to non-archive lookup
+        final Optional<Bytes> nonArchiveStorage =
+            storage.get(ACCOUNT_STORAGE_STORAGE, naturalKey).map(Bytes::wrap);
+        if (nonArchiveStorage.isPresent()) {
+          getStorageValueFlatDatabaseCounter.inc();
+          return nonArchiveStorage;
+        }
         getStorageValueNotFoundInFlatDatabaseCounter.inc();
       }
     } else {
@@ -413,6 +443,25 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
   }
 
+  /**
+   * Removes a flat account storage value with an explicit block context.
+   *
+   * @param transaction the transaction to write to
+   * @param context the block context for versioning
+   * @param accountHash the account hash
+   * @param slotHash the storage slot hash
+   */
+  public void removeFlatAccountStorageValueByStorageSlotHashWithContext(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final BonsaiContext context,
+      final Hash accountHash,
+      final Hash slotHash) {
+
+    byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
+    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, naturalKey);
+    transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
+  }
+
   public static byte[] calculateNaturalSlotKey(final Hash accountHash, final Hash slotHash) {
     return Bytes.concatenate(accountHash, slotHash).toArrayUnsafe();
   }
@@ -433,6 +482,43 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   public static Bytes calculateArchiveKeyWithMaxSuffix(
       final Optional<BonsaiContext> context, final byte[] naturalKey) {
     return Bytes.of(calculateArchiveKeyWithSuffix(context, naturalKey, MAX_BLOCK_SUFFIX));
+  }
+
+  /**
+   * Writes an account value to the archive storage with an explicit block context.
+   *
+   * @param transaction the transaction to write to
+   * @param context the block context for versioning
+   * @param accountHash the account hash
+   * @param accountValue the serialized account value
+   */
+  public static void putFlatAccountWithContext(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final BonsaiContext context,
+      final Hash accountHash,
+      final Bytes accountValue) {
+    byte[] archiveKey = calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+    transaction.put(ACCOUNT_INFO_STATE, archiveKey, accountValue.toArrayUnsafe());
+  }
+
+  /**
+   * Writes a storage value to the archive storage with an explicit block context.
+   *
+   * @param transaction the transaction to write to
+   * @param context the block context for versioning
+   * @param accountHash the account hash
+   * @param slotHash the storage slot hash
+   * @param storageValue the storage value
+   */
+  public static void putFlatAccountStorageValueWithContext(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final BonsaiContext context,
+      final Hash accountHash,
+      final Hash slotHash,
+      final Bytes storageValue) {
+    byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
+    byte[] archiveKey = calculateArchiveKeyWithMinSuffix(context, naturalKey);
+    transaction.put(ACCOUNT_STORAGE_STORAGE, archiveKey, storageValue.toArrayUnsafe());
   }
 
   // TODO JF: move this out of this class so can be used with ArchiveCodeStorageStrategy without

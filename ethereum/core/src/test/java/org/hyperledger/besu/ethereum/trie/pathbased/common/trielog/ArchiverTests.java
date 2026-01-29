@@ -668,6 +668,7 @@ public class ArchiverTests {
 
     final BonsaiReferenceTestWorldStateStorage testWorldStateStorage =
         new BonsaiReferenceTestWorldStateStorage(bonsaiWorldStateKeyValueStorage, preImageProxy);
+    testWorldStateStorage.upgradeToArchiveDbMode();
 
     assertThat(testWorldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
 
@@ -908,6 +909,7 @@ public class ArchiverTests {
 
     final BonsaiReferenceTestWorldStateStorage testWorldStateStorage =
         new BonsaiReferenceTestWorldStateStorage(bonsaiWorldStateKeyValueStorage, preImageProxy);
+    testWorldStateStorage.upgradeToArchiveDbMode();
 
     assertThat(testWorldStateStorage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
 
