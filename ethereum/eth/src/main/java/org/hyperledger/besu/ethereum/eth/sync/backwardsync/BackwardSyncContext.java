@@ -222,6 +222,7 @@ public class BackwardSyncContext {
 
   @VisibleForTesting
   protected void processException(final Throwable throwable) {
+    LOG.info("Backward sync failed", throwable);
     extractBackwardSyncException(throwable)
         .ifPresentOrElse(
             backwardSyncException -> {

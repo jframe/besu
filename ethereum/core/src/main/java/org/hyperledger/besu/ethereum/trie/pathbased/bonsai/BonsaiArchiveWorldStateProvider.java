@@ -14,9 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
-
+import com.google.common.annotations.VisibleForTesting;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -31,14 +29,11 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManage
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.ServiceManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.function.Supplier;
-
-import com.google.common.annotations.VisibleForTesting;
-import org.apache.tuweni.bytes.Bytes;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
