@@ -303,9 +303,15 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Bytes accountValue) {
 
     // key suffixed with block context, or MIN_BLOCK_SUFFIX if we have no context:
+    final BonsaiContext context = getStateArchiveContextForWrite(storage).get();
     byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(
-            getStateArchiveContextForWrite(storage).get(), accountHash.toArrayUnsafe());
+        calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+
+    LOG.info(
+        "[DIAG] putFlatAccount: writing account {} with value size {} at block suffix {}",
+        accountHash.toShortHexString(),
+        accountValue.size(),
+        context.getBlockNumber().orElse(-1L));
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
@@ -317,9 +323,14 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Hash accountHash) {
 
     // insert a key suffixed with block context, with 'deleted account' value
+    final BonsaiContext context = getStateArchiveContextForWrite(storage).get();
     byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(
-            getStateArchiveContextForWrite(storage).get(), accountHash.toArrayUnsafe());
+        calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
+
+    LOG.info(
+        "[DIAG] removeFlatAccount: marking account {} as DELETED at block suffix {}",
+        accountHash.toShortHexString(),
+        context.getBlockNumber().orElse(-1L));
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
@@ -335,6 +346,11 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final BonsaiContext context,
       final Hash accountHash) {
+
+    LOG.info(
+        "[DIAG] removeFlatAccountWithContext: marking account {} as DELETED at block suffix {}",
+        accountHash.toShortHexString(),
+        context.getBlockNumber().orElse(-1L));
 
     byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, accountHash.toArrayUnsafe());
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
@@ -429,8 +445,15 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     // keyNearest, use MIN_BLOCK_SUFFIX in the absence of a block context:
-    byte[] keyNearest =
-        calculateArchiveKeyWithMinSuffix(getStateArchiveContextForWrite(storage).get(), naturalKey);
+    final BonsaiContext context = getStateArchiveContextForWrite(storage).get();
+    byte[] keyNearest = calculateArchiveKeyWithMinSuffix(context, naturalKey);
+
+    LOG.info(
+        "[DIAG] putFlatAccountStorageValueByStorageSlotHash: writing storage slot {} for account {} with value {} at block suffix {}",
+        slotHash.toShortHexString(),
+        accountHash.toShortHexString(),
+        storageValue.toShortHexString(),
+        context.getBlockNumber().orElse(-1L));
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keyNearest, storageValue.toArrayUnsafe());
   }
@@ -448,8 +471,14 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     // insert a key suffixed with block context, with 'deleted account' value
-    byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(getStateArchiveContextForWrite(storage).get(), naturalKey);
+    final BonsaiContext context = getStateArchiveContextForWrite(storage).get();
+    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, naturalKey);
+
+    LOG.info(
+        "[DIAG] removeFlatAccountStorageValueByStorageSlotHash: marking storage slot {} for account {} as DELETED at block suffix {}",
+        slotHash.toShortHexString(),
+        accountHash.toShortHexString(),
+        context.getBlockNumber().orElse(-1L));
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
   }
@@ -467,6 +496,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final BonsaiContext context,
       final Hash accountHash,
       final Hash slotHash) {
+
+    LOG.info(
+        "[DIAG] removeFlatAccountStorageValueByStorageSlotHashWithContext: marking storage slot {} for account {} as DELETED at block suffix {}",
+        slotHash.toShortHexString(),
+        accountHash.toShortHexString(),
+        context.getBlockNumber().orElse(-1L));
 
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(context, naturalKey);
