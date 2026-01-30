@@ -14,7 +14,6 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -29,11 +28,13 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManage
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.ServiceManager;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.function.Supplier;
+
+import com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
@@ -82,22 +83,43 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
   @Override
   public Optional<MutableWorldState> getWorldState(final WorldStateQueryParams queryParams) {
-    // Log the current WORLD_BLOCK_NUMBER_KEY value BEFORE updating
-    var currentWBN = worldStateKeyValueStorage.getWorldStateBlockNumber();
     LOG.info(
-        "[DIAG] getWorldState: stateRoot={}, blockHash={}, blockNumber={}, shouldWorldStateUpdateHead={}, currentWORLD_BLOCK_NUMBER_KEY={}",
+        "[DIAG] getWorldState: stateRoot={}, blockHash={}, blockNumber={}, shouldWorldStateUpdateHead={}",
         queryParams.getStateRoot(),
         queryParams.getBlockHash().toShortHexString(),
         queryParams.getBlockHeader().getNumber(),
-        queryParams.shouldWorldStateUpdateHead(),
-        currentWBN.orElse(-1L));
+        queryParams.shouldWorldStateUpdateHead());
 
     if (queryParams.shouldWorldStateUpdateHead()) {
-      var result = getFullWorldState(queryParams);
+      // Set up archive contexts for the target block
+      final long targetBlockNumber = queryParams.getBlockHeader().getNumber();
+      final BonsaiWorldStateKeyValueStorage bonsaiStorage =
+          (BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage;
+
+      // Set write context for any flat DB writes during the roll operation
       LOG.info(
-          "[DIAG] getWorldState (updateHead=true): result={}",
-          result.isPresent() ? "present" : "EMPTY");
-      return result;
+          "[DIAG] getWorldState: setting archive write context to {} before roll",
+          targetBlockNumber);
+      bonsaiStorage.setArchiveWriteContext(targetBlockNumber);
+
+      try {
+        var result = getFullWorldState(queryParams);
+        LOG.info(
+            "[DIAG] getWorldState (updateHead=true): result={}",
+            result.isPresent() ? "present" : "EMPTY");
+
+        // Set read context AFTER successful roll so reads use the target block number
+        if (result.isPresent()) {
+          LOG.info(
+              "[DIAG] getWorldState: setting archive read context to {} after roll",
+              targetBlockNumber);
+          bonsaiStorage.setArchiveReadContext(targetBlockNumber);
+        }
+        return result;
+      } finally {
+        // Always clear write context after operation
+        bonsaiStorage.clearArchiveWriteContext();
+      }
     } else {
       // If we are creating a world state for a historic/archive block, we have 2 options:
       // 1. Roll back and create a layered world state. We can do this as far back as 512 blocks by
@@ -132,9 +154,26 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   protected Optional<MutableWorldState> rollMutableArchiveStateToBlockHash(
       final PathBasedWorldState mutableState, final Hash blockHash) {
     LOG.trace("Rolling mutable archive world state to block hash " + blockHash.toHexString());
+
+    final BlockHeader targetHeader = blockchain.getBlockHeader(blockHash).orElse(null);
+    if (targetHeader == null) {
+      LOG.warn("Cannot roll to block hash {} - header not found", blockHash);
+      return Optional.empty();
+    }
+
+    final BonsaiWorldStateKeyValueStorage bonsaiStorage =
+        (BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage;
+    final long targetBlockNumber = targetHeader.getNumber();
+
+    // Set write context for the persist
+    bonsaiStorage.setArchiveWriteContext(targetBlockNumber);
+
     try {
       // Simply persist the block hash/number and state root for this archive state
-      mutableState.persist(blockchain.getBlockHeader(blockHash).get());
+      mutableState.persist(targetHeader);
+
+      // Set read context after successful persist
+      bonsaiStorage.setArchiveReadContext(targetBlockNumber);
 
       LOG.trace(
           "Archive rolling finished, {} now at {}",
@@ -153,6 +192,9 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
           .log();
 
       return Optional.empty();
+    } finally {
+      // Always clear write context
+      bonsaiStorage.clearArchiveWriteContext();
     }
   }
 }

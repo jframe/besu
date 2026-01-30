@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
@@ -171,6 +172,58 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
 
   public void upgradeToArchiveDbMode() {
     flatDbStrategyProvider.upgradeToArchiveDbMode(composedWorldStateStorage);
+  }
+
+  /**
+   * Sets the archive write context before operations. When set, the archive strategy will use this
+   * block number as the suffix for flat DB writes.
+   *
+   * @param blockNumber the block number to use as the write context
+   */
+  public void setArchiveWriteContext(final long blockNumber) {
+    BonsaiArchiveFlatDbStrategy archiveStrategy = flatDbStrategyProvider.getArchiveFlatDbStrategy();
+    if (archiveStrategy != null) {
+      archiveStrategy.setWriteContext(blockNumber);
+    }
+  }
+
+  /** Clears the archive write context after operations. */
+  public void clearArchiveWriteContext() {
+    BonsaiArchiveFlatDbStrategy archiveStrategy = flatDbStrategyProvider.getArchiveFlatDbStrategy();
+    if (archiveStrategy != null) {
+      archiveStrategy.clearWriteContext();
+    }
+  }
+
+  /**
+   * Sets the archive read context for operations. When set, the archive strategy will use this
+   * block number when searching for entries in the archive flat DB.
+   *
+   * @param blockNumber the block number to use as the read context
+   */
+  public void setArchiveReadContext(final long blockNumber) {
+    BonsaiArchiveFlatDbStrategy archiveStrategy = flatDbStrategyProvider.getArchiveFlatDbStrategy();
+    if (archiveStrategy != null) {
+      archiveStrategy.setReadContext(blockNumber);
+    }
+  }
+
+  /** Clears the archive read context, reverting to using MAX_BLOCK_SUFFIX for reads. */
+  public void clearArchiveReadContext() {
+    BonsaiArchiveFlatDbStrategy archiveStrategy = flatDbStrategyProvider.getArchiveFlatDbStrategy();
+    if (archiveStrategy != null) {
+      archiveStrategy.clearReadContext();
+    }
+  }
+
+  /**
+   * Checks if the archive write context is currently set.
+   *
+   * @return true if the write context is set, false otherwise
+   */
+  public boolean hasArchiveWriteContext() {
+    BonsaiArchiveFlatDbStrategy archiveStrategy = flatDbStrategyProvider.getArchiveFlatDbStrategy();
+    return archiveStrategy != null && archiveStrategy.hasWriteContext();
   }
 
   @Override

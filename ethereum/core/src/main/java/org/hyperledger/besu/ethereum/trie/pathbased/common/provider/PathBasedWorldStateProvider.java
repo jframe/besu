@@ -246,10 +246,14 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         .map(
             worldState -> {
               var storage = worldState.getWorldStateStorage();
-              LOG.info(
-                  "[DIAG] getFullWorldStateFromCache: got worldState with storage={}@{}",
-                  storage.getClass().getSimpleName(),
-                  Integer.toHexString(System.identityHashCode(storage)));
+              if (storage != null) {
+                LOG.info(
+                    "[DIAG] getFullWorldStateFromCache: got worldState with storage={}@{}",
+                    storage.getClass().getSimpleName(),
+                    Integer.toHexString(System.identityHashCode(storage)));
+              } else {
+                LOG.info("[DIAG] getFullWorldStateFromCache: got worldState with null storage");
+              }
               return worldState;
             })
         .flatMap(worldState -> rollFullWorldStateToBlockHash(worldState, blockHeader.getHash()))
@@ -262,18 +266,24 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         blockchain.getBlockHeader(mutableState.blockHash()).map(BlockHeader::getNumber).orElse(-1L);
     final long targetBlockNum =
         blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber).orElse(-1L);
-    // Read WORLD_BLOCK_NUMBER_KEY from this world state's storage to see what it sees
     var storage = mutableState.getWorldStateStorage();
-    var storageWBN = storage.getWorldStateBlockNumber().orElse(-1L);
-    LOG.info(
-        "[DIAG] rollFullWorldStateToBlockHash: from block {} ({}) to block {} ({}), storage={}@{}, storageWBN={}",
-        mutableBlockNum,
-        mutableState.blockHash().toShortHexString(),
-        targetBlockNum,
-        blockHash.toShortHexString(),
-        storage.getClass().getSimpleName(),
-        Integer.toHexString(System.identityHashCode(storage)),
-        storageWBN);
+    if (storage != null) {
+      LOG.info(
+          "[DIAG] rollFullWorldStateToBlockHash: from block {} ({}) to block {} ({}), storage={}@{}",
+          mutableBlockNum,
+          mutableState.blockHash().toShortHexString(),
+          targetBlockNum,
+          blockHash.toShortHexString(),
+          storage.getClass().getSimpleName(),
+          Integer.toHexString(System.identityHashCode(storage)));
+    } else {
+      LOG.info(
+          "[DIAG] rollFullWorldStateToBlockHash: from block {} ({}) to block {} ({}), storage=null",
+          mutableBlockNum,
+          mutableState.blockHash().toShortHexString(),
+          targetBlockNum,
+          blockHash.toShortHexString());
+    }
 
     if (blockHash.equals(mutableState.blockHash())) {
       LOG.info("[DIAG] rollFullWorldStateToBlockHash: already at target block");

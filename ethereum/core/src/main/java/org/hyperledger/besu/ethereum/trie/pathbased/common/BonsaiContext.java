@@ -22,17 +22,35 @@ public class BonsaiContext {
 
   private final AtomicReference<Long> blockNumber;
 
-  /** Context for Bonsai storage i.e. the block the storage applies to */
+  /** Creates an empty context with no block number set. */
+  public BonsaiContext() {
+    this.blockNumber = new AtomicReference<>(null);
+  }
+
+  /**
+   * Context for Bonsai storage i.e. the block the storage applies to
+   *
+   * @param blockNumber the block number for this context
+   */
   public BonsaiContext(final long blockNumber) {
     this.blockNumber = new AtomicReference<>(blockNumber);
   }
 
   /**
-   * Get the block header currently applied to this context
+   * Get the block number currently applied to this context
    *
-   * @return the optional block header
+   * @return the optional block number
    */
   public Optional<Long> getBlockNumber() {
     return Optional.ofNullable(blockNumber.get());
+  }
+
+  /**
+   * Set the block number for this context
+   *
+   * @param blockNumber the block number to set, or null to clear
+   */
+  public void setBlockNumber(final Long blockNumber) {
+    this.blockNumber.set(blockNumber);
   }
 }

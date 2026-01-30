@@ -16,7 +16,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.common.worldview;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_HASH_KEY;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_ROOT_HASH_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
@@ -26,6 +25,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.MutableWorldState;
 import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.StateRootCommitter;
 import org.hyperledger.besu.ethereum.trie.common.StateRootMismatchException;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.StorageSubscriber;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.cache.PathBasedCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedLayeredWorldStateKeyValueStorage;
@@ -209,18 +209,36 @@ public abstract class PathBasedWorldState
 
     final Optional<BlockHeader> maybeBlockHeader = Optional.ofNullable(blockHeader);
     LOG.info(
-        "[DIAG] persist: block={}, hash={}, storage={}@{}, currentWBN={}",
+        "[DIAG] persist: block={}, hash={}, storage={}@{}",
         blockHeader == null ? "null" : blockHeader.getNumber(),
         blockHeader == null ? "null" : blockHeader.getHash().toShortHexString(),
         worldStateKeyValueStorage.getClass().getSimpleName(),
-        Integer.toHexString(System.identityHashCode(worldStateKeyValueStorage)),
-        worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(-1L));
+        Integer.toHexString(System.identityHashCode(worldStateKeyValueStorage)));
     LOG.atDebug()
         .setMessage("Persist world state for block {}")
         .addArgument(maybeBlockHeader)
         .log();
 
     boolean success = false;
+
+    // For archive mode, ensure write context is set for flat DB writes.
+    // The context may already be set by the caller (e.g., BonsaiArchiveWorldStateProvider).
+    // If not set, we set it here based on the block header.
+    // IMPORTANT: Only set context when modifying the head world state, not for snapshots/layers.
+    final boolean isArchiveMode =
+        worldStateKeyValueStorage instanceof BonsaiWorldStateKeyValueStorage
+            && isModifyingHeadWorldState();
+    final boolean needToSetWriteContext =
+        isArchiveMode
+            && blockHeader != null
+            && !((BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage)
+                .hasArchiveWriteContext();
+    if (needToSetWriteContext) {
+      LOG.info(
+          "[DIAG] persist: setting archive write context to block {}", blockHeader.getNumber());
+      ((BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage)
+          .setArchiveWriteContext(blockHeader.getNumber());
+    }
 
     final PathBasedWorldStateKeyValueStorage.Updater stateUpdater =
         worldStateKeyValueStorage.updater();
@@ -256,13 +274,6 @@ public abstract class PathBasedWorldState
           .getWorldStateTransaction()
           .put(TRIE_BRANCH_STORAGE, WORLD_ROOT_HASH_KEY, calculatedRootHash.toArrayUnsafe());
 
-      stateUpdater
-          .getWorldStateTransaction()
-          .put(
-              TRIE_BRANCH_STORAGE,
-              WORLD_BLOCK_NUMBER_KEY,
-              Bytes.ofUnsignedLong(blockHeader == null ? 0L : blockHeader.getNumber())
-                  .toArrayUnsafe());
       worldStateRootHash = calculatedRootHash;
       success = true;
     } finally {
@@ -272,17 +283,34 @@ public abstract class PathBasedWorldState
         // commit only the composed worldstate, as trielog transaction is already complete:
         stateUpdater.commitComposedOnly();
         LOG.info(
-            "[DIAG] persist: committed successfully, finalWBN={}",
-            worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(-1L));
+            "[DIAG] persist: committed successfully for block={}, hash={}",
+            blockHeader != null ? blockHeader.getNumber() : "null",
+            blockHeader != null ? blockHeader.getHash().toShortHexString() : "null");
         if (!isStorageFrozen) {
           // optionally save the committed worldstate state in the cache
           cacheWorldState.run();
+        }
+
+        // For archive mode, set read context after successful commit so subsequent reads
+        // use the new block number
+        if (isArchiveMode && blockHeader != null) {
+          LOG.info(
+              "[DIAG] persist: setting archive read context to block {} after commit",
+              blockHeader.getNumber());
+          ((BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage)
+              .setArchiveReadContext(blockHeader.getNumber());
         }
 
         accumulator.reset();
       } else {
         stateUpdater.rollback();
         accumulator.reset();
+      }
+
+      // Clear write context if we set it (regardless of success/failure)
+      if (needToSetWriteContext) {
+        LOG.info("[DIAG] persist: clearing archive write context");
+        ((BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage).clearArchiveWriteContext();
       }
     }
   }

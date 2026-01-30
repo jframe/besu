@@ -24,7 +24,6 @@ import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.Difficulty;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 
@@ -38,7 +37,6 @@ class BonsaiArchiveWorldStateProviderTest {
 
   private final BlockHeaderTestFixture blockHeaderBuilder = new BlockHeaderTestFixture();
   private MutableBlockchain blockchain;
-  private BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage;
   private BonsaiArchiveWorldStateProvider archiveWorldStateProvider;
 
   @BeforeEach
@@ -46,8 +44,6 @@ class BonsaiArchiveWorldStateProviderTest {
     final Block genesisBlock = createGenesisBlock();
     blockchain = createInMemoryBlockchain(genesisBlock);
     archiveWorldStateProvider = createBonsaiArchiveInMemoryWorldStateArchive(blockchain);
-    worldStateKeyValueStorage =
-        (BonsaiWorldStateKeyValueStorage) archiveWorldStateProvider.getWorldStateKeyValueStorage();
     archiveWorldStateProvider.getWorldState().persist(genesisBlock.getHeader());
   }
 
@@ -82,8 +78,6 @@ class BonsaiArchiveWorldStateProviderTest {
       archiveWorldStateProvider.getWorldState().persist(currentHeader);
     }
 
-    assertThat(worldStateKeyValueStorage.getWorldStateBlockNumber()).contains(5L);
-
     // Request world state at block 3 with updateHead=true
     final BlockHeader blockHeader3 = blockchain.getBlockHeader(3).orElseThrow();
     Optional<BonsaiWorldState> worldState =
@@ -93,7 +87,8 @@ class BonsaiArchiveWorldStateProviderTest {
 
     assertThat(worldState).isPresent();
     assertThat(worldState.get().getWorldStateBlockHash()).isEqualTo(blockHeader3.getBlockHash());
-    assertThat(worldStateKeyValueStorage.getWorldStateBlockNumber()).contains(3L);
+    // Archive context is now managed via setArchiveReadContext/setArchiveWriteContext
+    // rather than WORLD_BLOCK_NUMBER_KEY in the database
   }
 
   @Test
@@ -111,7 +106,8 @@ class BonsaiArchiveWorldStateProviderTest {
     assertThat(worldState).isPresent();
     assertThat(worldState.get().getWorldStateBlockHash())
         .isEqualTo(block1.getHeader().getBlockHash());
-    assertThat(worldStateKeyValueStorage.getWorldStateBlockNumber()).contains(1L);
+    // Archive context is now managed via setArchiveReadContext/setArchiveWriteContext
+    // rather than WORLD_BLOCK_NUMBER_KEY in the database
   }
 
   @Test
@@ -129,8 +125,6 @@ class BonsaiArchiveWorldStateProviderTest {
     archiveWorldStateProvider.getWorldState(
         WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(blockHeader3));
 
-    assertThat(worldStateKeyValueStorage.getWorldStateBlockNumber()).contains(3L);
-
     // Roll forward to block 5
     final BlockHeader blockHeader5 = blockchain.getBlockHeader(5).orElseThrow();
     Optional<BonsaiWorldState> worldState =
@@ -140,6 +134,7 @@ class BonsaiArchiveWorldStateProviderTest {
 
     assertThat(worldState).isPresent();
     assertThat(worldState.get().getWorldStateBlockHash()).isEqualTo(blockHeader5.getBlockHash());
-    assertThat(worldStateKeyValueStorage.getWorldStateBlockNumber()).contains(5L);
+    // Archive context is now managed via setArchiveReadContext/setArchiveWriteContext
+    // rather than WORLD_BLOCK_NUMBER_KEY in the database
   }
 }

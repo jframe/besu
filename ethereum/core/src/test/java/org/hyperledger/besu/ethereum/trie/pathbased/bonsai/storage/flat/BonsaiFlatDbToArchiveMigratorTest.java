@@ -16,7 +16,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.VARIABLES;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeastOnce;
@@ -501,14 +500,9 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   private void setWorldBlockNumber(final long blockNumber) {
-    final org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction tx =
-        storage.startTransaction();
-    tx.put(
-        TRIE_BRANCH_STORAGE,
-        org.hyperledger.besu.ethereum.trie.pathbased.common.storage
-            .PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
-        org.apache.tuweni.bytes.Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
-    tx.commit();
+    // Use the new explicit context setting instead of writing to WORLD_BLOCK_NUMBER_KEY.
+    // The archive strategy now uses read context directly instead of reading from the database.
+    archiveStrategy.setReadContext(blockNumber);
   }
 
   private Optional<Bytes> getStorageValueUsingStrategy(

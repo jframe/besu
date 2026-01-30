@@ -17,8 +17,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -185,12 +183,15 @@ public class BonsaiArchiveFlatDbStrategyTest {
   }
 
   private void setWorldBlockNumber(final long blockNumber) {
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    tx.put(
-        TRIE_BRANCH_STORAGE,
-        WORLD_BLOCK_NUMBER_KEY,
-        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
-    tx.commit();
+    // Use the new explicit context setting instead of writing to WORLD_BLOCK_NUMBER_KEY.
+    // The old behavior was:
+    // - Write suffix = WORLD_BLOCK_NUMBER_KEY + 1
+    // - Read suffix = WORLD_BLOCK_NUMBER_KEY (max suffix to search for)
+    // So we set:
+    // - Write context to blockNumber + 1 to maintain write behavior
+    // - Read context to blockNumber to maintain read behavior
+    archiveFlatDbStrategy.setWriteContext(blockNumber + 1);
+    archiveFlatDbStrategy.setReadContext(blockNumber);
   }
 
   @Test

@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbSt
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
@@ -40,6 +41,10 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
   @Override
   protected FlatDbMode getRequestedFlatDbMode(
       final DataStorageConfiguration dataStorageConfiguration) {
+    // Check for archive mode first based on the data storage format
+    if (dataStorageConfiguration.getDataStorageFormat() == DataStorageFormat.X_BONSAI_ARCHIVE) {
+      return FlatDbMode.ARCHIVE;
+    }
     return dataStorageConfiguration
             .getPathBasedExtraStorageConfiguration()
             .getUnstable()
@@ -101,5 +106,18 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
     } else {
       return new BonsaiPartialFlatDbStrategy(metricsSystem, codeStorageStrategy);
     }
+  }
+
+  /**
+   * Returns the archive flat DB strategy if the current mode is ARCHIVE, otherwise returns null.
+   * This allows callers to access archive-specific methods like setWriteContext/clearWriteContext.
+   *
+   * @return the BonsaiArchiveFlatDbStrategy instance, or null if not in archive mode
+   */
+  public BonsaiArchiveFlatDbStrategy getArchiveFlatDbStrategy() {
+    if (flatDbMode == FlatDbMode.ARCHIVE && flatDbStrategy instanceof BonsaiArchiveFlatDbStrategy) {
+      return (BonsaiArchiveFlatDbStrategy) flatDbStrategy;
+    }
+    return null;
   }
 }

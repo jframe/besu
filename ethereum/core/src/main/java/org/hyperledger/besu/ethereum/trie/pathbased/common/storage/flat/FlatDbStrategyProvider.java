@@ -101,6 +101,13 @@ public abstract class FlatDbStrategyProvider {
       final SegmentedKeyValueStorage composedWorldStateStorage) {
     final FlatDbMode requestedFlatDbMode = getRequestedFlatDbMode(dataStorageConfiguration);
 
+    // If requested mode is ARCHIVE, always use ARCHIVE regardless of DB state.
+    // Archive mode cannot be "downgraded" by database state or upgrade operations.
+    if (requestedFlatDbMode == FlatDbMode.ARCHIVE) {
+      LOG.info("Flat db mode set to ARCHIVE based on configuration");
+      return FlatDbMode.ARCHIVE;
+    }
+
     final var existingTrieData =
         composedWorldStateStorage.get(TRIE_BRANCH_STORAGE, WORLD_ROOT_HASH_KEY).isPresent();
 
