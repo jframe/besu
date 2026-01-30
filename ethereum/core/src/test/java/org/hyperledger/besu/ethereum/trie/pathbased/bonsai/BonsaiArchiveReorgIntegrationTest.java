@@ -1422,6 +1422,70 @@ public class BonsaiArchiveReorgIntegrationTest {
     }
   }
 
+  /**
+   * Test that verifies layered/snapshot storages correctly inherit read context from parent. This
+   * is critical because layered storages share the parent's flatDbStrategyProvider, and if context
+   * isn't properly propagated, they will read with MAX_BLOCK_SUFFIX instead of the block-specific
+   * context, causing data corruption.
+   */
+  @Test
+  void testLayeredStorageInheritsReadContext() {
+    Address accountX = Address.fromHexString("0xF400000000000000000000000000000000000001");
+    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
+    Wei twoEth = Wei.of(2_000_000_000_000_000_000L);
+
+    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+
+    // Block 1: Account X gets 1 ETH
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Block block1 = forTransactions(List.of(tx1), parentHeader);
+    BlockProcessingResult result1 = executeBlock(archiveProvider.getWorldState(), block1);
+    assertThat(result1.isSuccessful()).isTrue();
+
+    // Block 2: Account X gets another 1 ETH (total 2 ETH)
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
+    Block block2 = forTransactions(List.of(tx2), block1.getHeader());
+    BlockProcessingResult result2 = executeBlock(archiveProvider.getWorldState(), block2);
+    assertThat(result2.isSuccessful()).isTrue();
+
+    // Verify current worldstate has 2 ETH
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+
+    // Critical test: Create a layered worldstate for block 1 (historical query)
+    // This creates BonsaiWorldStateLayerStorage which shares parent's flatDbStrategyProvider
+    MutableWorldState wsAtBlock1 =
+        archiveProvider
+            .getWorldState(
+                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block1.getHeader()))
+            .orElseThrow();
+
+    // Verify the layered storage reads from the correct block context
+    // If context isn't inherited, this will read with MAX_BLOCK_SUFFIX and return 2 ETH (wrong!)
+    // With correct context, it should read with block 1 suffix and return 1 ETH (correct)
+    Wei balanceAtBlock1 = wsAtBlock1.get(accountX).getBalance();
+    assertThat(balanceAtBlock1)
+        .as(
+            "Layered storage MUST inherit read context from parent - should read block 1 (1 ETH), not latest (2 ETH)")
+        .isEqualTo(oneEth);
+
+    // Also verify we can still read current state correctly
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
+        .as("Current worldstate should still have 2 ETH")
+        .isEqualTo(twoEth);
+
+    // Verify we can create another layered storage for block 2 without interference
+    MutableWorldState wsAtBlock2 =
+        archiveProvider
+            .getWorldState(
+                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block2.getHeader()))
+            .orElseThrow();
+
+    Wei balanceAtBlock2 = wsAtBlock2.get(accountX).getBalance();
+    assertThat(balanceAtBlock2)
+        .as("Second layered storage should read from block 2 context (2 ETH)")
+        .isEqualTo(twoEth);
+  }
+
   // Helper methods
 
   private Transaction burnTransactionWithValue(
