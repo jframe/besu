@@ -135,15 +135,32 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         LOG.debug(
             "Returning archive state without verifying state root {}",
             trieLogManager.getMaxLayersToLoad());
-        return cachedWorldStorageManager
-            .getWorldState(chainHeadBlockHeader.getHash())
-            .map(MutableWorldState::disableTrie)
-            .flatMap(
-                worldState ->
-                    rollMutableArchiveStateToBlockHash( // This is a tiny action for archive
-                        // state
-                        (PathBasedWorldState) worldState, queryParams.getBlockHeader().getHash()))
-            .map(MutableWorldState::freezeStorage);
+
+        // For historical queries, set read context for the target block to avoid race conditions
+        // when multiple concurrent queries create layered storages
+        final long targetBlockNumber = queryParams.getBlockHeader().getNumber();
+        final BonsaiWorldStateKeyValueStorage bonsaiStorage =
+            (BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage;
+
+        LOG.info(
+            "[DIAG] getWorldState (historical): setting read context to {} for archive query",
+            targetBlockNumber);
+        bonsaiStorage.setArchiveReadContext(targetBlockNumber);
+
+        try {
+          return cachedWorldStorageManager
+              .getWorldState(chainHeadBlockHeader.getHash())
+              .map(MutableWorldState::disableTrie)
+              .flatMap(
+                  worldState ->
+                      rollMutableArchiveStateToBlockHash( // This is a tiny action for archive
+                          // state
+                          (PathBasedWorldState) worldState, queryParams.getBlockHeader().getHash()))
+              .map(MutableWorldState::freezeStorage);
+        } finally {
+          // Clear read context after query completes
+          bonsaiStorage.clearArchiveReadContext();
+        }
       }
       return super.getWorldState(queryParams);
     }

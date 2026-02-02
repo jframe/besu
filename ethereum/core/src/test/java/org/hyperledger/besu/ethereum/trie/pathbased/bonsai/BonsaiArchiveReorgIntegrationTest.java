@@ -1486,6 +1486,65 @@ public class BonsaiArchiveReorgIntegrationTest {
         .isEqualTo(twoEth);
   }
 
+  /**
+   * Test that validates historical queries beyond trie log depth correctly set read context. This
+   * prevents the production bug where concurrent historical queries would read with
+   * MAX_BLOCK_SUFFIX instead of block-specific context.
+   */
+  @Test
+  void testHistoricalQueriesBeyondTrieLogDepthUseCorrectContext() {
+    Address accountX = Address.fromHexString("0xF500000000000000000000000000000000000001");
+    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
+
+    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+
+    // Create 20 blocks (beyond default trie log depth of 16)
+    // Each block adds 1 ETH to accountX
+    for (int i = 1; i <= 20; i++) {
+      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, oneEth);
+      Block block = forTransactions(List.of(tx), parentHeader);
+      BlockProcessingResult result = executeBlock(archiveProvider.getWorldState(), block);
+      assertThat(result.isSuccessful()).isTrue();
+      parentHeader = block.getHeader();
+    }
+
+    // Verify current state has 20 ETH
+    Wei twentyEth = oneEth.multiply(20);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twentyEth);
+
+    // Critical test: Query historical block 5 (beyond trie log depth from block 20)
+    // This triggers the archive-specific path in getWorldState() that must set read context
+    BlockHeader block5Header = blockchain.getBlockHeader(5).orElseThrow();
+    MutableWorldState wsAtBlock5 =
+        archiveProvider
+            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block5Header))
+            .orElseThrow();
+
+    // Should read with block 5 context (5 ETH), not MAX_BLOCK_SUFFIX (20 ETH)
+    Wei fiveEth = Wei.of(5_000_000_000_000_000_000L);
+    assertThat(wsAtBlock5.get(accountX).getBalance())
+        .as(
+            "Historical query for block 5 MUST read with block 5 context (5 ETH), not latest (20 ETH)")
+        .isEqualTo(fiveEth);
+
+    // Also verify we can query block 15 correctly
+    BlockHeader block15Header = blockchain.getBlockHeader(15).orElseThrow();
+    MutableWorldState wsAtBlock15 =
+        archiveProvider
+            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block15Header))
+            .orElseThrow();
+
+    Wei fifteenEth = oneEth.multiply(15);
+    assertThat(wsAtBlock15.get(accountX).getBalance())
+        .as("Historical query for block 15 should return 15 ETH")
+        .isEqualTo(fifteenEth);
+
+    // Final check: Current state should still be correct
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
+        .as("Current worldstate should still have 20 ETH")
+        .isEqualTo(twentyEth);
+  }
+
   // Helper methods
 
   private Transaction burnTransactionWithValue(
