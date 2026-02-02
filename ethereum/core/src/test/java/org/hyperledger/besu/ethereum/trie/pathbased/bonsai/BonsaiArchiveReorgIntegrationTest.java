@@ -1581,6 +1581,62 @@ public class BonsaiArchiveReorgIntegrationTest {
     assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
   }
 
+  /**
+   * Test that validates read context is initialized to chain head on startup. This prevents the
+   * production bug where restarting a node with existing blocks would fail validation of the next
+   * block due to reading with MAX_BLOCK_SUFFIX instead of the parent block context.
+   */
+  @Test
+  void testReadContextInitializedOnStartup() {
+    Address accountX = Address.fromHexString("0xF800000000000000000000000000000000000001");
+    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
+
+    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+
+    // Process block 1 with first provider instance
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Block block1 = forTransactions(List.of(tx1), parentHeader);
+    BlockProcessingResult result1 = executeBlock(archiveProvider.getWorldState(), block1);
+    assertThat(result1.isSuccessful()).isTrue();
+
+    // Verify block 1 persisted
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(oneEth);
+
+    // Simulate restart: Create new provider with same blockchain and storage
+    // This mimics what happens when Besu restarts with existing blocks in DB
+    BonsaiArchiveWorldStateProvider newProvider =
+        new BonsaiArchiveWorldStateProvider(
+            worldStateKeyValueStorage,
+            blockchain,
+            Optional.of(16L),
+            new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem()),
+            null,
+            EvmConfiguration.DEFAULT,
+            throwingWorldStateHealerSupplier(),
+            new CodeCache());
+
+    // Critical: The new provider's constructor should have initialized read context to block 1
+    // Without this initialization, validation of block 2 will read with MAX_BLOCK_SUFFIX
+
+    // Process block 2 with new provider instance (simulating post-restart block)
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
+    Block block2 = forTransactions(List.of(tx2), block1.getHeader());
+    BlockProcessingResult result2 = executeBlock(newProvider.getWorldState(), block2);
+
+    // This test passes only if read context was properly initialized on startup
+    // Without initialization, validation would read nonce with MAX_BLOCK_SUFFIX,
+    // get wrong value, and fail with "transaction nonce X does not match sender account nonce Y"
+    assertThat(result2.isSuccessful())
+        .as(
+            "Block 2 validation must succeed after provider restart - read context must be initialized to block 1")
+        .isTrue();
+
+    // Verify final state
+    Wei twoEth = oneEth.multiply(2);
+    assertThat(newProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+  }
+
   // Helper methods
 
   private Transaction burnTransactionWithValue(

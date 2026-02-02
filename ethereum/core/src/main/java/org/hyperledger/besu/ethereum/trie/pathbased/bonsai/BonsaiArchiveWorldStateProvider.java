@@ -58,6 +58,16 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         evmConfiguration,
         worldStateHealerSupplier,
         codeCache);
+
+    // Initialize read context to chain head block on startup
+    // This is critical for nodes that restart with existing blocks in DB
+    final long chainHeadBlockNumber = blockchain.getChainHeadBlockNumber();
+    if (chainHeadBlockNumber > 0) {
+      LOG.info(
+          "[DIAG] BonsaiArchiveWorldStateProvider: initializing read context to chain head block {}",
+          chainHeadBlockNumber);
+      worldStateKeyValueStorage.setArchiveReadContext(chainHeadBlockNumber);
+    }
   }
 
   @VisibleForTesting
