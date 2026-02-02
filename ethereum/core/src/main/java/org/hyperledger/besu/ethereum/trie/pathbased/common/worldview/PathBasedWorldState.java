@@ -233,6 +233,14 @@ public abstract class PathBasedWorldState
             && blockHeader != null
             && !((BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage)
                 .hasArchiveWriteContext();
+
+    LOG.info(
+        "[DIAG] persist: isArchiveMode={}, needToSetWriteContext={}, isModifyingHead={}, blockNumber={}",
+        isArchiveMode,
+        needToSetWriteContext,
+        isModifyingHeadWorldState(),
+        blockHeader != null ? blockHeader.getNumber() : "null");
+
     if (needToSetWriteContext) {
       LOG.info(
           "[DIAG] persist: setting archive write context to block {}", blockHeader.getNumber());
