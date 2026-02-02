@@ -96,6 +96,24 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       final BonsaiWorldStateKeyValueStorage bonsaiStorage =
           (BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage;
 
+      // Get current block number for read context during rollforward
+      final long currentBlockNumber =
+          blockchain
+              .getBlockHeader(headWorldState.blockHash())
+              .map(BlockHeader::getNumber)
+              .orElse(0L);
+
+      // Only set read context if we're actually rolling forward (not already at target)
+      // This prevents reads during rollforward from using MAX_BLOCK_SUFFIX and getting wrong data
+      final boolean needRollforward = currentBlockNumber < targetBlockNumber;
+      if (needRollforward) {
+        LOG.info(
+            "[DIAG] getWorldState: setting archive read context to {} before rollforward to {}",
+            currentBlockNumber,
+            targetBlockNumber);
+        bonsaiStorage.setArchiveReadContext(currentBlockNumber);
+      }
+
       // Set write context for any flat DB writes during the roll operation
       LOG.info(
           "[DIAG] getWorldState: setting archive write context to {} before roll",
@@ -117,8 +135,12 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         }
         return result;
       } finally {
-        // Always clear write context after operation
+        // Clear write context after operation
         bonsaiStorage.clearArchiveWriteContext();
+        // Clear read context if we set it for rollforward
+        if (needRollforward) {
+          bonsaiStorage.clearArchiveReadContext();
+        }
       }
     } else {
       // If we are creating a world state for a historic/archive block, we have 2 options:

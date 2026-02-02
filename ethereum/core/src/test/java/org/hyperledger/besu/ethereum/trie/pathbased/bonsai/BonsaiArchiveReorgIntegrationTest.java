@@ -1545,6 +1545,42 @@ public class BonsaiArchiveReorgIntegrationTest {
         .isEqualTo(twentyEth);
   }
 
+  /**
+   * Test that validates reads during rollforward use correct read context. This prevents the
+   * production bug where rollforward reads would use MAX_BLOCK_SUFFIX and get wrong account state,
+   * causing nonce mismatch errors.
+   */
+  @Test
+  void testRollforwardReadsUseCorrectContext() {
+    Address accountX = Address.fromHexString("0xF600000000000000000000000000000000000001");
+    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
+
+    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+
+    // Block 1: Account X gets 1 ETH
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Block block1 = forTransactions(List.of(tx1), parentHeader);
+    BlockProcessingResult result1 = executeBlock(archiveProvider.getWorldState(), block1);
+    assertThat(result1.isSuccessful()).isTrue();
+
+    // Block 2: Account X gets another 1 ETH
+    // This triggers rollforward from block 1 → 2
+    // During rollforward, reads MUST use block 1 context to get correct prior state
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
+    Block block2 = forTransactions(List.of(tx2), block1.getHeader());
+    BlockProcessingResult result2 = executeBlock(archiveProvider.getWorldState(), block2);
+
+    // If read context wasn't set during rollforward, reads would use MAX_BLOCK_SUFFIX
+    // and potentially get wrong account state, failing transaction validation
+    assertThat(result2.isSuccessful())
+        .as("Rollforward must read from block 1 context, not MAX_BLOCK_SUFFIX")
+        .isTrue();
+
+    // Verify final balance
+    Wei twoEth = oneEth.multiply(2);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+  }
+
   // Helper methods
 
   private Transaction burnTransactionWithValue(
