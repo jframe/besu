@@ -2270,7 +2270,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
     }
 
     if (SyncMode.FULL.equals(getDefaultSyncModeIfNotSet())
-        && DataStorageFormat.BONSAI.equals(dataStorageConfiguration.getDataStorageFormat())) {
+        && dataStorageConfiguration.getDataStorageFormat().isBonsaiFormat()) {
       final PathBasedExtraStorageConfiguration pathBasedExtraStorageConfiguration =
           dataStorageConfiguration.getPathBasedExtraStorageConfiguration();
       if (pathBasedExtraStorageConfiguration.getLimitTrieLogsEnabled()) {
