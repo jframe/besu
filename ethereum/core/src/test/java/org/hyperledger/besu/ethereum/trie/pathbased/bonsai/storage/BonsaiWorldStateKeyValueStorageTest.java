@@ -289,7 +289,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     Mockito.reset(storage);
 
-    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()))).isEmpty();
+    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), Optional::empty)).isEmpty();
 
     verify(storage, times(0)).getAccountStateTrieNode(any(), eq(trie.getRootHash()));
   }
@@ -320,7 +320,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     Mockito.reset(storage);
 
-    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey())))
+    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), Optional::empty))
         .contains(accounts.firstEntry().getValue());
 
     verify(storage, times(1)).getAccountStateTrieNode(any(), eq(trie.getRootHash()));
@@ -353,10 +353,10 @@ public class BonsaiWorldStateKeyValueStorageTest {
     storage.clearFlatDatabase();
 
     storage.upgradeToFullFlatDbMode();
-    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()))).isEmpty();
+    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), Optional::empty)).isEmpty();
 
     storage.downgradeToPartialFlatDbMode();
-    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey())))
+    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), Optional::empty))
         .contains(accounts.firstEntry().getValue());
   }
 
@@ -406,7 +406,8 @@ public class BonsaiWorldStateKeyValueStorageTest {
     assertThat(
             storage.getStorageValueByStorageSlotKey(
                 Hash.wrap(accounts.firstKey()),
-                new StorageSlotKey(Hash.wrap(slots.firstKey()), Optional.empty())))
+                new StorageSlotKey(Hash.wrap(slots.firstKey()), Optional.empty()),
+                Optional::empty))
         .map(Bytes::toShortHexString)
         .contains(slots.firstEntry().getValue().toShortHexString());
 
@@ -450,14 +451,14 @@ public class BonsaiWorldStateKeyValueStorageTest {
             (currentBlock) ->
                 updateStorageArchiveBlock(
                     storage.getComposedWorldStateStorage(), currentBlock + 1));
-    assertThat(storage.getAccount(Hash.ZERO)).isNotEmpty();
+    assertThat(storage.getAccount(Hash.ZERO, Optional::empty)).isNotEmpty();
 
     // clear
     storage.clear();
 
     assertThat(storage.getFlatDbStrategy()).isNotNull();
 
-    assertThat(storage.getAccount(Hash.ZERO)).isEmpty();
+    assertThat(storage.getAccount(Hash.ZERO, Optional::empty)).isEmpty();
   }
 
   @ParameterizedTest
@@ -487,7 +488,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
                 updateStorageArchiveBlock(
                     storage.getComposedWorldStateStorage(), currentBlock + 1));
 
-    assertThat(storage.getAccount(account.addressHash())).isNotEmpty();
+    assertThat(storage.getAccount(account.addressHash(), Optional::empty)).isNotEmpty();
 
     // Get the raw key/value out of storage and check that as well. The key differs between flat DB
     // and flat archive DB
@@ -502,7 +503,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     BonsaiAccount retrievedAccount =
         BonsaiAccount.fromRLP(
-            null, account, storage.getAccount(account.addressHash()).get(), false, new CodeCache());
+            null, account, storage.getAccount(account.addressHash(), Optional::empty).get(), false, new CodeCache());
     assertThat(retrievedAccount.getBalance())
         .isEqualTo(
             Wei.fromHexString(
@@ -514,7 +515,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     assertThat(storage.getFlatDbStrategy()).isNotNull();
 
-    assertThat(storage.getAccount(account.addressHash())).isEmpty();
+    assertThat(storage.getAccount(account.addressHash(), Optional::empty)).isEmpty();
   }
 
   @ParameterizedTest
@@ -615,9 +616,9 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     assertThat(storage.getFlatDbStrategy()).isNotNull();
 
-    assertThat(storage.getAccount(account1.addressHash())).isEmpty();
-    assertThat(storage.getAccount(account2.addressHash())).isEmpty();
-    assertThat(storage.getAccount(account3.addressHash())).isEmpty();
+    assertThat(storage.getAccount(account1.addressHash(), Optional::empty)).isEmpty();
+    assertThat(storage.getAccount(account2.addressHash(), Optional::empty)).isEmpty();
+    assertThat(storage.getAccount(account3.addressHash(), Optional::empty)).isEmpty();
   }
 
   @ParameterizedTest
@@ -735,9 +736,9 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     assertThat(storage.getFlatDbStrategy()).isNotNull();
 
-    assertThat(storage.getAccount(account1.addressHash())).isEmpty();
-    assertThat(storage.getAccount(account2.addressHash())).isEmpty();
-    assertThat(storage.getAccount(account3.addressHash())).isEmpty();
+    assertThat(storage.getAccount(account1.addressHash(), Optional::empty)).isEmpty();
+    assertThat(storage.getAccount(account2.addressHash(), Optional::empty)).isEmpty();
+    assertThat(storage.getAccount(account3.addressHash(), Optional::empty)).isEmpty();
   }
 
   @ParameterizedTest

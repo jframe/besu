@@ -36,6 +36,7 @@ import org.hyperledger.besu.ethereum.trie.CompactEncoding;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.plugin.services.BesuEvents;
@@ -50,6 +51,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -524,9 +526,8 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
                 LOGGER.trace("obtained worldstate in {}", stopWatch);
 
                 // For archive mode, create read context from the storage's block number
-                java.util.function.Supplier<Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext>> readContextSupplier =
-                    () -> storage.getWorldStateBlockNumber()
-                        .map(org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext::new);
+                Supplier<Optional<BonsaiContext>> readContextSupplier =
+                    () -> storage.getWorldStateBlockNumber().map(BonsaiContext::new);
 
                 ArrayList<Bytes> trieNodes = new ArrayList<>();
                 var triePathList =

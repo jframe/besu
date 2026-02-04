@@ -976,7 +976,7 @@ public class BonsaiArchiveReorgIntegrationTest {
         .isEqualTo(fiveEth);
 
     // Also verify via direct flat DB query using the archive strategy
-    Optional<Bytes> flatDbValue = worldStateKeyValueStorage.getAccount(accountXHash);
+    Optional<Bytes> flatDbValue = worldStateKeyValueStorage.getAccount(accountXHash, Optional::empty);
     assertThat(flatDbValue).as("Flat DB should have a value for accountX").isPresent();
 
     // The flat DB value should decode to an account with 5 ETH balance
@@ -1041,7 +1041,7 @@ public class BonsaiArchiveReorgIntegrationTest {
 
     // 3. Verify via flat DB that accountZ has no value for block 1
     Hash accountZHash = accountZ.addressHash();
-    Optional<Bytes> flatDbValueZ = worldStateKeyValueStorage.getAccount(accountZHash);
+    Optional<Bytes> flatDbValueZ = worldStateKeyValueStorage.getAccount(accountZHash, Optional::empty);
 
     // After reorg, the flat DB should either:
     // - Not have accountZ at all, OR
