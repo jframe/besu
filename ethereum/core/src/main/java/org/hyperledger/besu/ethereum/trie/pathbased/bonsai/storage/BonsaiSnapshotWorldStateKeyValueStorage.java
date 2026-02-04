@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.StorageSubscriber;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedSnapshotWorldStateKeyValueStorage;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
@@ -67,17 +68,19 @@ public class BonsaiSnapshotWorldStateKeyValueStorage extends BonsaiWorldStateKey
   }
 
   @Override
-  public Updater updater() {
+  public Updater updater(final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
     return new Updater(
         ((SnappedKeyValueStorage) composedWorldStateStorage).getSnapshotTransaction(),
         trieLogStorage.startTransaction(),
         getFlatDbStrategy(),
-        composedWorldStateStorage);
+        composedWorldStateStorage,
+        writeContextSupplier);
   }
 
   @Override
-  public Optional<Bytes> getAccount(final Hash accountHash) {
-    return isClosedGet() ? Optional.empty() : super.getAccount(accountHash);
+  public Optional<Bytes> getAccount(
+      final Hash accountHash, final Supplier<Optional<BonsaiContext>> readContextSupplier) {
+    return isClosedGet() ? Optional.empty() : super.getAccount(accountHash, readContextSupplier);
   }
 
   @Override
@@ -130,20 +133,24 @@ public class BonsaiSnapshotWorldStateKeyValueStorage extends BonsaiWorldStateKey
 
   @Override
   public Optional<Bytes> getStorageValueByStorageSlotKey(
-      final Hash accountHash, final StorageSlotKey storageSlotKey) {
+      final Hash accountHash,
+      final StorageSlotKey storageSlotKey,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier) {
     return isClosedGet()
         ? Optional.empty()
-        : super.getStorageValueByStorageSlotKey(accountHash, storageSlotKey);
+        : super.getStorageValueByStorageSlotKey(accountHash, storageSlotKey, readContextSupplier);
   }
 
   @Override
   public Optional<Bytes> getStorageValueByStorageSlotKey(
       final Supplier<Optional<Hash>> storageRootSupplier,
       final Hash accountHash,
-      final StorageSlotKey storageSlotKey) {
+      final StorageSlotKey storageSlotKey,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier) {
     return isClosedGet()
         ? Optional.empty()
-        : super.getStorageValueByStorageSlotKey(storageRootSupplier, accountHash, storageSlotKey);
+        : super.getStorageValueByStorageSlotKey(
+            storageRootSupplier, accountHash, storageSlotKey, readContextSupplier);
   }
 
   @Override
