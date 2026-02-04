@@ -21,6 +21,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategy;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
@@ -55,7 +56,8 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       Supplier<Optional<Bytes>> worldStateRootHashSupplier,
       NodeLoader nodeLoader,
       Hash accountHash,
-      SegmentedKeyValueStorage storage);
+      SegmentedKeyValueStorage storage,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier);
 
   /*
    * Retrieves the storage value for the given account hash and storage slot key, using the world state root hash supplier, storage root supplier, and node loader.
@@ -67,14 +69,17 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       NodeLoader nodeLoader,
       Hash accountHash,
       StorageSlotKey storageSlotKey,
-      SegmentedKeyValueStorage storageStorage);
+      SegmentedKeyValueStorage storageStorage,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier);
 
   @Override
   public void putFlatAccount(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Bytes accountValue) {
+      final Bytes accountValue,
+      final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
+    // Non-archive mode ignores context
     transaction.put(
         ACCOUNT_INFO_STATE, accountHash.getBytes().toArrayUnsafe(), accountValue.toArrayUnsafe());
   }
@@ -83,7 +88,9 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
   public void removeFlatAccount(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
-      final Hash accountHash) {
+      final Hash accountHash,
+      final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
+    // Non-archive mode ignores context
     transaction.remove(ACCOUNT_INFO_STATE, accountHash.getBytes().toArrayUnsafe());
   }
 
@@ -93,7 +100,9 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
       final Hash slotHash,
-      final Bytes storageValue) {
+      final Bytes storageValue,
+      final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
+    // Non-archive mode ignores context
     transaction.put(
         ACCOUNT_STORAGE_STORAGE,
         Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe(),
@@ -105,7 +114,9 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Hash slotHash) {
+      final Hash slotHash,
+      final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
+    // Non-archive mode ignores context
     transaction.remove(
         ACCOUNT_STORAGE_STORAGE,
         Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe());
