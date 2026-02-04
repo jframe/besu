@@ -522,6 +522,12 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
           .map(
               storage -> {
                 LOGGER.trace("obtained worldstate in {}", stopWatch);
+
+                // For archive mode, create read context from the storage's block number
+                java.util.function.Supplier<Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext>> readContextSupplier =
+                    () -> storage.getWorldStateBlockNumber()
+                        .map(org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext::new);
+
                 ArrayList<Bytes> trieNodes = new ArrayList<>();
                 var triePathList =
                     triePaths.paths().size() < MAX_TRIE_LOOKUPS_PER_REQUEST
@@ -555,7 +561,7 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
                     // are compact encoded account storage paths
 
                     final Bytes32 accountPrefix = Bytes32.leftPad(triePath.getFirst());
-                    var optAccount = storage.getAccount(Hash.wrap(accountPrefix));
+                    var optAccount = storage.getAccount(Hash.wrap(accountPrefix), readContextSupplier);
                     if (optAccount.isEmpty()) {
                       continue;
                     }
