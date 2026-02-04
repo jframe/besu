@@ -67,11 +67,20 @@ public class BonsaiWorldState extends PathBasedWorldState {
   private final CodeCache codeCache;
 
   protected Supplier<Optional<BonsaiContext>> getReadContextSupplier() {
-    return Optional::empty;
+    // Default implementation: get context from storage's current block number
+    // This works for both archive and non-archive modes
+    // BonsaiArchiveWorldState can override to provide explicit context
+    return () -> getWorldStateStorage()
+        .getWorldStateBlockNumber()
+        .map(BonsaiContext::new);
   }
 
   protected Supplier<Optional<BonsaiContext>> getWriteContextSupplier() {
-    return Optional::empty;
+    // Default implementation: get context from storage's current block number + 1
+    // BonsaiArchiveWorldState can override to provide explicit context
+    return () -> getWorldStateStorage()
+        .getWorldStateBlockNumber()
+        .map(blockNum -> new BonsaiContext(blockNum + 1));
   }
 
   public BonsaiWorldState(

@@ -72,6 +72,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStorageProviderBui
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
@@ -91,6 +92,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -976,7 +978,10 @@ public class BonsaiArchiveReorgIntegrationTest {
         .isEqualTo(fiveEth);
 
     // Also verify via direct flat DB query using the archive strategy
-    Optional<Bytes> flatDbValue = worldStateKeyValueStorage.getAccount(accountXHash, Optional::empty);
+    // Use current world state block number as read context
+    Supplier<Optional<BonsaiContext>> readContextSupplier =
+        () -> worldStateKeyValueStorage.getWorldStateBlockNumber().map(BonsaiContext::new);
+    Optional<Bytes> flatDbValue = worldStateKeyValueStorage.getAccount(accountXHash, readContextSupplier);
     assertThat(flatDbValue).as("Flat DB should have a value for accountX").isPresent();
 
     // The flat DB value should decode to an account with 5 ETH balance
@@ -1041,7 +1046,9 @@ public class BonsaiArchiveReorgIntegrationTest {
 
     // 3. Verify via flat DB that accountZ has no value for block 1
     Hash accountZHash = accountZ.addressHash();
-    Optional<Bytes> flatDbValueZ = worldStateKeyValueStorage.getAccount(accountZHash, Optional::empty);
+    Supplier<Optional<BonsaiContext>> readContextSupplier2 =
+        () -> worldStateKeyValueStorage.getWorldStateBlockNumber().map(BonsaiContext::new);
+    Optional<Bytes> flatDbValueZ = worldStateKeyValueStorage.getAccount(accountZHash, readContextSupplier2);
 
     // After reorg, the flat DB should either:
     // - Not have accountZ at all, OR

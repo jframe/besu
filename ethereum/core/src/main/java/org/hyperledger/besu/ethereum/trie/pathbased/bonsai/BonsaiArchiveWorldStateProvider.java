@@ -59,9 +59,15 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         worldStateHealerSupplier,
         codeCache);
     // Override the head world state with BonsaiArchiveWorldState
-    loadHeadWorldState(
-        new BonsaiArchiveWorldState(
-            this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
+    BonsaiArchiveWorldState archiveHeadWorldState = new BonsaiArchiveWorldState(
+        this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache);
+
+    // Set initial contexts based on the current world state block number
+    Long currentBlockNumber = worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(0L);
+    archiveHeadWorldState.setReadContext(new BonsaiContext(currentBlockNumber));
+    archiveHeadWorldState.setWriteContext(new BonsaiContext(currentBlockNumber));
+
+    loadHeadWorldState(archiveHeadWorldState);
   }
 
   @Override
@@ -106,7 +112,14 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
                 })
             .map(MutableWorldState::freezeStorage);
       }
-      return super.getWorldState(queryParams);
+      // For queries within max layers, use parent logic but set read context
+      Optional<MutableWorldState> maybeWorldState = super.getWorldState(queryParams);
+      maybeWorldState.ifPresent(ws -> {
+        if (ws instanceof BonsaiArchiveWorldState archiveWs) {
+          archiveWs.setReadContext(new BonsaiContext(queryParams.getBlockHeader().getNumber()));
+        }
+      });
+      return maybeWorldState;
     }
   }
 
