@@ -1,6 +1,7 @@
 *.bak
 *.swp
 *.tmp
+.worktrees/
 *~.nib
 *.iml
 *.launch
