@@ -22,6 +22,8 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
@@ -56,12 +58,25 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         evmConfiguration,
         worldStateHealerSupplier,
         codeCache);
+    // Override the head world state with BonsaiArchiveWorldState
+    loadHeadWorldState(
+        new BonsaiArchiveWorldState(
+            this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
   }
 
   @Override
   public Optional<MutableWorldState> getWorldState(final WorldStateQueryParams queryParams) {
     if (queryParams.shouldWorldStateUpdateHead()) {
-      return getFullWorldState(queryParams);
+      Optional<MutableWorldState> maybeWorldState = getFullWorldState(queryParams);
+      maybeWorldState.ifPresent(ws -> {
+        if (ws instanceof BonsaiArchiveWorldState archiveWs) {
+          // Set read context = target block (for reading during rollback/forward)
+          archiveWs.setReadContext(new BonsaiContext(queryParams.getBlockHeader().getNumber()));
+          // Set write context = target block (for persisting after rollback/forward)
+          archiveWs.setWriteContext(new BonsaiContext(queryParams.getBlockHeader().getNumber()));
+        }
+      });
+      return maybeWorldState;
     } else {
       // If we are creating a world state for a historic/archive block, we have 2 options:
       // 1. Roll back and create a layered world state. We can do this as far back as 512 blocks by
@@ -81,10 +96,14 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             .getWorldState(chainHeadBlockHeader.getHash())
             .map(MutableWorldState::disableTrie)
             .flatMap(
-                worldState ->
-                    rollMutableArchiveStateToBlockHash( // This is a tiny action for archive
-                        // state
-                        (PathBasedWorldState) worldState, queryParams.getBlockHeader().getHash()))
+                worldState -> {
+                  if (worldState instanceof BonsaiArchiveWorldState archiveWs) {
+                    archiveWs.setReadContext(new BonsaiContext(queryParams.getBlockHeader().getNumber()));
+                  }
+                  return rollMutableArchiveStateToBlockHash( // This is a tiny action for archive
+                      // state
+                      (PathBasedWorldState) worldState, queryParams.getBlockHeader().getHash());
+                })
             .map(MutableWorldState::freezeStorage);
       }
       return super.getWorldState(queryParams);
