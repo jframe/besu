@@ -68,6 +68,11 @@ public class BonsaiSnapshotWorldStateKeyValueStorage extends BonsaiWorldStateKey
   }
 
   @Override
+  public Updater updater() {
+    return updater(Optional::empty);
+  }
+
+  @Override
   public Updater updater(final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
     return new Updater(
         ((SnappedKeyValueStorage) composedWorldStateStorage).getSnapshotTransaction(),

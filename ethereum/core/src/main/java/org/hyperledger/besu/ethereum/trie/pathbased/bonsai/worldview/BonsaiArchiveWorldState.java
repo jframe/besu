@@ -38,10 +38,12 @@ public class BonsaiArchiveWorldState extends BonsaiWorldState {
     super(archive, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache);
   }
 
+  @Override
   public Supplier<Optional<BonsaiContext>> getReadContextSupplier() {
     return () -> readContext;
   }
 
+  @Override
   public Supplier<Optional<BonsaiContext>> getWriteContextSupplier() {
     return () -> writeContext;
   }

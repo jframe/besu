@@ -31,6 +31,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.NoopBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateLayerStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.PathBasedValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.cache.PathBasedCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
@@ -64,6 +65,14 @@ public class BonsaiWorldState extends PathBasedWorldState {
 
   protected BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader;
   private final CodeCache codeCache;
+
+  protected Supplier<Optional<BonsaiContext>> getReadContextSupplier() {
+    return Optional::empty;
+  }
+
+  protected Supplier<Optional<BonsaiContext>> getWriteContextSupplier() {
+    return Optional::empty;
+  }
 
   public BonsaiWorldState(
       final BonsaiWorldStateProvider archive,
@@ -306,7 +315,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
       // because we are clearing persisted values we need the account root as persisted
       final BonsaiAccount oldAccount =
           getWorldStateStorage()
-              .getAccount(address.addressHash())
+              .getAccount(address.addressHash(), getReadContextSupplier())
               .map(
                   bytes ->
                       BonsaiAccount.fromRLP(BonsaiWorldState.this, address, bytes, true, codeCache))
@@ -373,14 +382,15 @@ public class BonsaiWorldState extends PathBasedWorldState {
                 noOpSegmentedTx,
                 noOpTx,
                 worldStateKeyValueStorage.getFlatDbStrategy(),
-                worldStateKeyValueStorage.getComposedWorldStateStorage())),
+                worldStateKeyValueStorage.getComposedWorldStateStorage(),
+                getWriteContextSupplier())),
         accumulator.copy());
   }
 
   @Override
   public Account get(final Address address) {
     return getWorldStateStorage()
-        .getAccount(address.addressHash())
+        .getAccount(address.addressHash(), getReadContextSupplier())
         .map(bytes -> BonsaiAccount.fromRLP(accumulator, address, bytes, true, codeCache))
         .orElse(null);
   }
@@ -413,7 +423,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
   public Optional<UInt256> getStorageValueByStorageSlotKey(
       final Address address, final StorageSlotKey storageSlotKey) {
     return getWorldStateStorage()
-        .getStorageValueByStorageSlotKey(address.addressHash(), storageSlotKey)
+        .getStorageValueByStorageSlotKey(address.addressHash(), storageSlotKey, getReadContextSupplier())
         .map(UInt256::fromBytes);
   }
 
@@ -422,7 +432,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
       final Address address,
       final StorageSlotKey storageSlotKey) {
     return getWorldStateStorage()
-        .getStorageValueByStorageSlotKey(storageRootSupplier, address.addressHash(), storageSlotKey)
+        .getStorageValueByStorageSlotKey(storageRootSupplier, address.addressHash(), storageSlotKey, getReadContextSupplier())
         .map(UInt256::fromBytes);
   }
 
