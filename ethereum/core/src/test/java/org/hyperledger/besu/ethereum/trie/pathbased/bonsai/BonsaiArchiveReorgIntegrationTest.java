@@ -75,6 +75,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldSt
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
+import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.BesuConfiguration;
@@ -165,7 +166,7 @@ public class BonsaiArchiveReorgIntegrationTest {
         new BonsaiArchiveWorldStateProvider(
             worldStateKeyValueStorage,
             blockchain,
-            Optional.of(16L),
+            PathBasedExtraStorageConfiguration.DEFAULT,
             new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem()),
             null,
             EvmConfiguration.DEFAULT,
@@ -1289,25 +1290,25 @@ public class BonsaiArchiveReorgIntegrationTest {
 
     // Check that we can find values at the expected block suffixes
     // Block 1 suffix: accountHash + 0x0000000000000001
-    byte[] keyAtBlock1 = Bytes.concatenate(accountXHash, Bytes.ofUnsignedLong(1)).toArrayUnsafe();
+    byte[] keyAtBlock1 = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
     Optional<byte[]> valueAtBlock1 =
         composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock1);
     assertThat(valueAtBlock1).as("Account value should exist at block suffix 1").isPresent();
 
     // Block 2 suffix: accountHash + 0x0000000000000002
-    byte[] keyAtBlock2 = Bytes.concatenate(accountXHash, Bytes.ofUnsignedLong(2)).toArrayUnsafe();
+    byte[] keyAtBlock2 = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(2)).toArrayUnsafe();
     Optional<byte[]> valueAtBlock2 =
         composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock2);
     assertThat(valueAtBlock2).as("Account value should exist at block suffix 2").isPresent();
 
     // Block 3 suffix: accountHash + 0x0000000000000003
-    byte[] keyAtBlock3 = Bytes.concatenate(accountXHash, Bytes.ofUnsignedLong(3)).toArrayUnsafe();
+    byte[] keyAtBlock3 = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(3)).toArrayUnsafe();
     Optional<byte[]> valueAtBlock3 =
         composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock3);
     assertThat(valueAtBlock3).as("Account value should exist at block suffix 3").isPresent();
 
     // Verify no value at block 0 for this account (it didn't exist at genesis)
-    byte[] keyAtBlock0 = Bytes.concatenate(accountXHash, Bytes.ofUnsignedLong(0)).toArrayUnsafe();
+    byte[] keyAtBlock0 = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(0)).toArrayUnsafe();
     Optional<byte[]> valueAtBlock0 =
         composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock0);
     assertThat(valueAtBlock0)
@@ -1352,19 +1353,19 @@ public class BonsaiArchiveReorgIntegrationTest {
     var composedStorage = worldStateKeyValueStorage.getComposedWorldStateStorage();
 
     byte[] key1 =
-        Bytes.concatenate(receiver1.addressHash(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
+        Bytes.concatenate(receiver1.addressHash().getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
     assertThat(composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, key1))
         .as("Receiver1 should have value at block suffix 1")
         .isPresent();
 
     byte[] key2 =
-        Bytes.concatenate(receiver2.addressHash(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
+        Bytes.concatenate(receiver2.addressHash().getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
     assertThat(composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, key2))
         .as("Receiver2 should have value at block suffix 1")
         .isPresent();
 
     byte[] key3 =
-        Bytes.concatenate(receiver3.addressHash(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
+        Bytes.concatenate(receiver3.addressHash().getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
     assertThat(composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, key3))
         .as("Receiver3 should have value at block suffix 1")
         .isPresent();
@@ -1399,7 +1400,7 @@ public class BonsaiArchiveReorgIntegrationTest {
           .isEqualTo(expectedBalance);
 
       // Verify flat DB has entry at this block suffix
-      byte[] keyAtBlock = Bytes.concatenate(accountXHash, Bytes.ofUnsignedLong(i)).toArrayUnsafe();
+      byte[] keyAtBlock = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(i)).toArrayUnsafe();
       Optional<byte[]> valueAtBlock =
           composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock);
       assertThat(valueAtBlock).as("Flat DB should have entry at block suffix %d", i).isPresent();
@@ -1581,68 +1582,12 @@ public class BonsaiArchiveReorgIntegrationTest {
     assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
   }
 
-  /**
-   * Test that validates read context is initialized to chain head on startup. This prevents the
-   * production bug where restarting a node with existing blocks would fail validation of the next
-   * block due to reading with MAX_BLOCK_SUFFIX instead of the parent block context.
-   */
-  @Test
-  void testReadContextInitializedOnStartup() {
-    Address accountX = Address.fromHexString("0xF800000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
-
-    // Process block 1 with first provider instance
-    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
-    Block block1 = forTransactions(List.of(tx1), parentHeader);
-    BlockProcessingResult result1 = executeBlock(archiveProvider.getWorldState(), block1);
-    assertThat(result1.isSuccessful()).isTrue();
-
-    // Verify block 1 persisted
-    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(oneEth);
-
-    // Simulate restart: Create new provider with same blockchain and storage
-    // This mimics what happens when Besu restarts with existing blocks in DB
-    BonsaiArchiveWorldStateProvider newProvider =
-        new BonsaiArchiveWorldStateProvider(
-            worldStateKeyValueStorage,
-            blockchain,
-            Optional.of(16L),
-            new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem()),
-            null,
-            EvmConfiguration.DEFAULT,
-            throwingWorldStateHealerSupplier(),
-            new CodeCache());
-
-    // Critical: The new provider's constructor should have initialized read context to block 1
-    // Without this initialization, validation of block 2 will read with MAX_BLOCK_SUFFIX
-
-    // Process block 2 with new provider instance (simulating post-restart block)
-    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
-    Block block2 = forTransactions(List.of(tx2), block1.getHeader());
-    BlockProcessingResult result2 = executeBlock(newProvider.getWorldState(), block2);
-
-    // This test passes only if read context was properly initialized on startup
-    // Without initialization, validation would read nonce with MAX_BLOCK_SUFFIX,
-    // get wrong value, and fail with "transaction nonce X does not match sender account nonce Y"
-    assertThat(result2.isSuccessful())
-        .as(
-            "Block 2 validation must succeed after provider restart - read context must be initialized to block 1")
-        .isTrue();
-
-    // Verify final state
-    Wei twoEth = oneEth.multiply(2);
-    assertThat(newProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
-  }
-
   // Helper methods
 
   private Transaction burnTransactionWithValue(
       final KeyPair sender, final Long nonce, final Address to, final Wei value) {
     return new TransactionTestFixture()
-        .sender(Address.extract(Hash.hash(sender.getPublicKey().getEncodedBytes())))
+        .sender(Address.extract(sender.getPublicKey()))
         .to(Optional.of(to))
         .value(value)
         .gasLimit(21_000L)

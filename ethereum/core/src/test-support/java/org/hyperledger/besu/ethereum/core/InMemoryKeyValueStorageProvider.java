@@ -34,6 +34,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMer
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
@@ -130,7 +131,7 @@ public class InMemoryKeyValueStorageProvider extends KeyValueStorageProvider {
             inMemoryKeyValueStorageProvider.createWorldStateStorage(
                 DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG),
         blockchain,
-        Optional.of(512L),
+            PathBasedExtraStorageConfiguration.DEFAULT,
         bonsaiCachedMerkleTrieLoader,
         null,
         EvmConfiguration.DEFAULT,
