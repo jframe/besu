@@ -42,6 +42,7 @@ import org.hyperledger.besu.ethereum.trie.StorageEntriesCollector;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiAccount;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
@@ -59,6 +60,7 @@ import java.util.Collection;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -289,7 +291,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     Mockito.reset(storage);
 
-    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), Optional::empty)).isEmpty();
+    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), () -> storage.getWorldStateBlockNumber().map(BonsaiContext::new))).isEmpty();
 
     verify(storage, times(0)).getAccountStateTrieNode(any(), eq(trie.getRootHash()));
   }
@@ -320,7 +322,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     Mockito.reset(storage);
 
-    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), Optional::empty))
+    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), () -> storage.getWorldStateBlockNumber().map(BonsaiContext::new)))
         .contains(accounts.firstEntry().getValue());
 
     verify(storage, times(1)).getAccountStateTrieNode(any(), eq(trie.getRootHash()));
@@ -353,10 +355,10 @@ public class BonsaiWorldStateKeyValueStorageTest {
     storage.clearFlatDatabase();
 
     storage.upgradeToFullFlatDbMode();
-    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), Optional::empty)).isEmpty();
+    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), () -> storage.getWorldStateBlockNumber().map(BonsaiContext::new))).isEmpty();
 
     storage.downgradeToPartialFlatDbMode();
-    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), Optional::empty))
+    assertThat(storage.getAccount(Hash.wrap(accounts.firstKey()), () -> storage.getWorldStateBlockNumber().map(BonsaiContext::new)))
         .contains(accounts.firstEntry().getValue());
   }
 
@@ -442,7 +444,10 @@ public class BonsaiWorldStateKeyValueStorageTest {
     final BonsaiWorldStateKeyValueStorage storage = spy(setUp(flatDbMode));
 
     // save world state root hash
-    final BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater();
+    // For archive mode, provide write context = current block + 1
+    Supplier<Optional<BonsaiContext>> writeContextSupplier =
+        () -> storage.getWorldStateBlockNumber().map(blockNum -> new BonsaiContext(blockNum + 1));
+    final BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater(writeContextSupplier);
     updater.putAccountInfoState(Hash.ZERO, Bytes32.random()).commit();
 
     storage
@@ -451,14 +456,15 @@ public class BonsaiWorldStateKeyValueStorageTest {
             (currentBlock) ->
                 updateStorageArchiveBlock(
                     storage.getComposedWorldStateStorage(), currentBlock + 1));
-    assertThat(storage.getAccount(Hash.ZERO, Optional::empty)).isNotEmpty();
+    assertThat(storage.getAccount(Hash.ZERO, () -> storage.getWorldStateBlockNumber().map(BonsaiContext::new))).isNotEmpty();
 
     // clear
     storage.clear();
 
     assertThat(storage.getFlatDbStrategy()).isNotNull();
 
-    assertThat(storage.getAccount(Hash.ZERO, Optional::empty)).isEmpty();
+    // After clear, provide explicit context (block 0 for cleared state)
+    assertThat(storage.getAccount(Hash.ZERO, () -> Optional.of(new BonsaiContext(0)))).isEmpty();
   }
 
   @ParameterizedTest
@@ -468,7 +474,10 @@ public class BonsaiWorldStateKeyValueStorageTest {
     final BonsaiWorldStateKeyValueStorage storage = spy(setUp(flatDbMode));
 
     // save world state root hash
-    final BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater();
+    // For archive mode, provide write context = current block + 1
+    Supplier<Optional<BonsaiContext>> writeContextSupplier =
+        () -> storage.getWorldStateBlockNumber().map(blockNum -> new BonsaiContext(blockNum + 1));
+    final BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater(writeContextSupplier);
 
     Address account = Address.fromHexString("0x1cda99fb95e5418ae3bdc3bab5c4efa4a5a58a7c");
 
@@ -488,7 +497,9 @@ public class BonsaiWorldStateKeyValueStorageTest {
                 updateStorageArchiveBlock(
                     storage.getComposedWorldStateStorage(), currentBlock + 1));
 
-    assertThat(storage.getAccount(account.addressHash(), Optional::empty)).isNotEmpty();
+    Supplier<Optional<BonsaiContext>> readContextSupplier =
+        () -> storage.getWorldStateBlockNumber().map(BonsaiContext::new);
+    assertThat(storage.getAccount(account.addressHash(), readContextSupplier)).isNotEmpty();
 
     // Get the raw key/value out of storage and check that as well. The key differs between flat DB
     // and flat archive DB
@@ -503,7 +514,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     BonsaiAccount retrievedAccount =
         BonsaiAccount.fromRLP(
-            null, account, storage.getAccount(account.addressHash(), Optional::empty).get(), false, new CodeCache());
+            null, account, storage.getAccount(account.addressHash(), () -> storage.getWorldStateBlockNumber().map(BonsaiContext::new)).get(), false, new CodeCache());
     assertThat(retrievedAccount.getBalance())
         .isEqualTo(
             Wei.fromHexString(
@@ -515,7 +526,8 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     assertThat(storage.getFlatDbStrategy()).isNotNull();
 
-    assertThat(storage.getAccount(account.addressHash(), Optional::empty)).isEmpty();
+    // After clear, provide explicit context (block 0 for cleared state)
+    assertThat(storage.getAccount(account.addressHash(), () -> Optional.of(new BonsaiContext(0)))).isEmpty();
   }
 
   @ParameterizedTest
@@ -525,7 +537,10 @@ public class BonsaiWorldStateKeyValueStorageTest {
     final BonsaiWorldStateKeyValueStorage storage = spy(setUp(flatDbMode));
 
     // save world state root hash
-    BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater();
+    // For archive mode, provide write context = current block + 1
+    Supplier<Optional<BonsaiContext>> writeContextSupplier =
+        () -> storage.getWorldStateBlockNumber().map(blockNum -> new BonsaiContext(blockNum + 1));
+    BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater(writeContextSupplier);
 
     // Put 3 accounts
     Address account1 =
@@ -533,13 +548,13 @@ public class BonsaiWorldStateKeyValueStorageTest {
             "0x1111111111111111111111111111111111111111"); // 3rd entry in DB after hashing
     Bytes32 account1Value = Bytes32.random();
     updater.putAccountInfoState(account1.addressHash(), account1Value).commit();
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     Address account2 =
         Address.fromHexString(
             "0x2222222222222222222222222222222222222222"); // 1st entry in the DB after hashing
     Bytes32 account2Value = Bytes32.random();
     updater.putAccountInfoState(account2.addressHash(), account2Value).commit();
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     Address account3 =
         Address.fromHexString(
             "0x3333333333333333333333333333333333333333"); // 2nd entry in the DB after hashing
@@ -616,9 +631,11 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     assertThat(storage.getFlatDbStrategy()).isNotNull();
 
-    assertThat(storage.getAccount(account1.addressHash(), Optional::empty)).isEmpty();
-    assertThat(storage.getAccount(account2.addressHash(), Optional::empty)).isEmpty();
-    assertThat(storage.getAccount(account3.addressHash(), Optional::empty)).isEmpty();
+    // After clear, provide explicit context (block 0 for cleared state)
+    Supplier<Optional<BonsaiContext>> contextAfterClear = () -> Optional.of(new BonsaiContext(0));
+    assertThat(storage.getAccount(account1.addressHash(), contextAfterClear)).isEmpty();
+    assertThat(storage.getAccount(account2.addressHash(), contextAfterClear)).isEmpty();
+    assertThat(storage.getAccount(account3.addressHash(), contextAfterClear)).isEmpty();
   }
 
   @ParameterizedTest
@@ -627,19 +644,22 @@ public class BonsaiWorldStateKeyValueStorageTest {
     final BonsaiWorldStateKeyValueStorage storage = spy(setUp(flatDbMode));
 
     // save world state root hash
-    BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater();
+    // For archive mode, provide write context = current block + 1
+    Supplier<Optional<BonsaiContext>> writeContextSupplier =
+        () -> storage.getWorldStateBlockNumber().map(blockNum -> new BonsaiContext(blockNum + 1));
+    BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater(writeContextSupplier);
 
     // Put 3 accounts
     Address account1 =
         Address.fromHexString(
             "0x1111111111111111111111111111111111111111"); // 3rd entry in DB after hashing
     updater.putAccountInfoState(account1.addressHash(), Bytes32.random()).commit();
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     Address account2 =
         Address.fromHexString(
             "0x2222222222222222222222222222222222222222"); // 1st entry in the DB after hashing
     updater.putAccountInfoState(account2.addressHash(), Bytes32.random()).commit();
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     Address account3 =
         Address.fromHexString(
             "0x3333333333333333333333333333333333333333"); // 2nd entry in the DB after hashing
@@ -651,18 +671,18 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     // Update the account at block 2
     updateStorageArchiveBlock(storage.getComposedWorldStateStorage(), 2);
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     updater.putAccountInfoState(account3.addressHash(), Bytes32.random()).commit();
 
     // Update the account at block 3
     updateStorageArchiveBlock(storage.getComposedWorldStateStorage(), 3);
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     updater.putAccountInfoState(account3.addressHash(), Bytes32.random()).commit();
 
     // Update the account at block 4
     updateStorageArchiveBlock(storage.getComposedWorldStateStorage(), 4);
     Bytes32 finalStateUpdate = Bytes32.random();
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     updater.putAccountInfoState(account3.addressHash(), finalStateUpdate).commit();
 
     // Streaming the entire range to ensure we only get 3 accounts back
@@ -736,9 +756,11 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     assertThat(storage.getFlatDbStrategy()).isNotNull();
 
-    assertThat(storage.getAccount(account1.addressHash(), Optional::empty)).isEmpty();
-    assertThat(storage.getAccount(account2.addressHash(), Optional::empty)).isEmpty();
-    assertThat(storage.getAccount(account3.addressHash(), Optional::empty)).isEmpty();
+    // After clear, provide explicit context (block 0 for cleared state)
+    Supplier<Optional<BonsaiContext>> contextAfterClear = () -> Optional.of(new BonsaiContext(0));
+    assertThat(storage.getAccount(account1.addressHash(), contextAfterClear)).isEmpty();
+    assertThat(storage.getAccount(account2.addressHash(), contextAfterClear)).isEmpty();
+    assertThat(storage.getAccount(account3.addressHash(), contextAfterClear)).isEmpty();
   }
 
   @ParameterizedTest
@@ -747,7 +769,10 @@ public class BonsaiWorldStateKeyValueStorageTest {
     final BonsaiWorldStateKeyValueStorage storage = spy(setUp(flatDbMode));
 
     // save world state root hash
-    BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater();
+    // For archive mode, provide write context = current block + 1
+    Supplier<Optional<BonsaiContext>> writeContextSupplier =
+        () -> storage.getWorldStateBlockNumber().map(blockNum -> new BonsaiContext(blockNum + 1));
+    BonsaiWorldStateKeyValueStorage.Updater updater = storage.updater(writeContextSupplier);
 
     // Put 3 accounts
     Address account1 =
@@ -760,7 +785,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
             UInt256.fromHexString("0x11"))
         .commit();
 
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     Address account2 =
         Address.fromHexString(
             "0x2222222222222222222222222222222222222222"); // 1st entry in the DB after hashing
@@ -771,7 +796,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
             UInt256.fromHexString("0x22"))
         .commit();
 
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     Address account3 =
         Address.fromHexString(
             "0x3333333333333333333333333333333333333333"); // 2nd entry in the DB after hashing
@@ -789,7 +814,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     // Update the storage at block 2
     updateStorageArchiveBlock(storage.getComposedWorldStateStorage(), 2);
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     updater
         .putStorageValueBySlotHash(
             account3.addressHash(), slot1.getSlotHash(), UInt256.fromHexString("0x12"))
@@ -797,7 +822,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     // Update the account at block 3
     updateStorageArchiveBlock(storage.getComposedWorldStateStorage(), 3);
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     updater
         .putStorageValueBySlotHash(
             account3.addressHash(), slot1.getSlotHash(), UInt256.fromHexString("0x13"))
@@ -805,7 +830,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     // Update the account at block 4
     updateStorageArchiveBlock(storage.getComposedWorldStateStorage(), 4);
-    updater = storage.updater();
+    updater = storage.updater(writeContextSupplier);
     updater
         .putStorageValueBySlotHash(
             account3.addressHash(), slot1.getSlotHash(), UInt256.fromHexString("0x14"))
