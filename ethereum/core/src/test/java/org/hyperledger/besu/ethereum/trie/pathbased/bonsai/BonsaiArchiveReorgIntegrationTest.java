@@ -73,6 +73,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMer
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
@@ -386,6 +387,15 @@ public class BonsaiArchiveReorgIntegrationTest {
             .processBlock(protocolContext, blockchain, wsAtBlock9, block10B);
     assertThat(result10B.isSuccessful()).isTrue();
 
+    // Persist the snapshot to create the trie log for block10B
+    // This is needed for the rollforward during reorg
+    wsAtBlock9.persist(block10B.getHeader());
+
+    // Verify trie log was created for block10B
+    assertThat(worldStateKeyValueStorage.getTrieLog(block10B.getHash()))
+        .as("Trie log for block10B should exist after persist")
+        .isPresent();
+
     // Store block10B without making it canonical yet
     blockchain.storeBlock(block10B, result10B.getReceipts());
 
@@ -396,13 +406,24 @@ public class BonsaiArchiveReorgIntegrationTest {
     blockchain.appendBlock(block10B, result10B.getReceipts());
 
     // Roll world state to new head using the archive provider
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block10B.getHeader()));
+    var rolledWorldState =
+        archiveProvider.getWorldState(
+            WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block10B.getHeader()));
+    assertThat(rolledWorldState).as("World state should be rolled to block10B").isPresent();
 
-    // Assert: Account X has 2 ETH (from 10B), not 1 ETH (from 10A)
+    // Verify HEAD is at the correct block
     MutableWorldState currentWorldState = archiveProvider.getWorldState();
+    Hash headBlockHash = ((PathBasedWorldState) currentWorldState).getWorldStateBlockHash();
+    assertThat(headBlockHash)
+        .as(
+            "HEAD should be at block10B hash, not block10A. HEAD=%s, block10B=%s, block10A=%s",
+            headBlockHash, block10B.getHash(), block10A.getHash())
+        .isEqualTo(block10B.getHash());
+
     assertThat(currentWorldState.get(accountX)).isNotNull();
-    assertThat(currentWorldState.get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(currentWorldState.get(accountX).getBalance())
+        .as("Account X balance should be 2 ETH from block10B")
+        .isEqualTo(twoEth);
 
     // Assert: WORLD_BLOCK_NUMBER_KEY correct
 
@@ -1290,25 +1311,29 @@ public class BonsaiArchiveReorgIntegrationTest {
 
     // Check that we can find values at the expected block suffixes
     // Block 1 suffix: accountHash + 0x0000000000000001
-    byte[] keyAtBlock1 = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
+    byte[] keyAtBlock1 =
+        Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
     Optional<byte[]> valueAtBlock1 =
         composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock1);
     assertThat(valueAtBlock1).as("Account value should exist at block suffix 1").isPresent();
 
     // Block 2 suffix: accountHash + 0x0000000000000002
-    byte[] keyAtBlock2 = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(2)).toArrayUnsafe();
+    byte[] keyAtBlock2 =
+        Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(2)).toArrayUnsafe();
     Optional<byte[]> valueAtBlock2 =
         composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock2);
     assertThat(valueAtBlock2).as("Account value should exist at block suffix 2").isPresent();
 
     // Block 3 suffix: accountHash + 0x0000000000000003
-    byte[] keyAtBlock3 = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(3)).toArrayUnsafe();
+    byte[] keyAtBlock3 =
+        Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(3)).toArrayUnsafe();
     Optional<byte[]> valueAtBlock3 =
         composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock3);
     assertThat(valueAtBlock3).as("Account value should exist at block suffix 3").isPresent();
 
     // Verify no value at block 0 for this account (it didn't exist at genesis)
-    byte[] keyAtBlock0 = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(0)).toArrayUnsafe();
+    byte[] keyAtBlock0 =
+        Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(0)).toArrayUnsafe();
     Optional<byte[]> valueAtBlock0 =
         composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock0);
     assertThat(valueAtBlock0)
@@ -1353,19 +1378,22 @@ public class BonsaiArchiveReorgIntegrationTest {
     var composedStorage = worldStateKeyValueStorage.getComposedWorldStateStorage();
 
     byte[] key1 =
-        Bytes.concatenate(receiver1.addressHash().getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
+        Bytes.concatenate(receiver1.addressHash().getBytes(), Bytes.ofUnsignedLong(1))
+            .toArrayUnsafe();
     assertThat(composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, key1))
         .as("Receiver1 should have value at block suffix 1")
         .isPresent();
 
     byte[] key2 =
-        Bytes.concatenate(receiver2.addressHash().getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
+        Bytes.concatenate(receiver2.addressHash().getBytes(), Bytes.ofUnsignedLong(1))
+            .toArrayUnsafe();
     assertThat(composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, key2))
         .as("Receiver2 should have value at block suffix 1")
         .isPresent();
 
     byte[] key3 =
-        Bytes.concatenate(receiver3.addressHash().getBytes(), Bytes.ofUnsignedLong(1)).toArrayUnsafe();
+        Bytes.concatenate(receiver3.addressHash().getBytes(), Bytes.ofUnsignedLong(1))
+            .toArrayUnsafe();
     assertThat(composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, key3))
         .as("Receiver3 should have value at block suffix 1")
         .isPresent();
@@ -1400,7 +1428,8 @@ public class BonsaiArchiveReorgIntegrationTest {
           .isEqualTo(expectedBalance);
 
       // Verify flat DB has entry at this block suffix
-      byte[] keyAtBlock = Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(i)).toArrayUnsafe();
+      byte[] keyAtBlock =
+          Bytes.concatenate(accountXHash.getBytes(), Bytes.ofUnsignedLong(i)).toArrayUnsafe();
       Optional<byte[]> valueAtBlock =
           composedStorage.get(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE, keyAtBlock);
       assertThat(valueAtBlock).as("Flat DB should have entry at block suffix %d", i).isPresent();

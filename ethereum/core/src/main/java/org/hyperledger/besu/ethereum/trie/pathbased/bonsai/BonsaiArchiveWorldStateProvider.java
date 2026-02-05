@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
@@ -77,6 +78,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         LOG.debug(
             "Returning archive state without verifying state root {}",
             trieLogManager.getMaxLayersToLoad());
+        final BlockHeader targetHeader = queryParams.getBlockHeader();
         return cachedWorldStorageManager
             .getWorldState(chainHeadBlockHeader.getHash())
             .map(MutableWorldState::disableTrie)
@@ -84,8 +86,12 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
                 worldState ->
                     rollMutableArchiveStateToBlockHash( // This is a tiny action for archive
                         // state
-                        (PathBasedWorldState) worldState, queryParams.getBlockHeader().getHash()))
-            .map(MutableWorldState::freezeStorage);
+                        (PathBasedWorldState) worldState, targetHeader.getHash()))
+            .map(MutableWorldState::freezeStorage)
+            .map(
+                worldState ->
+                    ((BonsaiWorldState) worldState)
+                        .setArchiveContextForHistoricalQuery(targetHeader.getNumber()));
       }
       return super.getWorldState(queryParams);
     }

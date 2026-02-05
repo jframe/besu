@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldView.encodeTrieValue;
 
 import org.hyperledger.besu.datatypes.Address;
@@ -444,6 +446,36 @@ public class BonsaiWorldState extends PathBasedWorldState {
   public MutableWorldState freezeStorage() {
     this.isStorageFrozen = true;
     this.worldStateKeyValueStorage = new BonsaiWorldStateLayerStorage(getWorldStateStorage());
+    return this;
+  }
+
+  /**
+   * Sets the archive context for historical queries by writing WORLD_BLOCK_NUMBER_KEY to the frozen
+   * layer. This method should only be called after freezeStorage() for archive/historical queries.
+   *
+   * <p>The archive strategy reads WORLD_BLOCK_NUMBER_KEY and adds 1 for write context. For
+   * historical read-only queries, we set (blockNumber - 1) so that read context = blockNumber - 1
+   * (reading from parent state). For block 0, we don't set the key to use the strategy's default.
+   *
+   * @param blockNumber the target block number for the historical query
+   * @return this world state for method chaining
+   */
+  public MutableWorldState setArchiveContextForHistoricalQuery(final long blockNumber) {
+    if (!(worldStateKeyValueStorage instanceof BonsaiWorldStateLayerStorage layerStorage)) {
+      throw new IllegalStateException(
+          "setArchiveContextForHistoricalQuery should only be called after freezeStorage()");
+    }
+
+    // For historical queries at block N, we want to read from block N's state.
+    // The strategy uses WORLD_BLOCK_NUMBER_KEY directly for read context.
+    // So we set WORLD_BLOCK_NUMBER_KEY = N for read context = N.
+    final var transaction = layerStorage.getComposedWorldStateStorage().startTransaction();
+    transaction.put(
+        TRIE_BRANCH_STORAGE,
+        WORLD_BLOCK_NUMBER_KEY,
+        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+    transaction.commit();
+
     return this;
   }
 

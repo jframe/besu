@@ -14,7 +14,9 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.common.provider;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -241,7 +243,7 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         .map(MutableWorldState::freezeStorage);
   }
 
-  private Optional<MutableWorldState> rollFullWorldStateToBlockHash(
+  protected Optional<MutableWorldState> rollFullWorldStateToBlockHash(
       final PathBasedWorldState mutableState, final Hash blockHash) {
     if (blockHash.equals(mutableState.blockHash())) {
       return Optional.of(mutableState);
@@ -303,6 +305,22 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             LOG.debug("Attempting Rollforward of {}", rollForwards.get(i).getBlockHash());
             pathBasedUpdater.rollForward(forward);
           }
+
+          // Update WORLD_BLOCK_NUMBER_KEY before commit so the archive flat DB strategy uses
+          // the correct write context. The strategy uses (WORLD_BLOCK_NUMBER_KEY + 1) as the
+          // block suffix for writes. For a target block N, we want suffix N, so we set
+          // WORLD_BLOCK_NUMBER_KEY to N-1.
+          final BlockHeader targetBlockHeader = blockchain.getBlockHeader(blockHash).get();
+          final long parentBlockNumber =
+              targetBlockHeader.getNumber() > 0 ? targetBlockHeader.getNumber() - 1 : 0;
+          var contextTransaction =
+              mutableState.getWorldStateStorage().getComposedWorldStateStorage().startTransaction();
+          contextTransaction.put(
+              TRIE_BRANCH_STORAGE,
+              WORLD_BLOCK_NUMBER_KEY,
+              Bytes.ofUnsignedLong(parentBlockNumber).toArrayUnsafe());
+          contextTransaction.commit();
+
           pathBasedUpdater.commit();
 
           mutableState.persist(blockchain.getBlockHeader(blockHash).get());

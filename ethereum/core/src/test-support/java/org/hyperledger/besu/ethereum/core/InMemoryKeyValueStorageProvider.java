@@ -131,7 +131,7 @@ public class InMemoryKeyValueStorageProvider extends KeyValueStorageProvider {
             inMemoryKeyValueStorageProvider.createWorldStateStorage(
                 DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG),
         blockchain,
-            PathBasedExtraStorageConfiguration.DEFAULT,
+        PathBasedExtraStorageConfiguration.DEFAULT,
         bonsaiCachedMerkleTrieLoader,
         null,
         EvmConfiguration.DEFAULT,
