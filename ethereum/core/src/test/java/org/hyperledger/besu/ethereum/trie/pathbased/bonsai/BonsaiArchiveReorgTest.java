@@ -249,7 +249,7 @@ public class BonsaiArchiveReorgTest {
 
     // Process 5 blocks, each adding 1 ETH
     for (int i = 1; i <= 5; i++) {
-      Transaction tx = createTransaction(ACCOUNT_A, ONE_ETH, (long) (i - 1));
+      Transaction tx = createTransaction(ACCOUNT_A, ONE_ETH, i - 1);
       Block block = forTransactions(List.of(tx), parentHeader);
       BlockProcessingResult result = executeBlock(archiveProvider.getWorldState(), block);
       assertThat(result.isSuccessful()).isTrue();
@@ -338,12 +338,11 @@ public class BonsaiArchiveReorgTest {
   @Test
   void shouldHandleReorgAtTrieLogDepthBoundary() {
     // This test verifies behavior at the exact trie log depth boundary (16 blocks)
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Build chain A: exactly TRIE_LOG_DEPTH (16) blocks
-    BlockHeader parentHeader = genesisHeader;
+    BlockHeader parentHeader = fixture.getGenesis().getHeader();
     for (int i = 0; i < TRIE_LOG_DEPTH; i++) {
-      Transaction tx = createTransaction(ACCOUNT_A, ONE_ETH, (long) i);
+      Transaction tx = createTransaction(ACCOUNT_A, ONE_ETH, i);
       Block block = forTransactions(List.of(tx), parentHeader);
       executeBlock(archiveProvider.getWorldState(), block);
       parentHeader = block.getHeader();
@@ -379,7 +378,7 @@ public class BonsaiArchiveReorgTest {
     Bytes initCode = createInitCode(runtimeCode);
 
     // Block 1A: Deploy contract with 1 ETH
-    Transaction deployTx1A = createContractDeployment(initCode, ONE_ETH, 0L);
+    Transaction deployTx1A = createContractDeployment(initCode, ONE_ETH);
     Block block1A = forTransactions(List.of(deployTx1A), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
 
@@ -387,7 +386,7 @@ public class BonsaiArchiveReorgTest {
     assertThat(archiveProvider.getWorldState().get(contractAddress)).isNotNull();
 
     // Reorg to block1B: Deploy same contract with 5 ETH
-    Transaction deployTx1B = createContractDeployment(initCode, FIVE_ETH, 0L);
+    Transaction deployTx1B = createContractDeployment(initCode, FIVE_ETH);
     Block block1B = forTransactions(List.of(deployTx1B), fixture.getGenesis().getHeader());
     reorgFromGenesis(block1B);
 
@@ -403,7 +402,7 @@ public class BonsaiArchiveReorgTest {
     Bytes initCode = createInitCode(runtimeCode);
 
     // Block 1A: Deploy a contract
-    Transaction deployTx = createContractDeployment(initCode, ONE_ETH, 0L);
+    Transaction deployTx = createContractDeployment(initCode, ONE_ETH);
     Block block1A = forTransactions(List.of(deployTx), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
 
@@ -431,7 +430,7 @@ public class BonsaiArchiveReorgTest {
     Bytes initCode = createInitCode(runtimeCode);
 
     // Block 1A: Deploy contract with 3 ETH, do NOT call it
-    Transaction deployTx = createContractDeployment(initCode, THREE_ETH, 0L);
+    Transaction deployTx = createContractDeployment(initCode, THREE_ETH);
     Block block1A = forTransactions(List.of(deployTx), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
 
@@ -442,12 +441,12 @@ public class BonsaiArchiveReorgTest {
     assertAccountNull(ACCOUNT_B);
 
     // Reorg to chain B: Deploy contract AND call it to trigger selfdestruct
-    Transaction deployTxB = createContractDeployment(initCode, THREE_ETH, 0L);
+    Transaction deployTxB = createContractDeployment(initCode, THREE_ETH);
     Block block1B = forTransactions(List.of(deployTxB), fixture.getGenesis().getHeader());
     reorgFromGenesis(block1B);
 
     // Call the contract to trigger selfdestruct
-    Transaction callTx = createContractCall(contractAddress, Bytes.EMPTY, Wei.ZERO, 1L);
+    Transaction callTx = createContractCall(contractAddress);
     Block block2B = forTransactions(List.of(callTx), block1B.getHeader());
     executeBlock(archiveProvider.getWorldState(), block2B);
 
@@ -465,7 +464,7 @@ public class BonsaiArchiveReorgTest {
     Bytes initCodeB = createInitCode(codeB);
 
     // Block 1A: Deploy contract with code A
-    Transaction deployTxA = createContractDeployment(initCodeA, Wei.ZERO, 0L);
+    Transaction deployTxA = createContractDeployment(initCodeA, Wei.ZERO);
     Block block1A = forTransactions(List.of(deployTxA), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
 
@@ -474,7 +473,7 @@ public class BonsaiArchiveReorgTest {
     assertThat(archiveProvider.getWorldState().get(contractAddress).getCode()).isEqualTo(codeA);
 
     // Reorg to chain B: Deploy contract with code B at same address
-    Transaction deployTxB = createContractDeployment(initCodeB, Wei.ZERO, 0L);
+    Transaction deployTxB = createContractDeployment(initCodeB, Wei.ZERO);
     Block block1B = forTransactions(List.of(deployTxB), fixture.getGenesis().getHeader());
     reorgFromGenesis(block1B);
 
@@ -516,7 +515,8 @@ public class BonsaiArchiveReorgTest {
   }
 
   private void assertBalance(final Address address, final Wei expectedBalance) {
-    assertThat(archiveProvider.getWorldState().get(address).getBalance()).isEqualTo(expectedBalance);
+    assertThat(archiveProvider.getWorldState().get(address).getBalance())
+        .isEqualTo(expectedBalance);
   }
 
   private void assertAccountExists(final Address address) {
@@ -551,27 +551,25 @@ public class BonsaiArchiveReorgTest {
         .createTransaction(sender);
   }
 
-  private Transaction createContractDeployment(
-      final Bytes initCode, final Wei value, final long nonce) {
+  private Transaction createContractDeployment(final Bytes initCode, final Wei value) {
     return new TransactionTestFixture()
         .sender(Address.extract(sender.getPublicKey()))
         .to(Optional.empty())
         .value(value)
         .payload(initCode)
         .gasLimit(100_000L)
-        .nonce(nonce)
+        .nonce(0L)
         .createTransaction(sender);
   }
 
-  private Transaction createContractCall(
-      final Address contract, final Bytes data, final Wei value, final long nonce) {
+  private Transaction createContractCall(final Address contract) {
     return new TransactionTestFixture()
         .sender(Address.extract(sender.getPublicKey()))
         .to(Optional.of(contract))
-        .value(value)
-        .payload(data)
+        .value(Wei.ZERO)
+        .payload(Bytes.EMPTY)
         .gasLimit(100_000L)
-        .nonce(nonce)
+        .nonce(1L)
         .createTransaction(sender);
   }
 
@@ -585,15 +583,15 @@ public class BonsaiArchiveReorgTest {
   private BlockProcessingResult executeBlock(final MutableWorldState ws, final Block block) {
     var res =
         protocolSchedule
-            .getByBlockHeader(blockHeader(0))
+            .getByBlockHeader(blockHeader())
             .getBlockProcessor()
             .processBlock(protocolContext, blockchain, ws, block);
     blockchain.appendBlock(block, res.getReceipts());
     return res;
   }
 
-  private BlockHeader blockHeader(final long number) {
-    return new BlockHeaderTestFixture().number(number).buildHeader();
+  private BlockHeader blockHeader() {
+    return new BlockHeaderTestFixture().number(0).buildHeader();
   }
 
   private BlockHeader buildEmptyChainToBlock(final int blockCount) {
