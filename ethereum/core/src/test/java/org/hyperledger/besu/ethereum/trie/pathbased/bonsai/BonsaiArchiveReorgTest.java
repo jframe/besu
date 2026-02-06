@@ -83,27 +83,27 @@ public class BonsaiArchiveReorgTest {
   private static final Address ACCOUNT_C =
       Address.fromHexString("0x1000000000000000000000000000000000000003");
 
-  private ExecutionContextTestFixture fixture;
-  private BonsaiArchiveWorldStateProvider archiveProvider;
+    private BonsaiArchiveWorldStateProvider archiveProvider;
   private MutableBlockchain blockchain;
   private ProtocolContext protocolContext;
   private ProtocolSchedule protocolSchedule;
   private TransactionPool transactionPool;
   private KeyPair sender;
+  private BlockHeader genesisHeader;
   private final EthScheduler ethScheduler = new DeterministicEthScheduler();
 
   @BeforeEach
   public void setUp() {
-    fixture =
-        ExecutionContextTestFixture.builder(GenesisConfig.fromResource(GENESIS_CONFIG))
-            .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
-            .maxLayersToLoad(TRIE_LOG_DEPTH)
-            .build();
+      ExecutionContextTestFixture fixture = ExecutionContextTestFixture.builder(GenesisConfig.fromResource(GENESIS_CONFIG))
+              .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
+              .maxLayersToLoad(TRIE_LOG_DEPTH)
+              .build();
 
     blockchain = fixture.getBlockchain();
     protocolContext = fixture.getProtocolContext();
     protocolSchedule = fixture.getProtocolSchedule();
     archiveProvider = (BonsaiArchiveWorldStateProvider) fixture.getStateArchive();
+    genesisHeader = fixture.getGenesis().getHeader();
     assertThat(archiveProvider.getWorldStateKeyValueStorage().getFlatDbMode())
         .isEqualTo(FlatDbMode.ARCHIVE);
 
@@ -203,19 +203,19 @@ public class BonsaiArchiveReorgTest {
   void shouldHandleConsecutiveReorgs() {
     // Chain A: block1A with 1 ETH
     Transaction tx1A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
-    Block block1A = forTransactions(List.of(tx1A), fixture.getGenesis().getHeader());
+    Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
     assertBalance(ACCOUNT_A, ONE_ETH);
 
     // First reorg: block1B with 2 ETH
     Transaction tx1B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
-    Block block1B = forTransactions(List.of(tx1B), fixture.getGenesis().getHeader());
+    Block block1B = forTransactions(List.of(tx1B), genesisHeader);
     reorgFromGenesis(block1B);
     assertBalance(ACCOUNT_A, TWO_ETH);
 
     // Second reorg: block1C with 3 ETH
     Transaction tx1C = createTransaction(ACCOUNT_A, THREE_ETH, 0L);
-    Block block1C = forTransactions(List.of(tx1C), fixture.getGenesis().getHeader());
+    Block block1C = forTransactions(List.of(tx1C), genesisHeader);
     reorgFromGenesis(block1C);
     assertBalance(ACCOUNT_A, THREE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
@@ -245,7 +245,7 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldTrackAccountBalanceChangesAcrossBlocks() {
-    BlockHeader parentHeader = fixture.getGenesis().getHeader();
+    BlockHeader parentHeader = genesisHeader;
 
     // Process 5 blocks, each adding 1 ETH
     for (int i = 1; i <= 5; i++) {
@@ -277,8 +277,6 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleReorgToLongerAlternateChain() {
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
-
     // Chain A: 3 blocks, each sending 1 ETH (total 3 ETH)
     BlockHeader parentHeader = genesisHeader;
     for (int i = 0; i < 3; i++) {
@@ -311,8 +309,6 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldReturnOrphanedBlockStateForHistoricalQuery() {
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
-
     // Block 1A: Account gets 1 ETH
     Transaction tx1A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block1A = forTransactions(List.of(tx1A), genesisHeader);
@@ -340,7 +336,7 @@ public class BonsaiArchiveReorgTest {
     // This test verifies behavior at the exact trie log depth boundary (16 blocks)
 
     // Build chain A: exactly TRIE_LOG_DEPTH (16) blocks
-    BlockHeader parentHeader = fixture.getGenesis().getHeader();
+    BlockHeader parentHeader = genesisHeader;
     for (int i = 0; i < TRIE_LOG_DEPTH; i++) {
       Transaction tx = createTransaction(ACCOUNT_A, ONE_ETH, i);
       Block block = forTransactions(List.of(tx), parentHeader);
@@ -379,7 +375,7 @@ public class BonsaiArchiveReorgTest {
 
     // Block 1A: Deploy contract with 1 ETH
     Transaction deployTx1A = createContractDeployment(initCode, ONE_ETH);
-    Block block1A = forTransactions(List.of(deployTx1A), fixture.getGenesis().getHeader());
+    Block block1A = forTransactions(List.of(deployTx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
@@ -387,7 +383,7 @@ public class BonsaiArchiveReorgTest {
 
     // Reorg to block1B: Deploy same contract with 5 ETH
     Transaction deployTx1B = createContractDeployment(initCode, FIVE_ETH);
-    Block block1B = forTransactions(List.of(deployTx1B), fixture.getGenesis().getHeader());
+    Block block1B = forTransactions(List.of(deployTx1B), genesisHeader);
     reorgFromGenesis(block1B);
 
     // Contract should exist with new balance
@@ -403,7 +399,7 @@ public class BonsaiArchiveReorgTest {
 
     // Block 1A: Deploy a contract
     Transaction deployTx = createContractDeployment(initCode, ONE_ETH);
-    Block block1A = forTransactions(List.of(deployTx), fixture.getGenesis().getHeader());
+    Block block1A = forTransactions(List.of(deployTx), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
@@ -412,7 +408,7 @@ public class BonsaiArchiveReorgTest {
 
     // Reorg to block1B: Simple value transfer instead of contract deployment
     Transaction valueTx = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
-    Block block1B = forTransactions(List.of(valueTx), fixture.getGenesis().getHeader());
+    Block block1B = forTransactions(List.of(valueTx), genesisHeader);
     reorgFromGenesis(block1B);
 
     // After reorg: Contract should NOT exist, recipient should have 2 ETH
@@ -431,7 +427,7 @@ public class BonsaiArchiveReorgTest {
 
     // Block 1A: Deploy contract with 3 ETH, do NOT call it
     Transaction deployTx = createContractDeployment(initCode, THREE_ETH);
-    Block block1A = forTransactions(List.of(deployTx), fixture.getGenesis().getHeader());
+    Block block1A = forTransactions(List.of(deployTx), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
@@ -442,7 +438,7 @@ public class BonsaiArchiveReorgTest {
 
     // Reorg to chain B: Deploy contract AND call it to trigger selfdestruct
     Transaction deployTxB = createContractDeployment(initCode, THREE_ETH);
-    Block block1B = forTransactions(List.of(deployTxB), fixture.getGenesis().getHeader());
+    Block block1B = forTransactions(List.of(deployTxB), genesisHeader);
     reorgFromGenesis(block1B);
 
     // Call the contract to trigger selfdestruct
@@ -465,7 +461,7 @@ public class BonsaiArchiveReorgTest {
 
     // Block 1A: Deploy contract with code A
     Transaction deployTxA = createContractDeployment(initCodeA, Wei.ZERO);
-    Block block1A = forTransactions(List.of(deployTxA), fixture.getGenesis().getHeader());
+    Block block1A = forTransactions(List.of(deployTxA), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
@@ -474,7 +470,7 @@ public class BonsaiArchiveReorgTest {
 
     // Reorg to chain B: Deploy contract with code B at same address
     Transaction deployTxB = createContractDeployment(initCodeB, Wei.ZERO);
-    Block block1B = forTransactions(List.of(deployTxB), fixture.getGenesis().getHeader());
+    Block block1B = forTransactions(List.of(deployTxB), genesisHeader);
     reorgFromGenesis(block1B);
 
     // After reorg: Contract should exist with code B
@@ -494,7 +490,7 @@ public class BonsaiArchiveReorgTest {
                 createTransaction(ACCOUNT_A, ONE_ETH, initialNonce),
                 createTransaction(ACCOUNT_B, ONE_ETH, initialNonce + 1),
                 createTransaction(ACCOUNT_C, ONE_ETH, initialNonce + 2)),
-            fixture.getGenesis().getHeader());
+            genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
     assertThat(archiveProvider.getWorldState().get(senderAddress).getNonce())
         .isEqualTo(initialNonce + 3);
@@ -503,7 +499,7 @@ public class BonsaiArchiveReorgTest {
     Block block1B =
         forTransactions(
             List.of(createTransaction(ACCOUNT_A, TWO_ETH, initialNonce)),
-            fixture.getGenesis().getHeader());
+            genesisHeader);
     reorgFromGenesis(block1B);
 
     // After reorg: Nonce should reflect chain B (only 1 transaction)
@@ -538,7 +534,7 @@ public class BonsaiArchiveReorgTest {
   }
 
   private void reorgFromGenesis(final Block alternateBlock) {
-    executeReorg(alternateBlock, getHistoricalWorldState(fixture.getGenesis().getHeader()), 0L);
+    executeReorg(alternateBlock, getHistoricalWorldState(genesisHeader), 0L);
   }
 
   private Transaction createTransaction(final Address to, final Wei value, final long nonce) {
@@ -595,7 +591,7 @@ public class BonsaiArchiveReorgTest {
   }
 
   private BlockHeader buildEmptyChainToBlock(final int blockCount) {
-    BlockHeader parentHeader = fixture.getGenesis().getHeader();
+    BlockHeader parentHeader = genesisHeader;
     for (int i = 1; i <= blockCount; i++) {
       Block block = forTransactions(Collections.emptyList(), parentHeader);
       executeBlock(archiveProvider.getWorldState(), block);
