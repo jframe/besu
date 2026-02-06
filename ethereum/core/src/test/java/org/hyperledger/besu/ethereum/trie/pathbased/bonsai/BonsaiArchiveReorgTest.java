@@ -298,7 +298,8 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleStorageSlotChangesAcrossReorg() {
-    Bytes runtimeCode = Bytes.fromHexString("6000345500"); // PUSH1 0, CALLVALUE, SSTORE, STOP
+    // Runtime: 60 00 PUSH1 0, 34 CALLVALUE, 55 SSTORE, 00 STOP - stores msg.value in slot 0
+    Bytes runtimeCode = Bytes.fromHexString("6000345500");
     Bytes initCode = createInitCode(runtimeCode);
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
 
@@ -315,6 +316,7 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleContractDeploymentReorg() {
+    // Runtime: 60 00 PUSH1 0, 34 CALLVALUE, 55 SSTORE, 00 STOP - stores msg.value in slot 0
     Bytes initCode = createInitCode(Bytes.fromHexString("6000345500"));
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
 
@@ -328,7 +330,7 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleSelfDestructDuringReorg() {
-    // Runtime code: PUSH20 beneficiary SELFDESTRUCT
+    // Runtime: 73 PUSH20 <address>, FF SELFDESTRUCT - sends balance to beneficiary
     Bytes runtimeCode =
         Bytes.concatenate(
             Bytes.fromHexString("73"), ACCOUNT_B.getBytes(), Bytes.fromHexString("FF"));
@@ -354,8 +356,9 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleCodeChangesViaCreate2DuringReorg() {
-    Bytes codeA = Bytes.fromHexString("60AA60005500");
-    Bytes codeB = Bytes.fromHexString("60BB60005500");
+    // Runtime: 60 XX PUSH1 value, 60 00 PUSH1 0, 55 SSTORE, 00 STOP - stores value in slot 0
+    Bytes codeA = Bytes.fromHexString("60AA60005500"); // stores 0xAA
+    Bytes codeB = Bytes.fromHexString("60BB60005500"); // stores 0xBB
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
 
     deployContractFromGenesis(createInitCode(codeA), Wei.ZERO);
@@ -412,6 +415,22 @@ public class BonsaiArchiveReorgTest {
     assertThat(archiveProvider.getWorldState().get(address)).isNull();
   }
 
+  /**
+   * Creates EVM init code that deploys the given runtime code.
+   *
+   * <p>Structure (12 bytes + runtime code):
+   *
+   * <pre>
+   * 60 XX    PUSH1 size   - runtime code size
+   * 60 0c    PUSH1 12     - code offset (init code is 12 bytes)
+   * 60 00    PUSH1 0      - memory destination
+   * 39       CODECOPY     - copy runtime code to memory
+   * 60 XX    PUSH1 size   - runtime code size
+   * 60 00    PUSH1 0      - memory offset
+   * f3       RETURN       - return runtime code
+   * [runtime code]
+   * </pre>
+   */
   private Bytes createInitCode(final Bytes runtimeCode) {
     return Bytes.concatenate(
         Bytes.fromHexString("60"),
