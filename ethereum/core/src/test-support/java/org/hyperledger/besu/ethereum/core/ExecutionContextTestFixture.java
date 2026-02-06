@@ -59,7 +59,8 @@ public class ExecutionContextTestFixture {
       final ProtocolSchedule protocolSchedule,
       final KeyValueStorage blockchainKeyValueStorage,
       final KeyValueStorage variablesKeyValueStorage,
-      final Optional<DataStorageFormat> dataStorageFormat) {
+      final Optional<DataStorageFormat> dataStorageFormat,
+      final Optional<Long> maxLayersToLoad) {
     final GenesisState genesisState =
         GenesisState.fromConfig(genesisConfig, protocolSchedule, new CodeCache());
     this.genesis = genesisState.getBlock();
@@ -77,7 +78,10 @@ public class ExecutionContextTestFixture {
             0);
     if (dataStorageFormat.isPresent()) {
       if (dataStorageFormat.get().equals(DataStorageFormat.X_BONSAI_ARCHIVE)) {
-        this.stateArchive = createBonsaiArchiveInMemoryWorldStateArchive(blockchain);
+        this.stateArchive =
+            maxLayersToLoad
+                .map(layers -> createBonsaiArchiveInMemoryWorldStateArchive(blockchain, layers))
+                .orElseGet(() -> createBonsaiArchiveInMemoryWorldStateArchive(blockchain));
       } else if (dataStorageFormat.get().equals(DataStorageFormat.BONSAI)) {
         this.stateArchive = createBonsaiInMemoryWorldStateArchive(blockchain);
       } else {
@@ -138,6 +142,7 @@ public class ExecutionContextTestFixture {
     private KeyValueStorage blockchainKeyValueStorage;
     private ProtocolSchedule protocolSchedule;
     private Optional<DataStorageFormat> dataStorageFormat = Optional.empty();
+    private Optional<Long> maxLayersToLoad = Optional.empty();
 
     public Builder(final GenesisConfig genesisConfig) {
       this.genesisConfig = genesisConfig;
@@ -160,6 +165,11 @@ public class ExecutionContextTestFixture {
 
     public Builder dataStorageFormat(final DataStorageFormat dataStorageFormat) {
       this.dataStorageFormat = Optional.of(dataStorageFormat);
+      return this;
+    }
+
+    public Builder maxLayersToLoad(final long maxLayersToLoad) {
+      this.maxLayersToLoad = Optional.of(maxLayersToLoad);
       return this;
     }
 
@@ -191,7 +201,8 @@ public class ExecutionContextTestFixture {
           protocolSchedule,
           blockchainKeyValueStorage,
           variablesKeyValueStorage,
-          dataStorageFormat);
+          dataStorageFormat,
+          maxLayersToLoad);
     }
   }
 }

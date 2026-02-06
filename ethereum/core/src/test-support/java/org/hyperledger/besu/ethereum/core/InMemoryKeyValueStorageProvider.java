@@ -34,6 +34,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMer
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.ImmutablePathBasedExtraStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
@@ -122,16 +123,26 @@ public class InMemoryKeyValueStorageProvider extends KeyValueStorageProvider {
 
   public static BonsaiArchiveWorldStateProvider createBonsaiArchiveInMemoryWorldStateArchive(
       final Blockchain blockchain) {
+    return createBonsaiArchiveInMemoryWorldStateArchive(
+        blockchain, PathBasedExtraStorageConfiguration.DEFAULT_MAX_LAYERS_TO_LOAD);
+  }
+
+  public static BonsaiArchiveWorldStateProvider createBonsaiArchiveInMemoryWorldStateArchive(
+      final Blockchain blockchain, final long maxLayersToLoad) {
     final InMemoryKeyValueStorageProvider inMemoryKeyValueStorageProvider =
         new InMemoryKeyValueStorageProvider();
     final BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader =
         new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem());
+    final PathBasedExtraStorageConfiguration extraStorageConfig =
+        ImmutablePathBasedExtraStorageConfiguration.builder()
+            .maxLayersToLoad(maxLayersToLoad)
+            .build();
     return new BonsaiArchiveWorldStateProvider(
         (BonsaiWorldStateKeyValueStorage)
             inMemoryKeyValueStorageProvider.createWorldStateStorage(
                 DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG),
         blockchain,
-        PathBasedExtraStorageConfiguration.DEFAULT,
+        extraStorageConfig,
         bonsaiCachedMerkleTrieLoader,
         null,
         EvmConfiguration.DEFAULT,
