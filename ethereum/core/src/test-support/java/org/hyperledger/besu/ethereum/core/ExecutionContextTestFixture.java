@@ -89,7 +89,7 @@ public class ExecutionContextTestFixture {
   }
 
   private WorldStateArchive createWorldStateArchive(
-      Optional<DataStorageFormat> dataStorageFormat, Optional<Long> maxLayersToLoad) {
+      final Optional<DataStorageFormat> dataStorageFormat, final Optional<Long> maxLayersToLoad) {
     return switch (dataStorageFormat.orElse(DataStorageFormat.FOREST)) {
       case BONSAI -> createBonsaiInMemoryWorldStateArchive(blockchain);
       case X_BONSAI_ARCHIVE ->

@@ -59,7 +59,6 @@ import org.hyperledger.besu.ethereum.eth.transactions.layered.GasPricePrioritize
 import org.hyperledger.besu.ethereum.eth.transactions.layered.LayeredPendingTransactions;
 import org.hyperledger.besu.ethereum.eth.transactions.layered.SenderBalanceChecker;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
@@ -101,11 +100,18 @@ public class BonsaiArchiveReorgTest {
   private static final Wei FIVE_ETH = ONE_ETH.multiply(5);
   private static final Wei TEN_ETH = ONE_ETH.multiply(10);
 
+  // Standard test addresses (reused across independent tests)
+  private static final Address ACCOUNT_A =
+      Address.fromHexString("0x1000000000000000000000000000000000000001");
+  private static final Address ACCOUNT_B =
+      Address.fromHexString("0x1000000000000000000000000000000000000002");
+  private static final Address ACCOUNT_C =
+      Address.fromHexString("0x1000000000000000000000000000000000000003");
+
   @Mock private EthContext ethContext;
 
   private ExecutionContextTestFixture fixture;
   private BonsaiArchiveWorldStateProvider archiveProvider;
-  private BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage;
   private MutableBlockchain blockchain;
   private ProtocolContext protocolContext;
   private ProtocolSchedule protocolSchedule;
@@ -129,12 +135,9 @@ public class BonsaiArchiveReorgTest {
     protocolContext = fixture.getProtocolContext();
     protocolSchedule = fixture.getProtocolSchedule();
     archiveProvider = (BonsaiArchiveWorldStateProvider) fixture.getStateArchive();
-    worldStateKeyValueStorage =
-        (BonsaiWorldStateKeyValueStorage) archiveProvider.getWorldStateKeyValueStorage();
 
     // Verify archive mode
-    assertThat(worldStateKeyValueStorage.getFlatDbMode())
-        .as("Should be in ARCHIVE mode")
+    assertThat(archiveProvider.getWorldStateKeyValueStorage().getFlatDbMode())
         .isEqualTo(FlatDbMode.ARCHIVE);
 
     // Get sender key from genesis allocations
@@ -199,29 +202,25 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleReorgWithConflictingAccountBalances() {
-    Address accountX = Address.fromHexString("0x1000000000000000000000000000000000000001");
-
     // Build chain: genesis -> blocks 1-9 (empty)
     BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
-    // Block 10A: Account X receives 1 ETH
-    Transaction tx10A = createTransaction(accountX, ONE_ETH, 0L);
+    // Block 10A: Account receives 1 ETH
+    Transaction tx10A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block10A = forTransactions(List.of(tx10A), parentHeader);
     executeBlock(archiveProvider.getWorldState(), block10A);
 
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
 
-    // Create alternate block10B: Account X receives 2 ETH
+    // Create alternate block10B: Account receives 2 ETH
     MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
-    Transaction tx10B = createTransaction(accountX, TWO_ETH, 0L);
+    Transaction tx10B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
     Block block10B = forTransactions(List.of(tx10B), parentHeader);
 
     executeReorg(block10B, wsAtBlock9, 9L);
 
-    // Verify: Account X should have 2 ETH from block10B
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
-        .as("Account X balance should be 2 ETH from block10B after reorg")
-        .isEqualTo(TWO_ETH);
+    // Verify: Account should have 2 ETH from block10B
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
 
     Hash headBlockHash =
         ((PathBasedWorldState) archiveProvider.getWorldState()).getWorldStateBlockHash();
@@ -230,132 +229,116 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleReorgAccountCreationVsNoCreation() {
-    Address accountZ = Address.fromHexString("0x2000000000000000000000000000000000000001");
-    Address accountY = Address.fromHexString("0x2000000000000000000000000000000000000002");
-
     BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
-    // Block 10A: Account Z is created with 1 ETH
-    Transaction tx10A = createTransaction(accountZ, ONE_ETH, 0L);
+    // Block 10A: Account A is created with 1 ETH
+    Transaction tx10A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block10A = forTransactions(List.of(tx10A), parentHeader);
     executeBlock(archiveProvider.getWorldState(), block10A);
-    assertThat(archiveProvider.getWorldState().get(accountZ)).isNotNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A)).isNotNull();
 
-    // Reorg to block10B: Account Y gets 1 ETH
+    // Reorg to block10B: Account B gets 1 ETH instead
     MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
-    Transaction tx10B = createTransaction(accountY, ONE_ETH, 0L);
+    Transaction tx10B = createTransaction(ACCOUNT_B, ONE_ETH, 0L);
     Block block10B = forTransactions(List.of(tx10B), parentHeader);
     executeReorg(block10B, wsAtBlock9, 9L);
 
-    // Account Z should not exist after reorg
-    assertThat(archiveProvider.getWorldState().get(accountZ))
-        .as("accountZ should be null after reorg")
-        .isNull();
-    assertThat(archiveProvider.getWorldState().get(accountY)).isNotNull();
+    // Account A should not exist after reorg
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A)).isNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNotNull();
   }
 
   @Test
   void shouldSupportHistoricalQueriesAfterReorg() {
-    Address accountX = Address.fromHexString("0x6000000000000000000000000000000000000001");
-
     // Build chain: genesis -> block1 -> block2 (empty)
     BlockHeader block2Header = buildEmptyChainToBlock(2);
 
-    // Block 3A: Account X gets 1 ETH
-    Transaction tx3A = createTransaction(accountX, ONE_ETH, 0L);
+    // Block 3A: Account gets 1 ETH
+    Transaction tx3A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block3A = forTransactions(List.of(tx3A), block2Header);
     executeBlock(archiveProvider.getWorldState(), block3A);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
 
     // Historical query at block 2 - account should not exist
-    assertThat(getHistoricalWorldState(block2Header).get(accountX)).isNull();
+    assertThat(getHistoricalWorldState(block2Header).get(ACCOUNT_A)).isNull();
 
-    // Reorg to block3B: Account X gets 2 ETH
+    // Reorg to block3B: Account gets 2 ETH
     MutableWorldState wsAtBlock2 = getHistoricalWorldState(block2Header);
-    Transaction tx3B = createTransaction(accountX, TWO_ETH, 0L);
+    Transaction tx3B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
     Block block3B = forTransactions(List.of(tx3B), block2Header);
     executeReorg(block3B, wsAtBlock2, 2L);
 
     // Current state should be 2 ETH
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TWO_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
 
     // Historical query at block 2 should still work
-    assertThat(getHistoricalWorldState(block2Header).get(accountX)).isNull();
+    assertThat(getHistoricalWorldState(block2Header).get(ACCOUNT_A)).isNull();
 
     // Historical query at block3B should return 2 ETH
-    assertThat(getHistoricalWorldState(block3B.getHeader()).get(accountX).getBalance())
+    assertThat(getHistoricalWorldState(block3B.getHeader()).get(ACCOUNT_A).getBalance())
         .isEqualTo(TWO_ETH);
   }
 
   @Test
   void shouldHandleConsecutiveReorgs() {
-    Address accountX = Address.fromHexString("0x7000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
-
     // Chain A: block1A with 1 ETH
-    Transaction tx1A = createTransaction(accountX, ONE_ETH, 0L);
-    Block block1A = forTransactions(List.of(tx1A), genesisHeader);
+    Transaction tx1A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
+    Block block1A = forTransactions(List.of(tx1A), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
 
     // First reorg: block1B with 2 ETH
-    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
-    Transaction tx1B = createTransaction(accountX, TWO_ETH, 0L);
-    Block block1B = forTransactions(List.of(tx1B), genesisHeader);
-    executeReorg(block1B, wsAtGenesis, 0L);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TWO_ETH);
+    Transaction tx1B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
+    Block block1B = forTransactions(List.of(tx1B), fixture.getGenesis().getHeader());
+    reorgFromGenesis(block1B);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
 
     // Second reorg: block1C with 3 ETH
-    MutableWorldState wsAtGenesis2 = getHistoricalWorldState(genesisHeader);
-    Transaction tx1C = createTransaction(accountX, THREE_ETH, 0L);
-    Block block1C = forTransactions(List.of(tx1C), genesisHeader);
-    executeReorg(block1C, wsAtGenesis2, 0L);
+    Transaction tx1C = createTransaction(ACCOUNT_A, THREE_ETH, 0L);
+    Block block1C = forTransactions(List.of(tx1C), fixture.getGenesis().getHeader());
+    reorgFromGenesis(block1C);
 
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(THREE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(THREE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
   }
 
   @Test
   void shouldHandleReorgWithMultipleAccountsAffected() {
-    Address account1 = Address.fromHexString("0x4000000000000000000000000000000000000001");
-    Address account2 = Address.fromHexString("0x4000000000000000000000000000000000000002");
-
     BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
-    // Block 10A: account1 gets 1 ETH, account2 gets 1 ETH
-    Transaction tx10A_1 = createTransaction(account1, ONE_ETH, 0L);
-    Transaction tx10A_2 = createTransaction(account2, ONE_ETH, 1L);
+    // Block 10A: ACCOUNT_A gets 1 ETH, ACCOUNT_B gets 1 ETH
+    Transaction tx10A_1 = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
+    Transaction tx10A_2 = createTransaction(ACCOUNT_B, ONE_ETH, 1L);
     Block block10A = forTransactions(List.of(tx10A_1, tx10A_2), parentHeader);
     executeBlock(archiveProvider.getWorldState(), block10A);
 
-    assertThat(archiveProvider.getWorldState().get(account1).getBalance()).isEqualTo(ONE_ETH);
-    assertThat(archiveProvider.getWorldState().get(account2).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B).getBalance()).isEqualTo(ONE_ETH);
 
-    // Reorg: account1 gets 2 ETH, account2 gets nothing
+    // Reorg: ACCOUNT_A gets 2 ETH, ACCOUNT_B gets nothing
     MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
-    Transaction tx10B = createTransaction(account1, TWO_ETH, 0L);
+    Transaction tx10B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
     Block block10B = forTransactions(List.of(tx10B), parentHeader);
     executeReorg(block10B, wsAtBlock9, 9L);
 
-    assertThat(archiveProvider.getWorldState().get(account1).getBalance()).isEqualTo(TWO_ETH);
-    assertThat(archiveProvider.getWorldState().get(account2)).isNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNull();
   }
 
   @Test
   void shouldTrackAccountBalanceChangesAcrossBlocks() {
-    Address accountX = Address.fromHexString("0xF300000000000000000000000000000000000001");
     BlockHeader parentHeader = fixture.getGenesis().getHeader();
 
-    // Process 5 blocks, each adding 1 ETH to accountX
+    // Process 5 blocks, each adding 1 ETH
     for (int i = 1; i <= 5; i++) {
-      Transaction tx = createTransaction(accountX, ONE_ETH, (long) (i - 1));
+      Transaction tx = createTransaction(ACCOUNT_A, ONE_ETH, (long) (i - 1));
       Block block = forTransactions(List.of(tx), parentHeader);
       BlockProcessingResult result = executeBlock(archiveProvider.getWorldState(), block);
       assertThat(result.isSuccessful()).isTrue();
 
       // Verify current balance
       Wei expectedBalance = ONE_ETH.multiply(i);
-      assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
+      assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance())
           .as("Balance after block %d should be %d ETH", i, i)
           .isEqualTo(expectedBalance);
 
@@ -368,7 +351,7 @@ public class BonsaiArchiveReorgTest {
       MutableWorldState wsAtBlock = getHistoricalWorldState(blockHeader);
 
       Wei expectedBalance = ONE_ETH.multiply(i);
-      assertThat(wsAtBlock.get(accountX).getBalance())
+      assertThat(wsAtBlock.get(ACCOUNT_A).getBalance())
           .as("Historical query at block %d should return %d ETH", i, i)
           .isEqualTo(expectedBalance);
     }
@@ -376,107 +359,83 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleReorgToLongerAlternateChain() {
-    Address accountX = Address.fromHexString("0xF700000000000000000000000000000000000001");
     BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Chain A: 3 blocks, each sending 1 ETH (total 3 ETH)
     BlockHeader parentHeader = genesisHeader;
     for (int i = 0; i < 3; i++) {
-      Transaction tx = createTransaction(accountX, ONE_ETH, (long) i);
+      Transaction tx = createTransaction(ACCOUNT_A, ONE_ETH, i);
       Block block = forTransactions(List.of(tx), parentHeader);
       executeBlock(archiveProvider.getWorldState(), block);
       parentHeader = block.getHeader();
     }
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(THREE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(THREE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(3L);
 
     // Reorg to chain B: 5 blocks from genesis, each sending 2 ETH (total 10 ETH)
-    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
     parentHeader = genesisHeader;
-
-    // Build alternate chain of 5 blocks
     for (int i = 0; i < 5; i++) {
-      Transaction tx = createTransaction(accountX, TWO_ETH, (long) i);
+      Transaction tx = createTransaction(ACCOUNT_A, TWO_ETH, i);
       Block block = forTransactions(List.of(tx), parentHeader);
 
       if (i == 0) {
-        // First block triggers the reorg
-        executeReorg(block, wsAtGenesis, 0L);
+        reorgFromGenesis(block);
       } else {
-        // Subsequent blocks extend the new chain
         executeBlock(archiveProvider.getWorldState(), block);
       }
       parentHeader = block.getHeader();
     }
 
-    // Verify: Account X should have 10 ETH from 5 blocks of 2 ETH each
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
-        .as("Account X balance should be 10 ETH from longer chain B")
-        .isEqualTo(TEN_ETH);
-    assertThat(blockchain.getChainHeadBlockNumber())
-        .as("Chain head should be at block 5")
-        .isEqualTo(5L);
+    // Verify: Account should have 10 ETH from 5 blocks of 2 ETH each
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TEN_ETH);
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(5L);
   }
 
   @Test
   void shouldReturnOrphanedBlockStateForHistoricalQuery() {
-    Address accountX = Address.fromHexString("0xF800000000000000000000000000000000000001");
     BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
-    // Block 1A: Account X gets 1 ETH
-    Transaction tx1A = createTransaction(accountX, ONE_ETH, 0L);
+    // Block 1A: Account gets 1 ETH
+    Transaction tx1A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
 
-    // Reorg to block1B: Account X gets 5 ETH
-    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
-    Transaction tx1B = createTransaction(accountX, FIVE_ETH, 0L);
+    // Reorg to block1B: Account gets 5 ETH
+    Transaction tx1B = createTransaction(ACCOUNT_A, FIVE_ETH, 0L);
     Block block1B = forTransactions(List.of(tx1B), genesisHeader);
-    executeReorg(block1B, wsAtGenesis, 0L);
+    reorgFromGenesis(block1B);
 
     // Current state should be 5 ETH from block1B
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
-        .as("Current balance should be 5 ETH from block1B")
-        .isEqualTo(FIVE_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(FIVE_ETH);
 
     // Query the orphaned block1A - archive mode preserves this data via trie logs
-    // The trie log for block1A still exists and can be used to reconstruct the state
     Optional<MutableWorldState> orphanedWorldState =
         archiveProvider.getWorldState(
             WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block1A.getHeader()));
 
-    // The orphaned block data is still accessible in archive mode
-    // This is useful for debugging and forensic analysis
-    assertThat(orphanedWorldState)
-        .as("Archive mode should return world state for orphaned block")
-        .isPresent();
-
-    // Archive mode preserves orphaned block state - returns the original 1 ETH
-    // from block1A, not the canonical chain's 5 ETH from block1B
-    assertThat(orphanedWorldState.get().get(accountX).getBalance())
-        .as("Orphaned block query returns orphaned block's original state")
-        .isEqualTo(ONE_ETH);
+    // Archive mode preserves orphaned block state
+    assertThat(orphanedWorldState).isPresent();
+    assertThat(orphanedWorldState.get().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
   }
 
   @Test
   void shouldHandleReorgAtTrieLogDepthBoundary() {
     // This test verifies behavior at the exact trie log depth boundary (16 blocks)
-    Address accountX = Address.fromHexString("0xF900000000000000000000000000000000000001");
     BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Build chain A: exactly TRIE_LOG_DEPTH (16) blocks
     BlockHeader parentHeader = genesisHeader;
     for (int i = 0; i < TRIE_LOG_DEPTH; i++) {
-      Transaction tx = createTransaction(accountX, ONE_ETH, (long) i);
+      Transaction tx = createTransaction(ACCOUNT_A, ONE_ETH, (long) i);
       Block block = forTransactions(List.of(tx), parentHeader);
       executeBlock(archiveProvider.getWorldState(), block);
       parentHeader = block.getHeader();
     }
 
     Wei sixteenEth = ONE_ETH.multiply(TRIE_LOG_DEPTH);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(sixteenEth);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(sixteenEth);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(TRIE_LOG_DEPTH);
 
     // Get the fork point at exactly half the trie log depth
@@ -485,302 +444,178 @@ public class BonsaiArchiveReorgTest {
 
     // Reorg from block 8: create alternate chain with different values
     MutableWorldState wsAtFork = getHistoricalWorldState(forkHeader);
-    Transaction txB = createTransaction(accountX, TEN_ETH, forkBlockNumber);
+    Transaction txB = createTransaction(ACCOUNT_A, TEN_ETH, forkBlockNumber);
     Block blockB = forTransactions(List.of(txB), forkHeader);
     executeReorg(blockB, wsAtFork, forkBlockNumber);
 
-    // Verify: Account X should have 8 ETH (from blocks 1-8) + 10 ETH (from block 9B) = 18 ETH
+    // Verify: Account should have 8 ETH (from blocks 1-8) + 10 ETH (from block 9B) = 18 ETH
     Wei expectedBalance = ONE_ETH.multiply(forkBlockNumber).add(TEN_ETH);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
-        .as("Account X balance should reflect the reorged chain")
-        .isEqualTo(expectedBalance);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(expectedBalance);
 
     // Historical query at fork point should still work
-    assertThat(getHistoricalWorldState(forkHeader).get(accountX).getBalance())
-        .as("Historical query at fork point should return balance at that block")
+    assertThat(getHistoricalWorldState(forkHeader).get(ACCOUNT_A).getBalance())
         .isEqualTo(ONE_ETH.multiply(forkBlockNumber));
   }
 
   @Test
   void shouldHandleStorageSlotChangesAcrossReorg() {
-    // This test verifies that contract storage slots are correctly handled during reorg
-    // We deploy a simple contract that stores a value in its constructor
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
+    // Contract that stores msg.value in storage slot 0
+    Bytes runtimeCode = Bytes.fromHexString("6000345500"); // PUSH1 0, CALLVALUE, SSTORE, STOP
+    Bytes initCode = createInitCode(runtimeCode);
 
-    // Contract bytecode: stores msg.value in storage slot 0
-    // PUSH1 0x00 CALLVALUE SSTORE STOP = 60 00 34 55 00
-    // With contract creation wrapper
-    Bytes contractCode = Bytes.fromHexString("6000345500");
-    Bytes initCode =
-        Bytes.concatenate(
-            Bytes.fromHexString("60"), // PUSH1
-            Bytes.of(contractCode.size()), // code size
-            Bytes.fromHexString("600b6000f3"), // DUP code, PUSH1 0, CODECOPY, RETURN
-            contractCode);
-
-    // Block 1A: Deploy contract with 1 ETH (stores 1 ETH in slot 0)
+    // Block 1A: Deploy contract with 1 ETH
     Transaction deployTx1A = createContractDeployment(initCode, ONE_ETH, 0L);
-    Block block1A = forTransactions(List.of(deployTx1A), genesisHeader);
+    Block block1A = forTransactions(List.of(deployTx1A), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
-    assertThat(archiveProvider.getWorldState().get(contractAddress))
-        .as("Contract should exist after deployment in chain A")
-        .isNotNull();
+    assertThat(archiveProvider.getWorldState().get(contractAddress)).isNotNull();
 
-    // Reorg to block1B: Deploy same contract with 5 ETH (stores 5 ETH in slot 0)
-    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    // Reorg to block1B: Deploy same contract with 5 ETH
     Transaction deployTx1B = createContractDeployment(initCode, FIVE_ETH, 0L);
-    Block block1B = forTransactions(List.of(deployTx1B), genesisHeader);
-    executeReorg(block1B, wsAtGenesis, 0L);
+    Block block1B = forTransactions(List.of(deployTx1B), fixture.getGenesis().getHeader());
+    reorgFromGenesis(block1B);
 
-    // Contract should still exist but with different storage
-    assertThat(archiveProvider.getWorldState().get(contractAddress))
-        .as("Contract should exist after reorg")
-        .isNotNull();
-
-    // Verify balance reflects the new deployment value
+    // Contract should exist with new balance
+    assertThat(archiveProvider.getWorldState().get(contractAddress)).isNotNull();
     assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
-        .as("Contract balance should be 5 ETH from chain B deployment")
         .isEqualTo(FIVE_ETH);
   }
 
   @Test
   void shouldHandleContractDeploymentReorg() {
-    // This test verifies that contract deployment is correctly handled when
-    // a contract exists in one chain but not the other
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
-    Address receiver = Address.fromHexString("0xFA00000000000000000000000000000000000001");
-
-    // Contract bytecode that just stores and stops
-    Bytes contractCode = Bytes.fromHexString("6000345500"); // PUSH1 0, CALLVALUE, SSTORE, STOP
-    Bytes initCode =
-        Bytes.concatenate(
-            Bytes.fromHexString("60"), // PUSH1
-            Bytes.of(contractCode.size()), // code size
-            Bytes.fromHexString("600b6000f3"), // code position, PUSH1 0, CODECOPY, RETURN
-            contractCode);
+    Bytes runtimeCode = Bytes.fromHexString("6000345500"); // PUSH1 0, CALLVALUE, SSTORE, STOP
+    Bytes initCode = createInitCode(runtimeCode);
 
     // Block 1A: Deploy a contract
     Transaction deployTx = createContractDeployment(initCode, ONE_ETH, 0L);
-    Block block1A = forTransactions(List.of(deployTx), genesisHeader);
+    Block block1A = forTransactions(List.of(deployTx), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
-    assertThat(archiveProvider.getWorldState().get(contractAddress))
-        .as("Contract should exist in chain A")
-        .isNotNull();
-    assertThat(archiveProvider.getWorldState().get(contractAddress).hasCode())
-        .as("Contract should have code in chain A")
-        .isTrue();
+    assertThat(archiveProvider.getWorldState().get(contractAddress)).isNotNull();
+    assertThat(archiveProvider.getWorldState().get(contractAddress).hasCode()).isTrue();
 
     // Reorg to block1B: Simple value transfer instead of contract deployment
-    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
-    Transaction valueTx = createTransaction(receiver, TWO_ETH, 0L);
-    Block block1B = forTransactions(List.of(valueTx), genesisHeader);
-    executeReorg(block1B, wsAtGenesis, 0L);
+    Transaction valueTx = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
+    Block block1B = forTransactions(List.of(valueTx), fixture.getGenesis().getHeader());
+    reorgFromGenesis(block1B);
 
-    // After reorg: Contract should NOT exist (it was only deployed in chain A)
-    assertThat(archiveProvider.getWorldState().get(contractAddress))
-        .as("Contract should NOT exist after reorg to chain without deployment")
-        .isNull();
-
-    // Receiver should have the value from chain B
-    assertThat(archiveProvider.getWorldState().get(receiver))
-        .as("Receiver should exist in chain B")
-        .isNotNull();
-    assertThat(archiveProvider.getWorldState().get(receiver).getBalance())
-        .as("Receiver should have 2 ETH from chain B")
-        .isEqualTo(TWO_ETH);
+    // After reorg: Contract should NOT exist, recipient should have 2 ETH
+    assertThat(archiveProvider.getWorldState().get(contractAddress)).isNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A)).isNotNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
   }
 
   @Test
   void shouldHandleSelfDestructDuringReorg() {
-    // Test: Contract exists and keeps funds in chain A, but self-destructs in chain B
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
-    Address beneficiary = Address.fromHexString("0xFB00000000000000000000000000000000000001");
-
-    // Runtime code: PUSH20 beneficiary SELFDESTRUCT (22 bytes)
-    // When called, sends all funds to beneficiary
+    // Runtime code: PUSH20 beneficiary SELFDESTRUCT
     Bytes runtimeCode =
         Bytes.concatenate(
-            Bytes.fromHexString("73"), // PUSH20
-            beneficiary.getBytes(), // beneficiary address (20 bytes)
-            Bytes.fromHexString("FF") // SELFDESTRUCT
-            );
+            Bytes.fromHexString("73"), ACCOUNT_B.getBytes(), Bytes.fromHexString("FF"));
+    Bytes initCode = createInitCode(runtimeCode);
 
-    // Init code pattern: copy runtime code to memory, then return it
-    // PUSH1 <size> PUSH1 <offset> PUSH1 0 CODECOPY PUSH1 <size> PUSH1 0 RETURN
-    // Total init prefix = 12 bytes, so runtime code starts at offset 12
-    Bytes initCode =
-        Bytes.concatenate(
-            Bytes.fromHexString("60"), // PUSH1
-            Bytes.of(runtimeCode.size()), // runtime code size (22)
-            Bytes.fromHexString("600c"), // PUSH1 12 (code offset)
-            Bytes.fromHexString("6000"), // PUSH1 0 (memory dest)
-            Bytes.fromHexString("39"), // CODECOPY
-            Bytes.fromHexString("60"), // PUSH1
-            Bytes.of(runtimeCode.size()), // runtime code size (22)
-            Bytes.fromHexString("6000"), // PUSH1 0 (return offset)
-            Bytes.fromHexString("f3"), // RETURN
-            runtimeCode);
-
-    // Block 1A: Deploy the contract with 3 ETH, do NOT call it (no selfdestruct)
+    // Block 1A: Deploy contract with 3 ETH, do NOT call it
     Transaction deployTx = createContractDeployment(initCode, THREE_ETH, 0L);
-    Block block1A = forTransactions(List.of(deployTx), genesisHeader);
+    Block block1A = forTransactions(List.of(deployTx), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
-    assertThat(archiveProvider.getWorldState().get(contractAddress))
-        .as("Contract should exist in chain A")
-        .isNotNull();
+    assertThat(archiveProvider.getWorldState().get(contractAddress)).isNotNull();
     assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
-        .as("Contract should have 3 ETH in chain A")
         .isEqualTo(THREE_ETH);
-    assertThat(archiveProvider.getWorldState().get(beneficiary))
-        .as("Beneficiary should not exist in chain A (no selfdestruct called)")
-        .isNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNull();
 
     // Reorg to chain B: Deploy contract AND call it to trigger selfdestruct
-    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
-
-    // Deploy the contract in chain B
     Transaction deployTxB = createContractDeployment(initCode, THREE_ETH, 0L);
-    Block block1B = forTransactions(List.of(deployTxB), genesisHeader);
-    executeReorg(block1B, wsAtGenesis, 0L);
+    Block block1B = forTransactions(List.of(deployTxB), fixture.getGenesis().getHeader());
+    reorgFromGenesis(block1B);
 
-    // Now call the contract to trigger selfdestruct
+    // Call the contract to trigger selfdestruct
     Transaction callTx = createContractCall(contractAddress, Bytes.EMPTY, Wei.ZERO, 1L);
     Block block2B = forTransactions(List.of(callTx), block1B.getHeader());
     executeBlock(archiveProvider.getWorldState(), block2B);
 
-    // After chain B: Beneficiary should have received the 3 ETH from selfdestruct
-    assertThat(archiveProvider.getWorldState().get(beneficiary))
-        .as("Beneficiary should exist after selfdestruct in chain B")
-        .isNotNull();
-    assertThat(archiveProvider.getWorldState().get(beneficiary).getBalance())
-        .as("Beneficiary should have received funds from selfdestruct")
+    // Beneficiary should have received the 3 ETH from selfdestruct
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNotNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B).getBalance())
         .isEqualTo(THREE_ETH);
   }
 
   @Test
   void shouldHandleCodeChangesViaCreate2DuringReorg() {
-    // Test: Contract has different code at same address in different chains
-    // Using same sender nonce means same contract address via CREATE
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
-
-    // Simple runtime codes with different stored values
-    // Contract A: stores 0xAA in slot 0 then stops
-    Bytes codeA = Bytes.fromHexString("60AA60005500"); // PUSH1 0xAA, PUSH1 0, SSTORE, STOP
-    // Contract B: stores 0xBB in slot 0 then stops
-    Bytes codeB = Bytes.fromHexString("60BB60005500"); // PUSH1 0xBB, PUSH1 0, SSTORE, STOP
-
-    // Correct init code pattern:
-    // PUSH1 <size> PUSH1 <offset> PUSH1 0 CODECOPY PUSH1 <size> PUSH1 0 RETURN
-    // Total init prefix = 12 bytes, runtime code starts at offset 12
-    Bytes initCodeA =
-        Bytes.concatenate(
-            Bytes.fromHexString("60"), // PUSH1
-            Bytes.of(codeA.size()), // runtime code size (6)
-            Bytes.fromHexString("600c"), // PUSH1 12 (code offset)
-            Bytes.fromHexString("6000"), // PUSH1 0 (memory dest)
-            Bytes.fromHexString("39"), // CODECOPY
-            Bytes.fromHexString("60"), // PUSH1
-            Bytes.of(codeA.size()), // runtime code size (6)
-            Bytes.fromHexString("6000"), // PUSH1 0 (return offset)
-            Bytes.fromHexString("f3"), // RETURN
-            codeA);
-
-    Bytes initCodeB =
-        Bytes.concatenate(
-            Bytes.fromHexString("60"), // PUSH1
-            Bytes.of(codeB.size()), // runtime code size (6)
-            Bytes.fromHexString("600c"), // PUSH1 12 (code offset)
-            Bytes.fromHexString("6000"), // PUSH1 0 (memory dest)
-            Bytes.fromHexString("39"), // CODECOPY
-            Bytes.fromHexString("60"), // PUSH1
-            Bytes.of(codeB.size()), // runtime code size (6)
-            Bytes.fromHexString("6000"), // PUSH1 0 (return offset)
-            Bytes.fromHexString("f3"), // RETURN
-            codeB);
+    // Contract A: stores 0xAA in slot 0; Contract B: stores 0xBB in slot 0
+    Bytes codeA = Bytes.fromHexString("60AA60005500");
+    Bytes codeB = Bytes.fromHexString("60BB60005500");
+    Bytes initCodeA = createInitCode(codeA);
+    Bytes initCodeB = createInitCode(codeB);
 
     // Block 1A: Deploy contract with code A
     Transaction deployTxA = createContractDeployment(initCodeA, Wei.ZERO, 0L);
-    Block block1A = forTransactions(List.of(deployTxA), genesisHeader);
+    Block block1A = forTransactions(List.of(deployTxA), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
-    assertThat(archiveProvider.getWorldState().get(contractAddress))
-        .as("Contract should exist in chain A")
-        .isNotNull();
-    Bytes codeInChainA = archiveProvider.getWorldState().get(contractAddress).getCode();
-    assertThat(codeInChainA).as("Contract should have code A").isEqualTo(codeA);
+    assertThat(archiveProvider.getWorldState().get(contractAddress)).isNotNull();
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getCode()).isEqualTo(codeA);
 
     // Reorg to chain B: Deploy contract with code B at same address
-    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
     Transaction deployTxB = createContractDeployment(initCodeB, Wei.ZERO, 0L);
-    Block block1B = forTransactions(List.of(deployTxB), genesisHeader);
-    executeReorg(block1B, wsAtGenesis, 0L);
+    Block block1B = forTransactions(List.of(deployTxB), fixture.getGenesis().getHeader());
+    reorgFromGenesis(block1B);
 
     // After reorg: Contract should exist with code B
-    assertThat(archiveProvider.getWorldState().get(contractAddress))
-        .as("Contract should exist after reorg")
-        .isNotNull();
-    Bytes codeAfterReorg = archiveProvider.getWorldState().get(contractAddress).getCode();
-    assertThat(codeAfterReorg).as("Contract should have code B after reorg").isEqualTo(codeB);
-    assertThat(codeAfterReorg).as("Code should be different from chain A").isNotEqualTo(codeA);
+    assertThat(archiveProvider.getWorldState().get(contractAddress)).isNotNull();
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getCode()).isEqualTo(codeB);
   }
 
   @Test
   void shouldTrackAccountNonceAcrossReorg() {
-    // Test: Account nonce differs between chain A and chain B
-    Address recipient1 = Address.fromHexString("0xFC00000000000000000000000000000000000001");
-    Address recipient2 = Address.fromHexString("0xFC00000000000000000000000000000000000002");
-    Address recipient3 = Address.fromHexString("0xFC00000000000000000000000000000000000003");
-    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
-
     Address senderAddress = Address.extract(sender.getPublicKey());
-
-    // Get initial nonce
     long initialNonce = archiveProvider.getWorldState().get(senderAddress).getNonce();
 
     // Chain A: Sender makes 3 transactions (nonce increases by 3)
-    Transaction tx1A = createTransaction(recipient1, ONE_ETH, initialNonce);
-    Transaction tx2A = createTransaction(recipient2, ONE_ETH, initialNonce + 1);
-    Transaction tx3A = createTransaction(recipient3, ONE_ETH, initialNonce + 2);
-    Block block1A = forTransactions(List.of(tx1A, tx2A, tx3A), genesisHeader);
+    Block block1A =
+        forTransactions(
+            List.of(
+                createTransaction(ACCOUNT_A, ONE_ETH, initialNonce),
+                createTransaction(ACCOUNT_B, ONE_ETH, initialNonce + 1),
+                createTransaction(ACCOUNT_C, ONE_ETH, initialNonce + 2)),
+            fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
-
-    long nonceAfterChainA = archiveProvider.getWorldState().get(senderAddress).getNonce();
-    assertThat(nonceAfterChainA)
-        .as("Nonce should increase by 3 after chain A")
+    assertThat(archiveProvider.getWorldState().get(senderAddress).getNonce())
         .isEqualTo(initialNonce + 3);
 
-    // Reorg to chain B: Sender makes only 1 transaction (nonce increases by 1)
-    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
-    Transaction tx1B = createTransaction(recipient1, TWO_ETH, initialNonce);
-    Block block1B = forTransactions(List.of(tx1B), genesisHeader);
-    executeReorg(block1B, wsAtGenesis, 0L);
+    // Reorg to chain B: Sender makes only 1 transaction
+    Block block1B =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_A, TWO_ETH, initialNonce)),
+            fixture.getGenesis().getHeader());
+    reorgFromGenesis(block1B);
 
     // After reorg: Nonce should reflect chain B (only 1 transaction)
-    long nonceAfterReorg = archiveProvider.getWorldState().get(senderAddress).getNonce();
-    assertThat(nonceAfterReorg)
-        .as("Nonce should be initial + 1 after reorg to chain B")
+    assertThat(archiveProvider.getWorldState().get(senderAddress).getNonce())
         .isEqualTo(initialNonce + 1);
-
-    // Verify only recipient1 exists with 2 ETH, others should not exist
-    assertThat(archiveProvider.getWorldState().get(recipient1).getBalance())
-        .as("Recipient1 should have 2 ETH from chain B")
-        .isEqualTo(TWO_ETH);
-    assertThat(archiveProvider.getWorldState().get(recipient2))
-        .as("Recipient2 should not exist after reorg")
-        .isNull();
-    assertThat(archiveProvider.getWorldState().get(recipient3))
-        .as("Recipient3 should not exist after reorg")
-        .isNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNull();
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_C)).isNull();
   }
 
   // ===== Helper Methods =====
+
+  private Bytes createInitCode(final Bytes runtimeCode) {
+    return Bytes.concatenate(
+        Bytes.fromHexString("60"),
+        Bytes.of(runtimeCode.size()),
+        Bytes.fromHexString("600c60003960"),
+        Bytes.of(runtimeCode.size()),
+        Bytes.fromHexString("6000f3"),
+        runtimeCode);
+  }
+
+  private void reorgFromGenesis(final Block alternateBlock) {
+    executeReorg(alternateBlock, getHistoricalWorldState(fixture.getGenesis().getHeader()), 0L);
+  }
 
   private Transaction createTransaction(final Address to, final Wei value, final long nonce) {
     return new TransactionTestFixture()
