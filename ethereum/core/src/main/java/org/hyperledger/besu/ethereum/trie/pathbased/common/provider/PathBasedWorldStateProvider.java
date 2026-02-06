@@ -14,9 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.common.provider;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -243,7 +241,7 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         .map(MutableWorldState::freezeStorage);
   }
 
-  protected Optional<MutableWorldState> rollFullWorldStateToBlockHash(
+  private Optional<MutableWorldState> rollFullWorldStateToBlockHash(
       final PathBasedWorldState mutableState, final Hash blockHash) {
     if (blockHash.equals(mutableState.blockHash())) {
       return Optional.of(mutableState);
@@ -306,20 +304,8 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             pathBasedUpdater.rollForward(forward);
           }
 
-          // Update WORLD_BLOCK_NUMBER_KEY before commit so the archive flat DB strategy uses
-          // the correct write context. The strategy uses (WORLD_BLOCK_NUMBER_KEY + 1) as the
-          // block suffix for writes. For a target block N, we want suffix N, so we set
-          // WORLD_BLOCK_NUMBER_KEY to N-1.
-          final BlockHeader targetBlockHeader = blockchain.getBlockHeader(blockHash).get();
-          final long parentBlockNumber =
-              targetBlockHeader.getNumber() > 0 ? targetBlockHeader.getNumber() - 1 : 0;
-          var contextTransaction =
-              mutableState.getWorldStateStorage().getComposedWorldStateStorage().startTransaction();
-          contextTransaction.put(
-              TRIE_BRANCH_STORAGE,
-              WORLD_BLOCK_NUMBER_KEY,
-              Bytes.ofUnsignedLong(parentBlockNumber).toArrayUnsafe());
-          contextTransaction.commit();
+          // Hook for subclasses to perform actions before commit
+          beforeRollCommit(mutableState, blockHash);
 
           pathBasedUpdater.commit();
 
@@ -355,6 +341,17 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             "invalid", Optional.of(Address.ZERO), Bytes32.wrap(Hash.EMPTY.getBytes()), Bytes.EMPTY);
       }
     }
+  }
+
+  /**
+   * Hook method called before committing changes during world state rolling. Subclasses can
+   * override this to perform actions before the commit, such as setting up archive context.
+   *
+   * @param mutableState the world state being rolled
+   * @param blockHash the target block hash
+   */
+  protected void beforeRollCommit(final PathBasedWorldState mutableState, final Hash blockHash) {
+    // Default implementation does nothing - subclasses can override
   }
 
   public WorldStateConfig getWorldStateSharedSpec() {

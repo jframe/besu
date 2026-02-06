@@ -14,6 +14,9 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
+
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -32,6 +35,7 @@ import org.hyperledger.besu.plugin.ServiceManager;
 import java.util.Optional;
 import java.util.function.Supplier;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -95,6 +99,26 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       }
       return super.getWorldState(queryParams);
     }
+  }
+
+  /**
+   * Sets up the archive context before committing changes during world state rolling. Updates
+   * WORLD_BLOCK_NUMBER_KEY so the archive flat DB strategy uses the correct write context. The
+   * strategy uses (WORLD_BLOCK_NUMBER_KEY + 1) as the block suffix for writes. For a target block
+   * N, we want suffix N, so we set WORLD_BLOCK_NUMBER_KEY to N-1.
+   */
+  @Override
+  protected void beforeRollCommit(final PathBasedWorldState mutableState, final Hash blockHash) {
+    final BlockHeader targetBlockHeader = blockchain.getBlockHeader(blockHash).get();
+    final long parentBlockNumber =
+        targetBlockHeader.getNumber() > 0 ? targetBlockHeader.getNumber() - 1 : 0;
+    var contextTransaction =
+        mutableState.getWorldStateStorage().getComposedWorldStateStorage().startTransaction();
+    contextTransaction.put(
+        TRIE_BRANCH_STORAGE,
+        WORLD_BLOCK_NUMBER_KEY,
+        Bytes.ofUnsignedLong(parentBlockNumber).toArrayUnsafe());
+    contextTransaction.commit();
   }
 
   // Archive-specific rollback behaviour. There is no trie-log roll forward/backward, we just roll
