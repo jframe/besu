@@ -15,9 +15,6 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.crypto.KeyPair;
@@ -43,43 +40,24 @@ import org.hyperledger.besu.ethereum.core.MutableWorldState;
 import org.hyperledger.besu.ethereum.core.SealableBlockHeader;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionTestFixture;
-import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
-import org.hyperledger.besu.ethereum.eth.transactions.BlobCache;
-import org.hyperledger.besu.ethereum.eth.transactions.ImmutableTransactionPoolConfiguration;
-import org.hyperledger.besu.ethereum.eth.transactions.PendingTransaction;
-import org.hyperledger.besu.ethereum.eth.transactions.PendingTransactions;
-import org.hyperledger.besu.ethereum.eth.transactions.TransactionBroadcaster;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
-import org.hyperledger.besu.ethereum.eth.transactions.TransactionPoolConfiguration;
-import org.hyperledger.besu.ethereum.eth.transactions.TransactionPoolMetrics;
-import org.hyperledger.besu.ethereum.eth.transactions.TransactionPoolReplacementHandler;
-import org.hyperledger.besu.ethereum.eth.transactions.layered.EndLayer;
-import org.hyperledger.besu.ethereum.eth.transactions.layered.GasPricePrioritizedTransactions;
-import org.hyperledger.besu.ethereum.eth.transactions.layered.LayeredPendingTransactions;
-import org.hyperledger.besu.ethereum.eth.transactions.layered.SenderBalanceChecker;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
-import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.testutil.DeterministicEthScheduler;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.BiFunction;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.quality.Strictness;
+import org.mockito.Mockito;
 
 /**
  * Integration tests for reorg scenarios with Bonsai archive mode using in-memory storage.
@@ -88,8 +66,6 @@ import org.mockito.quality.Strictness;
  * state provider, ensuring that account balances reflect the state of the new canonical chain after
  * a reorg.
  */
-@ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.LENIENT)
 public class BonsaiArchiveReorgTest {
 
   private static final String GENESIS_CONFIG = "/dev.json";
@@ -100,15 +76,12 @@ public class BonsaiArchiveReorgTest {
   private static final Wei FIVE_ETH = ONE_ETH.multiply(5);
   private static final Wei TEN_ETH = ONE_ETH.multiply(10);
 
-  // Standard test addresses (reused across independent tests)
   private static final Address ACCOUNT_A =
       Address.fromHexString("0x1000000000000000000000000000000000000001");
   private static final Address ACCOUNT_B =
       Address.fromHexString("0x1000000000000000000000000000000000000002");
   private static final Address ACCOUNT_C =
       Address.fromHexString("0x1000000000000000000000000000000000000003");
-
-  @Mock private EthContext ethContext;
 
   private ExecutionContextTestFixture fixture;
   private BonsaiArchiveWorldStateProvider archiveProvider;
@@ -119,12 +92,8 @@ public class BonsaiArchiveReorgTest {
   private KeyPair sender;
   private final EthScheduler ethScheduler = new DeterministicEthScheduler();
 
-  private final TransactionPoolConfiguration poolConfiguration =
-      ImmutableTransactionPoolConfiguration.builder().txPoolMaxSize(100).build();
-
   @BeforeEach
   public void setUp() {
-    // Use ExecutionContextTestFixture for core setup with configurable trie log depth
     fixture =
         ExecutionContextTestFixture.builder(GenesisConfig.fromResource(GENESIS_CONFIG))
             .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
@@ -135,12 +104,9 @@ public class BonsaiArchiveReorgTest {
     protocolContext = fixture.getProtocolContext();
     protocolSchedule = fixture.getProtocolSchedule();
     archiveProvider = (BonsaiArchiveWorldStateProvider) fixture.getStateArchive();
-
-    // Verify archive mode
     assertThat(archiveProvider.getWorldStateKeyValueStorage().getFlatDbMode())
         .isEqualTo(FlatDbMode.ARCHIVE);
 
-    // Get sender key from genesis allocations
     sender =
         GenesisConfig.fromResource(GENESIS_CONFIG)
             .streamAllocations()
@@ -149,50 +115,7 @@ public class BonsaiArchiveReorgTest {
             .map(ga -> asKeyPair(ga.privateKey()))
             .orElseThrow();
 
-    // Setup transaction pool with mocks
-    setupTransactionPool();
-  }
-
-  private void setupTransactionPool() {
-    var mockEthPeers = mock(org.hyperledger.besu.ethereum.eth.manager.EthPeers.class);
-    when(ethContext.getEthPeers()).thenReturn(mockEthPeers);
-    when(mockEthPeers.subscribeConnect(any())).thenReturn(1L);
-    when(ethContext.getScheduler()).thenReturn(ethScheduler);
-
-    TransactionPoolMetrics txPoolMetrics = new TransactionPoolMetrics(new NoOpMetricsSystem());
-    SenderBalanceChecker senderBalanceChecker = new SenderBalanceChecker.NoOpChecker();
-    TransactionPoolReplacementHandler transactionReplacementHandler =
-        new TransactionPoolReplacementHandler(
-            poolConfiguration.getPriceBump(), poolConfiguration.getBlobPriceBump());
-    BiFunction<PendingTransaction, PendingTransaction, Boolean> transactionReplacementTester =
-        (t1, t2) ->
-            transactionReplacementHandler.shouldReplace(
-                t1, t2, protocolContext.getBlockchain().getChainHeadHeader());
-    PendingTransactions sorter =
-        new LayeredPendingTransactions(
-            poolConfiguration,
-            new GasPricePrioritizedTransactions(
-                poolConfiguration,
-                ethScheduler,
-                new EndLayer(txPoolMetrics),
-                txPoolMetrics,
-                transactionReplacementTester,
-                new BlobCache(),
-                MiningConfiguration.newDefault(),
-                senderBalanceChecker),
-            ethScheduler);
-
-    transactionPool =
-        new TransactionPool(
-            () -> sorter,
-            protocolSchedule,
-            protocolContext,
-            mock(TransactionBroadcaster.class),
-            ethContext,
-            txPoolMetrics,
-            poolConfiguration,
-            new BlobCache());
-    transactionPool.setEnabled();
+    transactionPool = Mockito.mock(TransactionPool.class);
   }
 
   private KeyPair asKeyPair(final Bytes32 key) {
@@ -209,8 +132,7 @@ public class BonsaiArchiveReorgTest {
     Transaction tx10A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block10A = forTransactions(List.of(tx10A), parentHeader);
     executeBlock(archiveProvider.getWorldState(), block10A);
-
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
+    assertBalance(ACCOUNT_A, ONE_ETH);
 
     // Create alternate block10B: Account receives 2 ETH
     MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
@@ -218,9 +140,7 @@ public class BonsaiArchiveReorgTest {
     Block block10B = forTransactions(List.of(tx10B), parentHeader);
 
     executeReorg(block10B, wsAtBlock9, 9L);
-
-    // Verify: Account should have 2 ETH from block10B
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
+    assertBalance(ACCOUNT_A, TWO_ETH);
 
     Hash headBlockHash =
         ((PathBasedWorldState) archiveProvider.getWorldState()).getWorldStateBlockHash();
@@ -235,7 +155,7 @@ public class BonsaiArchiveReorgTest {
     Transaction tx10A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block10A = forTransactions(List.of(tx10A), parentHeader);
     executeBlock(archiveProvider.getWorldState(), block10A);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A)).isNotNull();
+    assertAccountExists(ACCOUNT_A);
 
     // Reorg to block10B: Account B gets 1 ETH instead
     MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
@@ -244,8 +164,8 @@ public class BonsaiArchiveReorgTest {
     executeReorg(block10B, wsAtBlock9, 9L);
 
     // Account A should not exist after reorg
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A)).isNull();
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNotNull();
+    assertAccountNull(ACCOUNT_A);
+    assertAccountExists(ACCOUNT_B);
   }
 
   @Test
@@ -257,7 +177,7 @@ public class BonsaiArchiveReorgTest {
     Transaction tx3A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block3A = forTransactions(List.of(tx3A), block2Header);
     executeBlock(archiveProvider.getWorldState(), block3A);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
+    assertBalance(ACCOUNT_A, ONE_ETH);
 
     // Historical query at block 2 - account should not exist
     assertThat(getHistoricalWorldState(block2Header).get(ACCOUNT_A)).isNull();
@@ -269,7 +189,7 @@ public class BonsaiArchiveReorgTest {
     executeReorg(block3B, wsAtBlock2, 2L);
 
     // Current state should be 2 ETH
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
+    assertBalance(ACCOUNT_A, TWO_ETH);
 
     // Historical query at block 2 should still work
     assertThat(getHistoricalWorldState(block2Header).get(ACCOUNT_A)).isNull();
@@ -285,20 +205,19 @@ public class BonsaiArchiveReorgTest {
     Transaction tx1A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block1A = forTransactions(List.of(tx1A), fixture.getGenesis().getHeader());
     executeBlock(archiveProvider.getWorldState(), block1A);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
+    assertBalance(ACCOUNT_A, ONE_ETH);
 
     // First reorg: block1B with 2 ETH
     Transaction tx1B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
     Block block1B = forTransactions(List.of(tx1B), fixture.getGenesis().getHeader());
     reorgFromGenesis(block1B);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
+    assertBalance(ACCOUNT_A, TWO_ETH);
 
     // Second reorg: block1C with 3 ETH
     Transaction tx1C = createTransaction(ACCOUNT_A, THREE_ETH, 0L);
     Block block1C = forTransactions(List.of(tx1C), fixture.getGenesis().getHeader());
     reorgFromGenesis(block1C);
-
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(THREE_ETH);
+    assertBalance(ACCOUNT_A, THREE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
   }
 
@@ -311,9 +230,8 @@ public class BonsaiArchiveReorgTest {
     Transaction tx10A_2 = createTransaction(ACCOUNT_B, ONE_ETH, 1L);
     Block block10A = forTransactions(List.of(tx10A_1, tx10A_2), parentHeader);
     executeBlock(archiveProvider.getWorldState(), block10A);
-
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B).getBalance()).isEqualTo(ONE_ETH);
+    assertBalance(ACCOUNT_A, ONE_ETH);
+    assertBalance(ACCOUNT_B, ONE_ETH);
 
     // Reorg: ACCOUNT_A gets 2 ETH, ACCOUNT_B gets nothing
     MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
@@ -321,8 +239,8 @@ public class BonsaiArchiveReorgTest {
     Block block10B = forTransactions(List.of(tx10B), parentHeader);
     executeReorg(block10B, wsAtBlock9, 9L);
 
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNull();
+    assertBalance(ACCOUNT_A, TWO_ETH);
+    assertAccountNull(ACCOUNT_B);
   }
 
   @Test
@@ -369,7 +287,7 @@ public class BonsaiArchiveReorgTest {
       executeBlock(archiveProvider.getWorldState(), block);
       parentHeader = block.getHeader();
     }
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(THREE_ETH);
+    assertBalance(ACCOUNT_A, THREE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(3L);
 
     // Reorg to chain B: 5 blocks from genesis, each sending 2 ETH (total 10 ETH)
@@ -387,7 +305,7 @@ public class BonsaiArchiveReorgTest {
     }
 
     // Verify: Account should have 10 ETH from 5 blocks of 2 ETH each
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TEN_ETH);
+    assertBalance(ACCOUNT_A, TEN_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(5L);
   }
 
@@ -399,16 +317,13 @@ public class BonsaiArchiveReorgTest {
     Transaction tx1A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
     Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
-
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
+    assertBalance(ACCOUNT_A, ONE_ETH);
 
     // Reorg to block1B: Account gets 5 ETH
     Transaction tx1B = createTransaction(ACCOUNT_A, FIVE_ETH, 0L);
     Block block1B = forTransactions(List.of(tx1B), genesisHeader);
     reorgFromGenesis(block1B);
-
-    // Current state should be 5 ETH from block1B
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(FIVE_ETH);
+    assertBalance(ACCOUNT_A, FIVE_ETH);
 
     // Query the orphaned block1A - archive mode preserves this data via trie logs
     Optional<MutableWorldState> orphanedWorldState =
@@ -435,7 +350,7 @@ public class BonsaiArchiveReorgTest {
     }
 
     Wei sixteenEth = ONE_ETH.multiply(TRIE_LOG_DEPTH);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(sixteenEth);
+    assertBalance(ACCOUNT_A, sixteenEth);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(TRIE_LOG_DEPTH);
 
     // Get the fork point at exactly half the trie log depth
@@ -450,7 +365,7 @@ public class BonsaiArchiveReorgTest {
 
     // Verify: Account should have 8 ETH (from blocks 1-8) + 10 ETH (from block 9B) = 18 ETH
     Wei expectedBalance = ONE_ETH.multiply(forkBlockNumber).add(TEN_ETH);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(expectedBalance);
+    assertBalance(ACCOUNT_A, expectedBalance);
 
     // Historical query at fork point should still work
     assertThat(getHistoricalWorldState(forkHeader).get(ACCOUNT_A).getBalance())
@@ -503,8 +418,8 @@ public class BonsaiArchiveReorgTest {
 
     // After reorg: Contract should NOT exist, recipient should have 2 ETH
     assertThat(archiveProvider.getWorldState().get(contractAddress)).isNull();
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
+    assertAccountExists(ACCOUNT_A);
+    assertBalance(ACCOUNT_A, TWO_ETH);
   }
 
   @Test
@@ -524,7 +439,7 @@ public class BonsaiArchiveReorgTest {
     assertThat(archiveProvider.getWorldState().get(contractAddress)).isNotNull();
     assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
         .isEqualTo(THREE_ETH);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNull();
+    assertAccountNull(ACCOUNT_B);
 
     // Reorg to chain B: Deploy contract AND call it to trigger selfdestruct
     Transaction deployTxB = createContractDeployment(initCode, THREE_ETH, 0L);
@@ -537,9 +452,8 @@ public class BonsaiArchiveReorgTest {
     executeBlock(archiveProvider.getWorldState(), block2B);
 
     // Beneficiary should have received the 3 ETH from selfdestruct
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B).getBalance())
-        .isEqualTo(THREE_ETH);
+    assertAccountExists(ACCOUNT_B);
+    assertBalance(ACCOUNT_B, THREE_ETH);
   }
 
   @Test
@@ -596,12 +510,22 @@ public class BonsaiArchiveReorgTest {
     // After reorg: Nonce should reflect chain B (only 1 transaction)
     assertThat(archiveProvider.getWorldState().get(senderAddress).getNonce())
         .isEqualTo(initialNonce + 1);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B)).isNull();
-    assertThat(archiveProvider.getWorldState().get(ACCOUNT_C)).isNull();
+    assertBalance(ACCOUNT_A, TWO_ETH);
+    assertAccountNull(ACCOUNT_B);
+    assertAccountNull(ACCOUNT_C);
   }
 
-  // ===== Helper Methods =====
+  private void assertBalance(final Address address, final Wei expectedBalance) {
+    assertThat(archiveProvider.getWorldState().get(address).getBalance()).isEqualTo(expectedBalance);
+  }
+
+  private void assertAccountExists(final Address address) {
+    assertThat(archiveProvider.getWorldState().get(address)).isNotNull();
+  }
+
+  private void assertAccountNull(final Address address) {
+    assertThat(archiveProvider.getWorldState().get(address)).isNull();
+  }
 
   private Bytes createInitCode(final Bytes runtimeCode) {
     return Bytes.concatenate(
@@ -631,10 +555,10 @@ public class BonsaiArchiveReorgTest {
       final Bytes initCode, final Wei value, final long nonce) {
     return new TransactionTestFixture()
         .sender(Address.extract(sender.getPublicKey()))
-        .to(Optional.empty()) // Contract creation has no 'to' address
+        .to(Optional.empty())
         .value(value)
         .payload(initCode)
-        .gasLimit(100_000L) // Higher gas limit for contract creation
+        .gasLimit(100_000L)
         .nonce(nonce)
         .createTransaction(sender);
   }
@@ -698,8 +622,6 @@ public class BonsaiArchiveReorgTest {
             .getBlockProcessor()
             .processBlock(protocolContext, blockchain, wsAtForkPoint, alternateBlock);
     assertThat(result.isSuccessful()).isTrue();
-
-    // Persist to create trie log for reorg
     wsAtForkPoint.persist(alternateBlock.getHeader());
 
     blockchain.storeBlock(alternateBlock, result.getReceipts());
