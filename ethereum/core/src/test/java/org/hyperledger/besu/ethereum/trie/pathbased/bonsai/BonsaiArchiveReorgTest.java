@@ -126,21 +126,14 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldHandleReorgWithConflictingAccountBalances() {
-    // Build chain: genesis -> blocks 1-9 (empty)
     BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
-    // Block 10A: Account receives 1 ETH
-    Transaction tx10A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
-    Block block10A = forTransactions(List.of(tx10A), parentHeader);
-    executeBlock(archiveProvider.getWorldState(), block10A);
+    transfer(parentHeader);
     assertBalance(ACCOUNT_A, ONE_ETH);
 
-    // Create alternate block10B: Account receives 2 ETH
-    MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
-    Transaction tx10B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
-    Block block10B = forTransactions(List.of(tx10B), parentHeader);
-
-    executeReorg(block10B, wsAtBlock9, 9L);
+    Block block10B =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, TWO_ETH, 0L)), parentHeader);
+    reorgFrom(parentHeader, block10B);
     assertBalance(ACCOUNT_A, TWO_ETH);
 
     Hash headBlockHash =
@@ -152,67 +145,41 @@ public class BonsaiArchiveReorgTest {
   void shouldHandleReorgAccountCreationVsNoCreation() {
     BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
-    // Block 10A: Account A is created with 1 ETH
-    Transaction tx10A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
-    Block block10A = forTransactions(List.of(tx10A), parentHeader);
-    executeBlock(archiveProvider.getWorldState(), block10A);
+    transfer(parentHeader);
     assertAccountExists(ACCOUNT_A);
 
-    // Reorg to block10B: Account B gets 1 ETH instead
-    MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
-    Transaction tx10B = createTransaction(ACCOUNT_B, ONE_ETH, 0L);
-    Block block10B = forTransactions(List.of(tx10B), parentHeader);
-    executeReorg(block10B, wsAtBlock9, 9L);
-
-    // Account A should not exist after reorg
+    reorgFromWithTransfer(parentHeader, ACCOUNT_B, ONE_ETH);
     assertAccountNull(ACCOUNT_A);
     assertAccountExists(ACCOUNT_B);
   }
 
   @Test
   void shouldSupportHistoricalQueriesAfterReorg() {
-    // Build chain: genesis -> block1 -> block2 (empty)
     BlockHeader block2Header = buildEmptyChainToBlock(2);
 
-    // Block 3A: Account gets 1 ETH
-    Transaction tx3A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
-    Block block3A = forTransactions(List.of(tx3A), block2Header);
-    executeBlock(archiveProvider.getWorldState(), block3A);
+    transfer(block2Header);
     assertBalance(ACCOUNT_A, ONE_ETH);
-
-    // Historical query at block 2 - account should not exist
     assertThat(getHistoricalWorldState(block2Header).get(ACCOUNT_A)).isNull();
 
-    // Reorg to block3B: Account gets 2 ETH
-    MutableWorldState wsAtBlock2 = getHistoricalWorldState(block2Header);
-    Transaction tx3B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
-    Block block3B = forTransactions(List.of(tx3B), block2Header);
-    executeReorg(block3B, wsAtBlock2, 2L);
+    Block block3B =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, TWO_ETH, 0L)), block2Header);
+    reorgFrom(block2Header, block3B);
 
-    // Current state should be 2 ETH
     assertBalance(ACCOUNT_A, TWO_ETH);
-
-    // Historical query at block 2 should still work
     assertThat(getHistoricalWorldState(block2Header).get(ACCOUNT_A)).isNull();
-
-    // Historical query at block3B should return 2 ETH
     assertThat(getHistoricalWorldState(block3B.getHeader()).get(ACCOUNT_A).getBalance())
         .isEqualTo(TWO_ETH);
   }
 
   @Test
   void shouldHandleConsecutiveReorgs() {
-    executeBlock(
-        archiveProvider.getWorldState(),
-        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0L)), genesisHeader));
+    transfer(genesisHeader);
     assertBalance(ACCOUNT_A, ONE_ETH);
 
-    reorgFromGenesis(
-        forTransactions(List.of(createTransaction(ACCOUNT_A, TWO_ETH, 0L)), genesisHeader));
+    reorgFromWithTransfer(genesisHeader, ACCOUNT_A, TWO_ETH);
     assertBalance(ACCOUNT_A, TWO_ETH);
 
-    reorgFromGenesis(
-        forTransactions(List.of(createTransaction(ACCOUNT_A, THREE_ETH, 0L)), genesisHeader));
+    reorgFromWithTransfer(genesisHeader, ACCOUNT_A, THREE_ETH);
     assertBalance(ACCOUNT_A, THREE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
   }
@@ -222,19 +189,17 @@ public class BonsaiArchiveReorgTest {
     BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
     // Block 10A: ACCOUNT_A gets 1 ETH, ACCOUNT_B gets 1 ETH
-    Transaction tx10A_1 = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
-    Transaction tx10A_2 = createTransaction(ACCOUNT_B, ONE_ETH, 1L);
-    Block block10A = forTransactions(List.of(tx10A_1, tx10A_2), parentHeader);
-    executeBlock(archiveProvider.getWorldState(), block10A);
+    executeBlock(
+        archiveProvider.getWorldState(),
+        forTransactions(
+            List.of(
+                createTransaction(ACCOUNT_A, ONE_ETH, 0L),
+                createTransaction(ACCOUNT_B, ONE_ETH, 1L)),
+            parentHeader));
     assertBalance(ACCOUNT_A, ONE_ETH);
     assertBalance(ACCOUNT_B, ONE_ETH);
 
-    // Reorg: ACCOUNT_A gets 2 ETH, ACCOUNT_B gets nothing
-    MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
-    Transaction tx10B = createTransaction(ACCOUNT_A, TWO_ETH, 0L);
-    Block block10B = forTransactions(List.of(tx10B), parentHeader);
-    executeReorg(block10B, wsAtBlock9, 9L);
-
+    reorgFromWithTransfer(parentHeader, ACCOUNT_A, TWO_ETH);
     assertBalance(ACCOUNT_A, TWO_ETH);
     assertAccountNull(ACCOUNT_B);
   }
@@ -297,50 +262,36 @@ public class BonsaiArchiveReorgTest {
 
   @Test
   void shouldReturnOrphanedBlockStateForHistoricalQuery() {
-    // Block 1A: Account gets 1 ETH
-    Transaction tx1A = createTransaction(ACCOUNT_A, ONE_ETH, 0L);
-    Block block1A = forTransactions(List.of(tx1A), genesisHeader);
-    executeBlock(archiveProvider.getWorldState(), block1A);
+    Block block1A = transfer(genesisHeader);
     assertBalance(ACCOUNT_A, ONE_ETH);
 
-    // Reorg to block1B: Account gets 5 ETH
-    Transaction tx1B = createTransaction(ACCOUNT_A, FIVE_ETH, 0L);
-    Block block1B = forTransactions(List.of(tx1B), genesisHeader);
-    reorgFromGenesis(block1B);
+    reorgFromWithTransfer(genesisHeader, ACCOUNT_A, FIVE_ETH);
     assertBalance(ACCOUNT_A, FIVE_ETH);
 
     // Query the orphaned block1A - archive mode preserves this data via trie logs
     Optional<MutableWorldState> orphanedWorldState =
         archiveProvider.getWorldState(
             WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block1A.getHeader()));
-
-    // Archive mode preserves orphaned block state
     assertThat(orphanedWorldState).isPresent();
     assertThat(orphanedWorldState.get().get(ACCOUNT_A).getBalance()).isEqualTo(ONE_ETH);
   }
 
   @Test
   void shouldHandleReorgAtTrieLogDepthBoundary() {
-    // Build chain A: exactly TRIE_LOG_DEPTH (16) blocks
     buildChain((int) TRIE_LOG_DEPTH);
     assertBalance(ACCOUNT_A, ONE_ETH.multiply(TRIE_LOG_DEPTH));
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(TRIE_LOG_DEPTH);
 
-    // Get the fork point at exactly half the trie log depth
     long forkBlockNumber = TRIE_LOG_DEPTH / 2; // Block 8
     BlockHeader forkHeader = blockchain.getBlockHeader(forkBlockNumber).orElseThrow();
 
-    // Reorg from block 8: create alternate chain with different values
-    MutableWorldState wsAtFork = getHistoricalWorldState(forkHeader);
-    Transaction txB = createTransaction(ACCOUNT_A, TEN_ETH, forkBlockNumber);
-    Block blockB = forTransactions(List.of(txB), forkHeader);
-    executeReorg(blockB, wsAtFork, forkBlockNumber);
+    Block blockB =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_A, TEN_ETH, forkBlockNumber)), forkHeader);
+    reorgFrom(forkHeader, blockB);
 
-    // Verify: Account should have 8 ETH (from blocks 1-8) + 10 ETH (from block 9B) = 18 ETH
-    Wei expectedBalance = ONE_ETH.multiply(forkBlockNumber).add(TEN_ETH);
-    assertBalance(ACCOUNT_A, expectedBalance);
-
-    // Historical query at fork point should still work
+    // Account should have 8 ETH (from blocks 1-8) + 10 ETH (from block 9B) = 18 ETH
+    assertBalance(ACCOUNT_A, ONE_ETH.multiply(forkBlockNumber).add(TEN_ETH));
     assertThat(getHistoricalWorldState(forkHeader).get(ACCOUNT_A).getBalance())
         .isEqualTo(ONE_ETH.multiply(forkBlockNumber));
   }
@@ -368,12 +319,9 @@ public class BonsaiArchiveReorgTest {
     Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
 
     deployContractFromGenesis(initCode, ONE_ETH);
-    assertAccountExists(contractAddress);
     assertThat(archiveProvider.getWorldState().get(contractAddress).hasCode()).isTrue();
 
-    // Reorg: Simple value transfer instead of contract deployment
-    reorgFromGenesis(
-        forTransactions(List.of(createTransaction(ACCOUNT_A, TWO_ETH, 0L)), genesisHeader));
+    reorgFromWithTransfer(genesisHeader, ACCOUNT_A, TWO_ETH);
     assertAccountNull(contractAddress);
     assertBalance(ACCOUNT_A, TWO_ETH);
   }
@@ -474,8 +422,27 @@ public class BonsaiArchiveReorgTest {
         runtimeCode);
   }
 
+  private Block transfer(final BlockHeader parent) {
+    Block block =
+        forTransactions(
+            List.of(
+                createTransaction(
+                    BonsaiArchiveReorgTest.ACCOUNT_A, BonsaiArchiveReorgTest.ONE_ETH, 0L)),
+            parent);
+    executeBlock(archiveProvider.getWorldState(), block);
+    return block;
+  }
+
+  private void reorgFrom(final BlockHeader parentHeader, final Block alternateBlock) {
+    executeReorg(alternateBlock, getHistoricalWorldState(parentHeader), parentHeader.getNumber());
+  }
+
   private void reorgFromGenesis(final Block alternateBlock) {
-    executeReorg(alternateBlock, getHistoricalWorldState(genesisHeader), 0L);
+    reorgFrom(genesisHeader, alternateBlock);
+  }
+
+  private void reorgFromWithTransfer(final BlockHeader parent, final Address to, final Wei value) {
+    reorgFrom(parent, forTransactions(List.of(createTransaction(to, value, 0L)), parent));
   }
 
   private void deployContractFromGenesis(final Bytes initCode, final Wei value) {
