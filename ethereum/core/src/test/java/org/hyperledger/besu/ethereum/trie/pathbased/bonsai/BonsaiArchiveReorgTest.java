@@ -15,8 +15,6 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createBonsaiArchiveInMemoryWorldStateArchive;
-import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryBlockchain;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -31,14 +29,13 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.BlockProcessingResult;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.blockcreation.AbstractBlockCreator;
-import org.hyperledger.besu.ethereum.chain.BadBlockManager;
-import org.hyperledger.besu.ethereum.chain.GenesisState;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderBuilder;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.Difficulty;
+import org.hyperledger.besu.ethereum.core.ExecutionContextTestFixture;
 import org.hyperledger.besu.ethereum.core.ImmutableMiningConfiguration;
 import org.hyperledger.besu.ethereum.core.ImmutableMiningConfiguration.MutableInitValues;
 import org.hyperledger.besu.ethereum.core.MiningConfiguration;
@@ -61,15 +58,13 @@ import org.hyperledger.besu.ethereum.eth.transactions.layered.EndLayer;
 import org.hyperledger.besu.ethereum.eth.transactions.layered.GasPricePrioritizedTransactions;
 import org.hyperledger.besu.ethereum.eth.transactions.layered.LayeredPendingTransactions;
 import org.hyperledger.besu.ethereum.eth.transactions.layered.SenderBalanceChecker;
-import org.hyperledger.besu.ethereum.mainnet.BalConfiguration;
-import org.hyperledger.besu.ethereum.mainnet.MainnetProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.testutil.DeterministicEthScheduler;
 
 import java.util.Collections;
@@ -98,6 +93,7 @@ import org.mockito.quality.Strictness;
 @MockitoSettings(strictness = Strictness.LENIENT)
 public class BonsaiArchiveReorgTest {
 
+  private static final String GENESIS_CONFIG = "/dev.json";
   private static final Wei ONE_ETH = Wei.of(1_000_000_000_000_000_000L);
   private static final Wei TWO_ETH = ONE_ETH.multiply(2);
   private static final Wei THREE_ETH = ONE_ETH.multiply(3);
@@ -106,45 +102,31 @@ public class BonsaiArchiveReorgTest {
 
   @Mock private EthContext ethContext;
 
+  private ExecutionContextTestFixture fixture;
   private BonsaiArchiveWorldStateProvider archiveProvider;
   private BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage;
   private MutableBlockchain blockchain;
   private ProtocolContext protocolContext;
+  private ProtocolSchedule protocolSchedule;
   private TransactionPool transactionPool;
   private KeyPair sender;
   private final EthScheduler ethScheduler = new DeterministicEthScheduler();
-
-  private final ProtocolSchedule protocolSchedule =
-      MainnetProtocolSchedule.fromConfig(
-          GenesisConfig.fromResource("/dev.json").getConfigOptions(),
-          MiningConfiguration.MINING_DISABLED,
-          new BadBlockManager(),
-          false,
-          BalConfiguration.DEFAULT,
-          new NoOpMetricsSystem());
-
-  private final GenesisState genesisState =
-      GenesisState.fromConfig(
-          GenesisConfig.fromResource("/dev.json"), protocolSchedule, new CodeCache());
 
   private final TransactionPoolConfiguration poolConfiguration =
       ImmutableTransactionPoolConfiguration.builder().txPoolMaxSize(100).build();
 
   @BeforeEach
   public void setUp() {
-    blockchain = createInMemoryBlockchain(genesisState.getBlock());
+    // Use ExecutionContextTestFixture for core setup
+    fixture =
+        ExecutionContextTestFixture.builder(GenesisConfig.fromResource(GENESIS_CONFIG))
+            .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
+            .build();
 
-    // Get sender key from genesis allocations
-    sender =
-        GenesisConfig.fromResource("/dev.json")
-            .streamAllocations()
-            .filter(ga -> ga.privateKey() != null)
-            .findFirst()
-            .map(ga -> asKeyPair(ga.privateKey()))
-            .orElseThrow();
-
-    // Create in-memory archive provider
-    archiveProvider = createBonsaiArchiveInMemoryWorldStateArchive(blockchain);
+    blockchain = fixture.getBlockchain();
+    protocolContext = fixture.getProtocolContext();
+    protocolSchedule = fixture.getProtocolSchedule();
+    archiveProvider = (BonsaiArchiveWorldStateProvider) fixture.getStateArchive();
     worldStateKeyValueStorage =
         (BonsaiWorldStateKeyValueStorage) archiveProvider.getWorldStateKeyValueStorage();
 
@@ -153,17 +135,20 @@ public class BonsaiArchiveReorgTest {
         .as("Should be in ARCHIVE mode")
         .isEqualTo(FlatDbMode.ARCHIVE);
 
-    // Initialize genesis state
-    genesisState.writeStateTo(archiveProvider.getWorldState());
+    // Get sender key from genesis allocations
+    sender =
+        GenesisConfig.fromResource(GENESIS_CONFIG)
+            .streamAllocations()
+            .filter(ga -> ga.privateKey() != null)
+            .findFirst()
+            .map(ga -> asKeyPair(ga.privateKey()))
+            .orElseThrow();
 
-    // Setup protocol context
-    protocolContext =
-        new ProtocolContext.Builder()
-            .withBlockchain(blockchain)
-            .withWorldStateArchive(archiveProvider)
-            .build();
+    // Setup transaction pool with mocks
+    setupTransactionPool();
+  }
 
-    // Setup transaction pool
+  private void setupTransactionPool() {
     var mockEthPeers = mock(org.hyperledger.besu.ethereum.eth.manager.EthPeers.class);
     when(ethContext.getEthPeers()).thenReturn(mockEthPeers);
     when(mockEthPeers.subscribeConnect(any())).thenReturn(1L);
@@ -270,7 +255,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testShallowReorg_OneBlock() {
     Address accountX = Address.fromHexString("0x3000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Block 1A: Account X gets 1 ETH
     Transaction tx1A = createTransaction(accountX, ONE_ETH, 0L);
@@ -290,7 +275,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testMediumReorg_FiveBlocks() {
     Address accountX = Address.fromHexString("0x4000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Chain A: 5 blocks, each sending 1 ETH
     BlockHeader parentHeader = genesisHeader;
@@ -315,7 +300,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testDeepReorg_FifteenBlocks() {
     Address accountX = Address.fromHexString("0x5000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Chain A: 15 blocks
     BlockHeader parentHeader = genesisHeader;
@@ -375,7 +360,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testConsecutiveReorgs() {
     Address accountX = Address.fromHexString("0x7000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Chain A: block1A with 1 ETH
     Transaction tx1A = createTransaction(accountX, ONE_ETH, 0L);
@@ -403,7 +388,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testHistoricalQueriesInNormalChain() {
     Address accountX = Address.fromHexString("0x8000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Build chain: 4 blocks, each sending 1 ETH
     Block block1 =
@@ -442,7 +427,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testHistoricalQueriesBeyondTrieLogDepth() {
     Address accountX = Address.fromHexString("0x9000000000000000000000000000000000000001");
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+    BlockHeader parentHeader = fixture.getGenesis().getHeader();
 
     // Create 20 blocks (beyond default trie log depth of 16)
     for (int i = 0; i < 20; i++) {
@@ -499,7 +484,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testDeepReorg_NearMaxTrieLogDepth() {
     Address accountX = Address.fromHexString("0x7000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Chain A: 15 blocks
     BlockHeader parentHeader = genesisHeader;
@@ -526,7 +511,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testArchiveFlatDbHistoricalQueriesAfterReorg() {
     Address accountX = Address.fromHexString("0x9000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Block 1: empty
     Block block1 = forTransactions(Collections.emptyList(), genesisHeader);
@@ -558,7 +543,7 @@ public class BonsaiArchiveReorgTest {
     // Historical query at block 2 should still work
     assertThat(getHistoricalWorldState(block2.getHeader()).get(accountX)).isNull();
 
-    // Historical query at block 3B should return 2 ETH
+    // Historical query at block3B should return 2 ETH
     assertThat(getHistoricalWorldState(block3B.getHeader()).get(accountX).getBalance())
         .isEqualTo(TWO_ETH);
   }
@@ -566,7 +551,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testArchiveFlatDbMultiBlockHistoryAfterReorg() {
     Address accountX = Address.fromHexString("0xA000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Build chain A: 3 blocks each sending 1 ETH
     Transaction tx1A = createTransaction(accountX, ONE_ETH, 0L);
@@ -606,7 +591,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testArchiveFlatDbAccountOverwriteOnReorg() {
     Address accountX = Address.fromHexString("0xB000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Chain A: block1A with 1 ETH to accountX
     Transaction tx1A = createTransaction(accountX, ONE_ETH, 0L);
@@ -632,7 +617,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testArchiveFlatDbOnlyContainsCanonicalBlockValues() {
     Address accountX = Address.fromHexString("0xC000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Block 1A: accountX = 1 ETH
     Transaction tx1A = createTransaction(accountX, ONE_ETH, 0L);
@@ -662,7 +647,7 @@ public class BonsaiArchiveReorgTest {
   void testArchiveFlatDbOrphanedAccountsNotPresent() {
     Address accountZ = Address.fromHexString("0xD000000000000000000000000000000000000001");
     Address accountY = Address.fromHexString("0xD000000000000000000000000000000000000002");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Block 1A: accountZ gets 1 ETH (accountY does not exist)
     Transaction tx1A = createTransaction(accountZ, ONE_ETH, 0L);
@@ -703,7 +688,7 @@ public class BonsaiArchiveReorgTest {
     Address receiver2 = Address.fromHexString("0xE000000000000000000000000000000000000002");
     Address receiver3 = Address.fromHexString("0xE000000000000000000000000000000000000003");
 
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+    BlockHeader parentHeader = fixture.getGenesis().getHeader();
 
     // Block 1: Send 1 ETH to receiver1
     Transaction tx1 = createTransaction(receiver1, ONE_ETH, 0L);
@@ -738,10 +723,9 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testArchiveFlatDbHistoricalQueriesInNormalChain() {
     Address accountX = Address.fromHexString("0xF000000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Build chain: genesis -> block1 -> block2 -> block3 -> block4
-    // Each block adds 1 ETH to accountX
     Transaction tx1 = createTransaction(accountX, ONE_ETH, 0L);
     Block block1 = forTransactions(List.of(tx1), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1);
@@ -778,7 +762,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testArchiveFlatDbStorageKeysHaveCorrectBlockSuffix() {
     Address accountX = Address.fromHexString("0xF100000000000000000000000000000000000001");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Block 1: Create accountX with 1 ETH
     Transaction tx1 = createTransaction(accountX, ONE_ETH, 0L);
@@ -809,7 +793,7 @@ public class BonsaiArchiveReorgTest {
     Address receiver1 = Address.fromHexString("0xF200000000000000000000000000000000000001");
     Address receiver2 = Address.fromHexString("0xF200000000000000000000000000000000000002");
     Address receiver3 = Address.fromHexString("0xF200000000000000000000000000000000000003");
-    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
+    BlockHeader genesisHeader = fixture.getGenesis().getHeader();
 
     // Block 1: 3 transactions sending to 3 different accounts
     Transaction tx1 = createTransaction(receiver1, ONE_ETH, 0L);
@@ -834,7 +818,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testAccountBalanceChangesAcrossBlocks() {
     Address accountX = Address.fromHexString("0xF300000000000000000000000000000000000001");
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+    BlockHeader parentHeader = fixture.getGenesis().getHeader();
 
     // Process 5 blocks, each adding 1 ETH to accountX
     for (int i = 1; i <= 5; i++) {
@@ -867,7 +851,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testLayeredStorageInheritsReadContext() {
     Address accountX = Address.fromHexString("0xF400000000000000000000000000000000000001");
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+    BlockHeader parentHeader = fixture.getGenesis().getHeader();
 
     // Block 1: Account X gets 1 ETH
     Transaction tx1 = createTransaction(accountX, ONE_ETH, 0L);
@@ -910,7 +894,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testHistoricalQueriesBeyondTrieLogDepthUseCorrectContext() {
     Address accountX = Address.fromHexString("0xF500000000000000000000000000000000000001");
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+    BlockHeader parentHeader = fixture.getGenesis().getHeader();
 
     // Create 20 blocks (beyond default trie log depth of 16)
     for (int i = 1; i <= 20; i++) {
@@ -953,7 +937,7 @@ public class BonsaiArchiveReorgTest {
   @Test
   void testRollforwardReadsUseCorrectContext() {
     Address accountX = Address.fromHexString("0xF600000000000000000000000000000000000001");
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+    BlockHeader parentHeader = fixture.getGenesis().getHeader();
 
     // Block 1: Account X gets 1 ETH
     Transaction tx1 = createTransaction(accountX, ONE_ETH, 0L);
@@ -962,14 +946,10 @@ public class BonsaiArchiveReorgTest {
     assertThat(result1.isSuccessful()).isTrue();
 
     // Block 2: Account X gets another 1 ETH
-    // This triggers rollforward from block 1 -> 2
-    // During rollforward, reads MUST use block 1 context to get correct prior state
     Transaction tx2 = createTransaction(accountX, ONE_ETH, 1L);
     Block block2 = forTransactions(List.of(tx2), block1.getHeader());
     BlockProcessingResult result2 = executeBlock(archiveProvider.getWorldState(), block2);
 
-    // If read context wasn't set during rollforward, reads would use MAX_BLOCK_SUFFIX
-    // and potentially get wrong account state, failing transaction validation
     assertThat(result2.isSuccessful())
         .as("Rollforward must read from block 1 context, not MAX_BLOCK_SUFFIX")
         .isTrue();
@@ -1012,7 +992,7 @@ public class BonsaiArchiveReorgTest {
   }
 
   private BlockHeader buildEmptyChainToBlock(final int blockCount) {
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+    BlockHeader parentHeader = fixture.getGenesis().getHeader();
     for (int i = 1; i <= blockCount; i++) {
       Block block = forTransactions(Collections.emptyList(), parentHeader);
       executeBlock(archiveProvider.getWorldState(), block);

@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.core;
 
+import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createBonsaiArchiveInMemoryWorldStateArchive;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createBonsaiInMemoryWorldStateArchive;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryWorldStateArchive;
 
@@ -74,9 +75,17 @@ public class ExecutionContextTestFixture {
                 false),
             new NoOpMetricsSystem(),
             0);
-    if (dataStorageFormat.isPresent() && dataStorageFormat.get().equals(DataStorageFormat.BONSAI))
-      this.stateArchive = createBonsaiInMemoryWorldStateArchive(blockchain);
-    else this.stateArchive = createInMemoryWorldStateArchive();
+    if (dataStorageFormat.isPresent()) {
+      if (dataStorageFormat.get().equals(DataStorageFormat.X_BONSAI_ARCHIVE)) {
+        this.stateArchive = createBonsaiArchiveInMemoryWorldStateArchive(blockchain);
+      } else if (dataStorageFormat.get().equals(DataStorageFormat.BONSAI)) {
+        this.stateArchive = createBonsaiInMemoryWorldStateArchive(blockchain);
+      } else {
+        this.stateArchive = createInMemoryWorldStateArchive();
+      }
+    } else {
+      this.stateArchive = createInMemoryWorldStateArchive();
+    }
     this.protocolSchedule = protocolSchedule;
     this.protocolContext =
         new ProtocolContext.Builder()
