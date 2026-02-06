@@ -150,6 +150,13 @@ public class BonsaiArchiveReorgIntegrationTest {
 
   private KeyPair sender1;
 
+  // Common Wei constants to avoid repetition
+  private static final Wei ONE_ETH = Wei.of(1_000_000_000_000_000_000L);
+  private static final Wei TWO_ETH = ONE_ETH.multiply(2);
+  private static final Wei THREE_ETH = ONE_ETH.multiply(3);
+  private static final Wei FIVE_ETH = ONE_ETH.multiply(5);
+  private static final Wei TEN_ETH = ONE_ETH.multiply(10);
+
   @BeforeEach
   public void setUp() {
     blockchain = createInMemoryBlockchain(genesisState.getBlock());
@@ -247,71 +254,77 @@ public class BonsaiArchiveReorgIntegrationTest {
                         Optional.empty()),
                 Arrays.asList(KeyValueSegmentIdentifier.values()),
                 RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS))
-        .withCommonConfiguration(
-            new BesuConfiguration() {
-              @Override
-              public Optional<String> getRpcHttpHost() {
-                return Optional.empty();
-              }
+        .withCommonConfiguration(new TestBesuConfiguration(tempData))
+        .withMetricsSystem(new NoOpMetricsSystem())
+        .build();
+  }
 
-              @Override
-              public Optional<Integer> getRpcHttpPort() {
-                return Optional.empty();
-              }
-
-              @Override
-              public String getConfiguredRpcHttpHost() {
-                return "";
-              }
-
-              @Override
-              public Integer getConfiguredRpcHttpPort() {
-                return 0;
-              }
-
-              @Override
-              public long getConfiguredRpcHttpTimeoutSec() {
-                return 0;
-              }
-
-              @Override
-              public Path getStoragePath() {
-                return tempData.resolve("database");
-              }
-
-              @Override
-              public Path getDataPath() {
-                return tempData;
-              }
-
+  /** Minimal BesuConfiguration for archive tests. */
+  private record TestBesuConfiguration(Path dataPath) implements BesuConfiguration {
+    private static final org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration
+        DATA_STORAGE_CONFIG =
+            new org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration() {
               @Override
               public DataStorageFormat getDatabaseFormat() {
                 return DataStorageFormat.X_BONSAI_ARCHIVE;
               }
 
               @Override
-              public Wei getMinGasPrice() {
-                return MiningConfiguration.newDefault().getMinTransactionGasPrice();
+              public boolean getReceiptCompactionEnabled() {
+                return false;
               }
+            };
 
-              @Override
-              public org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration
-                  getDataStorageConfiguration() {
-                return new org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration() {
-                  @Override
-                  public DataStorageFormat getDatabaseFormat() {
-                    return DataStorageFormat.X_BONSAI_ARCHIVE;
-                  }
+    @Override
+    public Optional<String> getRpcHttpHost() {
+      return Optional.empty();
+    }
 
-                  @Override
-                  public boolean getReceiptCompactionEnabled() {
-                    return false;
-                  }
-                };
-              }
-            })
-        .withMetricsSystem(new NoOpMetricsSystem())
-        .build();
+    @Override
+    public Optional<Integer> getRpcHttpPort() {
+      return Optional.empty();
+    }
+
+    @Override
+    public String getConfiguredRpcHttpHost() {
+      return "";
+    }
+
+    @Override
+    public Integer getConfiguredRpcHttpPort() {
+      return 0;
+    }
+
+    @Override
+    public long getConfiguredRpcHttpTimeoutSec() {
+      return 0;
+    }
+
+    @Override
+    public Path getStoragePath() {
+      return dataPath.resolve("database");
+    }
+
+    @Override
+    public Path getDataPath() {
+      return dataPath;
+    }
+
+    @Override
+    public DataStorageFormat getDatabaseFormat() {
+      return DataStorageFormat.X_BONSAI_ARCHIVE;
+    }
+
+    @Override
+    public Wei getMinGasPrice() {
+      return Wei.ONE;
+    }
+
+    @Override
+    public org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration
+        getDataStorageConfiguration() {
+      return DATA_STORAGE_CONFIG;
+    }
   }
 
   /**
@@ -340,19 +353,12 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testReorgWithConflictingAccountTransactions() {
     Address accountX = Address.fromHexString("0x1000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei twoEth = Wei.of(2_000_000_000_000_000_000L);
 
     // Build chain: genesis -> blocks 1-9
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
-    for (int i = 1; i <= 9; i++) {
-      Block block = forTransactions(Collections.emptyList(), parentHeader);
-      executeBlock(archiveProvider.getWorldState(), block);
-      parentHeader = block.getHeader();
-    }
+    BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
     // Block 10A: Account X receives 1 ETH
-    Transaction tx10A = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx10A = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block10A = forTransactions(List.of(tx10A), parentHeader);
     BlockProcessingResult result10A = executeBlock(archiveProvider.getWorldState(), block10A);
     assertThat(result10A.isSuccessful()).isTrue();
@@ -365,18 +371,13 @@ public class BonsaiArchiveReorgIntegrationTest {
 
     // Verify current state: account X has 1 ETH from block10A
     assertThat(archiveProvider.getWorldState().get(accountX)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(11L);
 
     // Create alternate block10B (same parent as 10A): Account X receives 2 ETH
-    // Need to get a fresh world state at block 9 for creating block10B
-    MutableWorldState wsAtBlock9 =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(parentHeader))
-            .orElseThrow();
+    MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
 
-    // Create a different transaction for block10B that sends 2 ETH to accountX
-    Transaction tx10B = burnTransactionWithValue(sender1, 0L, accountX, twoEth);
+    Transaction tx10B = burnTransactionWithValue(sender1, 0L, accountX, TWO_ETH);
     Block block10B = forTransactions(List.of(tx10B), parentHeader);
 
     // Execute block10B on the snapshot world state to get receipts
@@ -388,7 +389,6 @@ public class BonsaiArchiveReorgIntegrationTest {
     assertThat(result10B.isSuccessful()).isTrue();
 
     // Persist the snapshot to create the trie log for block10B
-    // This is needed for the rollforward during reorg
     wsAtBlock9.persist(block10B.getHeader());
 
     // Verify trie log was created for block10B
@@ -401,8 +401,6 @@ public class BonsaiArchiveReorgIntegrationTest {
 
     // Simulate FCU reorg: rewind to block 9, then append block10B
     blockchain.rewindToBlock(9L);
-
-    // Append block10B as new canonical
     blockchain.appendBlock(block10B, result10B.getReceipts());
 
     // Roll world state to new head using the archive provider
@@ -423,9 +421,7 @@ public class BonsaiArchiveReorgIntegrationTest {
     assertThat(currentWorldState.get(accountX)).isNotNull();
     assertThat(currentWorldState.get(accountX).getBalance())
         .as("Account X balance should be 2 ETH from block10B")
-        .isEqualTo(twoEth);
-
-    // Assert: WORLD_BLOCK_NUMBER_KEY correct
+        .isEqualTo(TWO_ETH);
 
     // Build block11B on top of block10B
     Transaction tx11B = burnTransactionWithValue(sender1, 1L, accountX, Wei.ZERO);
@@ -435,7 +431,7 @@ public class BonsaiArchiveReorgIntegrationTest {
 
     // Final assertions
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(11L);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TWO_ETH);
 
     // Verify state root matches new head block's state root
     assertThat(archiveProvider.getWorldState().rootHash())
@@ -446,49 +442,25 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testReorgAccountCreationVsNoCreation() {
     Address accountZ = Address.fromHexString("0x2000000000000000000000000000000000000002");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
+    Address otherAccount = Address.fromHexString("0x3000000000000000000000000000000000000003");
 
     // Build chain: genesis -> blocks 1-9
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
-    for (int i = 1; i <= 9; i++) {
-      Block block = forTransactions(Collections.emptyList(), parentHeader);
-      executeBlock(archiveProvider.getWorldState(), block);
-      parentHeader = block.getHeader();
-    }
+    BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
     // Block 10A: Account Z is created (receives 1 ETH)
-    Transaction tx10A = burnTransactionWithValue(sender1, 0L, accountZ, oneEth);
+    Transaction tx10A = burnTransactionWithValue(sender1, 0L, accountZ, ONE_ETH);
     Block block10A = forTransactions(List.of(tx10A), parentHeader);
     executeBlock(archiveProvider.getWorldState(), block10A);
 
     // Verify account Z exists
     assertThat(archiveProvider.getWorldState().get(accountZ)).isNotNull();
 
-    // Create alternate block10B (empty - account Z not created)
-    MutableWorldState wsAtBlock9 =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(parentHeader))
-            .orElseThrow();
-
-    // Different tx that doesn't involve accountZ - send to a different address
-    Address otherAccount = Address.fromHexString("0x3000000000000000000000000000000000000003");
-    Transaction tx10B = burnTransactionWithValue(sender1, 0L, otherAccount, oneEth);
+    // Create alternate block10B - sends to different address (accountZ not created)
+    MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
+    Transaction tx10B = burnTransactionWithValue(sender1, 0L, otherAccount, ONE_ETH);
     Block block10B = forTransactions(List.of(tx10B), parentHeader);
 
-    BlockProcessingResult result10B =
-        protocolSchedule
-            .getByBlockHeader(block10B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtBlock9, block10B);
-    assertThat(result10B.isSuccessful()).isTrue();
-
-    // Store and reorg
-    blockchain.storeBlock(block10B, result10B.getReceipts());
-    blockchain.rewindToBlock(9L);
-    blockchain.appendBlock(block10B, result10B.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block10B.getHeader()));
+    executeReorg(block10B, wsAtBlock9, 9L);
 
     // Assert: Account Z is null after reorg (was never created in 10B chain)
     assertThat(archiveProvider.getWorldState().get(accountZ)).isNull();
@@ -501,52 +473,29 @@ public class BonsaiArchiveReorgIntegrationTest {
   void testReorgWithMultipleAccountsAffected() {
     Address account1 = Address.fromHexString("0x4000000000000000000000000000000000000001");
     Address account2 = Address.fromHexString("0x4000000000000000000000000000000000000002");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei twoEth = Wei.of(2_000_000_000_000_000_000L);
 
     // Build chain: genesis -> blocks 1-9
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
-    for (int i = 1; i <= 9; i++) {
-      Block block = forTransactions(Collections.emptyList(), parentHeader);
-      executeBlock(archiveProvider.getWorldState(), block);
-      parentHeader = block.getHeader();
-    }
+    BlockHeader parentHeader = buildEmptyChainToBlock(9);
 
     // Block 10A: account1 gets 1 ETH, account2 gets 1 ETH
-    Transaction tx10A_1 = burnTransactionWithValue(sender1, 0L, account1, oneEth);
-    Transaction tx10A_2 = burnTransactionWithValue(sender1, 1L, account2, oneEth);
+    Transaction tx10A_1 = burnTransactionWithValue(sender1, 0L, account1, ONE_ETH);
+    Transaction tx10A_2 = burnTransactionWithValue(sender1, 1L, account2, ONE_ETH);
     Block block10A = forTransactions(List.of(tx10A_1, tx10A_2), parentHeader);
     executeBlock(archiveProvider.getWorldState(), block10A);
 
     // Verify current state
-    assertThat(archiveProvider.getWorldState().get(account1).getBalance()).isEqualTo(oneEth);
-    assertThat(archiveProvider.getWorldState().get(account2).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(account1).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(account2).getBalance()).isEqualTo(ONE_ETH);
 
     // Create alternate block10B: account1 gets 2 ETH, account2 gets nothing
-    MutableWorldState wsAtBlock9 =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(parentHeader))
-            .orElseThrow();
-
-    Transaction tx10B = burnTransactionWithValue(sender1, 0L, account1, twoEth);
+    MutableWorldState wsAtBlock9 = getHistoricalWorldState(parentHeader);
+    Transaction tx10B = burnTransactionWithValue(sender1, 0L, account1, TWO_ETH);
     Block block10B = forTransactions(List.of(tx10B), parentHeader);
 
-    BlockProcessingResult result10B =
-        protocolSchedule
-            .getByBlockHeader(block10B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtBlock9, block10B);
-
-    // Store and reorg
-    blockchain.storeBlock(block10B, result10B.getReceipts());
-    blockchain.rewindToBlock(9L);
-    blockchain.appendBlock(block10B, result10B.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block10B.getHeader()));
+    executeReorg(block10B, wsAtBlock9, 9L);
 
     // Assert: account1 has 2 ETH, account2 doesn't exist
-    assertThat(archiveProvider.getWorldState().get(account1).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(account1).getBalance()).isEqualTo(TWO_ETH);
     assertThat(archiveProvider.getWorldState().get(account2)).isNull();
   }
 
@@ -554,93 +503,53 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testShallowReorg_OneBlock() {
     Address accountX = Address.fromHexString("0x5000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei twoEth = Wei.of(2_000_000_000_000_000_000L);
+    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
     // Build chain: genesis -> block1A
-    BlockHeader parentHeader = genesisState.getBlock().getHeader();
-
-    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
-    Block block1A = forTransactions(List.of(tx1A), parentHeader);
+    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
+    Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
 
     // Create alternate block1B
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(parentHeader))
-            .orElseThrow();
+    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, TWO_ETH);
+    Block block1B = forTransactions(List.of(tx1B), genesisHeader);
 
-    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, twoEth);
-    Block block1B = forTransactions(List.of(tx1B), parentHeader);
-
-    BlockProcessingResult result1B =
-        protocolSchedule
-            .getByBlockHeader(block1B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis, block1B);
-
-    // Store and reorg
-    blockchain.storeBlock(block1B, result1B.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(block1B, result1B.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block1B.getHeader()));
+    executeReorg(block1B, wsAtGenesis, 0L);
 
     // Assert
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TWO_ETH);
   }
 
   /* Test medium reorg (depth = 5 blocks). */
   @Test
   void testMediumReorg_FiveBlocks() {
     Address accountX = Address.fromHexString("0x6000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei fiveEth = Wei.of(5_000_000_000_000_000_000L);
+    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
-    // Build chain: genesis -> blocks 1-5 (chain A)
-    BlockHeader commonAncestor = genesisState.getBlock().getHeader();
-
-    // Chain A: each block sends 1 ETH to accountX
-    BlockHeader parentHeader = commonAncestor;
+    // Chain A: each block sends 1 ETH to accountX (5 blocks total)
+    BlockHeader parentHeader = genesisHeader;
     for (int i = 1; i <= 5; i++) {
-      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, oneEth);
+      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, ONE_ETH);
       Block block = forTransactions(List.of(tx), parentHeader);
       executeBlock(archiveProvider.getWorldState(), block);
       parentHeader = block.getHeader();
     }
 
     // Verify: accountX has 5 ETH
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(fiveEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(FIVE_ETH);
 
     // Create alternate chain B from genesis: single block with 5 ETH to accountX
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(commonAncestor))
-            .orElseThrow();
+    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    Transaction txB = burnTransactionWithValue(sender1, 0L, accountX, FIVE_ETH);
+    Block blockB = forTransactions(List.of(txB), genesisHeader);
 
-    // Chain B: just one block that sends 5 ETH directly
-    Transaction txB = burnTransactionWithValue(sender1, 0L, accountX, fiveEth);
-    Block blockB = forTransactions(List.of(txB), commonAncestor);
-
-    BlockProcessingResult resultB =
-        protocolSchedule
-            .getByBlockHeader(blockB.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis, blockB);
-
-    // Store and reorg
-    blockchain.storeBlock(blockB, resultB.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(blockB, resultB.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(blockB.getHeader()));
+    executeReorg(blockB, wsAtGenesis, 0L);
 
     // Assert: accountX still has 5 ETH but from chain B
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(fiveEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(FIVE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
     assertThat(archiveProvider.getWorldState().rootHash())
         .isEqualTo(blockB.getHeader().getStateRoot());
@@ -650,49 +559,29 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testDeepReorg_NearMaxTrieLogDepth() {
     Address accountX = Address.fromHexString("0x7000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
+    BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
-    // Build chain: genesis -> blocks 1-15 (chain A)
-    BlockHeader commonAncestor = genesisState.getBlock().getHeader();
-
-    BlockHeader parentHeader = commonAncestor;
+    // Chain A: each block sends 1 ETH to accountX (15 blocks total)
+    BlockHeader parentHeader = genesisHeader;
     for (int i = 1; i <= 15; i++) {
-      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, oneEth);
+      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, ONE_ETH);
       Block block = forTransactions(List.of(tx), parentHeader);
       executeBlock(archiveProvider.getWorldState(), block);
       parentHeader = block.getHeader();
     }
 
-    Wei fifteenEth = oneEth.multiply(15);
+    Wei fifteenEth = ONE_ETH.multiply(15);
     assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(fifteenEth);
 
-    // Create alternate chain B from genesis
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(commonAncestor))
-            .orElseThrow();
+    // Create alternate chain B from genesis: single block with 10 ETH
+    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    Transaction txB = burnTransactionWithValue(sender1, 0L, accountX, TEN_ETH);
+    Block blockB = forTransactions(List.of(txB), genesisHeader);
 
-    // Chain B: single block with different value
-    Wei tenEth = oneEth.multiply(10);
-    Transaction txB = burnTransactionWithValue(sender1, 0L, accountX, tenEth);
-    Block blockB = forTransactions(List.of(txB), commonAncestor);
-
-    BlockProcessingResult resultB =
-        protocolSchedule
-            .getByBlockHeader(blockB.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis, blockB);
-
-    // Store and reorg
-    blockchain.storeBlock(blockB, resultB.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(blockB, resultB.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(blockB.getHeader()));
+    executeReorg(blockB, wsAtGenesis, 0L);
 
     // Assert
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(tenEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TEN_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
   }
 
@@ -710,92 +599,48 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testArchiveFlatDbHistoricalQueriesAfterReorg() {
     Address accountX = Address.fromHexString("0x9000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei twoEth = Wei.of(2_000_000_000_000_000_000L);
-
-    // Build chain: genesis -> block1 -> block2
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
-    // Block 1: empty
+    // Build chain: genesis -> block1 -> block2 (empty blocks)
     Block block1 = forTransactions(Collections.emptyList(), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1);
 
-    // Block 2: empty
     Block block2 = forTransactions(Collections.emptyList(), block1.getHeader());
     executeBlock(archiveProvider.getWorldState(), block2);
 
     // Block 3A: account X receives 1 ETH
-    Transaction tx3A = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx3A = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block3A = forTransactions(List.of(tx3A), block2.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3A);
 
     // Verify current state at block 3A
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
 
     // Query historical state at block 2 - account X should not exist
-    MutableWorldState wsAtBlock2 =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block2.getHeader()))
-            .orElseThrow();
-    assertThat(wsAtBlock2.get(accountX)).isNull();
+    assertThat(getHistoricalWorldState(block2.getHeader()).get(accountX)).isNull();
 
     // Query historical state at block 3A - account X should have 1 ETH
-    MutableWorldState wsAtBlock3A =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block3A.getHeader()))
-            .orElseThrow();
+    MutableWorldState wsAtBlock3A = getHistoricalWorldState(block3A.getHeader());
     assertThat(wsAtBlock3A.get(accountX)).isNotNull();
-    assertThat(wsAtBlock3A.get(accountX).getBalance()).isEqualTo(oneEth);
+    assertThat(wsAtBlock3A.get(accountX).getBalance()).isEqualTo(ONE_ETH);
 
-    // Now create alternate block3B with 2 ETH to accountX
-    MutableWorldState wsForBlock3B =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block2.getHeader()))
-            .orElseThrow();
-
-    Transaction tx3B = burnTransactionWithValue(sender1, 0L, accountX, twoEth);
+    // Create alternate block3B with 2 ETH to accountX
+    MutableWorldState wsForBlock3B = getHistoricalWorldState(block2.getHeader());
+    Transaction tx3B = burnTransactionWithValue(sender1, 0L, accountX, TWO_ETH);
     Block block3B = forTransactions(List.of(tx3B), block2.getHeader());
 
-    BlockProcessingResult result3B =
-        protocolSchedule
-            .getByBlockHeader(block3B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsForBlock3B, block3B);
-    assertThat(result3B.isSuccessful()).isTrue();
-
-    // Store and reorg to block3B
-    blockchain.storeBlock(block3B, result3B.getReceipts());
-    blockchain.rewindToBlock(2L);
-    blockchain.appendBlock(block3B, result3B.getReceipts());
-
-    // Roll world state to new head
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block3B.getHeader()));
-
-    // Verify WORLD_BLOCK_NUMBER_KEY is updated
+    executeReorg(block3B, wsForBlock3B, 2L);
 
     // Key test: Current state should show 2 ETH (from 3B), not 1 ETH (from 3A)
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TWO_ETH);
 
     // Key test: Historical query at block 2 should still work (account X doesn't exist)
-    MutableWorldState wsAtBlock2AfterReorg =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block2.getHeader()))
-            .orElseThrow();
-    assertThat(wsAtBlock2AfterReorg.get(accountX)).isNull();
+    assertThat(getHistoricalWorldState(block2.getHeader()).get(accountX)).isNull();
 
     // Key test: Historical query at block 3B should return 2 ETH
-    MutableWorldState wsAtBlock3BAfterReorg =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block3B.getHeader()))
-            .orElseThrow();
+    MutableWorldState wsAtBlock3BAfterReorg = getHistoricalWorldState(block3B.getHeader());
     assertThat(wsAtBlock3BAfterReorg.get(accountX)).isNotNull();
-    assertThat(wsAtBlock3BAfterReorg.get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(wsAtBlock3BAfterReorg.get(accountX).getBalance()).isEqualTo(TWO_ETH);
   }
 
   /*
@@ -805,79 +650,42 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testArchiveFlatDbMultiBlockHistoryAfterReorg() {
     Address accountX = Address.fromHexString("0xA000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
     // Build chain A: genesis -> block1A (1 ETH) -> block2A (2 ETH) -> block3A (3 ETH)
-    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
-    Transaction tx2A = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
+    Transaction tx2A = burnTransactionWithValue(sender1, 1L, accountX, ONE_ETH);
     Block block2A = forTransactions(List.of(tx2A), block1A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block2A);
 
-    Transaction tx3A = burnTransactionWithValue(sender1, 2L, accountX, oneEth);
+    Transaction tx3A = burnTransactionWithValue(sender1, 2L, accountX, ONE_ETH);
     Block block3A = forTransactions(List.of(tx3A), block2A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3A);
 
-    Wei threeEth = oneEth.multiply(3);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(threeEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(THREE_ETH);
 
     // Verify historical state at each block
-    assertThat(
-            archiveProvider
-                .getWorldState(
-                    WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block1A.getHeader()))
-                .orElseThrow()
-                .get(accountX)
-                .getBalance())
-        .isEqualTo(oneEth);
-
-    Wei twoEth = oneEth.multiply(2);
-    assertThat(
-            archiveProvider
-                .getWorldState(
-                    WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block2A.getHeader()))
-                .orElseThrow()
-                .get(accountX)
-                .getBalance())
-        .isEqualTo(twoEth);
+    assertThat(getHistoricalWorldState(block1A.getHeader()).get(accountX).getBalance())
+        .isEqualTo(ONE_ETH);
+    assertThat(getHistoricalWorldState(block2A.getHeader()).get(accountX).getBalance())
+        .isEqualTo(TWO_ETH);
 
     // Now reorg from genesis: block1B sends 5 ETH directly
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(genesisHeader))
-            .orElseThrow();
-
-    Wei fiveEth = oneEth.multiply(5);
-    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, fiveEth);
+    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, FIVE_ETH);
     Block block1B = forTransactions(List.of(tx1B), genesisHeader);
 
-    BlockProcessingResult result1B =
-        protocolSchedule
-            .getByBlockHeader(block1B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis, block1B);
-
-    blockchain.storeBlock(block1B, result1B.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(block1B, result1B.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block1B.getHeader()));
+    executeReorg(block1B, wsAtGenesis, 0L);
 
     // After reorg: current state should be 5 ETH (from block1B)
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(fiveEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(FIVE_ETH);
 
     // Historical query at block1B should return 5 ETH
-    MutableWorldState wsAtBlock1B =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block1B.getHeader()))
-            .orElseThrow();
-    assertThat(wsAtBlock1B.get(accountX).getBalance()).isEqualTo(fiveEth);
+    assertThat(getHistoricalWorldState(block1B.getHeader()).get(accountX).getBalance())
+        .isEqualTo(FIVE_ETH);
   }
 
   /*
@@ -888,51 +696,28 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testArchiveFlatDbAccountOverwriteOnReorg() {
     Address accountX = Address.fromHexString("0xB000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei fiveEth = oneEth.multiply(5);
-
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
     // Chain A: block1A with 1 ETH to accountX
-    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
 
     // Reorg: block1B with 5 ETH to accountX (same block number, different value)
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(genesisHeader))
-            .orElseThrow();
-
-    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, fiveEth);
+    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, FIVE_ETH);
     Block block1B = forTransactions(List.of(tx1B), genesisHeader);
 
-    BlockProcessingResult result1B =
-        protocolSchedule
-            .getByBlockHeader(block1B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis, block1B);
-
-    blockchain.storeBlock(block1B, result1B.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(block1B, result1B.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block1B.getHeader()));
+    executeReorg(block1B, wsAtGenesis, 0L);
 
     // Critical assertion: The value should be 5 ETH (from 1B), NOT 1 ETH (from 1A)
-    // This tests that the archive flat DB correctly handles the reorg
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(fiveEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(FIVE_ETH);
 
     // Also verify via historical query
-    MutableWorldState wsAtBlock1B =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block1B.getHeader()))
-            .orElseThrow();
-    assertThat(wsAtBlock1B.get(accountX).getBalance()).isEqualTo(fiveEth);
+    assertThat(getHistoricalWorldState(block1B.getHeader()).get(accountX).getBalance())
+        .isEqualTo(FIVE_ETH);
   }
 
   /*
@@ -952,56 +737,33 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testArchiveFlatDbOnlyContainsCanonicalBlockValues() {
     Address accountX = Address.fromHexString("0xC000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei fiveEth = oneEth.multiply(5);
-
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
     // Block 1A: accountX = 1 ETH
-    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     // Verify 1A state
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
 
-    // Record what's in the flat DB at block 1 (chain A)
     Hash accountXHash = accountX.addressHash();
 
     // Now reorg to 1B with 5 ETH
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(genesisHeader))
-            .orElseThrow();
-
-    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, fiveEth);
+    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, FIVE_ETH);
     Block block1B = forTransactions(List.of(tx1B), genesisHeader);
 
-    BlockProcessingResult result1B =
-        protocolSchedule
-            .getByBlockHeader(block1B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis, block1B);
-
-    blockchain.storeBlock(block1B, result1B.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(block1B, result1B.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block1B.getHeader()));
+    executeReorg(block1B, wsAtGenesis, 0L);
 
     // Critical assertion: The flat DB should now return 5 ETH (from 1B), NOT 1 ETH (from 1A)
-    // This tests that the archive correctly handles the reorg and doesn't return stale values
     assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
         .as("After reorg to 1B, account should have 5 ETH, not 1 ETH from orphaned chain A")
-        .isEqualTo(fiveEth);
+        .isEqualTo(FIVE_ETH);
 
     // Also verify via direct flat DB query using the archive strategy
     Optional<Bytes> flatDbValue = worldStateKeyValueStorage.getAccount(accountXHash);
     assertThat(flatDbValue).as("Flat DB should have a value for accountX").isPresent();
-
-    // The flat DB value should decode to an account with 5 ETH balance
-    // If this fails, it means the flat DB contains the stale 1A value
   }
 
   /*
@@ -1013,12 +775,10 @@ public class BonsaiArchiveReorgIntegrationTest {
   void testArchiveFlatDbOrphanedAccountsNotPresent() {
     Address accountZ = Address.fromHexString("0xD000000000000000000000000000000000000001");
     Address accountY = Address.fromHexString("0xD000000000000000000000000000000000000002");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
     // Block 1A: accountZ gets 1 ETH (accountY does not exist)
-    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountZ, oneEth);
+    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountZ, ONE_ETH);
     Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
@@ -1027,26 +787,11 @@ public class BonsaiArchiveReorgIntegrationTest {
     assertThat(archiveProvider.getWorldState().get(accountY)).isNull();
 
     // Reorg to 1B: accountY gets 1 ETH (accountZ does NOT exist in 1B)
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(genesisHeader))
-            .orElseThrow();
-
-    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountY, oneEth);
+    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountY, ONE_ETH);
     Block block1B = forTransactions(List.of(tx1B), genesisHeader);
 
-    BlockProcessingResult result1B =
-        protocolSchedule
-            .getByBlockHeader(block1B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis, block1B);
-
-    blockchain.storeBlock(block1B, result1B.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(block1B, result1B.getReceipts());
-
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block1B.getHeader()));
+    executeReorg(block1B, wsAtGenesis, 0L);
 
     // Critical assertions after reorg:
     // 1. accountZ should NOT exist (it was only in chain A, not chain B)
@@ -1058,16 +803,13 @@ public class BonsaiArchiveReorgIntegrationTest {
     assertThat(archiveProvider.getWorldState().get(accountY))
         .as("accountY should exist after reorg - it was created in chain B")
         .isNotNull();
-    assertThat(archiveProvider.getWorldState().get(accountY).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(accountY).getBalance()).isEqualTo(ONE_ETH);
 
     // 3. Verify via flat DB that accountZ has no value for block 1
     Hash accountZHash = accountZ.addressHash();
     Optional<Bytes> flatDbValueZ = worldStateKeyValueStorage.getAccount(accountZHash);
 
-    // After reorg, the flat DB should either:
-    // - Not have accountZ at all, OR
-    // - Have a "deleted" marker for accountZ
-    // It should NOT return the 1A value
+    // After reorg, the flat DB should not return the 1A value
     assertThat(flatDbValueZ)
         .as("Flat DB should not return chain A's value for accountZ after reorg to chain B")
         .isEmpty();
@@ -1077,65 +819,33 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testConsecutiveReorgs() {
     Address accountX = Address.fromHexString("0x8000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei twoEth = Wei.of(2_000_000_000_000_000_000L);
-    Wei threeEth = Wei.of(3_000_000_000_000_000_000L);
-
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
     // First chain: block1A with 1 ETH
-    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx1A = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block1A = forTransactions(List.of(tx1A), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(ONE_ETH);
 
     // First reorg: block1B with 2 ETH
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(genesisHeader))
-            .orElseThrow();
-
-    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, twoEth);
+    MutableWorldState wsAtGenesis = getHistoricalWorldState(genesisHeader);
+    Transaction tx1B = burnTransactionWithValue(sender1, 0L, accountX, TWO_ETH);
     Block block1B = forTransactions(List.of(tx1B), genesisHeader);
 
-    BlockProcessingResult result1B =
-        protocolSchedule
-            .getByBlockHeader(block1B.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis, block1B);
+    executeReorg(block1B, wsAtGenesis, 0L);
 
-    blockchain.storeBlock(block1B, result1B.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(block1B, result1B.getReceipts());
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block1B.getHeader()));
-
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TWO_ETH);
 
     // Second reorg: block1C with 3 ETH
-    MutableWorldState wsAtGenesis2 =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(genesisHeader))
-            .orElseThrow();
-
-    Transaction tx1C = burnTransactionWithValue(sender1, 0L, accountX, threeEth);
+    MutableWorldState wsAtGenesis2 = getHistoricalWorldState(genesisHeader);
+    Transaction tx1C = burnTransactionWithValue(sender1, 0L, accountX, THREE_ETH);
     Block block1C = forTransactions(List.of(tx1C), genesisHeader);
 
-    BlockProcessingResult result1C =
-        protocolSchedule
-            .getByBlockHeader(block1C.getHeader())
-            .getBlockProcessor()
-            .processBlock(protocolContext, blockchain, wsAtGenesis2, block1C);
-
-    blockchain.storeBlock(block1C, result1C.getReceipts());
-    blockchain.rewindToBlock(0L);
-    blockchain.appendBlock(block1C, result1C.getReceipts());
-    archiveProvider.getWorldState(
-        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(block1C.getHeader()));
+    executeReorg(block1C, wsAtGenesis2, 0L);
 
     // Final assertions
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(threeEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(THREE_ETH);
     assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
     assertThat(archiveProvider.getWorldState().rootHash())
         .isEqualTo(block1C.getHeader().getStateRoot());
@@ -1152,46 +862,42 @@ public class BonsaiArchiveReorgIntegrationTest {
     Address receiver1 = Address.fromHexString("0xE000000000000000000000000000000000000001");
     Address receiver2 = Address.fromHexString("0xE000000000000000000000000000000000000002");
     Address receiver3 = Address.fromHexString("0xE000000000000000000000000000000000000003");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei twoEth = oneEth.multiply(2);
-    Wei threeEth = oneEth.multiply(3);
-
     BlockHeader parentHeader = genesisState.getBlock().getHeader();
 
     // Block 1: Send 1 ETH to receiver1
-    Transaction tx1 = burnTransactionWithValue(sender1, 0L, receiver1, oneEth);
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, receiver1, ONE_ETH);
     Block block1 = forTransactions(List.of(tx1), parentHeader);
     BlockProcessingResult result1 = executeBlock(archiveProvider.getWorldState(), block1);
     assertThat(result1.isSuccessful()).isTrue();
 
     // Verify block 1 state
     assertThat(archiveProvider.getWorldState().get(receiver1)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(receiver1).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(receiver1).getBalance()).isEqualTo(ONE_ETH);
 
     // Block 2: Send 2 ETH to receiver2
-    Transaction tx2 = burnTransactionWithValue(sender1, 1L, receiver2, twoEth);
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, receiver2, TWO_ETH);
     Block block2 = forTransactions(List.of(tx2), block1.getHeader());
     BlockProcessingResult result2 = executeBlock(archiveProvider.getWorldState(), block2);
     assertThat(result2.isSuccessful()).isTrue();
 
     // Verify block 2 state
     assertThat(archiveProvider.getWorldState().get(receiver2)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(receiver2).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(receiver2).getBalance()).isEqualTo(TWO_ETH);
 
     // Block 3: Send 3 ETH to receiver3
-    Transaction tx3 = burnTransactionWithValue(sender1, 2L, receiver3, threeEth);
+    Transaction tx3 = burnTransactionWithValue(sender1, 2L, receiver3, THREE_ETH);
     Block block3 = forTransactions(List.of(tx3), block2.getHeader());
     BlockProcessingResult result3 = executeBlock(archiveProvider.getWorldState(), block3);
     assertThat(result3.isSuccessful()).isTrue();
 
     // Verify block 3 state
     assertThat(archiveProvider.getWorldState().get(receiver3)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(receiver3).getBalance()).isEqualTo(threeEth);
+    assertThat(archiveProvider.getWorldState().get(receiver3).getBalance()).isEqualTo(THREE_ETH);
 
     // Verify all receivers still have their balances at the end
-    assertThat(archiveProvider.getWorldState().get(receiver1).getBalance()).isEqualTo(oneEth);
-    assertThat(archiveProvider.getWorldState().get(receiver2).getBalance()).isEqualTo(twoEth);
-    assertThat(archiveProvider.getWorldState().get(receiver3).getBalance()).isEqualTo(threeEth);
+    assertThat(archiveProvider.getWorldState().get(receiver1).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(receiver2).getBalance()).isEqualTo(TWO_ETH);
+    assertThat(archiveProvider.getWorldState().get(receiver3).getBalance()).isEqualTo(THREE_ETH);
   }
 
   /*
@@ -1201,74 +907,48 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testArchiveFlatDbHistoricalQueriesInNormalChain() {
     Address accountX = Address.fromHexString("0xF000000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
     // Build chain: genesis -> block1 (1 ETH) -> block2 (2 ETH) -> block3 (3 ETH) -> block4 (4 ETH)
     // Each block adds 1 ETH to accountX
-
-    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block1 = forTransactions(List.of(tx1), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1);
 
-    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, ONE_ETH);
     Block block2 = forTransactions(List.of(tx2), block1.getHeader());
     executeBlock(archiveProvider.getWorldState(), block2);
 
-    Transaction tx3 = burnTransactionWithValue(sender1, 2L, accountX, oneEth);
+    Transaction tx3 = burnTransactionWithValue(sender1, 2L, accountX, ONE_ETH);
     Block block3 = forTransactions(List.of(tx3), block2.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3);
 
-    Transaction tx4 = burnTransactionWithValue(sender1, 3L, accountX, oneEth);
+    Transaction tx4 = burnTransactionWithValue(sender1, 3L, accountX, ONE_ETH);
     Block block4 = forTransactions(List.of(tx4), block3.getHeader());
     executeBlock(archiveProvider.getWorldState(), block4);
 
-    // Verify WORLD_BLOCK_NUMBER_KEY is at block 4
+    Wei fourEth = ONE_ETH.multiply(4);
 
     // Historical query at genesis: accountX should not exist
-    MutableWorldState wsAtGenesis =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(genesisHeader))
-            .orElseThrow();
-    assertThat(wsAtGenesis.get(accountX)).isNull();
+    assertThat(getHistoricalWorldState(genesisHeader).get(accountX)).isNull();
 
     // Historical query at block 1: accountX = 1 ETH
-    MutableWorldState wsAtBlock1 =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block1.getHeader()))
-            .orElseThrow();
+    MutableWorldState wsAtBlock1 = getHistoricalWorldState(block1.getHeader());
     assertThat(wsAtBlock1.get(accountX)).isNotNull();
-    assertThat(wsAtBlock1.get(accountX).getBalance()).isEqualTo(oneEth);
+    assertThat(wsAtBlock1.get(accountX).getBalance()).isEqualTo(ONE_ETH);
 
     // Historical query at block 2: accountX = 2 ETH
-    Wei twoEth = oneEth.multiply(2);
-    MutableWorldState wsAtBlock2 =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block2.getHeader()))
-            .orElseThrow();
+    MutableWorldState wsAtBlock2 = getHistoricalWorldState(block2.getHeader());
     assertThat(wsAtBlock2.get(accountX)).isNotNull();
-    assertThat(wsAtBlock2.get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(wsAtBlock2.get(accountX).getBalance()).isEqualTo(TWO_ETH);
 
     // Historical query at block 3: accountX = 3 ETH
-    Wei threeEth = oneEth.multiply(3);
-    MutableWorldState wsAtBlock3 =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block3.getHeader()))
-            .orElseThrow();
+    MutableWorldState wsAtBlock3 = getHistoricalWorldState(block3.getHeader());
     assertThat(wsAtBlock3.get(accountX)).isNotNull();
-    assertThat(wsAtBlock3.get(accountX).getBalance()).isEqualTo(threeEth);
+    assertThat(wsAtBlock3.get(accountX).getBalance()).isEqualTo(THREE_ETH);
 
     // Historical query at block 4: accountX = 4 ETH
-    Wei fourEth = oneEth.multiply(4);
-    MutableWorldState wsAtBlock4 =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block4.getHeader()))
-            .orElseThrow();
+    MutableWorldState wsAtBlock4 = getHistoricalWorldState(block4.getHeader());
     assertThat(wsAtBlock4.get(accountX)).isNotNull();
     assertThat(wsAtBlock4.get(accountX).getBalance()).isEqualTo(fourEth);
 
@@ -1283,23 +963,21 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testArchiveFlatDbStorageKeysHaveCorrectBlockSuffix() {
     Address accountX = Address.fromHexString("0xF100000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
     Hash accountXHash = accountX.addressHash();
 
     // Block 1: Create accountX with 1 ETH
-    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block1 = forTransactions(List.of(tx1), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1);
 
     // Block 2: Add 1 ETH to accountX (total 2 ETH)
-    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, ONE_ETH);
     Block block2 = forTransactions(List.of(tx2), block1.getHeader());
     executeBlock(archiveProvider.getWorldState(), block2);
 
     // Block 3: Add 1 ETH to accountX (total 3 ETH)
-    Transaction tx3 = burnTransactionWithValue(sender1, 2L, accountX, oneEth);
+    Transaction tx3 = burnTransactionWithValue(sender1, 2L, accountX, ONE_ETH);
     Block block3 = forTransactions(List.of(tx3), block2.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3);
 
@@ -1349,16 +1027,12 @@ public class BonsaiArchiveReorgIntegrationTest {
     Address receiver1 = Address.fromHexString("0xF200000000000000000000000000000000000001");
     Address receiver2 = Address.fromHexString("0xF200000000000000000000000000000000000002");
     Address receiver3 = Address.fromHexString("0xF200000000000000000000000000000000000003");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei twoEth = oneEth.multiply(2);
-    Wei threeEth = oneEth.multiply(3);
-
     BlockHeader genesisHeader = genesisState.getBlock().getHeader();
 
     // Block 1: 3 transactions sending to 3 different accounts
-    Transaction tx1 = burnTransactionWithValue(sender1, 0L, receiver1, oneEth);
-    Transaction tx2 = burnTransactionWithValue(sender1, 1L, receiver2, twoEth);
-    Transaction tx3 = burnTransactionWithValue(sender1, 2L, receiver3, threeEth);
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, receiver1, ONE_ETH);
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, receiver2, TWO_ETH);
+    Transaction tx3 = burnTransactionWithValue(sender1, 2L, receiver3, THREE_ETH);
 
     Block block1 = forTransactions(List.of(tx1, tx2, tx3), genesisHeader);
     BlockProcessingResult result1 = executeBlock(archiveProvider.getWorldState(), block1);
@@ -1366,13 +1040,13 @@ public class BonsaiArchiveReorgIntegrationTest {
 
     // Verify all accounts have correct balances
     assertThat(archiveProvider.getWorldState().get(receiver1)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(receiver1).getBalance()).isEqualTo(oneEth);
+    assertThat(archiveProvider.getWorldState().get(receiver1).getBalance()).isEqualTo(ONE_ETH);
 
     assertThat(archiveProvider.getWorldState().get(receiver2)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(receiver2).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(receiver2).getBalance()).isEqualTo(TWO_ETH);
 
     assertThat(archiveProvider.getWorldState().get(receiver3)).isNotNull();
-    assertThat(archiveProvider.getWorldState().get(receiver3).getBalance()).isEqualTo(threeEth);
+    assertThat(archiveProvider.getWorldState().get(receiver3).getBalance()).isEqualTo(THREE_ETH);
 
     // Verify all values are stored at block suffix 1
     var composedStorage = worldStateKeyValueStorage.getComposedWorldStateStorage();
@@ -1408,21 +1082,19 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testAccountBalanceChangesAcrossBlocks() {
     Address accountX = Address.fromHexString("0xF300000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-
     BlockHeader parentHeader = genesisState.getBlock().getHeader();
     Hash accountXHash = accountX.addressHash();
     var composedStorage = worldStateKeyValueStorage.getComposedWorldStateStorage();
 
     // Process 5 blocks, each adding 1 ETH to accountX
     for (int i = 1; i <= 5; i++) {
-      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, oneEth);
+      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, ONE_ETH);
       Block block = forTransactions(List.of(tx), parentHeader);
       BlockProcessingResult result = executeBlock(archiveProvider.getWorldState(), block);
       assertThat(result.isSuccessful()).isTrue();
 
       // Verify current balance
-      Wei expectedBalance = oneEth.multiply(i);
+      Wei expectedBalance = ONE_ETH.multiply(i);
       assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
           .as("Balance after block %d should be %d ETH", i, i)
           .isEqualTo(expectedBalance);
@@ -1440,12 +1112,9 @@ public class BonsaiArchiveReorgIntegrationTest {
     // Final verification: historical queries at each block should return correct values
     for (int i = 1; i <= 5; i++) {
       BlockHeader blockHeader = blockchain.getBlockHeader(i).orElseThrow();
-      MutableWorldState wsAtBlock =
-          archiveProvider
-              .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(blockHeader))
-              .orElseThrow();
+      MutableWorldState wsAtBlock = getHistoricalWorldState(blockHeader);
 
-      Wei expectedBalance = oneEth.multiply(i);
+      Wei expectedBalance = ONE_ETH.multiply(i);
       assertThat(wsAtBlock.get(accountX).getBalance())
           .as("Historical query at block %d should return %d ETH", i, i)
           .isEqualTo(expectedBalance);
@@ -1461,33 +1130,26 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testLayeredStorageInheritsReadContext() {
     Address accountX = Address.fromHexString("0xF400000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-    Wei twoEth = Wei.of(2_000_000_000_000_000_000L);
-
     BlockHeader parentHeader = genesisState.getBlock().getHeader();
 
     // Block 1: Account X gets 1 ETH
-    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block1 = forTransactions(List.of(tx1), parentHeader);
     BlockProcessingResult result1 = executeBlock(archiveProvider.getWorldState(), block1);
     assertThat(result1.isSuccessful()).isTrue();
 
     // Block 2: Account X gets another 1 ETH (total 2 ETH)
-    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, ONE_ETH);
     Block block2 = forTransactions(List.of(tx2), block1.getHeader());
     BlockProcessingResult result2 = executeBlock(archiveProvider.getWorldState(), block2);
     assertThat(result2.isSuccessful()).isTrue();
 
     // Verify current worldstate has 2 ETH
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TWO_ETH);
 
     // Critical test: Create a layered worldstate for block 1 (historical query)
     // This creates BonsaiWorldStateLayerStorage which shares parent's flatDbStrategyProvider
-    MutableWorldState wsAtBlock1 =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block1.getHeader()))
-            .orElseThrow();
+    MutableWorldState wsAtBlock1 = getHistoricalWorldState(block1.getHeader());
 
     // Verify the layered storage reads from the correct block context
     // If context isn't inherited, this will read with MAX_BLOCK_SUFFIX and return 2 ETH (wrong!)
@@ -1496,24 +1158,20 @@ public class BonsaiArchiveReorgIntegrationTest {
     assertThat(balanceAtBlock1)
         .as(
             "Layered storage MUST inherit read context from parent - should read block 1 (1 ETH), not latest (2 ETH)")
-        .isEqualTo(oneEth);
+        .isEqualTo(ONE_ETH);
 
     // Also verify we can still read current state correctly
     assertThat(archiveProvider.getWorldState().get(accountX).getBalance())
         .as("Current worldstate should still have 2 ETH")
-        .isEqualTo(twoEth);
+        .isEqualTo(TWO_ETH);
 
     // Verify we can create another layered storage for block 2 without interference
-    MutableWorldState wsAtBlock2 =
-        archiveProvider
-            .getWorldState(
-                WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block2.getHeader()))
-            .orElseThrow();
+    MutableWorldState wsAtBlock2 = getHistoricalWorldState(block2.getHeader());
 
     Wei balanceAtBlock2 = wsAtBlock2.get(accountX).getBalance();
     assertThat(balanceAtBlock2)
         .as("Second layered storage should read from block 2 context (2 ETH)")
-        .isEqualTo(twoEth);
+        .isEqualTo(TWO_ETH);
   }
 
   /**
@@ -1524,14 +1182,12 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testHistoricalQueriesBeyondTrieLogDepthUseCorrectContext() {
     Address accountX = Address.fromHexString("0xF500000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-
     BlockHeader parentHeader = genesisState.getBlock().getHeader();
 
     // Create 20 blocks (beyond default trie log depth of 16)
     // Each block adds 1 ETH to accountX
     for (int i = 1; i <= 20; i++) {
-      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, oneEth);
+      Transaction tx = burnTransactionWithValue(sender1, (long) (i - 1), accountX, ONE_ETH);
       Block block = forTransactions(List.of(tx), parentHeader);
       BlockProcessingResult result = executeBlock(archiveProvider.getWorldState(), block);
       assertThat(result.isSuccessful()).isTrue();
@@ -1539,32 +1195,25 @@ public class BonsaiArchiveReorgIntegrationTest {
     }
 
     // Verify current state has 20 ETH
-    Wei twentyEth = oneEth.multiply(20);
+    Wei twentyEth = ONE_ETH.multiply(20);
     assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twentyEth);
 
     // Critical test: Query historical block 5 (beyond trie log depth from block 20)
     // This triggers the archive-specific path in getWorldState() that must set read context
     BlockHeader block5Header = blockchain.getBlockHeader(5).orElseThrow();
-    MutableWorldState wsAtBlock5 =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block5Header))
-            .orElseThrow();
+    MutableWorldState wsAtBlock5 = getHistoricalWorldState(block5Header);
 
     // Should read with block 5 context (5 ETH), not MAX_BLOCK_SUFFIX (20 ETH)
-    Wei fiveEth = Wei.of(5_000_000_000_000_000_000L);
     assertThat(wsAtBlock5.get(accountX).getBalance())
         .as(
             "Historical query for block 5 MUST read with block 5 context (5 ETH), not latest (20 ETH)")
-        .isEqualTo(fiveEth);
+        .isEqualTo(FIVE_ETH);
 
     // Also verify we can query block 15 correctly
     BlockHeader block15Header = blockchain.getBlockHeader(15).orElseThrow();
-    MutableWorldState wsAtBlock15 =
-        archiveProvider
-            .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(block15Header))
-            .orElseThrow();
+    MutableWorldState wsAtBlock15 = getHistoricalWorldState(block15Header);
 
-    Wei fifteenEth = oneEth.multiply(15);
+    Wei fifteenEth = ONE_ETH.multiply(15);
     assertThat(wsAtBlock15.get(accountX).getBalance())
         .as("Historical query for block 15 should return 15 ETH")
         .isEqualTo(fifteenEth);
@@ -1583,12 +1232,10 @@ public class BonsaiArchiveReorgIntegrationTest {
   @Test
   void testRollforwardReadsUseCorrectContext() {
     Address accountX = Address.fromHexString("0xF600000000000000000000000000000000000001");
-    Wei oneEth = Wei.of(1_000_000_000_000_000_000L);
-
     BlockHeader parentHeader = genesisState.getBlock().getHeader();
 
     // Block 1: Account X gets 1 ETH
-    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, oneEth);
+    Transaction tx1 = burnTransactionWithValue(sender1, 0L, accountX, ONE_ETH);
     Block block1 = forTransactions(List.of(tx1), parentHeader);
     BlockProcessingResult result1 = executeBlock(archiveProvider.getWorldState(), block1);
     assertThat(result1.isSuccessful()).isTrue();
@@ -1596,7 +1243,7 @@ public class BonsaiArchiveReorgIntegrationTest {
     // Block 2: Account X gets another 1 ETH
     // This triggers rollforward from block 1 → 2
     // During rollforward, reads MUST use block 1 context to get correct prior state
-    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, oneEth);
+    Transaction tx2 = burnTransactionWithValue(sender1, 1L, accountX, ONE_ETH);
     Block block2 = forTransactions(List.of(tx2), block1.getHeader());
     BlockProcessingResult result2 = executeBlock(archiveProvider.getWorldState(), block2);
 
@@ -1607,8 +1254,7 @@ public class BonsaiArchiveReorgIntegrationTest {
         .isTrue();
 
     // Verify final balance
-    Wei twoEth = oneEth.multiply(2);
-    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(twoEth);
+    assertThat(archiveProvider.getWorldState().get(accountX).getBalance()).isEqualTo(TWO_ETH);
   }
 
   // Helper methods
@@ -1643,6 +1289,53 @@ public class BonsaiArchiveReorgIntegrationTest {
 
   private BlockHeader blockHeader(final long number) {
     return new BlockHeaderTestFixture().number(number).buildHeader();
+  }
+
+  /** Builds empty blocks from genesis up to the specified block number. */
+  private BlockHeader buildEmptyChainToBlock(final int blockCount) {
+    BlockHeader parentHeader = genesisState.getBlock().getHeader();
+    for (int i = 1; i <= blockCount; i++) {
+      Block block = forTransactions(Collections.emptyList(), parentHeader);
+      executeBlock(archiveProvider.getWorldState(), block);
+      parentHeader = block.getHeader();
+    }
+    return parentHeader;
+  }
+
+  /** Gets a historical world state snapshot at the given block header (does not update head). */
+  private MutableWorldState getHistoricalWorldState(final BlockHeader header) {
+    return archiveProvider
+        .getWorldState(WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(header))
+        .orElseThrow();
+  }
+
+  /**
+   * Executes a reorg to the given block.
+   *
+   * @param alternateBlock the block to reorg to
+   * @param wsAtForkPoint world state at the fork point (parent of alternateBlock)
+   * @param rewindToBlockNumber the block number to rewind to before appending
+   * @return the processing result
+   */
+  private BlockProcessingResult executeReorg(
+      final Block alternateBlock,
+      final MutableWorldState wsAtForkPoint,
+      final long rewindToBlockNumber) {
+    BlockProcessingResult result =
+        protocolSchedule
+            .getByBlockHeader(alternateBlock.getHeader())
+            .getBlockProcessor()
+            .processBlock(protocolContext, blockchain, wsAtForkPoint, alternateBlock);
+    assertThat(result.isSuccessful()).isTrue();
+
+    blockchain.storeBlock(alternateBlock, result.getReceipts());
+    blockchain.rewindToBlock(rewindToBlockNumber);
+    blockchain.appendBlock(alternateBlock, result.getReceipts());
+
+    archiveProvider.getWorldState(
+        WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(alternateBlock.getHeader()));
+
+    return result;
   }
 
   static class TestBlockCreator extends AbstractBlockCreator {
