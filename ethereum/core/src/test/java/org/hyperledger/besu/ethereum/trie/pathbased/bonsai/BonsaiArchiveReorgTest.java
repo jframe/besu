@@ -96,7 +96,7 @@ import org.mockito.quality.Strictness;
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-public class BonsaiArchiveReorgIntegrationTest {
+public class BonsaiArchiveReorgTest {
 
   private static final Wei ONE_ETH = Wei.of(1_000_000_000_000_000_000L);
   private static final Wei TWO_ETH = ONE_ETH.multiply(2);
