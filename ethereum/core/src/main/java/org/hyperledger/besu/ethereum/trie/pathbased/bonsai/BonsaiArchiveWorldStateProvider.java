@@ -14,9 +14,6 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
-
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -25,7 +22,6 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
@@ -35,7 +31,6 @@ import org.hyperledger.besu.plugin.ServiceManager;
 import java.util.Optional;
 import java.util.function.Supplier;
 
-import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -93,9 +88,10 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
                         (PathBasedWorldState) worldState, targetHeader.getHash()))
             .map(MutableWorldState::freezeStorage)
             .map(
-                worldState ->
-                    ((BonsaiWorldState) worldState)
-                        .setArchiveContextForHistoricalQuery(targetHeader.getNumber()));
+                worldState -> {
+                  ((PathBasedWorldState) worldState).setWorldBlockNumber(targetHeader.getNumber());
+                  return worldState;
+                });
       }
       return super.getWorldState(queryParams);
     }
@@ -112,13 +108,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final BlockHeader targetBlockHeader = blockchain.getBlockHeader(blockHash).get();
     final long parentBlockNumber =
         targetBlockHeader.getNumber() > 0 ? targetBlockHeader.getNumber() - 1 : 0;
-    var contextTransaction =
-        mutableState.getWorldStateStorage().getComposedWorldStateStorage().startTransaction();
-    contextTransaction.put(
-        TRIE_BRANCH_STORAGE,
-        WORLD_BLOCK_NUMBER_KEY,
-        Bytes.ofUnsignedLong(parentBlockNumber).toArrayUnsafe());
-    contextTransaction.commit();
+    mutableState.setWorldBlockNumber(parentBlockNumber);
   }
 
   // Archive-specific rollback behaviour. There is no trie-log roll forward/backward, we just roll

@@ -255,13 +255,7 @@ public abstract class PathBasedWorldState
               WORLD_ROOT_HASH_KEY,
               calculatedRootHash.getBytes().toArrayUnsafe());
 
-      stateUpdater
-          .getWorldStateTransaction()
-          .put(
-              TRIE_BRANCH_STORAGE,
-              WORLD_BLOCK_NUMBER_KEY,
-              Bytes.ofUnsignedLong(blockHeader == null ? 0L : blockHeader.getNumber())
-                  .toArrayUnsafe());
+      setWorldBlockNumber(stateUpdater.getWorldStateTransaction(), blockHeader);
       worldStateRootHash = calculatedRootHash;
       success = true;
     } finally {
@@ -287,6 +281,24 @@ public abstract class PathBasedWorldState
     if (!worldStateConfig.isTrieDisabled() && !calculatedStateRoot.equals(header.getStateRoot())) {
       throw new StateRootMismatchException(header.getStateRoot(), calculatedStateRoot);
     }
+  }
+
+  private void setWorldBlockNumber(
+      final SegmentedKeyValueStorageTransaction transaction, final BlockHeader blockHeader) {
+    final long blockNumber = blockHeader == null ? 0L : blockHeader.getNumber();
+    transaction.put(
+        TRIE_BRANCH_STORAGE,
+        WORLD_BLOCK_NUMBER_KEY,
+        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+  }
+
+  public void setWorldBlockNumber(final long blockNumber) {
+    var transaction = worldStateKeyValueStorage.getComposedWorldStateStorage().startTransaction();
+    transaction.put(
+        TRIE_BRANCH_STORAGE,
+        WORLD_BLOCK_NUMBER_KEY,
+        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+    transaction.commit();
   }
 
   @Override
