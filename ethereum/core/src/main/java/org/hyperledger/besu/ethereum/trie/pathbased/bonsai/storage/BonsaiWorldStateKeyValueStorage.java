@@ -18,6 +18,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.CODE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
@@ -92,14 +93,14 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     }
   }
 
-  public Optional<Bytes> getAccount(final Hash accountHash) {
+  public Optional<Bytes> getAccount(final Hash accountHash, final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> readContext) {
     return getFlatDbStrategy()
         .getFlatAccount(
             this::getWorldStateRootHash,
             this::getAccountStateTrieNode,
             accountHash,
             composedWorldStateStorage,
-            Optional.empty());
+            readContext);
   }
 
   public Optional<Bytes> getAccountStateTrieNode(final Bytes location, final Bytes32 nodeHash) {
@@ -132,23 +133,25 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
   }
 
   public Optional<Bytes> getStorageValueByStorageSlotKey(
-      final Hash accountHash, final StorageSlotKey storageSlotKey) {
+      final Hash accountHash, final StorageSlotKey storageSlotKey, final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> readContext) {
     return getStorageValueByStorageSlotKey(
         () ->
-            getAccount(accountHash)
+            getAccount(accountHash, readContext)
                 .map(
                     b ->
                         PmtStateTrieAccountValue.readFrom(
                                 org.hyperledger.besu.ethereum.rlp.RLP.input(b))
                             .getStorageRoot()),
         accountHash,
-        storageSlotKey);
+        storageSlotKey,
+        readContext);
   }
 
   public Optional<Bytes> getStorageValueByStorageSlotKey(
       final Supplier<Optional<Hash>> storageRootSupplier,
       final Hash accountHash,
-      final StorageSlotKey storageSlotKey) {
+      final StorageSlotKey storageSlotKey,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> readContext) {
     return getFlatDbStrategy()
         .getFlatStorageValueByStorageSlotKey(
             this::getWorldStateRootHash,
@@ -157,7 +160,7 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
             accountHash,
             storageSlotKey,
             composedWorldStateStorage,
-            Optional.empty());
+            readContext);
   }
 
   public NavigableMap<Bytes32, AccountStorageEntry> storageEntriesFrom(
@@ -216,6 +219,20 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
       // it (i.e. Bonsai archive)
     }
 
+    private org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext getWriteContext() {
+      // For Bonsai archive get the flat DB context to use for writing archive entries.
+      // If WORLD_BLOCK_NUMBER_KEY doesn't exist, this is genesis (block 0), use suffix 0.
+      // Otherwise, we're processing block N+1, so use worldBlockNumber + 1 as the suffix.
+      Optional<byte[]> archiveContext = worldStorage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
+      if (archiveContext.isPresent()) {
+        return new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(
+            org.apache.tuweni.bytes.Bytes.wrap(archiveContext.get()).toLong() + 1);
+      } else {
+        // No context exists - this is genesis block, use suffix 0
+        return new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(0L);
+      }
+    }
+
     public Updater removeCode(final Hash accountHash, final Hash codeHash) {
       flatDbStrategy.removeFlatCode(
           worldStorage, composedWorldStateTransaction, accountHash, codeHash);
@@ -239,7 +256,9 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     }
 
     public Updater removeAccountInfoState(final Hash accountHash) {
-      flatDbStrategy.removeFlatAccount(worldStorage, composedWorldStateTransaction, accountHash, Optional.empty());
+      // Get the write context from the world storage
+      org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext writeContext = getWriteContext();
+      flatDbStrategy.removeFlatAccount(worldStorage, composedWorldStateTransaction, accountHash, Optional.of(writeContext));
       return this;
     }
 
@@ -248,8 +267,10 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
         // Don't save empty values
         return this;
       }
+      // Get the write context from the world storage
+      org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext writeContext = getWriteContext();
       flatDbStrategy.putFlatAccount(
-          worldStorage, composedWorldStateTransaction, accountHash, accountValue, Optional.empty());
+          worldStorage, composedWorldStateTransaction, accountHash, accountValue, Optional.of(writeContext));
       return this;
     }
 
@@ -295,15 +316,19 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
 
     public synchronized Updater putStorageValueBySlotHash(
         final Hash accountHash, final Hash slotHash, final Bytes storageValue) {
+      // Get the write context from the world storage
+      org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext writeContext = getWriteContext();
       flatDbStrategy.putFlatAccountStorageValueByStorageSlotHash(
-          worldStorage, composedWorldStateTransaction, accountHash, slotHash, storageValue, Optional.empty());
+          worldStorage, composedWorldStateTransaction, accountHash, slotHash, storageValue, Optional.of(writeContext));
       return this;
     }
 
     public synchronized void removeStorageValueBySlotHash(
         final Hash accountHash, final Hash slotHash) {
+      // Get the write context from the world storage
+      org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext writeContext = getWriteContext();
       flatDbStrategy.removeFlatAccountStorageValueByStorageSlotHash(
-          worldStorage, composedWorldStateTransaction, accountHash, slotHash, Optional.empty());
+          worldStorage, composedWorldStateTransaction, accountHash, slotHash, Optional.of(writeContext));
     }
 
     @Override

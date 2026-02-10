@@ -555,7 +555,10 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
                     // are compact encoded account storage paths
 
                     final Bytes32 accountPrefix = Bytes32.leftPad(triePath.getFirst());
-                    var optAccount = storage.getAccount(Hash.wrap(accountPrefix));
+                    // Get the block number context from the storage
+                    final var blockNumber = storage.getWorldStateBlockNumber().orElse(0L);
+                    final var context = Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(blockNumber));
+                    var optAccount = storage.getAccount(Hash.wrap(accountPrefix), context);
                     if (optAccount.isEmpty()) {
                       continue;
                     }

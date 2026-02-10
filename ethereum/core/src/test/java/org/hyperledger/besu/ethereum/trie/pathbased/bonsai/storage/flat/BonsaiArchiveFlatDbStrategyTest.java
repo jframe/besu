@@ -45,6 +45,17 @@ public class BonsaiArchiveFlatDbStrategyTest {
         new BonsaiArchiveFlatDbStrategy(new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy());
   }
 
+  private long getExpectedBlockContext(final SegmentedKeyValueStorage storage) {
+    // Get the write context from the world storage (block number + 1)
+    Optional<byte[]> archiveContext = storage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
+    if (archiveContext.isPresent()) {
+      return org.apache.tuweni.bytes.Bytes.wrap(archiveContext.get()).toLong() + 1;
+    } else {
+      // No context exists - this is genesis block, use suffix 0
+      return 0L;
+    }
+  }
+
   @Test
   public void genesisBlockUsesZeroSuffixWhenWorldBlockNumberKeyNotSet() {
     final Hash accountHash =
@@ -52,7 +63,7 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Bytes accountValue = Bytes.fromHexString("0xAABBCC");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     final byte[] expectedKey =
@@ -72,7 +83,7 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Bytes accountValue = Bytes.fromHexString("0xDDEEFF");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     final byte[] expectedKey =
@@ -96,7 +107,7 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Bytes accountValue = Bytes.fromHexString("0x112233");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     final byte[] expectedKey =
@@ -115,13 +126,13 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Bytes block1AccountValue = Bytes.fromHexString("0x112233445566FF");
 
     SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, genesisAccountValue, Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, genesisAccountValue, Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     setWorldBlockNumber(0);
 
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, block1AccountValue, Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, block1AccountValue, Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     final byte[] genesisKey =
@@ -145,25 +156,25 @@ public class BonsaiArchiveFlatDbStrategyTest {
         Address.fromHexString("0x0000000000000000000000000000000000000005").addressHash();
 
     SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA00"), Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA00"), Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     setWorldBlockNumber(0);
 
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA01"), Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA01"), Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     setWorldBlockNumber(1);
 
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA02"), Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA02"), Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     setWorldBlockNumber(2);
 
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA03"), Optional.empty());
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA03"), Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(getExpectedBlockContext(storage))));
     tx.commit();
 
     final Bytes[] expectedValues = {

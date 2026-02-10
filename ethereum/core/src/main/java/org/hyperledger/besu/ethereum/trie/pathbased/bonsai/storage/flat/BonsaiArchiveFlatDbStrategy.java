@@ -73,48 +73,6 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   public static final byte[] DELETED_ACCOUNT_VALUE = new byte[0];
   public static final byte[] DELETED_STORAGE_VALUE = new byte[0];
 
-  private Optional<BonsaiContext> getStateArchiveContextForWrite(
-      final SegmentedKeyValueStorage storage) {
-    // For Bonsai archive get the flat DB context to use for writing archive entries.
-    // If WORLD_BLOCK_NUMBER_KEY doesn't exist, this is genesis (block 0), use suffix 0.
-    // Otherwise, we're processing block N+1, so use worldBlockNumber + 1 as the suffix.
-    Optional<byte[]> archiveContext = storage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
-    if (archiveContext.isPresent()) {
-      try {
-        return Optional.of(
-            // The context for flat-DB PUTs is the block number recorded in the specified world
-            // state, + 1
-            new BonsaiContext(Bytes.wrap(archiveContext.get()).toLong() + 1));
-      } catch (NumberFormatException e) {
-        throw new IllegalStateException(
-            "World state archive context invalid format: "
-                + new String(archiveContext.get(), StandardCharsets.UTF_8));
-      }
-    } else {
-      // No context exists - this is genesis block, use suffix 0
-      return Optional.of(new BonsaiContext(0L));
-    }
-  }
-
-  private Optional<BonsaiContext> getStateArchiveContextForRead(
-      final SegmentedKeyValueStorage storage) {
-    // For Bonsai archive get the flat DB context to use for reading archive entries
-    Optional<byte[]> archiveContext = storage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
-    if (archiveContext.isPresent()) {
-      try {
-        return Optional.of(
-            // The context for flat-DB PUTs is the block number recorded in the specified world
-            // state
-            new BonsaiContext(Bytes.wrap(archiveContext.get()).toLong()));
-      } catch (NumberFormatException e) {
-        throw new IllegalStateException(
-            "World state archive context invalid format: "
-                + new String(archiveContext.get(), StandardCharsets.UTF_8));
-      }
-    }
-    return Optional.empty();
-  }
-
   @Override
   public Optional<Bytes> getFlatAccount(
       final Supplier<Optional<Bytes>> worldStateRootHashSupplier,
@@ -126,9 +84,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     getAccountCounter.inc();
     Optional<SegmentedKeyValueStorage.NearestKeyValue> accountFound;
 
-    // Use provided context if present, otherwise fallback to reading from storage
-    final Optional<BonsaiContext> contextToUse =
-        readContext.isPresent() ? readContext : getStateArchiveContextForRead(storage);
+    // Phase 3: Context should always be provided
+    if (readContext.isEmpty()) {
+      throw new IllegalStateException(
+          "Context must be provided for archive reads, database fallback is no longer supported");
+    }
+    final Optional<BonsaiContext> contextToUse = readContext;
 
     // keyNearest, use MAX_BLOCK_SUFFIX in the absence of a block context:
     Bytes keyNearest =
@@ -288,9 +249,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Bytes accountValue,
       final Optional<BonsaiContext> writeContext) {
 
-    // Use provided context if present, otherwise fallback to reading from storage
-    final BonsaiContext contextToUse =
-        writeContext.orElseGet(() -> getStateArchiveContextForWrite(storage).get());
+    // Phase 3: Context should always be provided
+    if (writeContext.isEmpty()) {
+      throw new IllegalStateException(
+          "Context must be provided for archive writes, database fallback is no longer supported");
+    }
+    final BonsaiContext contextToUse = writeContext.get();
 
     // key suffixed with block context, or MIN_BLOCK_SUFFIX if we have no context:
     byte[] keySuffixed =
@@ -307,9 +271,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Hash accountHash,
       final Optional<BonsaiContext> writeContext) {
 
-    // Use provided context if present, otherwise fallback to reading from storage
-    final BonsaiContext contextToUse =
-        writeContext.orElseGet(() -> getStateArchiveContextForWrite(storage).get());
+    // Phase 3: Context should always be provided
+    if (writeContext.isEmpty()) {
+      throw new IllegalStateException(
+          "Context must be provided for archive writes, database fallback is no longer supported");
+    }
+    final BonsaiContext contextToUse = writeContext.get();
 
     // insert a key suffixed with block context, with 'deleted account' value
     byte[] keySuffixed =
@@ -339,9 +306,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     Optional<SegmentedKeyValueStorage.NearestKeyValue> storageFound;
     getStorageValueCounter.inc();
 
-    // Use provided context if present, otherwise fallback to reading from storage
-    final Optional<BonsaiContext> contextToUse =
-        readContext.isPresent() ? readContext : getStateArchiveContextForRead(storage);
+    // Phase 3: Context should always be provided
+    if (readContext.isEmpty()) {
+      throw new IllegalStateException(
+          "Context must be provided for archive reads, database fallback is no longer supported");
+    }
+    final Optional<BonsaiContext> contextToUse = readContext;
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, storageSlotKey.getSlotHash());
@@ -404,9 +374,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Bytes storageValue,
       final Optional<BonsaiContext> writeContext) {
 
-    // Use provided context if present, otherwise fallback to reading from storage
-    final BonsaiContext contextToUse =
-        writeContext.orElseGet(() -> getStateArchiveContextForWrite(storage).get());
+    // Phase 3: Context should always be provided
+    if (writeContext.isEmpty()) {
+      throw new IllegalStateException(
+          "Context must be provided for archive writes, database fallback is no longer supported");
+    }
+    final BonsaiContext contextToUse = writeContext.get();
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
@@ -428,9 +401,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Hash slotHash,
       final Optional<BonsaiContext> writeContext) {
 
-    // Use provided context if present, otherwise fallback to reading from storage
-    final BonsaiContext contextToUse =
-        writeContext.orElseGet(() -> getStateArchiveContextForWrite(storage).get());
+    // Phase 3: Context should always be provided
+    if (writeContext.isEmpty()) {
+      throw new IllegalStateException(
+          "Context must be provided for archive writes, database fallback is no longer supported");
+    }
+    final BonsaiContext contextToUse = writeContext.get();
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);

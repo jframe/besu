@@ -306,7 +306,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
       // because we are clearing persisted values we need the account root as persisted
       final BonsaiAccount oldAccount =
           getWorldStateStorage()
-              .getAccount(address.addressHash())
+              .getAccount(address.addressHash(), Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(this.blockNumber)))
               .map(
                   bytes ->
                       BonsaiAccount.fromRLP(BonsaiWorldState.this, address, bytes, true, codeCache))
@@ -380,7 +380,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
   @Override
   public Account get(final Address address) {
     return getWorldStateStorage()
-        .getAccount(address.addressHash())
+        .getAccount(address.addressHash(), Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(this.blockNumber)))
         .map(bytes -> BonsaiAccount.fromRLP(accumulator, address, bytes, true, codeCache))
         .orElse(null);
   }
@@ -413,7 +413,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
   public Optional<UInt256> getStorageValueByStorageSlotKey(
       final Address address, final StorageSlotKey storageSlotKey) {
     return getWorldStateStorage()
-        .getStorageValueByStorageSlotKey(address.addressHash(), storageSlotKey)
+        .getStorageValueByStorageSlotKey(address.addressHash(), storageSlotKey, Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(this.blockNumber)))
         .map(UInt256::fromBytes);
   }
 
@@ -422,7 +422,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
       final Address address,
       final StorageSlotKey storageSlotKey) {
     return getWorldStateStorage()
-        .getStorageValueByStorageSlotKey(storageRootSupplier, address.addressHash(), storageSlotKey)
+        .getStorageValueByStorageSlotKey(storageRootSupplier, address.addressHash(), storageSlotKey, Optional.of(new org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext(this.blockNumber)))
         .map(UInt256::fromBytes);
   }
 
