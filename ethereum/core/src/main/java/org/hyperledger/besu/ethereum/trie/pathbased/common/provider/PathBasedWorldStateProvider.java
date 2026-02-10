@@ -323,7 +323,7 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
           // if we fail we must clean up the updater
           pathBasedUpdater.reset();
           LOG.atDebug()
-              .setMessage("State rolling failed on {} for block hash {}")
+              .setMessage("State rolling failed on {} for block hash {}: {}")
               .addArgument(mutableState.getWorldStateStorage().getClass().getSimpleName())
               .addArgument(blockHash)
               .addArgument(e)
