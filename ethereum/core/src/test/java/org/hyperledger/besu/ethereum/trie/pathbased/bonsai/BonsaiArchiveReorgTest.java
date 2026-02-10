@@ -546,6 +546,63 @@ public class BonsaiArchiveReorgTest {
         .orElseThrow();
   }
 
+  /**
+   * Tests that paired rollback/rollforward during a reorg correctly handles storage slot creation
+   * when archive context (WORLD_BLOCK_NUMBER_KEY) needs to be updated. This test reproduces the
+   * scenario from the bug where storage reads during rollforward were using the wrong block context.
+   *
+   * <p>Bug scenario: During paired rollback/rollforward, if WORLD_BLOCK_NUMBER_KEY isn't updated
+   * after rollbacks complete, subsequent storage reads during rollforward will use the wrong block
+   * context, causing "Expected to create slot, but the slot exists" errors.
+   *
+   * <p>This test creates a reorg with storage slot changes, ensuring the archive context is
+   * correctly updated at each stage of the rolling process.
+   */
+  @Test
+  void shouldHandlePairedRollbackRollforwardWithStorageSlotCreation() {
+    // Contract that stores values: 60 XX PUSH1 value, 60 YY PUSH1 slot, 55 SSTORE
+    Bytes storeInSlot0 = Bytes.fromHexString("60AA60005500"); // stores 0xAA in slot 0
+    Bytes storeInSlot1 = Bytes.fromHexString("60BB60015500"); // stores 0xBB in slot 1
+    Bytes initCodeA = createInitCode(storeInSlot0);
+    Bytes initCodeB = createInitCode(storeInSlot1);
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Block 1A: Deploy contract A (creates storage slot 0)
+    deployContractFromGenesis(initCodeA, Wei.ZERO);
+    assertAccountExists(contractAddress);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).hasCode()).isTrue();
+
+    // Build chain to block 3 to create some distance
+    Block block1A = blockchain.getBlockByNumber(1L).orElseThrow();
+    BlockHeader parentHeader = block1A.getHeader();
+    for (int i = 2; i <= 3; i++) {
+      Block block = forTransactions(Collections.emptyList(), parentHeader);
+      executeBlock(archiveProvider.getWorldState(), block);
+      parentHeader = block.getHeader();
+    }
+
+    // Now reorg from genesis, deploying contract B instead (creates storage slot 1)
+    // This creates a paired rollback/rollforward scenario:
+    // - Rollback blocks 1A, 2A, 3A
+    // - Rollforward with 1B (different contract, different storage slot)
+    Block block1B = forTransactions(
+        List.of(createContractDeployment(initCodeB, Wei.ZERO)), genesisHeader);
+
+    // The reorg will:
+    // 1. Roll back from block 3 to genesis (common ancestor)
+    // 2. Roll forward with block 1B
+    // Without the fix, the storage read during rollforward would use the wrong block context
+    // and find storage slot 0 from the old chain, causing the error
+    reorgFromGenesis(block1B);
+
+    // Verify the contract exists and is from chain B (not chain A)
+    assertAccountExists(contractAddress);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).hasCode()).isTrue();
+
+    // Verify we can query the historical state
+    assertThat(getHistoricalWorldState(genesisHeader).get(contractAddress)).isNull();
+  }
+
   private void executeReorg(
       final Block alternateBlock,
       final MutableWorldState wsAtForkPoint,

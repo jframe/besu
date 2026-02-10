@@ -241,7 +241,7 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         .map(MutableWorldState::freezeStorage);
   }
 
-  private Optional<MutableWorldState> rollFullWorldStateToBlockHash(
+  protected Optional<MutableWorldState> rollFullWorldStateToBlockHash(
       final PathBasedWorldState mutableState, final Hash blockHash) {
     if (blockHash.equals(mutableState.blockHash())) {
       return Optional.of(mutableState);
@@ -253,6 +253,8 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
 
         final List<TrieLog> rollBacks = new ArrayList<>();
         final List<TrieLog> rollForwards = new ArrayList<>();
+        BlockHeader commonAncestorHeader = null;
+
         if (maybePersistedHeader.isEmpty()) {
           trieLogManager.getTrieLogLayer(mutableState.blockHash()).ifPresent(rollBacks::add);
         } else {
@@ -288,6 +290,8 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             targetBlockHash = targetHeader.getBlockHash();
             persistedBlockHash = persistedHeader.getBlockHash();
           }
+          // At this point, persistedHeader is the common ancestor
+          commonAncestorHeader = persistedHeader;
         }
 
         // attempt the state rolling
@@ -298,14 +302,24 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             LOG.debug("Attempting Rollback of {}", rollBack.getBlockHash());
             pathBasedUpdater.rollBack(rollBack);
           }
+
+          // After rollbacks, set archive context to common ancestor so subsequent reads use
+          // correct block context
+          if (commonAncestorHeader != null) {
+            setArchiveContext(mutableState, commonAncestorHeader.getNumber());
+          }
+
           for (int i = rollForwards.size() - 1; i >= 0; i--) {
             final var forward = rollForwards.get(i);
             LOG.debug("Attempting Rollforward of {}", rollForwards.get(i).getBlockHash());
             pathBasedUpdater.rollForward(forward);
           }
 
-          // Hook for subclasses to perform actions before commit
-          beforeRollCommit(mutableState, blockHash);
+          // Set archive context to target block's parent for commit writes
+          final BlockHeader targetBlockHeader = blockchain.getBlockHeader(blockHash).get();
+          final long targetParentBlockNumber =
+              targetBlockHeader.getNumber() > 0 ? targetBlockHeader.getNumber() - 1 : 0;
+          setArchiveContext(mutableState, targetParentBlockNumber);
 
           pathBasedUpdater.commit();
 
@@ -344,13 +358,23 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
   }
 
   /**
-   * Hook method called before committing changes during world state rolling. Subclasses can
-   * override this to perform actions before the commit, such as setting up archive context.
+   * Hook method called to set the archive context (WORLD_BLOCK_NUMBER_KEY) during world state
+   * rolling. This ensures that storage reads during rollback/rollforward operations use the correct
+   * block context. Subclasses can override this to update the archive context at critical points.
+   *
+   * <p>This method is called:
+   *
+   * <ul>
+   *   <li>After rollbacks complete (with common ancestor block number) - ensures rollforwards read
+   *       from correct state
+   *   <li>Before commit (with target block's parent number) - ensures archive writes use correct
+   *       context
+   * </ul>
    *
    * @param mutableState the world state being rolled
-   * @param blockHash the target block hash
+   * @param blockNumber the block number to set as the archive context
    */
-  protected void beforeRollCommit(final PathBasedWorldState mutableState, final Hash blockHash) {
+  protected void setArchiveContext(final PathBasedWorldState mutableState, final long blockNumber) {
     // Default implementation does nothing - subclasses can override
   }
 

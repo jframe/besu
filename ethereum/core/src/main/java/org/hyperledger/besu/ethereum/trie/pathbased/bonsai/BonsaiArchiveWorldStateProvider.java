@@ -98,17 +98,24 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   }
 
   /**
-   * Sets up the archive context before committing changes during world state rolling. Updates
-   * WORLD_BLOCK_NUMBER_KEY so the archive flat DB strategy uses the correct write context. The
-   * strategy uses (WORLD_BLOCK_NUMBER_KEY + 1) as the block suffix for writes. For a target block
-   * N, we want suffix N, so we set WORLD_BLOCK_NUMBER_KEY to N-1.
+   * Sets the archive context (WORLD_BLOCK_NUMBER_KEY) during world state rolling. This ensures
+   * that storage reads during rollback/rollforward operations use the correct block context, fixing
+   * the issue where paired rollback/rollforward operations would read from the wrong block's state.
+   *
+   * <p>The archive flat DB strategy uses WORLD_BLOCK_NUMBER_KEY to determine which block context to
+   * read from and write to. By updating this at key points during rolling, we ensure consistency:
+   *
+   * <ul>
+   *   <li>After rollbacks: set to common ancestor so rollforwards read correct state
+   *   <li>Before commit: set to target's parent for correct archive writes
+   * </ul>
+   *
+   * @param mutableState the world state being rolled
+   * @param blockNumber the block number to set as the archive context
    */
   @Override
-  protected void beforeRollCommit(final PathBasedWorldState mutableState, final Hash blockHash) {
-    final BlockHeader targetBlockHeader = blockchain.getBlockHeader(blockHash).get();
-    final long parentBlockNumber =
-        targetBlockHeader.getNumber() > 0 ? targetBlockHeader.getNumber() - 1 : 0;
-    mutableState.setWorldBlockNumber(parentBlockNumber);
+  protected void setArchiveContext(final PathBasedWorldState mutableState, final long blockNumber) {
+    mutableState.setWorldBlockNumber(blockNumber);
   }
 
   // Archive-specific rollback behaviour. There is no trie-log roll forward/backward, we just roll
