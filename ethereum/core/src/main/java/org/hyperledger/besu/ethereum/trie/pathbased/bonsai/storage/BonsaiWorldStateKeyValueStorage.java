@@ -98,7 +98,8 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
             this::getWorldStateRootHash,
             this::getAccountStateTrieNode,
             accountHash,
-            composedWorldStateStorage);
+            composedWorldStateStorage,
+            Optional.empty());
   }
 
   public Optional<Bytes> getAccountStateTrieNode(final Bytes location, final Bytes32 nodeHash) {
@@ -155,7 +156,8 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
             (location, hash) -> getAccountStorageTrieNode(accountHash, location, hash),
             accountHash,
             storageSlotKey,
-            composedWorldStateStorage);
+            composedWorldStateStorage,
+            Optional.empty());
   }
 
   public NavigableMap<Bytes32, AccountStorageEntry> storageEntriesFrom(
@@ -237,7 +239,7 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     }
 
     public Updater removeAccountInfoState(final Hash accountHash) {
-      flatDbStrategy.removeFlatAccount(worldStorage, composedWorldStateTransaction, accountHash);
+      flatDbStrategy.removeFlatAccount(worldStorage, composedWorldStateTransaction, accountHash, Optional.empty());
       return this;
     }
 
@@ -247,7 +249,7 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
         return this;
       }
       flatDbStrategy.putFlatAccount(
-          worldStorage, composedWorldStateTransaction, accountHash, accountValue);
+          worldStorage, composedWorldStateTransaction, accountHash, accountValue, Optional.empty());
       return this;
     }
 
@@ -294,14 +296,14 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     public synchronized Updater putStorageValueBySlotHash(
         final Hash accountHash, final Hash slotHash, final Bytes storageValue) {
       flatDbStrategy.putFlatAccountStorageValueByStorageSlotHash(
-          worldStorage, composedWorldStateTransaction, accountHash, slotHash, storageValue);
+          worldStorage, composedWorldStateTransaction, accountHash, slotHash, storageValue, Optional.empty());
       return this;
     }
 
     public synchronized void removeStorageValueBySlotHash(
         final Hash accountHash, final Hash slotHash) {
       flatDbStrategy.removeFlatAccountStorageValueByStorageSlotHash(
-          worldStorage, composedWorldStateTransaction, accountHash, slotHash);
+          worldStorage, composedWorldStateTransaction, accountHash, slotHash, Optional.empty());
     }
 
     @Override

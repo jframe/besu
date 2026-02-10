@@ -125,12 +125,14 @@ public abstract class FlatDbStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Bytes accountValue);
+      final Bytes accountValue,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> writeContext);
 
   public abstract void removeFlatAccount(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
-      final Hash accountHash);
+      final Hash accountHash,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> writeContext);
 
   /*
    * Puts the storage value for the given account hash and storage slot key, using the world state root hash supplier, storage root supplier, and node loader.
@@ -140,7 +142,8 @@ public abstract class FlatDbStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
       final Hash slotHash,
-      final Bytes storageValue);
+      final Bytes storageValue,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> writeContext);
 
   /*
    * Removes the storage value for the given account hash and storage slot key, using the world state root hash supplier, storage root supplier, and node loader.
@@ -149,7 +152,8 @@ public abstract class FlatDbStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Hash slotHash);
+      final Hash slotHash,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> writeContext);
 
   public abstract void clearAll(final SegmentedKeyValueStorage storage);
 

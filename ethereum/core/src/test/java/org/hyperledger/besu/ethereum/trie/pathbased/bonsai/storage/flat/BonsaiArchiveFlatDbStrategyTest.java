@@ -52,7 +52,7 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Bytes accountValue = Bytes.fromHexString("0xAABBCC");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue);
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.empty());
     tx.commit();
 
     final byte[] expectedKey =
@@ -72,7 +72,7 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Bytes accountValue = Bytes.fromHexString("0xDDEEFF");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue);
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.empty());
     tx.commit();
 
     final byte[] expectedKey =
@@ -96,7 +96,7 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Bytes accountValue = Bytes.fromHexString("0x112233");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue);
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, Optional.empty());
     tx.commit();
 
     final byte[] expectedKey =
@@ -115,13 +115,13 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Bytes block1AccountValue = Bytes.fromHexString("0x112233445566FF");
 
     SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, genesisAccountValue);
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, genesisAccountValue, Optional.empty());
     tx.commit();
 
     setWorldBlockNumber(0);
 
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, block1AccountValue);
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, block1AccountValue, Optional.empty());
     tx.commit();
 
     final byte[] genesisKey =
@@ -145,25 +145,25 @@ public class BonsaiArchiveFlatDbStrategyTest {
         Address.fromHexString("0x0000000000000000000000000000000000000005").addressHash();
 
     SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA00"));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA00"), Optional.empty());
     tx.commit();
 
     setWorldBlockNumber(0);
 
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA01"));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA01"), Optional.empty());
     tx.commit();
 
     setWorldBlockNumber(1);
 
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA02"));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA02"), Optional.empty());
     tx.commit();
 
     setWorldBlockNumber(2);
 
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA03"));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA03"), Optional.empty());
     tx.commit();
 
     final Bytes[] expectedValues = {

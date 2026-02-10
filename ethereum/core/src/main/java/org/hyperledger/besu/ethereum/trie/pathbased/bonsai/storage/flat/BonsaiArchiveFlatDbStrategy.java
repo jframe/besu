@@ -120,15 +120,20 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Supplier<Optional<Bytes>> worldStateRootHashSupplier,
       final NodeLoader nodeLoader,
       final Hash accountHash,
-      final SegmentedKeyValueStorage storage) {
+      final SegmentedKeyValueStorage storage,
+      final Optional<BonsaiContext> readContext) {
 
     getAccountCounter.inc();
     Optional<SegmentedKeyValueStorage.NearestKeyValue> accountFound;
 
+    // Use provided context if present, otherwise fallback to reading from storage
+    final Optional<BonsaiContext> contextToUse =
+        readContext.isPresent() ? readContext : getStateArchiveContextForRead(storage);
+
     // keyNearest, use MAX_BLOCK_SUFFIX in the absence of a block context:
     Bytes keyNearest =
         calculateArchiveKeyWithMaxSuffix(
-            getStateArchiveContextForRead(storage), accountHash.getBytes().toArrayUnsafe());
+            contextToUse, accountHash.getBytes().toArrayUnsafe());
 
     // Find the nearest account state for this address and block context
     Optional<SegmentedKeyValueStorage.NearestKeyValue> nearestAccount =
@@ -280,12 +285,17 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Bytes accountValue) {
+      final Bytes accountValue,
+      final Optional<BonsaiContext> writeContext) {
+
+    // Use provided context if present, otherwise fallback to reading from storage
+    final BonsaiContext contextToUse =
+        writeContext.orElseGet(() -> getStateArchiveContextForWrite(storage).get());
 
     // key suffixed with block context, or MIN_BLOCK_SUFFIX if we have no context:
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(
-            getStateArchiveContextForWrite(storage).get(), accountHash.getBytes().toArrayUnsafe());
+            contextToUse, accountHash.getBytes().toArrayUnsafe());
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
@@ -294,12 +304,17 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   public void removeFlatAccount(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
-      final Hash accountHash) {
+      final Hash accountHash,
+      final Optional<BonsaiContext> writeContext) {
+
+    // Use provided context if present, otherwise fallback to reading from storage
+    final BonsaiContext contextToUse =
+        writeContext.orElseGet(() -> getStateArchiveContextForWrite(storage).get());
 
     // insert a key suffixed with block context, with 'deleted account' value
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(
-            getStateArchiveContextForWrite(storage).get(), accountHash.getBytes().toArrayUnsafe());
+            contextToUse, accountHash.getBytes().toArrayUnsafe());
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
@@ -318,16 +333,21 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final NodeLoader nodeLoader,
       final Hash accountHash,
       final StorageSlotKey storageSlotKey,
-      final SegmentedKeyValueStorage storage) {
+      final SegmentedKeyValueStorage storage,
+      final Optional<BonsaiContext> readContext) {
 
     Optional<SegmentedKeyValueStorage.NearestKeyValue> storageFound;
     getStorageValueCounter.inc();
+
+    // Use provided context if present, otherwise fallback to reading from storage
+    final Optional<BonsaiContext> contextToUse =
+        readContext.isPresent() ? readContext : getStateArchiveContextForRead(storage);
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, storageSlotKey.getSlotHash());
     // keyNearest, use MAX_BLOCK_SUFFIX in the absence of a block context:
     Bytes keyNearest =
-        calculateArchiveKeyWithMaxSuffix(getStateArchiveContextForRead(storage), naturalKey);
+        calculateArchiveKeyWithMaxSuffix(contextToUse, naturalKey);
 
     // Find the nearest storage for this address, slot key hash, and block context
     Optional<SegmentedKeyValueStorage.NearestKeyValue> nearestStorage =
@@ -381,13 +401,18 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
       final Hash slotHash,
-      final Bytes storageValue) {
+      final Bytes storageValue,
+      final Optional<BonsaiContext> writeContext) {
+
+    // Use provided context if present, otherwise fallback to reading from storage
+    final BonsaiContext contextToUse =
+        writeContext.orElseGet(() -> getStateArchiveContextForWrite(storage).get());
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     // keyNearest, use MIN_BLOCK_SUFFIX in the absence of a block context:
     byte[] keyNearest =
-        calculateArchiveKeyWithMinSuffix(getStateArchiveContextForWrite(storage).get(), naturalKey);
+        calculateArchiveKeyWithMinSuffix(contextToUse, naturalKey);
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keyNearest, storageValue.toArrayUnsafe());
   }
@@ -400,13 +425,18 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Hash slotHash) {
+      final Hash slotHash,
+      final Optional<BonsaiContext> writeContext) {
+
+    // Use provided context if present, otherwise fallback to reading from storage
+    final BonsaiContext contextToUse =
+        writeContext.orElseGet(() -> getStateArchiveContextForWrite(storage).get());
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     // insert a key suffixed with block context, with 'deleted account' value
     byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(getStateArchiveContextForWrite(storage).get(), naturalKey);
+        calculateArchiveKeyWithMinSuffix(contextToUse, naturalKey);
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
   }

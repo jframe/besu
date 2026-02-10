@@ -885,7 +885,8 @@ public class SnapServerTest {
                   updater.getWorldStateTransaction(),
                   acctHash,
                   Hash.wrap(mockBytes32),
-                  mockBytes32);
+                  mockBytes32,
+                  Optional.empty());
             });
     trie.commit(
         (location, key, value) ->

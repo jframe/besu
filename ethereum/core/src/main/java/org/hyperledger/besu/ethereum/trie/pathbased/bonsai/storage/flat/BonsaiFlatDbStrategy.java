@@ -55,7 +55,8 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       Supplier<Optional<Bytes>> worldStateRootHashSupplier,
       NodeLoader nodeLoader,
       Hash accountHash,
-      SegmentedKeyValueStorage storage);
+      SegmentedKeyValueStorage storage,
+      Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> readContext);
 
   /*
    * Retrieves the storage value for the given account hash and storage slot key, using the world state root hash supplier, storage root supplier, and node loader.
@@ -67,14 +68,16 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       NodeLoader nodeLoader,
       Hash accountHash,
       StorageSlotKey storageSlotKey,
-      SegmentedKeyValueStorage storageStorage);
+      SegmentedKeyValueStorage storageStorage,
+      Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> readContext);
 
   @Override
   public void putFlatAccount(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Bytes accountValue) {
+      final Bytes accountValue,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> writeContext) {
     transaction.put(
         ACCOUNT_INFO_STATE, accountHash.getBytes().toArrayUnsafe(), accountValue.toArrayUnsafe());
   }
@@ -83,7 +86,8 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
   public void removeFlatAccount(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
-      final Hash accountHash) {
+      final Hash accountHash,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> writeContext) {
     transaction.remove(ACCOUNT_INFO_STATE, accountHash.getBytes().toArrayUnsafe());
   }
 
@@ -93,7 +97,8 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
       final Hash slotHash,
-      final Bytes storageValue) {
+      final Bytes storageValue,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> writeContext) {
     transaction.put(
         ACCOUNT_STORAGE_STORAGE,
         Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe(),
@@ -105,7 +110,8 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Hash slotHash) {
+      final Hash slotHash,
+      final Optional<org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext> writeContext) {
     transaction.remove(
         ACCOUNT_STORAGE_STORAGE,
         Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe());
