@@ -62,6 +62,7 @@ public abstract class PathBasedWorldState
 
   protected Hash worldStateRootHash;
   protected Hash worldStateBlockHash;
+  protected long blockNumber;
 
   // configuration parameters for the world state.
   protected WorldStateConfig worldStateConfig;
@@ -89,6 +90,7 @@ public abstract class PathBasedWorldState
                     .getWorldStateRootHash()
                     .orElse(getEmptyTrieHash().getBytes())));
     this.worldStateBlockHash = worldStateKeyValueStorage.getWorldStateBlockHash().orElse(Hash.ZERO);
+    this.blockNumber = worldStateKeyValueStorage.getWorldStateBlockNumber().orElse(0L);
     this.cachedWorldStorageManager = cachedWorldStorageManager;
     this.trieLogManager = trieLogManager;
     this.worldStateConfig = worldStateConfig;
@@ -124,6 +126,15 @@ public abstract class PathBasedWorldState
   }
 
   /**
+   * Returns the world state block number of this world state
+   *
+   * @return the world state block number.
+   */
+  public long getWorldBlockNumber() {
+    return blockNumber;
+  }
+
+  /**
    * Determines whether the current world state is directly modifying the "head" state of the
    * blockchain. A world state modifying the head directly updates the latest state of the node,
    * while a world state derived from a snapshot or historical view (e.g., layered or snapshot world
@@ -153,6 +164,7 @@ public abstract class PathBasedWorldState
   public void resetWorldStateTo(final BlockHeader blockHeader) {
     worldStateBlockHash = blockHeader.getBlockHash();
     worldStateRootHash = blockHeader.getStateRoot();
+    blockNumber = blockHeader.getNumber();
   }
 
   @Override
@@ -243,9 +255,11 @@ public abstract class PathBasedWorldState
                 WORLD_BLOCK_HASH_KEY,
                 blockHeader.getHash().getBytes().toArrayUnsafe());
         worldStateBlockHash = blockHeader.getHash();
+        blockNumber = blockHeader.getNumber();
       } else {
         stateUpdater.getWorldStateTransaction().remove(TRIE_BRANCH_STORAGE, WORLD_BLOCK_HASH_KEY);
         worldStateBlockHash = null;
+        blockNumber = 0L;
       }
 
       stateUpdater
@@ -255,7 +269,12 @@ public abstract class PathBasedWorldState
               WORLD_ROOT_HASH_KEY,
               calculatedRootHash.getBytes().toArrayUnsafe());
 
-      setWorldBlockNumber(stateUpdater.getWorldStateTransaction(), blockHeader);
+      stateUpdater
+          .getWorldStateTransaction()
+          .put(
+              TRIE_BRANCH_STORAGE,
+              WORLD_BLOCK_NUMBER_KEY,
+              Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
       worldStateRootHash = calculatedRootHash;
       success = true;
     } finally {
@@ -283,22 +302,8 @@ public abstract class PathBasedWorldState
     }
   }
 
-  private void setWorldBlockNumber(
-      final SegmentedKeyValueStorageTransaction transaction, final BlockHeader blockHeader) {
-    final long blockNumber = blockHeader == null ? 0L : blockHeader.getNumber();
-    transaction.put(
-        TRIE_BRANCH_STORAGE,
-        WORLD_BLOCK_NUMBER_KEY,
-        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
-  }
-
   public void setWorldBlockNumber(final long blockNumber) {
-    var transaction = worldStateKeyValueStorage.getComposedWorldStateStorage().startTransaction();
-    transaction.put(
-        TRIE_BRANCH_STORAGE,
-        WORLD_BLOCK_NUMBER_KEY,
-        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
-    transaction.commit();
+    this.blockNumber = blockNumber;
   }
 
   @Override

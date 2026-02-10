@@ -14,6 +14,9 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
+
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -31,6 +34,7 @@ import org.hyperledger.besu.plugin.ServiceManager;
 import java.util.Optional;
 import java.util.function.Supplier;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -115,7 +119,15 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
    */
   @Override
   protected void setArchiveContext(final PathBasedWorldState mutableState, final long blockNumber) {
+    // Update in-memory block number
     mutableState.setWorldBlockNumber(blockNumber);
+    // Also write to database for archive context during rolling operations
+    var transaction = mutableState.getWorldStateStorage().getComposedWorldStateStorage().startTransaction();
+    transaction.put(
+        TRIE_BRANCH_STORAGE,
+        WORLD_BLOCK_NUMBER_KEY,
+        Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+    transaction.commit();
   }
 
   // Archive-specific rollback behaviour. There is no trie-log roll forward/backward, we just roll
