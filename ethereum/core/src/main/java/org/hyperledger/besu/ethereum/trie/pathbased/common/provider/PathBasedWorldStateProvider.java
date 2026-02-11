@@ -298,6 +298,16 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         final PathBasedWorldStateUpdateAccumulator<?> pathBasedUpdater =
             (PathBasedWorldStateUpdateAccumulator<?>) mutableState.updater();
         try {
+          // Set archive context before rollbacks to ensure storage reads during rollback
+          // use the correct historical context (parent of the first block being rolled back)
+          final BlockHeader currentHead =
+              blockchain.getBlockHeader(mutableState.blockHash()).orElse(null);
+          if (currentHead != null && !rollBacks.isEmpty()) {
+            final long contextBeforeRollbacks =
+                currentHead.getNumber() > 0 ? currentHead.getNumber() - 1 : 0;
+            setArchiveContext(mutableState, contextBeforeRollbacks);
+          }
+
           for (final TrieLog rollBack : rollBacks) {
             LOG.debug("Attempting Rollback of {}", rollBack.getBlockHash());
             pathBasedUpdater.rollBack(rollBack);
@@ -315,8 +325,13 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             pathBasedUpdater.rollForward(forward);
           }
 
-          // Set archive context to target block's parent for commit writes
+          // CRITICAL: After rollforwards, update archive context to target block so subsequent
+          // operations (like paired rollback/rollforward) read from the correct block context.
+          // Without this, the context remains stale and storage reads will fail.
           final BlockHeader targetBlockHeader = blockchain.getBlockHeader(blockHash).get();
+          setArchiveContext(mutableState, targetBlockHeader.getNumber());
+
+          // Set archive context to target block's parent for commit writes
           final long targetParentBlockNumber =
               targetBlockHeader.getNumber() > 0 ? targetBlockHeader.getNumber() - 1 : 0;
           setArchiveContext(mutableState, targetParentBlockNumber);
@@ -365,8 +380,12 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
    * <p>This method is called:
    *
    * <ul>
+   *   <li>Before rollbacks start (with current head's parent number) - ensures storage reads during
+   *       rollback use correct historical context
    *   <li>After rollbacks complete (with common ancestor block number) - ensures rollforwards read
    *       from correct state
+   *   <li>After rollforwards complete (with target block number) - critical for paired
+   *       rollback/rollforward operations to ensure subsequent reads use updated context
    *   <li>Before commit (with target block's parent number) - ensures archive writes use correct
    *       context
    * </ul>

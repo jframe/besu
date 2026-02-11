@@ -98,9 +98,9 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   }
 
   /**
-   * Sets the archive context (WORLD_BLOCK_NUMBER_KEY) during world state rolling. This ensures
-   * that storage reads during rollback/rollforward operations use the correct block context, fixing
-   * the issue where paired rollback/rollforward operations would read from the wrong block's state.
+   * Sets the archive context (WORLD_BLOCK_NUMBER_KEY) during world state rolling. This ensures that
+   * storage reads during rollback/rollforward operations use the correct block context, fixing the
+   * issue where paired rollback/rollforward operations would read from the wrong block's state.
    *
    * <p>The archive flat DB strategy uses WORLD_BLOCK_NUMBER_KEY to determine which block context to
    * read from and write to. By updating this at key points during rolling, we ensure consistency:
