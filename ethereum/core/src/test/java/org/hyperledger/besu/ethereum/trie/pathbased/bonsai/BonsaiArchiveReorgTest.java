@@ -549,7 +549,8 @@ public class BonsaiArchiveReorgTest {
   /**
    * Tests that paired rollback/rollforward during a reorg correctly handles storage slot creation
    * when archive context (WORLD_BLOCK_NUMBER_KEY) needs to be updated. This test reproduces the
-   * scenario from the bug where storage reads during rollforward were using the wrong block context.
+   * scenario from the bug where storage reads during rollforward were using the wrong block
+   * context.
    *
    * <p>Bug scenario: During paired rollback/rollforward, if WORLD_BLOCK_NUMBER_KEY isn't updated
    * after rollbacks complete, subsequent storage reads during rollforward will use the wrong block
@@ -585,8 +586,8 @@ public class BonsaiArchiveReorgTest {
     // This creates a paired rollback/rollforward scenario:
     // - Rollback blocks 1A, 2A, 3A
     // - Rollforward with 1B (different contract, different storage slot)
-    Block block1B = forTransactions(
-        List.of(createContractDeployment(initCodeB, Wei.ZERO)), genesisHeader);
+    Block block1B =
+        forTransactions(List.of(createContractDeployment(initCodeB, Wei.ZERO)), genesisHeader);
 
     // The reorg will:
     // 1. Roll back from block 3 to genesis (common ancestor)
@@ -601,6 +602,60 @@ public class BonsaiArchiveReorgTest {
 
     // Verify we can query the historical state
     assertThat(getHistoricalWorldState(genesisHeader).get(contractAddress)).isNull();
+  }
+
+  /**
+   * Tests multiple rollforwards followed by a paired rollback/rollforward operation. This
+   * reproduces the issue where WORLD_BLOCK_NUMBER_KEY was not updated after rollforwards, causing
+   * the subsequent rollback to read from the wrong block context.
+   *
+   * <p>Log sequence that this test reproduces:
+   *
+   * <pre>
+   * Rollforward 0x67238e14...  (applies block changes, creates storage slots)
+   * Rollforward 0x0bdee358...  (applies more changes)
+   * [WORLD_BLOCK_NUMBER_KEY not updated - BUG]
+   * Paired Rollback 0x70b8bb69...  (tries to roll back)
+   * ERROR: Expected to update storage value, but the slot does not exist
+   * </pre>
+   *
+   * <p>Without the fix, the rollback will throw IllegalStateException during the rollback because
+   * it reads storage using stale WORLD_BLOCK_NUMBER_KEY (from before the rollforwards), causing
+   * "slot does not exist" errors.
+   */
+  @Test
+  void shouldHandleRollforwardThenPairedRollbackRollforward() {
+    // Build a simple chain: Block 1 transfers to ACCOUNT_A
+    transfer(genesisHeader);
+    assertBalance(ACCOUNT_A, ONE_ETH);
+
+    // Build to block 3
+    BlockHeader parentHeader = blockchain.getBlockByNumber(1L).orElseThrow().getHeader();
+    for (int i = 2; i <= 3; i++) {
+      Block block = forTransactions(Collections.emptyList(), parentHeader);
+      executeBlock(archiveProvider.getWorldState(), block);
+      parentHeader = block.getHeader();
+    }
+
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(3L);
+
+    // Critical part: Get historical world state at block 2
+    // This triggers rollforwards from persisted state → block 2
+    // After this, WORLD_BLOCK_NUMBER_KEY should be updated, but without the fix it's not
+    BlockHeader block2Header = blockchain.getBlockByNumber(2L).orElseThrow().getHeader();
+    getHistoricalWorldState(block2Header); // Triggers rollforwards, context should update
+
+    // Now do a reorg from genesis with a different transfer amount to ACCOUNT_A
+    // This triggers: Rollback from head → genesis, then Rollforward to new block 1
+    // Without the fix: rollback tries to read with stale WORLD_BLOCK_NUMBER_KEY →
+    // IllegalStateException
+    // With the fix: WORLD_BLOCK_NUMBER_KEY was updated after rollforwards → SUCCESS
+    reorgFromWithTransfer(genesisHeader, ACCOUNT_A, TWO_ETH);
+
+    // Verify the reorg succeeded - if we get here without IllegalStateException, the fix worked!
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(1L);
+    // The key test is that we didn't get IllegalStateException during the reorg
+    // The actual balance value is less important than proving the reorg completes
   }
 
   private void executeReorg(
