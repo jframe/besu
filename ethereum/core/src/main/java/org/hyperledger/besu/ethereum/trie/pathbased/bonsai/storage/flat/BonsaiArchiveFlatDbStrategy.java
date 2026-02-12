@@ -25,7 +25,6 @@ import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
-import org.hyperledger.besu.plugin.data.BlockHeader;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -48,19 +47,10 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
   protected final Counter getAccountFromArchiveCounter;
   protected final Counter getStorageFromArchiveCounter;
-  private final BonsaiContext context;
 
   public BonsaiArchiveFlatDbStrategy(
       final MetricsSystem metricsSystem, final CodeStorageStrategy codeStorageStrategy) {
-    this(new BonsaiContext(), metricsSystem, codeStorageStrategy);
-  }
-
-  public BonsaiArchiveFlatDbStrategy(
-      final BonsaiContext context,
-      final MetricsSystem metricsSystem,
-      final CodeStorageStrategy codeStorageStrategy) {
     super(metricsSystem, codeStorageStrategy);
-    this.context = context;
 
     getAccountFromArchiveCounter =
         metricsSystem.createCounter(
@@ -80,42 +70,24 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   public static final byte[] DELETED_ACCOUNT_VALUE = new byte[0];
   public static final byte[] DELETED_STORAGE_VALUE = new byte[0];
 
-  /**
-   * Update the block context for this strategy. This is used to set the block number suffix for
-   * archive keys when reading and writing.
-   *
-   * @param blockHeader the block header to set as context
-   */
-  @Override
-  public void updateBlockContext(final BlockHeader blockHeader) {
-    context.setBlockHeader(blockHeader);
-  }
-
-  /**
-   * Create a context-safe clone of this strategy. The clone will have a copy of the current
-   * context, allowing isolated updates without side effects.
-   *
-   * @return a new BonsaiArchiveFlatDbStrategy with a copied context
-   */
-  @Override
-  public BonsaiFlatDbStrategy contextSafeClone() {
-    return new BonsaiArchiveFlatDbStrategy(context.copy(), metricsSystem, codeStorageStrategy);
-  }
-
   @Override
   public Optional<Bytes> getFlatAccount(
       final Supplier<Optional<Bytes>> worldStateRootHashSupplier,
       final NodeLoader nodeLoader,
       final Hash accountHash,
-      final SegmentedKeyValueStorage storage) {
+      final SegmentedKeyValueStorage storage,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier) {
 
     getAccountCounter.inc();
     Optional<SegmentedKeyValueStorage.NearestKeyValue> accountFound;
 
-    // keyNearest, use MAX_BLOCK_SUFFIX in the absence of a block context:
+    // Get read context - if not available, use MAX_SUFFIX to get latest value
+    // This handles cases like snapshot storage where we want the most recent value
+    Optional<BonsaiContext> readContext = readContextSupplier.get();
+
+    // keyNearest, use MAX_BLOCK_SUFFIX when no block context is available:
     Bytes keyNearest =
-        calculateArchiveKeyWithMaxSuffix(
-            Optional.of(context), accountHash.getBytes().toArrayUnsafe());
+        calculateArchiveKeyWithMaxSuffix(readContext, accountHash.getBytes().toArrayUnsafe());
 
     // Find the nearest account state for this address and block context
     Optional<SegmentedKeyValueStorage.NearestKeyValue> nearestAccount =
@@ -267,12 +239,16 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Bytes accountValue) {
+      final Bytes accountValue,
+      final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
+
+    // Get write context or default to genesis
+    BonsaiContext writeContext = writeContextSupplier.get().orElse(new BonsaiContext(0L));
 
     // key suffixed with block context, or MIN_BLOCK_SUFFIX if we have no context:
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(
-            Optional.of(context), accountHash.getBytes().toArrayUnsafe());
+            Optional.of(writeContext), accountHash.getBytes().toArrayUnsafe());
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
@@ -281,12 +257,16 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   public void removeFlatAccount(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
-      final Hash accountHash) {
+      final Hash accountHash,
+      final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
+
+    // Get write context or default to genesis
+    BonsaiContext writeContext = writeContextSupplier.get().orElse(new BonsaiContext(0L));
 
     // insert a key suffixed with block context, with 'deleted account' value
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(
-            Optional.of(context), accountHash.getBytes().toArrayUnsafe());
+            Optional.of(writeContext), accountHash.getBytes().toArrayUnsafe());
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
@@ -305,15 +285,20 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final NodeLoader nodeLoader,
       final Hash accountHash,
       final StorageSlotKey storageSlotKey,
-      final SegmentedKeyValueStorage storage) {
+      final SegmentedKeyValueStorage storage,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier) {
 
     Optional<SegmentedKeyValueStorage.NearestKeyValue> storageFound;
     getStorageValueCounter.inc();
 
+    // Get read context - if not available, use MAX_SUFFIX to get latest value
+    // This handles cases like snapshot storage where we want the most recent value
+    Optional<BonsaiContext> readContext = readContextSupplier.get();
+
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, storageSlotKey.getSlotHash());
-    // keyNearest, use MAX_BLOCK_SUFFIX in the absence of a block context:
-    Bytes keyNearest = calculateArchiveKeyWithMaxSuffix(Optional.of(context), naturalKey);
+    // keyNearest, use MAX_BLOCK_SUFFIX when no block context is available:
+    Bytes keyNearest = calculateArchiveKeyWithMaxSuffix(readContext, naturalKey);
 
     // Find the nearest storage for this address, slot key hash, and block context
     Optional<SegmentedKeyValueStorage.NearestKeyValue> nearestStorage =
@@ -367,12 +352,16 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
       final Hash slotHash,
-      final Bytes storageValue) {
+      final Bytes storageValue,
+      final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
+
+    // Get write context or default to genesis
+    BonsaiContext writeContext = writeContextSupplier.get().orElse(new BonsaiContext(0L));
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     // keyNearest, use MIN_BLOCK_SUFFIX in the absence of a block context:
-    byte[] keyNearest = calculateArchiveKeyWithMinSuffix(Optional.of(context), naturalKey);
+    byte[] keyNearest = calculateArchiveKeyWithMinSuffix(Optional.of(writeContext), naturalKey);
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keyNearest, storageValue.toArrayUnsafe());
   }
@@ -385,12 +374,16 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Hash accountHash,
-      final Hash slotHash) {
+      final Hash slotHash,
+      final Supplier<Optional<BonsaiContext>> writeContextSupplier) {
+
+    // Get write context or default to genesis
+    BonsaiContext writeContext = writeContextSupplier.get().orElse(new BonsaiContext(0L));
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     // insert a key suffixed with block context, with 'deleted account' value
-    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(Optional.of(context), naturalKey);
+    byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(Optional.of(writeContext), naturalKey);
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
   }

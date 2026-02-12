@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredNodeFactory;
@@ -85,7 +86,8 @@ public class BonsaiPartialFlatDbStrategy extends BonsaiFlatDbStrategy {
       final Supplier<Optional<Bytes>> worldStateRootHashSupplier,
       final NodeLoader nodeLoader,
       final Hash accountHash,
-      final SegmentedKeyValueStorage storage) {
+      final SegmentedKeyValueStorage storage,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier) {
     getAccountCounter.inc();
     Optional<Bytes> response =
         storage.get(ACCOUNT_INFO_STATE, accountHash.getBytes().toArrayUnsafe()).map(Bytes::wrap);
@@ -118,7 +120,8 @@ public class BonsaiPartialFlatDbStrategy extends BonsaiFlatDbStrategy {
       final NodeLoader nodeLoader,
       final Hash accountHash,
       final StorageSlotKey storageSlotKey,
-      final SegmentedKeyValueStorage storage) {
+      final SegmentedKeyValueStorage storage,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier) {
     getStorageValueCounter.inc();
     Optional<Bytes> response =
         storage

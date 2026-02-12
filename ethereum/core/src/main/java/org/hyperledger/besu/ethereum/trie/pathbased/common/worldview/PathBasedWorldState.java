@@ -212,6 +212,14 @@ public abstract class PathBasedWorldState
     // Default: no-op
   }
 
+  protected void postPersistSuccess(final BlockHeader blockHeader) {
+    // Default: no-op
+  }
+
+  protected PathBasedWorldStateKeyValueStorage.Updater getUpdaterForPersist() {
+    return worldStateKeyValueStorage.updater();
+  }
+
   @Override
   public void persist(final BlockHeader blockHeader, final StateRootCommitter committer) {
 
@@ -228,8 +236,7 @@ public abstract class PathBasedWorldState
 
     boolean success = false;
 
-    final PathBasedWorldStateKeyValueStorage.Updater stateUpdater =
-        worldStateKeyValueStorage.updater();
+    final PathBasedWorldStateKeyValueStorage.Updater stateUpdater = getUpdaterForPersist();
     Runnable saveTrieLog = () -> {};
     Runnable cacheWorldState = () -> {};
 
@@ -276,6 +283,8 @@ public abstract class PathBasedWorldState
         saveTrieLog.run();
         // commit only the composed worldstate, as trielog transaction is already complete:
         stateUpdater.commitComposedOnly();
+        // call post-persist hook for subclasses
+        postPersistSuccess(blockHeader);
         if (!isStorageFrozen) {
           // optionally save the committed worldstate state in the cache
           cacheWorldState.run();

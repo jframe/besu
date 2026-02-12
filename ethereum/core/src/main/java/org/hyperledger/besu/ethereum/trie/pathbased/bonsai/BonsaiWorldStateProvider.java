@@ -23,10 +23,12 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMer
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.PathBasedWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
+import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.ServiceManager;
@@ -65,9 +67,23 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
     provideCachedWorldStorageManager(
         new BonsaiCachedWorldStorageManager(
             this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
-    loadHeadWorldState(
-        new BonsaiWorldState(
-            this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
+
+    // Create archive world state if in archive mode, otherwise use regular world state
+    if (worldStateKeyValueStorage.getFlatDbMode() == FlatDbMode.ARCHIVE) {
+      // Get the block header for the current world state
+      final org.hyperledger.besu.ethereum.core.BlockHeader blockHeader =
+          worldStateKeyValueStorage
+              .getWorldStateBlockHash()
+              .flatMap(blockchain::getBlockHeader)
+              .orElse(null);
+      loadHeadWorldState(
+          new BonsaiArchiveWorldState(
+              this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache, blockHeader));
+    } else {
+      loadHeadWorldState(
+          new BonsaiWorldState(
+              this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
+    }
   }
 
   @VisibleForTesting
@@ -87,13 +103,31 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
     this.worldStateHealerSupplier = worldStateHealerSupplier;
     this.evmConfiguration = evmConfiguration;
     provideCachedWorldStorageManager(bonsaiCachedWorldStorageManager);
-    loadHeadWorldState(
-        new BonsaiWorldState(
-            this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
+
+    // Create archive world state if in archive mode, otherwise use regular world state
+    if (worldStateKeyValueStorage.getFlatDbMode() == FlatDbMode.ARCHIVE) {
+      // Get the block header for the current world state
+      final org.hyperledger.besu.ethereum.core.BlockHeader blockHeader =
+          worldStateKeyValueStorage
+              .getWorldStateBlockHash()
+              .flatMap(blockchain::getBlockHeader)
+              .orElse(null);
+      loadHeadWorldState(
+          new BonsaiArchiveWorldState(
+              this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache, blockHeader));
+    } else {
+      loadHeadWorldState(
+          new BonsaiWorldState(
+              this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
+    }
   }
 
   public BonsaiCachedMerkleTrieLoader getCachedMerkleTrieLoader() {
     return bonsaiCachedMerkleTrieLoader;
+  }
+
+  public Blockchain getBlockchain() {
+    return blockchain;
   }
 
   private BonsaiWorldStateKeyValueStorage getBonsaiWorldStateKeyValueStorage() {

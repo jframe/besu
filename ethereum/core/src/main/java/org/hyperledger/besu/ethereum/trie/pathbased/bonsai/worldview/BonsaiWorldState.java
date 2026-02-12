@@ -32,6 +32,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.NoopBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateLayerStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.PathBasedValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.cache.PathBasedCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
@@ -114,9 +115,22 @@ public class BonsaiWorldState extends PathBasedWorldState {
 
   @Override
   public BonsaiWorldStateKeyValueStorage getWorldStateStorage() {
-    // return a worldStateStorage with a clone of the bonsai context, to prevent context change side
-    // effects
-    return ((BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage).getContextSafeCopy();
+    return (BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage;
+  }
+
+  protected Supplier<Optional<BonsaiContext>> getReadContextSupplier() {
+    // Default: no context (works for FULL and PARTIAL modes)
+    return Optional::empty;
+  }
+
+  protected Supplier<Optional<BonsaiContext>> getWriteContextSupplier() {
+    // Default: no context (works for FULL and PARTIAL modes)
+    return Optional::empty;
+  }
+
+  @Override
+  protected PathBasedWorldStateKeyValueStorage.Updater getUpdaterForPersist() {
+    return getWorldStateStorage().updater(getWriteContextSupplier());
   }
 
   @Override
@@ -376,14 +390,15 @@ public class BonsaiWorldState extends PathBasedWorldState {
                 noOpSegmentedTx,
                 noOpTx,
                 worldStateKeyValueStorage.getFlatDbStrategy(),
-                worldStateKeyValueStorage.getComposedWorldStateStorage())),
+                worldStateKeyValueStorage.getComposedWorldStateStorage(),
+                getWriteContextSupplier())),
         accumulator.copy());
   }
 
   @Override
   public Account get(final Address address) {
     return getWorldStateStorage()
-        .getAccount(address.addressHash())
+        .getAccount(address.addressHash(), getReadContextSupplier())
         .map(bytes -> BonsaiAccount.fromRLP(accumulator, address, bytes, true, codeCache))
         .orElse(null);
   }
@@ -416,7 +431,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
   public Optional<UInt256> getStorageValueByStorageSlotKey(
       final Address address, final StorageSlotKey storageSlotKey) {
     return getWorldStateStorage()
-        .getStorageValueByStorageSlotKey(address.addressHash(), storageSlotKey)
+        .getStorageValueByStorageSlotKey(address.addressHash(), storageSlotKey, getReadContextSupplier())
         .map(UInt256::fromBytes);
   }
 
@@ -425,7 +440,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
       final Address address,
       final StorageSlotKey storageSlotKey) {
     return getWorldStateStorage()
-        .getStorageValueByStorageSlotKey(storageRootSupplier, address.addressHash(), storageSlotKey)
+        .getStorageValueByStorageSlotKey(storageRootSupplier, address.addressHash(), storageSlotKey, getReadContextSupplier())
         .map(UInt256::fromBytes);
   }
 
@@ -479,13 +494,5 @@ public class BonsaiWorldState extends PathBasedWorldState {
   @Override
   public CodeCache codeCache() {
     return codeCache;
-  }
-
-  @Override
-  protected void prePersist(final BlockHeader blockHeader) {
-    // update the bonsai context with the current block before we persist to storage
-    ((BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage)
-        .getFlatDbStrategy()
-        .updateBlockContext(blockHeader);
   }
 }

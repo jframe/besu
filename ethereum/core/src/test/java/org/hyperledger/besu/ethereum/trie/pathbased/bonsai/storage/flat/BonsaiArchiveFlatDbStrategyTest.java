@@ -16,19 +16,18 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
-import org.hyperledger.besu.plugin.data.BlockHeader;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,7 +53,8 @@ public class BonsaiArchiveFlatDbStrategyTest {
 
     // No context set - should default to block 0
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue);
+    Supplier<Optional<BonsaiContext>> writeContextSupplier = Optional::empty;
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, writeContextSupplier);
     tx.commit();
 
     final byte[] expectedKey =
@@ -67,14 +67,13 @@ public class BonsaiArchiveFlatDbStrategyTest {
 
   @Test
   public void block1UsesOneSuffixWhenContextIsBlockZero() {
-    updateBlockContext(0);
-
     final Hash accountHash =
         Address.fromHexString("0x0000000000000000000000000000000000000002").addressHash();
     final Bytes accountValue = Bytes.fromHexString("0xDDEEFF");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue);
+    Supplier<Optional<BonsaiContext>> writeContextSupplier = () -> Optional.of(new BonsaiContext(0L));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, writeContextSupplier);
     tx.commit();
 
     final byte[] expectedKey =
@@ -87,14 +86,13 @@ public class BonsaiArchiveFlatDbStrategyTest {
 
   @Test
   public void block2UsesTwoSuffixWhenContextIsBlockOne() {
-    updateBlockContext(1);
-
     final Hash accountHash =
         Address.fromHexString("0x0000000000000000000000000000000000000003").addressHash();
     final Bytes accountValue = Bytes.fromHexString("0x112233");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue);
+    Supplier<Optional<BonsaiContext>> writeContextSupplier = () -> Optional.of(new BonsaiContext(1L));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, accountValue, writeContextSupplier);
     tx.commit();
 
     final byte[] expectedKey =
@@ -114,13 +112,14 @@ public class BonsaiArchiveFlatDbStrategyTest {
 
     // Write genesis (no context = block 0)
     SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, genesisAccountValue);
+    Supplier<Optional<BonsaiContext>> genesisContext = Optional::empty;
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, genesisAccountValue, genesisContext);
     tx.commit();
 
     // Write block 1
-    updateBlockContext(0);
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, block1AccountValue);
+    Supplier<Optional<BonsaiContext>> block1Context = () -> Optional.of(new BonsaiContext(0L));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, block1AccountValue, block1Context);
     tx.commit();
 
     final byte[] genesisKey =
@@ -143,27 +142,27 @@ public class BonsaiArchiveFlatDbStrategyTest {
         Address.fromHexString("0x0000000000000000000000000000000000000005").addressHash();
 
     // Block 0
-    updateBlockContext(0);
     SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA00"));
+    Supplier<Optional<BonsaiContext>> context0 = () -> Optional.of(new BonsaiContext(0L));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA00"), context0);
     tx.commit();
 
     // Block 1
-    updateBlockContext(1);
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA01"));
+    Supplier<Optional<BonsaiContext>> context1 = () -> Optional.of(new BonsaiContext(1L));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA01"), context1);
     tx.commit();
 
     // Block 2
-    updateBlockContext(2);
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA02"));
+    Supplier<Optional<BonsaiContext>> context2 = () -> Optional.of(new BonsaiContext(2L));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA02"), context2);
     tx.commit();
 
     // Block 3
-    updateBlockContext(3);
     tx = storage.startTransaction();
-    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA03"));
+    Supplier<Optional<BonsaiContext>> context3 = () -> Optional.of(new BonsaiContext(3L));
+    archiveFlatDbStrategy.putFlatAccount(storage, tx, accountHash, Bytes.fromHexString("0xAA03"), context3);
     tx.commit();
 
     final Bytes[] expectedValues = {
@@ -182,47 +181,4 @@ public class BonsaiArchiveFlatDbStrategyTest {
     }
   }
 
-  @Test
-  public void contextSafeCloneCreatesIsolatedCopy() {
-    updateBlockContext(5);
-
-    // Create a clone
-    BonsaiArchiveFlatDbStrategy clonedStrategy =
-        (BonsaiArchiveFlatDbStrategy) archiveFlatDbStrategy.contextSafeClone();
-
-    // Update the original context
-    updateBlockContext(10);
-
-    // The clone should still have the old context (block 5)
-    final Hash accountHash =
-        Address.fromHexString("0x0000000000000000000000000000000000000006").addressHash();
-    final Bytes accountValue = Bytes.fromHexString("0xFFEEDD");
-
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    clonedStrategy.putFlatAccount(storage, tx, accountHash, accountValue);
-    tx.commit();
-
-    // Should be stored with suffix 5, not 10
-    final byte[] expectedKey =
-        Bytes.concatenate(accountHash.getBytes(), Bytes.ofUnsignedLong(5)).toArrayUnsafe();
-    final Optional<byte[]> storedValue = storage.get(ACCOUNT_INFO_STATE, expectedKey);
-
-    assertThat(storedValue).isPresent();
-    assertThat(Bytes.wrap(storedValue.get())).isEqualTo(accountValue);
-
-    // Verify block 10 key doesn't exist
-    final byte[] block10Key =
-        Bytes.concatenate(accountHash.getBytes(), Bytes.ofUnsignedLong(10)).toArrayUnsafe();
-    assertThat(storage.get(ACCOUNT_INFO_STATE, block10Key)).isEmpty();
-  }
-
-  /**
-   * Helper method to update the block context on the strategy. This replaces the old approach of
-   * writing to WORLD_BLOCK_NUMBER_KEY in the database.
-   */
-  private void updateBlockContext(final long blockNumber) {
-    final BlockHeader mockHeader = mock(BlockHeader.class);
-    when(mockHeader.getNumber()).thenReturn(blockNumber);
-    archiveFlatDbStrategy.updateBlockContext(mockHeader);
-  }
 }
