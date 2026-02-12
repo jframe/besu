@@ -79,12 +79,14 @@ public class BonsaiArchiveWorldState extends BonsaiWorldState {
   @Override
   protected void prePersist(final BlockHeader blockHeader) {
     long blockNumber = blockHeader == null ? 0L : blockHeader.getNumber();
+    LOG.debug("prePersist: setting writeContext to block {}", blockNumber);
     setWriteContext(new BonsaiContext(blockNumber));
   }
 
   @Override
   protected void postPersistSuccess(final BlockHeader blockHeader) {
     if (blockHeader != null) {
+      LOG.debug("postPersistSuccess: setting readContext to block {}", blockHeader.getNumber());
       setReadContext(new BonsaiContext(blockHeader.getNumber()));
     }
   }
@@ -93,6 +95,7 @@ public class BonsaiArchiveWorldState extends BonsaiWorldState {
   public void resetWorldStateTo(final BlockHeader blockHeader) {
     super.resetWorldStateTo(blockHeader);
     // Update read context to match the new block we're reset to
+    LOG.debug("resetWorldStateTo: setting readContext to block {}", blockHeader.getNumber());
     setReadContext(new BonsaiContext(blockHeader.getNumber()));
   }
 }
