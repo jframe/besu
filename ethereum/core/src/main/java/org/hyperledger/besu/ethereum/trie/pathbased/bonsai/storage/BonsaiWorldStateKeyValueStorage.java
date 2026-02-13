@@ -143,7 +143,9 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
   }
 
   public Optional<Bytes> getStorageValueByStorageSlotKey(
-      final Hash accountHash, final StorageSlotKey storageSlotKey, final Supplier<Optional<BonsaiContext>> readContextSupplier) {
+      final Hash accountHash,
+      final StorageSlotKey storageSlotKey,
+      final Supplier<Optional<BonsaiContext>> readContextSupplier) {
     return getStorageValueByStorageSlotKey(
         () ->
             getAccount(accountHash, readContextSupplier)
@@ -273,13 +275,34 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
       return this;
     }
 
+    /**
+     * Removes an account at an explicit block number context. Used during archive mode rollback to
+     * write deletion markers at specific block numbers.
+     *
+     * @param accountHash the hash of the account to remove
+     * @param blockNumber the block number context for the deletion marker
+     * @return this updater
+     */
+    public Updater removeAccountInfoStateAtBlock(final Hash accountHash, final long blockNumber) {
+      flatDbStrategy.removeFlatAccount(
+          worldStorage,
+          composedWorldStateTransaction,
+          accountHash,
+          () -> Optional.of(new BonsaiContext(blockNumber)));
+      return this;
+    }
+
     public Updater putAccountInfoState(final Hash accountHash, final Bytes accountValue) {
       if (accountValue.isEmpty()) {
         // Don't save empty values
         return this;
       }
       flatDbStrategy.putFlatAccount(
-          worldStorage, composedWorldStateTransaction, accountHash, accountValue, writeContextSupplier);
+          worldStorage,
+          composedWorldStateTransaction,
+          accountHash,
+          accountValue,
+          writeContextSupplier);
       return this;
     }
 
@@ -326,7 +349,12 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     public synchronized Updater putStorageValueBySlotHash(
         final Hash accountHash, final Hash slotHash, final Bytes storageValue) {
       flatDbStrategy.putFlatAccountStorageValueByStorageSlotHash(
-          worldStorage, composedWorldStateTransaction, accountHash, slotHash, storageValue, writeContextSupplier);
+          worldStorage,
+          composedWorldStateTransaction,
+          accountHash,
+          slotHash,
+          storageValue,
+          writeContextSupplier);
       return this;
     }
 
@@ -334,6 +362,26 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
         final Hash accountHash, final Hash slotHash) {
       flatDbStrategy.removeFlatAccountStorageValueByStorageSlotHash(
           worldStorage, composedWorldStateTransaction, accountHash, slotHash, writeContextSupplier);
+    }
+
+    /**
+     * Removes a storage value at an explicit block number context. Used during archive mode
+     * rollback to write deletion markers at specific block numbers.
+     *
+     * @param accountHash the hash of the account
+     * @param slotHash the hash of the storage slot to remove
+     * @param blockNumber the block number context for the deletion marker
+     * @return this updater
+     */
+    public synchronized Updater removeStorageValueBySlotHashAtBlock(
+        final Hash accountHash, final Hash slotHash, final long blockNumber) {
+      flatDbStrategy.removeFlatAccountStorageValueByStorageSlotHash(
+          worldStorage,
+          composedWorldStateTransaction,
+          accountHash,
+          slotHash,
+          () -> Optional.of(new BonsaiContext(blockNumber)));
+      return this;
     }
 
     @Override

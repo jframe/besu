@@ -19,7 +19,6 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.Path
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.MutableWorldState;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
@@ -49,6 +48,7 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -129,7 +129,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
   }
 
   @Override
-  protected PathBasedWorldStateKeyValueStorage.Updater getUpdaterForPersist() {
+  public PathBasedWorldStateKeyValueStorage.Updater getUpdaterForPersist() {
     return getWorldStateStorage().updater(getWriteContextSupplier());
   }
 
@@ -431,7 +431,8 @@ public class BonsaiWorldState extends PathBasedWorldState {
   public Optional<UInt256> getStorageValueByStorageSlotKey(
       final Address address, final StorageSlotKey storageSlotKey) {
     return getWorldStateStorage()
-        .getStorageValueByStorageSlotKey(address.addressHash(), storageSlotKey, getReadContextSupplier())
+        .getStorageValueByStorageSlotKey(
+            address.addressHash(), storageSlotKey, getReadContextSupplier())
         .map(UInt256::fromBytes);
   }
 
@@ -440,7 +441,8 @@ public class BonsaiWorldState extends PathBasedWorldState {
       final Address address,
       final StorageSlotKey storageSlotKey) {
     return getWorldStateStorage()
-        .getStorageValueByStorageSlotKey(storageRootSupplier, address.addressHash(), storageSlotKey, getReadContextSupplier())
+        .getStorageValueByStorageSlotKey(
+            storageRootSupplier, address.addressHash(), storageSlotKey, getReadContextSupplier())
         .map(UInt256::fromBytes);
   }
 
@@ -484,6 +486,45 @@ public class BonsaiWorldState extends PathBasedWorldState {
   protected Hash hashAndSavePreImage(final Bytes value) {
     // by default do not save has preImages
     return Hash.hash(value);
+  }
+
+  /**
+   * Writes deletion markers for all items removed during rollback, using their tracked block
+   * contexts. This is called once at the end of archive mode rollback to write markers at all
+   * intermediate blocks.
+   *
+   * @param stateUpdater the updater to write deletion markers to
+   * @param worldStateUpdater the accumulator containing tracked rollback deletions
+   */
+  public void writeRollbackDeletionMarkers(
+      final BonsaiWorldStateKeyValueStorage.Updater stateUpdater,
+      final BonsaiWorldStateUpdateAccumulator worldStateUpdater) {
+
+    // Write account deletion markers at each tracked block number
+    for (Map.Entry<Long, Set<Address>> entry :
+        worldStateUpdater.getAccountsRemovedByBlock().entrySet()) {
+      long blockNumber = entry.getKey();
+      for (Address address : entry.getValue()) {
+        stateUpdater.removeAccountInfoStateAtBlock(address.addressHash(), blockNumber);
+      }
+    }
+
+    // Write storage deletion markers at each tracked block number
+    for (Map.Entry<Long, Map<Address, Set<StorageSlotKey>>> blockEntry :
+        worldStateUpdater.getStorageRemovedByBlock().entrySet()) {
+      long blockNumber = blockEntry.getKey();
+      for (Map.Entry<Address, Set<StorageSlotKey>> addrEntry : blockEntry.getValue().entrySet()) {
+        Hash addressHash = addrEntry.getKey().addressHash();
+        for (StorageSlotKey slotKey : addrEntry.getValue()) {
+          stateUpdater.removeStorageValueBySlotHashAtBlock(
+              addressHash, slotKey.getSlotHash(), blockNumber);
+        }
+      }
+    }
+
+    // Note: Code deletion markers are handled by account removal in archive mode.
+    // The code storage uses account hash as the key prefix, so when an account is marked
+    // as deleted, the code is effectively marked as deleted too.
   }
 
   @Override

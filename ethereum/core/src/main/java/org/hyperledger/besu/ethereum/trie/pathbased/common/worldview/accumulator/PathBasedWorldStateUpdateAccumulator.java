@@ -77,6 +77,16 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
   private final Map<UInt256, Hash> storageKeyHashLookup = new ConcurrentHashMap<>();
   protected boolean isAccumulatorStateChanged;
 
+  // Track items removed during rollback, keyed by the block number where deletion markers should be
+  // written. Block number is the PARENT of the rolled-back block (where the deletion marker goes).
+  private final Map<Long, Set<Address>> accountsRemovedByBlock = new ConcurrentHashMap<>();
+  private final Map<Long, Map<Address, Set<StorageSlotKey>>> storageRemovedByBlock =
+      new ConcurrentHashMap<>();
+  private final Map<Long, Set<Address>> codeRemovedByBlock = new ConcurrentHashMap<>();
+
+  // Current rollback target block number (set before each rollback)
+  private long currentRollbackTargetBlock = -1;
+
   public PathBasedWorldStateUpdateAccumulator(
       final PathBasedWorldView world,
       final Consumer<PathBasedValue<ACCOUNT>> accountPreloader,
@@ -634,6 +644,55 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     return wrappedWorldView().getWorldStateStorage();
   }
 
+  /**
+   * Sets the current rollback target block number. This should be called before each rollback
+   * operation in archive mode to track which block number deletion markers should be written at.
+   *
+   * @param blockNumber the target block number for deletion markers
+   */
+  public void setRollbackTargetBlock(final long blockNumber) {
+    this.currentRollbackTargetBlock = blockNumber;
+  }
+
+  /**
+   * Gets the map of accounts removed during rollback, keyed by block number.
+   *
+   * @return map of block number to set of addresses that need deletion markers
+   */
+  public Map<Long, Set<Address>> getAccountsRemovedByBlock() {
+    return accountsRemovedByBlock;
+  }
+
+  /**
+   * Gets the map of storage slots removed during rollback, keyed by block number.
+   *
+   * @return map of block number to map of address to set of storage slot keys that need deletion
+   *     markers
+   */
+  public Map<Long, Map<Address, Set<StorageSlotKey>>> getStorageRemovedByBlock() {
+    return storageRemovedByBlock;
+  }
+
+  /**
+   * Gets the map of code removed during rollback, keyed by block number.
+   *
+   * @return map of block number to set of addresses that need code deletion markers
+   */
+  public Map<Long, Set<Address>> getCodeRemovedByBlock() {
+    return codeRemovedByBlock;
+  }
+
+  /**
+   * Clears all rollback deletion tracking state. Should be called after deletion markers have been
+   * written.
+   */
+  public void clearRollbackDeletionTracking() {
+    accountsRemovedByBlock.clear();
+    storageRemovedByBlock.clear();
+    codeRemovedByBlock.clear();
+    currentRollbackTargetBlock = -1;
+  }
+
   public void rollForward(final TrieLog layer) {
     layer
         .getAccountChanges()
@@ -709,6 +768,16 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
             expectedValue,
             "Address=" + address + " Prior Value in Rolling Change");
       }
+      // Track ALL account changes for archive mode deletion markers.
+      // In archive mode, each block's data is stored with that block's suffix. When rolling back,
+      // we need to write deletion markers at EVERY block to mask orphaned data, not just the
+      // block where the account was created. The deletion marker tells archive reads to not
+      // return the orphaned value at that block suffix.
+      if (currentRollbackTargetBlock >= 0) {
+        accountsRemovedByBlock
+            .computeIfAbsent(currentRollbackTargetBlock, k -> ConcurrentHashMap.newKeySet())
+            .add(address);
+      }
       if (replacementValue == null) {
         if (accountValue.getPrior() == null) {
           // TODO: should we remove from the parent accumulated change also?  only if it is a
@@ -783,8 +852,20 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
                 expectedCode == null ? "null" : Hash.hash(expectedCode),
                 Hash.hash(codeValue.getUpdated())));
       }
-      if (replacementCode == null && codeValue.getPrior() == null) {
-        codeToUpdate.remove(address);
+      // Track ALL code changes for archive mode deletion markers.
+      // In archive mode, each block's data is stored with that block's suffix. When rolling back,
+      // we need to write deletion markers at EVERY block to mask orphaned data.
+      if (currentRollbackTargetBlock >= 0) {
+        codeRemovedByBlock
+            .computeIfAbsent(currentRollbackTargetBlock, k -> ConcurrentHashMap.newKeySet())
+            .add(address);
+      }
+      if (replacementCode == null) {
+        if (codeValue.getPrior() == null) {
+          codeToUpdate.remove(address);
+        } else {
+          codeValue.setUpdated(null);
+        }
       } else {
         codeValue.setUpdated(replacementCode);
       }
@@ -860,12 +941,25 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
                 expectedValue == null ? "null" : expectedValue.toShortHexString(),
                 existingSlotValue == null ? "null" : existingSlotValue.toShortHexString()));
       }
-      if (replacementValue == null && slotValue.getPrior() == null) {
-        final Map<StorageSlotKey, PathBasedValue<UInt256>> thisStorageUpdate =
-            maybeCreateStorageMap(storageMap, address);
-        thisStorageUpdate.remove(storageSlotKey);
-        if (thisStorageUpdate.isEmpty()) {
-          storageToUpdate.remove(address);
+      // Track ALL storage changes for archive mode deletion markers.
+      // In archive mode, each block's data is stored with that block's suffix. When rolling back,
+      // we need to write deletion markers at EVERY block to mask orphaned data.
+      if (currentRollbackTargetBlock >= 0) {
+        storageRemovedByBlock
+            .computeIfAbsent(currentRollbackTargetBlock, k -> new ConcurrentHashMap<>())
+            .computeIfAbsent(address, k -> ConcurrentHashMap.newKeySet())
+            .add(storageSlotKey);
+      }
+      if (replacementValue == null) {
+        if (slotValue.getPrior() == null) {
+          final Map<StorageSlotKey, PathBasedValue<UInt256>> thisStorageUpdate =
+              maybeCreateStorageMap(storageMap, address);
+          thisStorageUpdate.remove(storageSlotKey);
+          if (thisStorageUpdate.isEmpty()) {
+            storageToUpdate.remove(address);
+          }
+        } else {
+          slotValue.setUpdated(null);
         }
       } else {
         slotValue.setUpdated(replacementValue);
@@ -917,6 +1011,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     updatedAccounts.clear();
     deletedAccounts.clear();
     storageKeyHashLookup.clear();
+    clearRollbackDeletionTracking();
   }
 
   protected Hash hashAndSaveAccountPreImage(final Address address) {

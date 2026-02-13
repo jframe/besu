@@ -78,7 +78,12 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
               .orElse(null);
       loadHeadWorldState(
           new BonsaiArchiveWorldState(
-              this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache, blockHeader));
+              this,
+              worldStateKeyValueStorage,
+              evmConfiguration,
+              worldStateConfig,
+              codeCache,
+              blockHeader));
     } else {
       loadHeadWorldState(
           new BonsaiWorldState(
@@ -114,7 +119,12 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
               .orElse(null);
       loadHeadWorldState(
           new BonsaiArchiveWorldState(
-              this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache, blockHeader));
+              this,
+              worldStateKeyValueStorage,
+              evmConfiguration,
+              worldStateConfig,
+              codeCache,
+              blockHeader));
     } else {
       loadHeadWorldState(
           new BonsaiWorldState(

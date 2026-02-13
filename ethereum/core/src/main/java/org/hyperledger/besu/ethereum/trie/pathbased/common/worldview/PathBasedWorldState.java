@@ -216,7 +216,7 @@ public abstract class PathBasedWorldState
     // Default: no-op
   }
 
-  protected PathBasedWorldStateKeyValueStorage.Updater getUpdaterForPersist() {
+  public PathBasedWorldStateKeyValueStorage.Updater getUpdaterForPersist() {
     return worldStateKeyValueStorage.updater();
   }
 

@@ -58,7 +58,6 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -836,8 +835,7 @@ public class BonsaiArchiveReorgTest {
     Block block1B =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0xFF)), 1)),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xFF)), 1)),
             deployBlock.getHeader());
     reorgFrom(deployBlock.getHeader(), block1B);
 
@@ -854,9 +852,6 @@ public class BonsaiArchiveReorgTest {
    * ACCOUNT_A and ACCOUNT_C with different storage values. After reorg, ACCOUNT_B should not exist
    * (flat DB bug if it does), and storage should reflect Chain B's values.
    */
-  // TODO: Fix archive reorg handling - orphaned block data remains in archive DB causing
-  // reads to return stale data from orphaned fork when new blocks have same block numbers
-  @Disabled("Archive mode reorg needs deletion markers for orphaned block data")
   @Test
   void shouldHandleMultiBlockReorgWithCombinedAccountAndStorageConflicts() {
     // Build a common ancestor block first
@@ -875,8 +870,7 @@ public class BonsaiArchiveReorgTest {
     Block block3A =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0xAA)), 1),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xAA)), 1),
                 createTransaction(ACCOUNT_A, ONE_ETH, 2)),
             deployBlockA.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3A);
@@ -885,8 +879,7 @@ public class BonsaiArchiveReorgTest {
     Block block4A =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0xBB)), 3),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xBB)), 3),
                 createTransaction(ACCOUNT_B, TWO_ETH, 4)),
             block3A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block4A);
@@ -906,8 +899,7 @@ public class BonsaiArchiveReorgTest {
     Block block3B =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0x11)), 1),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0x11)), 1),
                 createTransaction(ACCOUNT_C, THREE_ETH, 2)),
             deployBlockB.getHeader());
     executeBlockAndUpdateHead(block3B);
@@ -916,8 +908,7 @@ public class BonsaiArchiveReorgTest {
     Block block4B =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0x22)), 3),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0x22)), 3),
                 createTransaction(ACCOUNT_A, FIVE_ETH, 4)),
             block3B.getHeader());
     executeBlockAndUpdateHead(block4B);
@@ -939,9 +930,6 @@ public class BonsaiArchiveReorgTest {
    * reorg, ACCOUNT_A and ACCOUNT_B should not exist (they were never created in Chain B), while
    * ACCOUNT_C should have the expected balance.
    */
-  // TODO: Fix archive reorg handling - orphaned block data remains in archive DB causing
-  // reads to return stale data from orphaned fork when new blocks have same block numbers
-  @Disabled("Archive mode reorg needs deletion markers for orphaned block data")
   @Test
   void shouldHandleDeepMultiBlockReorgWithConflictsAtEveryLevel() {
     final int CHAIN_LENGTH = 10;
@@ -992,8 +980,7 @@ public class BonsaiArchiveReorgTest {
 
     // Verify historical queries still work for orphaned Chain A blocks
     for (int i = 0; i < CHAIN_LENGTH; i++) {
-      BlockHeader orphanedHeader =
-          blockchain.getBlockHeader(chainABlockHashes.get(i)).orElse(null);
+      BlockHeader orphanedHeader = blockchain.getBlockHeader(chainABlockHashes.get(i)).orElse(null);
       if (orphanedHeader != null) {
         // Trie logs should still allow querying orphaned state
         Optional<MutableWorldState> orphanedState =
@@ -1085,9 +1072,6 @@ public class BonsaiArchiveReorgTest {
    * <p>After reorg, ACCOUNT_B should not exist (it only received funds via self-destruct in Chain
    * A). This test verifies that the flat DB properly marks data as deleted during rollback.
    */
-  // TODO: Fix archive reorg handling - orphaned block data remains in archive DB causing
-  // reads to return stale data from orphaned fork when new blocks have same block numbers
-  @Disabled("Archive mode reorg needs deletion markers for orphaned block data")
   @Test
   void shouldHandleReorgWithAlternatingAccountCreationDeletion() {
     // Build a common ancestor block first
@@ -1117,13 +1101,11 @@ public class BonsaiArchiveReorgTest {
 
     // Block 4A: Transfer to keep chain going
     Block block4A =
-        forTransactions(
-            List.of(createTransaction(ACCOUNT_A, ONE_ETH, 2)), block3A.getHeader());
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 2)), block3A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block4A);
 
     // Reorg to Chain B: Never creates contractA, only sends to ACCOUNT_C
-    Block block2B =
-        forTransactions(List.of(createTransaction(ACCOUNT_C, ONE_ETH, 0)), forkPoint);
+    Block block2B = forTransactions(List.of(createTransaction(ACCOUNT_C, ONE_ETH, 0)), forkPoint);
     reorgFrom(forkPoint, block2B);
 
     Block block3B =

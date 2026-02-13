@@ -246,5 +246,4 @@ public abstract class FlatDbStrategy {
     pairStream.close();
     return collected;
   }
-
 }

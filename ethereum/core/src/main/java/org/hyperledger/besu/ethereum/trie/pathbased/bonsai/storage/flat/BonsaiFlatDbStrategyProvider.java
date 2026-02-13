@@ -99,5 +99,4 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
       return new BonsaiPartialFlatDbStrategy(metricsSystem, codeStorageStrategy);
     }
   }
-
 }

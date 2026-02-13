@@ -24,12 +24,16 @@ import org.hyperledger.besu.ethereum.core.MutableWorldState;
 import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.cache.PathBasedCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
+import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
@@ -293,9 +297,35 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         // attempt the state rolling
         final PathBasedWorldStateUpdateAccumulator<?> pathBasedUpdater =
             (PathBasedWorldStateUpdateAccumulator<?>) mutableState.updater();
+
+        // Check if this is archive mode - we need to track deletions with block context
+        final boolean isArchiveMode =
+            mutableState.getWorldStateStorage().getFlatDbMode() == FlatDbMode.ARCHIVE;
+
         try {
           for (final TrieLog rollBack : rollBacks) {
             LOG.debug("Attempting Rollback of {}", rollBack.getBlockHash());
+
+            // For archive mode: set the target block number for deletion marker tracking
+            // The target is the SAME block as the data being rolled back, because archive mode
+            // search finds the entry with the highest suffix <= read context. To mask orphaned
+            // data at block N, we need a deletion marker at block N (same suffix).
+            // First try the trie log's block number, then fall back to looking up the block header.
+            if (isArchiveMode) {
+              Optional<Long> blockNumber = rollBack.getBlockNumber();
+              if (blockNumber.isEmpty()) {
+                // Try to get block number from blockchain (if block header still exists)
+                blockNumber =
+                    blockchain.getBlockHeader(rollBack.getBlockHash()).map(BlockHeader::getNumber);
+              }
+              blockNumber.ifPresentOrElse(
+                  blockNum -> pathBasedUpdater.setRollbackTargetBlock(blockNum),
+                  () ->
+                      LOG.warn(
+                          "Archive rollback: could not determine block number for hash {}",
+                          rollBack.getBlockHash()));
+            }
+
             pathBasedUpdater.rollBack(rollBack);
           }
           for (int i = rollForwards.size() - 1; i >= 0; i--) {
@@ -304,6 +334,20 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             pathBasedUpdater.rollForward(forward);
           }
           pathBasedUpdater.commit();
+
+          // For archive mode: write deletion markers at all tracked intermediate blocks
+          if (isArchiveMode
+              && mutableState instanceof BonsaiWorldState bonsaiState
+              && pathBasedUpdater instanceof BonsaiWorldStateUpdateAccumulator bonsaiUpdater) {
+            if (!bonsaiUpdater.getAccountsRemovedByBlock().isEmpty()
+                || !bonsaiUpdater.getStorageRemovedByBlock().isEmpty()) {
+              BonsaiWorldStateKeyValueStorage.Updater stateUpdater =
+                  (BonsaiWorldStateKeyValueStorage.Updater) bonsaiState.getUpdaterForPersist();
+              bonsaiState.writeRollbackDeletionMarkers(stateUpdater, bonsaiUpdater);
+              stateUpdater.commitComposedOnly();
+            }
+            pathBasedUpdater.clearRollbackDeletionTracking();
+          }
 
           mutableState.persist(blockchain.getBlockHeader(blockHash).get());
 
