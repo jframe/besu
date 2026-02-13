@@ -1197,17 +1197,14 @@ public class BonsaiArchiveReorgTest {
     BlockHeader emptyBlock1 = buildEmptyChainToBlock(1);
 
     // Chain A: transfer, empty block, transfer
-    Block block2A =
-        forTransactions(
-            List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), emptyBlock1);
+    Block block2A = forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), emptyBlock1);
     executeBlock(archiveProvider.getWorldState(), block2A);
 
     Block block3A = forTransactions(Collections.emptyList(), block2A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3A);
 
     Block block4A =
-        forTransactions(
-            List.of(createTransaction(ACCOUNT_A, ONE_ETH, 1)), block3A.getHeader());
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 1)), block3A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block4A);
 
     assertBalance(ACCOUNT_A, TWO_ETH);
@@ -1215,8 +1212,7 @@ public class BonsaiArchiveReorgTest {
 
     // Reorg from block 1: Chain B has transfer to ACCOUNT_B instead
     Block block2B =
-        forTransactions(
-            List.of(createTransaction(ACCOUNT_B, FIVE_ETH, 0)), emptyBlock1);
+        forTransactions(List.of(createTransaction(ACCOUNT_B, FIVE_ETH, 0)), emptyBlock1);
     reorgFrom(emptyBlock1, block2B);
 
     // ACCOUNT_A should not exist (never created in chain B)
@@ -1243,16 +1239,14 @@ public class BonsaiArchiveReorgTest {
     Block block2A =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0xFF)), 1)),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xFF)), 1)),
             deployBlock.getHeader());
     executeBlock(archiveProvider.getWorldState(), block2A);
     assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xFF));
 
     Block block3A =
         forTransactions(
-            List.of(
-                createContractCallWithData(contractAddress, Bytes32.ZERO, 2)),
+            List.of(createContractCallWithData(contractAddress, Bytes32.ZERO, 2)),
             block2A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3A);
     // Storage is zero but the slot exists
@@ -1262,8 +1256,7 @@ public class BonsaiArchiveReorgTest {
     Block block2B =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0xAB)), 1)),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xAB)), 1)),
             deployBlock.getHeader());
     reorgFrom(deployBlock.getHeader(), block2B);
 
@@ -1302,16 +1295,14 @@ public class BonsaiArchiveReorgTest {
     Block block3A =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0x11)), 1)),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0x11)), 1)),
             deployBlock.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3A);
 
     Block block4A =
         forTransactions(
             List.of(
-                createContractCallWithData(
-                    contractAddress, Bytes32.leftPad(Bytes.of(0x22)), 2)),
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0x22)), 2)),
             block3A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block4A);
 
@@ -1319,8 +1310,7 @@ public class BonsaiArchiveReorgTest {
 
     // Reorg: Chain B just transfers to ACCOUNT_B, contract storage not modified
     Block block3B =
-        forTransactions(
-            List.of(createTransaction(ACCOUNT_B, TWO_ETH, 1)), deployBlock.getHeader());
+        forTransactions(List.of(createTransaction(ACCOUNT_B, TWO_ETH, 1)), deployBlock.getHeader());
     reorgFrom(deployBlock.getHeader(), block3B);
 
     // Contract should still exist (from deploy block which is shared)
@@ -1344,7 +1334,8 @@ public class BonsaiArchiveReorgTest {
     // Chain A: Deploy with codeA
     deployContractFromGenesis(createInitCode(codeA), Wei.ZERO);
     assertThat(archiveProvider.getWorldState().get(contractAddress).getCode()).isEqualTo(codeA);
-    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance()).isEqualTo(Wei.ZERO);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
+        .isEqualTo(Wei.ZERO);
 
     // Reorg: Deploy with codeB (same value Wei.ZERO)
     reorgFromGenesis(
@@ -1353,7 +1344,8 @@ public class BonsaiArchiveReorgTest {
 
     // Code should be codeB now
     assertThat(archiveProvider.getWorldState().get(contractAddress).getCode()).isEqualTo(codeB);
-    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance()).isEqualTo(Wei.ZERO);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
+        .isEqualTo(Wei.ZERO);
   }
 
   /**
@@ -1366,15 +1358,13 @@ public class BonsaiArchiveReorgTest {
     BlockHeader forkPoint = buildEmptyChainToBlock(2);
 
     // Reorg cycle 1: Chain sends to ACCOUNT_A
-    Block block3v1 =
-        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), forkPoint);
+    Block block3v1 = forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), forkPoint);
     reorgFrom(forkPoint, block3v1);
     assertBalance(ACCOUNT_A, ONE_ETH);
     assertAccountNull(ACCOUNT_B);
 
     // Reorg cycle 2: Chain sends to ACCOUNT_B instead
-    Block block3v2 =
-        forTransactions(List.of(createTransaction(ACCOUNT_B, TWO_ETH, 0)), forkPoint);
+    Block block3v2 = forTransactions(List.of(createTransaction(ACCOUNT_B, TWO_ETH, 0)), forkPoint);
     reorgFrom(forkPoint, block3v2);
     assertAccountNull(ACCOUNT_A); // Should be deleted
     assertBalance(ACCOUNT_B, TWO_ETH);
@@ -1390,8 +1380,7 @@ public class BonsaiArchiveReorgTest {
     Block block3v4 =
         forTransactions(
             List.of(
-                createTransaction(ACCOUNT_A, ONE_ETH, 0),
-                createTransaction(ACCOUNT_B, ONE_ETH, 1)),
+                createTransaction(ACCOUNT_A, ONE_ETH, 0), createTransaction(ACCOUNT_B, ONE_ETH, 1)),
             forkPoint);
     reorgFrom(forkPoint, block3v4);
     assertBalance(ACCOUNT_A, ONE_ETH);
@@ -1472,23 +1461,23 @@ public class BonsaiArchiveReorgTest {
 
     // Chain A: Deploy contract with initCodeA and 1 ETH
     Block block1A =
-        forTransactions(
-            List.of(createContractDeployment(initCodeA, ONE_ETH)), genesisHeader);
+        forTransactions(List.of(createContractDeployment(initCodeA, ONE_ETH)), genesisHeader);
     executeBlock(archiveProvider.getWorldState(), block1A);
 
     assertAccountExists(contractAddress);
-    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance()).isEqualTo(ONE_ETH);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
+        .isEqualTo(ONE_ETH);
     assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xAA));
     assertStorageValue(contractAddress, UInt256.ONE, UInt256.ZERO); // slot 1 doesn't exist
 
     // Reorg: Chain B deploys contract with initCodeB and 5 ETH
     Block block1B =
-        forTransactions(
-            List.of(createContractDeployment(initCodeB, FIVE_ETH)), genesisHeader);
+        forTransactions(List.of(createContractDeployment(initCodeB, FIVE_ETH)), genesisHeader);
     reorgFromGenesis(block1B);
 
     assertAccountExists(contractAddress);
-    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance()).isEqualTo(FIVE_ETH);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
+        .isEqualTo(FIVE_ETH);
     assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xBB));
     assertStorageValue(contractAddress, UInt256.ONE, UInt256.valueOf(0xCC));
   }
@@ -1579,12 +1568,12 @@ public class BonsaiArchiveReorgTest {
 
     // Verify pre-reorg values
     assertThat(wsAtBlock2.get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
-    assertThat(wsAtBlock4.get(ACCOUNT_A).getBalance()).isEqualTo(Wei.of(4_000_000_000_000_000_000L));
+    assertThat(wsAtBlock4.get(ACCOUNT_A).getBalance())
+        .isEqualTo(Wei.of(4_000_000_000_000_000_000L));
 
     // Now trigger reorg from block 3
     BlockHeader forkPoint = blockchain.getBlockHeader(3).orElseThrow();
-    Block block4B =
-        forTransactions(List.of(createTransaction(ACCOUNT_B, TEN_ETH, 3)), forkPoint);
+    Block block4B = forTransactions(List.of(createTransaction(ACCOUNT_B, TEN_ETH, 3)), forkPoint);
     reorgFrom(forkPoint, block4B);
 
     // After reorg, ACCOUNT_A should have 3 ETH (from blocks 1-3)
@@ -1660,8 +1649,7 @@ public class BonsaiArchiveReorgTest {
     List<Address> addresses = new ArrayList<>();
     for (int i = 0; i < ACCOUNT_COUNT; i++) {
       addresses.add(
-          Address.fromHexString(
-              String.format("0x2000000000000000000000000000000000%06x", i)));
+          Address.fromHexString(String.format("0x2000000000000000000000000000000000%06x", i)));
     }
 
     // Chain A: Create all accounts with 1 ETH each (split across multiple blocks)
@@ -1739,15 +1727,13 @@ public class BonsaiArchiveReorgTest {
 
     // Send more ETH
     Block block2A =
-        forTransactions(
-            List.of(createTransaction(ACCOUNT_A, TWO_ETH, 1)), block1A.getHeader());
+        forTransactions(List.of(createTransaction(ACCOUNT_A, TWO_ETH, 1)), block1A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block2A);
     assertBalance(ACCOUNT_A, THREE_ETH);
 
     // Send even more
     Block block3A =
-        forTransactions(
-            List.of(createTransaction(ACCOUNT_A, TWO_ETH, 2)), block2A.getHeader());
+        forTransactions(List.of(createTransaction(ACCOUNT_A, TWO_ETH, 2)), block2A.getHeader());
     executeBlock(archiveProvider.getWorldState(), block3A);
     assertBalance(ACCOUNT_A, FIVE_ETH);
 
