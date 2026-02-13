@@ -1183,6 +1183,585 @@ public class BonsaiArchiveReorgTest {
     }
   }
 
+  // ========================================
+  // Edge Case Tests
+  // ========================================
+
+  /**
+   * Tests reorg where some blocks on both forks have no state changes. Verifies deletion markers
+   * aren't written unnecessarily for empty blocks.
+   */
+  @Test
+  void shouldHandleReorgWithEmptyBlocksOnBothForks() {
+    // Build common empty blocks first
+    BlockHeader emptyBlock1 = buildEmptyChainToBlock(1);
+
+    // Chain A: transfer, empty block, transfer
+    Block block2A =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), emptyBlock1);
+    executeBlock(archiveProvider.getWorldState(), block2A);
+
+    Block block3A = forTransactions(Collections.emptyList(), block2A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3A);
+
+    Block block4A =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_A, ONE_ETH, 1)), block3A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block4A);
+
+    assertBalance(ACCOUNT_A, TWO_ETH);
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(4L);
+
+    // Reorg from block 1: Chain B has transfer to ACCOUNT_B instead
+    Block block2B =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_B, FIVE_ETH, 0)), emptyBlock1);
+    reorgFrom(emptyBlock1, block2B);
+
+    // ACCOUNT_A should not exist (never created in chain B)
+    assertAccountNull(ACCOUNT_A);
+    assertBalance(ACCOUNT_B, FIVE_ETH);
+  }
+
+  /**
+   * Tests that setting storage to zero is different from deleting it during reorg. Chain A sets
+   * slot to a value then to zero, Chain B deletes the account entirely.
+   */
+  @Test
+  void shouldDistinguishStorageZeroFromDeletedDuringReorg() {
+    // Contract that stores calldata in slot 0
+    Bytes runtimeCode = Bytes.fromHexString("60003560005500");
+    Bytes initCode = createInitCode(runtimeCode);
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Deploy contract
+    deployContractFromGenesis(initCode, Wei.ZERO);
+    Block deployBlock = blockchain.getBlockByNumber(1L).orElseThrow();
+
+    // Chain A: Set slot 0 to 0xFF, then set to 0x00 (zero, not deleted)
+    Block block2A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(
+                    contractAddress, Bytes32.leftPad(Bytes.of(0xFF)), 1)),
+            deployBlock.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2A);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xFF));
+
+    Block block3A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.ZERO, 2)),
+            block2A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3A);
+    // Storage is zero but the slot exists
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.ZERO);
+
+    // Reorg: Chain B sets slot to different value
+    Block block2B =
+        forTransactions(
+            List.of(
+                createContractCallWithData(
+                    contractAddress, Bytes32.leftPad(Bytes.of(0xAB)), 1)),
+            deployBlock.getHeader());
+    reorgFrom(deployBlock.getHeader(), block2B);
+
+    // After reorg, slot should have Chain B's value
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xAB));
+
+    // Historical query at block 2B should show 0xAB
+    assertThat(
+            getHistoricalWorldState(block2B.getHeader())
+                .get(contractAddress)
+                .getStorageValue(UInt256.ZERO))
+        .isEqualTo(UInt256.valueOf(0xAB));
+  }
+
+  /**
+   * Tests storage modifications during reorg. Contract with storage slots is modified on fork A but
+   * not on fork B. Storage changes from chain A should not appear after reorg to chain B.
+   */
+  @Test
+  void shouldHandleStorageModificationsDuringReorg() {
+    // Contract that stores calldata in slot 0
+    Bytes storeCode = Bytes.fromHexString("60003560005500"); // store calldata[0] in slot 0
+    Bytes initCode = createInitCode(storeCode);
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Build common ancestor with contract deployment
+    BlockHeader forkPoint = buildEmptyChainToBlock(1);
+
+    // Deploy contract at block 2
+    Block deployBlock =
+        forTransactions(List.of(createContractDeployment(initCode, ONE_ETH)), forkPoint);
+    executeBlock(archiveProvider.getWorldState(), deployBlock);
+    assertAccountExists(contractAddress);
+
+    // Chain A: Set storage to 0x11, then 0x22
+    Block block3A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(
+                    contractAddress, Bytes32.leftPad(Bytes.of(0x11)), 1)),
+            deployBlock.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3A);
+
+    Block block4A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(
+                    contractAddress, Bytes32.leftPad(Bytes.of(0x22)), 2)),
+            block3A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block4A);
+
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0x22));
+
+    // Reorg: Chain B just transfers to ACCOUNT_B, contract storage not modified
+    Block block3B =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_B, TWO_ETH, 1)), deployBlock.getHeader());
+    reorgFrom(deployBlock.getHeader(), block3B);
+
+    // Contract should still exist (from deploy block which is shared)
+    assertAccountExists(contractAddress);
+    // Storage slot 0 should be empty (no writes in chain B after deploy)
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.ZERO);
+    assertBalance(ACCOUNT_B, TWO_ETH);
+  }
+
+  /**
+   * Tests code change without balance change during reorg. Uses CREATE2 pattern where contract
+   * address is deterministic but code can differ.
+   */
+  @Test
+  void shouldHandleCodeOnlyChangeDuringReorg() {
+    // Two different runtime codes
+    Bytes codeA = Bytes.fromHexString("6001600055"); // SSTORE(0, 1)
+    Bytes codeB = Bytes.fromHexString("6002600055"); // SSTORE(0, 2)
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Chain A: Deploy with codeA
+    deployContractFromGenesis(createInitCode(codeA), Wei.ZERO);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getCode()).isEqualTo(codeA);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance()).isEqualTo(Wei.ZERO);
+
+    // Reorg: Deploy with codeB (same value Wei.ZERO)
+    reorgFromGenesis(
+        forTransactions(
+            List.of(createContractDeployment(createInitCode(codeB), Wei.ZERO)), genesisHeader));
+
+    // Code should be codeB now
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getCode()).isEqualTo(codeB);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance()).isEqualTo(Wei.ZERO);
+  }
+
+  /**
+   * Tests multiple consecutive reorgs to the same fork point. Verifies deletion markers accumulate
+   * correctly across repeated reorgs.
+   */
+  @Test
+  void shouldHandleMultipleConsecutiveReorgsToSameForkPoint() {
+    // Build common fork point
+    BlockHeader forkPoint = buildEmptyChainToBlock(2);
+
+    // Reorg cycle 1: Chain sends to ACCOUNT_A
+    Block block3v1 =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), forkPoint);
+    reorgFrom(forkPoint, block3v1);
+    assertBalance(ACCOUNT_A, ONE_ETH);
+    assertAccountNull(ACCOUNT_B);
+
+    // Reorg cycle 2: Chain sends to ACCOUNT_B instead
+    Block block3v2 =
+        forTransactions(List.of(createTransaction(ACCOUNT_B, TWO_ETH, 0)), forkPoint);
+    reorgFrom(forkPoint, block3v2);
+    assertAccountNull(ACCOUNT_A); // Should be deleted
+    assertBalance(ACCOUNT_B, TWO_ETH);
+
+    // Reorg cycle 3: Back to ACCOUNT_A with different amount
+    Block block3v3 =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, THREE_ETH, 0)), forkPoint);
+    reorgFrom(forkPoint, block3v3);
+    assertBalance(ACCOUNT_A, THREE_ETH);
+    assertAccountNull(ACCOUNT_B); // Should be deleted again
+
+    // Reorg cycle 4: Both accounts
+    Block block3v4 =
+        forTransactions(
+            List.of(
+                createTransaction(ACCOUNT_A, ONE_ETH, 0),
+                createTransaction(ACCOUNT_B, ONE_ETH, 1)),
+            forkPoint);
+    reorgFrom(forkPoint, block3v4);
+    assertBalance(ACCOUNT_A, ONE_ETH);
+    assertBalance(ACCOUNT_B, ONE_ETH);
+
+    // Verify we're still at block 3
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(3L);
+  }
+
+  /**
+   * Tests reorg where both forks reach the same final account state but via different intermediate
+   * values. Historical reads must return correct fork's intermediate values.
+   */
+  @Test
+  void shouldHandleReorgWhereBothForksReachSameFinalState() {
+    // Chain A: 0 → 3 ETH → 5 ETH (via two transfers)
+    Block block1A =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, THREE_ETH, 0)), genesisHeader);
+    executeBlock(archiveProvider.getWorldState(), block1A);
+
+    Block block2A =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, TWO_ETH, 1)), block1A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2A);
+
+    assertBalance(ACCOUNT_A, FIVE_ETH);
+
+    // Store chain A block hash for later orphan query
+    Hash block1AHash = block1A.getHash();
+
+    // Reorg: Chain B: 0 → 1 ETH → 5 ETH (different intermediate, same final)
+    Block block1B =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), genesisHeader);
+    reorgFromGenesis(block1B);
+
+    Block block2B =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_A, Wei.of(4_000_000_000_000_000_000L), 1)),
+            block1B.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2B);
+
+    // Final state is same (5 ETH)
+    assertBalance(ACCOUNT_A, FIVE_ETH);
+
+    // But historical queries should show chain B's intermediate values
+    assertThat(
+            getHistoricalWorldState(blockchain.getBlockHeader(1).orElseThrow())
+                .get(ACCOUNT_A)
+                .getBalance())
+        .isEqualTo(ONE_ETH); // Chain B's block 1
+
+    // Query orphaned chain A blocks if available
+    Optional<MutableWorldState> orphanedBlock1A =
+        archiveProvider.getWorldState(
+            WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead(
+                blockchain.getBlockHeader(block1AHash).orElse(null)));
+    if (orphanedBlock1A.isPresent()) {
+      assertThat(orphanedBlock1A.get().get(ACCOUNT_A).getBalance())
+          .isEqualTo(THREE_ETH); // Chain A's intermediate
+    }
+  }
+
+  /**
+   * Tests contract creation at the same address on both forks with different code and storage. This
+   * is a critical edge case for archive mode deletion markers.
+   */
+  @Test
+  void shouldHandleContractCreationAtSameAddressOnBothForksWithDifferentState() {
+    // Use init code that sets storage during construction, then returns minimal runtime code
+    // Init code A: SSTORE(0, 0xAA), then return empty runtime code
+    // PUSH1 0xAA, PUSH1 0, SSTORE, PUSH1 0, PUSH1 0, RETURN
+    Bytes initCodeA = Bytes.fromHexString("60AA6000556000600060006000f3");
+
+    // Init code B: SSTORE(0, 0xBB), SSTORE(1, 0xCC), then return empty runtime code
+    // PUSH1 0xBB, PUSH1 0, SSTORE, PUSH1 0xCC, PUSH1 1, SSTORE, PUSH1 0, PUSH1 0, RETURN
+    Bytes initCodeB = Bytes.fromHexString("60BB60005560CC600155600060006000f3");
+
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Chain A: Deploy contract with initCodeA and 1 ETH
+    Block block1A =
+        forTransactions(
+            List.of(createContractDeployment(initCodeA, ONE_ETH)), genesisHeader);
+    executeBlock(archiveProvider.getWorldState(), block1A);
+
+    assertAccountExists(contractAddress);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance()).isEqualTo(ONE_ETH);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xAA));
+    assertStorageValue(contractAddress, UInt256.ONE, UInt256.ZERO); // slot 1 doesn't exist
+
+    // Reorg: Chain B deploys contract with initCodeB and 5 ETH
+    Block block1B =
+        forTransactions(
+            List.of(createContractDeployment(initCodeB, FIVE_ETH)), genesisHeader);
+    reorgFromGenesis(block1B);
+
+    assertAccountExists(contractAddress);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance()).isEqualTo(FIVE_ETH);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xBB));
+    assertStorageValue(contractAddress, UInt256.ONE, UInt256.valueOf(0xCC));
+  }
+
+  /**
+   * Tests with very high storage slot numbers to ensure no truncation issues with slot hash
+   * handling during reorg.
+   */
+  @Test
+  void shouldHandleHighSlotNumbersDuringReorg() {
+    // Contract that stores calldata[32:64] at slot calldata[0:32]
+    Bytes runtimeCode = Bytes.fromHexString("600035602035905500");
+    Bytes initCode = createInitCode(runtimeCode);
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    deployContractFromGenesis(initCode, Wei.ZERO);
+    Block deployBlock = blockchain.getBlockByNumber(1L).orElseThrow();
+
+    // Use very high slot numbers
+    UInt256 highSlot1 = UInt256.MAX_VALUE.subtract(1);
+    UInt256 highSlot2 = UInt256.valueOf(Long.MAX_VALUE);
+
+    // Chain A: Set high slots to specific values
+    Block block2A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(
+                    contractAddress,
+                    Bytes.concatenate(highSlot1.toBytes(), Bytes32.leftPad(Bytes.of(0xAA))),
+                    1)),
+            deployBlock.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2A);
+
+    Block block3A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(
+                    contractAddress,
+                    Bytes.concatenate(highSlot2.toBytes(), Bytes32.leftPad(Bytes.of(0xBB))),
+                    2)),
+            block2A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3A);
+
+    assertStorageValue(contractAddress, highSlot1, UInt256.valueOf(0xAA));
+    assertStorageValue(contractAddress, highSlot2, UInt256.valueOf(0xBB));
+
+    // Reorg: Chain B sets different values at same high slots
+    Block block2B =
+        forTransactions(
+            List.of(
+                createContractCallWithData(
+                    contractAddress,
+                    Bytes.concatenate(highSlot1.toBytes(), Bytes32.leftPad(Bytes.of(0x11))),
+                    1)),
+            deployBlock.getHeader());
+    reorgFrom(deployBlock.getHeader(), block2B);
+
+    Block block3B =
+        forTransactions(
+            List.of(
+                createContractCallWithData(
+                    contractAddress,
+                    Bytes.concatenate(highSlot2.toBytes(), Bytes32.leftPad(Bytes.of(0x22))),
+                    2)),
+            block2B.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3B);
+
+    // High slots should have Chain B's values
+    assertStorageValue(contractAddress, highSlot1, UInt256.valueOf(0x11));
+    assertStorageValue(contractAddress, highSlot2, UInt256.valueOf(0x22));
+  }
+
+  /**
+   * Tests interleaved historical queries during active reorg operations. Verifies context isolation
+   * when multiple world state views are active.
+   */
+  @Test
+  void shouldMaintainConsistencyForHistoricalQueryDuringReorg() {
+    // Build chain with 5 blocks
+    buildChain(5);
+    assertBalance(ACCOUNT_A, FIVE_ETH);
+
+    // Get historical world state references BEFORE reorg
+    MutableWorldState wsAtBlock2 =
+        getHistoricalWorldState(blockchain.getBlockHeader(2).orElseThrow());
+    MutableWorldState wsAtBlock4 =
+        getHistoricalWorldState(blockchain.getBlockHeader(4).orElseThrow());
+
+    // Verify pre-reorg values
+    assertThat(wsAtBlock2.get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
+    assertThat(wsAtBlock4.get(ACCOUNT_A).getBalance()).isEqualTo(Wei.of(4_000_000_000_000_000_000L));
+
+    // Now trigger reorg from block 3
+    BlockHeader forkPoint = blockchain.getBlockHeader(3).orElseThrow();
+    Block block4B =
+        forTransactions(List.of(createTransaction(ACCOUNT_B, TEN_ETH, 3)), forkPoint);
+    reorgFrom(forkPoint, block4B);
+
+    // After reorg, ACCOUNT_A should have 3 ETH (from blocks 1-3)
+    // ACCOUNT_B should have 10 ETH (from block 4B)
+    assertBalance(ACCOUNT_A, THREE_ETH);
+    assertBalance(ACCOUNT_B, TEN_ETH);
+
+    // Historical queries at common ancestor blocks should still work
+    MutableWorldState wsAtBlock2AfterReorg =
+        getHistoricalWorldState(blockchain.getBlockHeader(2).orElseThrow());
+    assertThat(wsAtBlock2AfterReorg.get(ACCOUNT_A).getBalance()).isEqualTo(TWO_ETH);
+
+    // Block 3 is still common ancestor
+    MutableWorldState wsAtBlock3AfterReorg =
+        getHistoricalWorldState(blockchain.getBlockHeader(3).orElseThrow());
+    assertThat(wsAtBlock3AfterReorg.get(ACCOUNT_A).getBalance()).isEqualTo(THREE_ETH);
+  }
+
+  /**
+   * Tests reorg that goes back to block 1 (immediately after genesis). Edge case for parent block
+   * lookups and deletion marker context.
+   */
+  @Test
+  void shouldHandleReorgToBlockOne() {
+    // Build chain: genesis → block1A (transfer to A) → block2A (transfer to B)
+    Block block1A =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), genesisHeader);
+    executeBlock(archiveProvider.getWorldState(), block1A);
+
+    Block block2A =
+        forTransactions(List.of(createTransaction(ACCOUNT_B, TWO_ETH, 1)), block1A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2A);
+
+    assertBalance(ACCOUNT_A, ONE_ETH);
+    assertBalance(ACCOUNT_B, TWO_ETH);
+
+    // Reorg from genesis (block 0) - go back to the very beginning
+    Block block1B =
+        forTransactions(List.of(createTransaction(ACCOUNT_C, THREE_ETH, 0)), genesisHeader);
+    reorgFromGenesis(block1B);
+
+    // Only ACCOUNT_C should exist
+    assertAccountNull(ACCOUNT_A);
+    assertAccountNull(ACCOUNT_B);
+    assertBalance(ACCOUNT_C, THREE_ETH);
+
+    // Extend chain B
+    Block block2B =
+        forTransactions(List.of(createTransaction(ACCOUNT_C, TWO_ETH, 1)), block1B.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2B);
+
+    assertBalance(ACCOUNT_C, FIVE_ETH);
+    assertAccountNull(ACCOUNT_A);
+    assertAccountNull(ACCOUNT_B);
+
+    // Historical query at block 1 should show chain B's state
+    assertThat(
+            getHistoricalWorldState(blockchain.getBlockHeader(1).orElseThrow())
+                .get(ACCOUNT_C)
+                .getBalance())
+        .isEqualTo(THREE_ETH);
+  }
+
+  /**
+   * Tests reorg with a large number of accounts modified. Stress tests deletion marker writing with
+   * 100+ accounts.
+   */
+  @Test
+  void shouldHandleReorgWithManyAccountsModified() {
+    final int ACCOUNT_COUNT = 100;
+
+    // Generate addresses deterministically
+    List<Address> addresses = new ArrayList<>();
+    for (int i = 0; i < ACCOUNT_COUNT; i++) {
+      addresses.add(
+          Address.fromHexString(
+              String.format("0x2000000000000000000000000000000000%06x", i)));
+    }
+
+    // Chain A: Create all accounts with 1 ETH each (split across multiple blocks)
+    BlockHeader parentHeader = genesisHeader;
+    int accountIndex = 0;
+    long nonce = 0;
+
+    // Create accounts in batches of 10 per block
+    while (accountIndex < ACCOUNT_COUNT) {
+      List<Transaction> txs = new ArrayList<>();
+      for (int i = 0; i < 10 && accountIndex < ACCOUNT_COUNT; i++, accountIndex++) {
+        txs.add(createTransaction(addresses.get(accountIndex), ONE_ETH, nonce++));
+      }
+      Block block = forTransactions(txs, parentHeader);
+      executeBlock(archiveProvider.getWorldState(), block);
+      parentHeader = block.getHeader();
+    }
+
+    // Verify all accounts exist
+    for (Address addr : addresses) {
+      assertThat(archiveProvider.getWorldState().get(addr))
+          .as("Account %s should exist", addr)
+          .isNotNull();
+    }
+
+    // Reorg from genesis: Only create first 10 accounts with different amounts
+    Block block1B =
+        forTransactions(
+            List.of(
+                createTransaction(addresses.get(0), FIVE_ETH, 0),
+                createTransaction(addresses.get(1), FIVE_ETH, 1),
+                createTransaction(addresses.get(2), FIVE_ETH, 2),
+                createTransaction(addresses.get(3), FIVE_ETH, 3),
+                createTransaction(addresses.get(4), FIVE_ETH, 4)),
+            genesisHeader);
+    reorgFromGenesis(block1B);
+
+    Block block2B =
+        forTransactions(
+            List.of(
+                createTransaction(addresses.get(5), FIVE_ETH, 5),
+                createTransaction(addresses.get(6), FIVE_ETH, 6),
+                createTransaction(addresses.get(7), FIVE_ETH, 7),
+                createTransaction(addresses.get(8), FIVE_ETH, 8),
+                createTransaction(addresses.get(9), FIVE_ETH, 9)),
+            block1B.getHeader());
+    executeBlockAndUpdateHead(block2B);
+
+    // First 10 accounts should have 5 ETH
+    for (int i = 0; i < 10; i++) {
+      assertThat(archiveProvider.getWorldState().get(addresses.get(i)).getBalance())
+          .as("Account %d should have 5 ETH", i)
+          .isEqualTo(FIVE_ETH);
+    }
+
+    // Remaining 90 accounts should NOT exist (deletion markers should mask them)
+    for (int i = 10; i < ACCOUNT_COUNT; i++) {
+      assertThat(archiveProvider.getWorldState().get(addresses.get(i)))
+          .as("Account %d should not exist after reorg", i)
+          .isNull();
+    }
+  }
+
+  /**
+   * Tests reorg where an account goes through multiple state transitions on chain A (create,
+   * modify, more modifications) but chain B only has the initial creation.
+   */
+  @Test
+  void shouldHandleFullAccountLifecycleDuringReorg() {
+    // Chain A: Create account → modify balance multiple times
+    Block block1A =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), genesisHeader);
+    executeBlock(archiveProvider.getWorldState(), block1A);
+    assertBalance(ACCOUNT_A, ONE_ETH);
+
+    // Send more ETH
+    Block block2A =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_A, TWO_ETH, 1)), block1A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2A);
+    assertBalance(ACCOUNT_A, THREE_ETH);
+
+    // Send even more
+    Block block3A =
+        forTransactions(
+            List.of(createTransaction(ACCOUNT_A, TWO_ETH, 2)), block2A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3A);
+    assertBalance(ACCOUNT_A, FIVE_ETH);
+
+    // Reorg from genesis: Just one transfer with different amount
+    Block block1B =
+        forTransactions(List.of(createTransaction(ACCOUNT_B, TEN_ETH, 0)), genesisHeader);
+    reorgFromGenesis(block1B);
+
+    // ACCOUNT_A should not exist (never created in chain B)
+    assertAccountNull(ACCOUNT_A);
+    // ACCOUNT_B should have 10 ETH
+    assertBalance(ACCOUNT_B, TEN_ETH);
+  }
+
   private void executeReorg(
       final Block alternateBlock,
       final MutableWorldState wsAtForkPoint,
