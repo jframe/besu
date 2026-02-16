@@ -119,6 +119,17 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       getAccountFoundInFlatDatabaseCounter.inc();
     }
 
+    LOG.info(
+        "getFlatAccount: hash={}, readContext={}, found={}, value={}",
+        accountHash,
+        readContext,
+        accountFound.isPresent(),
+        accountFound
+            .flatMap(SegmentedKeyValueStorage.NearestKeyValue::value)
+            .map(Bytes::of)
+            .map(Bytes::toHexString)
+            .orElse("empty"));
+
     if (accountFound.isPresent()) {
       // The entry exists (so metrics are still incremented) but we don't return deleted values
       return accountFound
@@ -327,6 +338,17 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       storageFound = nearestStorage;
       getStorageValueFlatDatabaseCounter.inc();
     }
+
+    LOG.info(
+        "getFlatStorageValueByStorageSlotKey: hash={}, readContext={}, found={}, value={}",
+        accountHash,
+        readContext,
+        storageFound.isPresent(),
+        storageFound
+            .flatMap(SegmentedKeyValueStorage.NearestKeyValue::value)
+            .map(Bytes::of)
+            .map(Bytes::toHexString)
+            .orElse("empty"));
 
     // The entry exists (so metrics are still incremented) but we don't return deleted values
     if (storageFound.isPresent()) {
