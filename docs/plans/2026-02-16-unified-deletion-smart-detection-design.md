@@ -1,17 +1,17 @@
 # Unified Deletion with Smart Detection - Design Document
 
 **Date:** 2026-02-16
-**Status:** Approved
+**Status:** Implemented
 **Author:** Claude (via Brainstorming Session)
 
 ## Problem Statement
 
-Bonsai archive mode currently has two deletion methods with different semantics:
+Bonsai archive mode previously had two deletion methods with different semantics:
 
 1. **`removeFlatAccount()`** - Writes deletion markers (empty byte arrays)
-2. **`deleteFlatAccountAtBlock()`** - Actually removes entries from storage
+2. **`deleteFlatAccountAtBlock()`** - Actually removes entries from storage (now removed)
 
-This dual approach adds complexity and requires callers to choose the correct method. However, unifying them is non-trivial because:
+This dual approach added complexity and required callers to choose the correct method. However, unifying them was non-trivial because:
 
 - **Deletion markers** act as hard barriers - they stop queries and return null
 - **Actual deletion** reveals historical data from earlier blocks
@@ -258,3 +258,16 @@ After unification, these methods become obsolete:
 ## Conclusion
 
 Smart detection provides a clean unification by exploiting the natural difference in database state between SELFDESTRUCT (no current data) and reorg cleanup (orphaned data present). The solution is automatic, correct, and maintains the existing API.
+
+## Implementation Notes (2026-02-16)
+
+**Completed:**
+1. Added `hasHistoricalAccountDataBefore()` helper method
+2. Added `hasHistoricalStorageDataBefore()` helper method
+3. Implemented smart detection in `removeFlatAccount()`
+4. Implemented smart detection in `removeFlatAccountStorageValueByStorageSlotHash()`
+5. Removed deprecated `deleteFlatAccountAtBlock()` and `deleteFlatStorageAtBlock()` methods
+6. Removed deprecated `deleteAccountInfoStateAtBlock()` and `deleteStorageValueBySlotHashAtBlock()` from Updater class
+7. Updated `writeRollbackDeletionMarkers()` to use the unified remove methods
+8. Changed verbose INFO logging to DEBUG level for production readiness
+9. All tests pass including `BonsaiArchiveReorgTest` integration tests
