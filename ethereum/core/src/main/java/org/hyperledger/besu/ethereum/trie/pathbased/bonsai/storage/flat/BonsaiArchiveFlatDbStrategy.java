@@ -464,18 +464,49 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
     // Get write context or default to genesis
     BonsaiContext writeContext = writeContextSupplier.get().orElse(new BonsaiContext(0L));
+    long blockNumber = writeContext.getBlockNumber().orElse(0L);
 
     // get natural key from account hash and slot key
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
-    // insert a key suffixed with block context, with 'deleted account' value
     byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(Optional.of(writeContext), naturalKey);
 
-    LOG.info(
-        "removeFlatAccountStorageValueByStorageSlotHash: hash={}, writeContext={}",
-        accountHash,
-        writeContext);
+    // SMART DETECTION: Check if data exists at current block
+    Optional<byte[]> currentData = storage.get(ACCOUNT_STORAGE_STORAGE, keySuffixed);
 
-    transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
+    boolean isReorgCleanup =
+        currentData.isPresent() && !Arrays.areEqual(currentData.get(), DELETED_STORAGE_VALUE);
+
+    if (isReorgCleanup) {
+      // Data exists at current block → this is reorg cleanup (orphaned data from abandoned chain)
+      boolean hasHistory =
+          hasHistoricalStorageDataBefore(storage, accountHash, slotHash, blockNumber);
+
+      if (hasHistory) {
+        // Historical data exists → DELETE to reveal it
+        LOG.info(
+            "removeFlatAccountStorageValueByStorageSlotHash: DELETE orphaned data (history exists): accountHash={}, slotHash={}, writeContext={}",
+            accountHash,
+            slotHash,
+            writeContext);
+        transaction.remove(ACCOUNT_STORAGE_STORAGE, keySuffixed);
+      } else {
+        // No historical data → MARKER to overwrite orphaned data
+        LOG.info(
+            "removeFlatAccountStorageValueByStorageSlotHash: MARKER for orphaned data (no history): accountHash={}, slotHash={}, writeContext={}",
+            accountHash,
+            slotHash,
+            writeContext);
+        transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
+      }
+    } else {
+      // No data at current block → this is SELFDESTRUCT (storage being cleared during commit)
+      LOG.info(
+          "removeFlatAccountStorageValueByStorageSlotHash: MARKER for SELFDESTRUCT: accountHash={}, slotHash={}, writeContext={}",
+          accountHash,
+          slotHash,
+          writeContext);
+      transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
+    }
   }
 
   /**

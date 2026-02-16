@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -421,5 +422,113 @@ public class BonsaiArchiveFlatDbStrategyTest {
 
     assertThat(valueAtBlock20).isPresent();
     assertThat(valueAtBlock20.get()).isEqualTo(BonsaiArchiveFlatDbStrategy.DELETED_ACCOUNT_VALUE);
+  }
+
+  // ========== Storage Slot Smart Detection Tests ==========
+
+  @Test
+  public void removeStorageShouldWriteMarkerForSelfDestruct() {
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000400").addressHash();
+    final Hash slotHash = Hash.wrap(Bytes32.leftPad(Bytes.fromHexString("0x01")));
+
+    // Scenario: SELFDESTRUCT at block 20 - no existing data at this block
+    // Expected: Write a deletion marker (hide any historical data)
+
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    Supplier<Optional<BonsaiContext>> context20 = () -> Optional.of(new BonsaiContext(20L));
+    archiveFlatDbStrategy.removeFlatAccountStorageValueByStorageSlotHash(
+        storage, tx, accountHash, slotHash, context20);
+    tx.commit();
+
+    // Verify marker was written at block 20
+    final byte[] naturalKey =
+        BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey(accountHash, slotHash);
+    final byte[] expectedKey =
+        Bytes.concatenate(Bytes.of(naturalKey), Bytes.ofUnsignedLong(20)).toArrayUnsafe();
+    final Optional<byte[]> storedValue = storage.get(ACCOUNT_STORAGE_STORAGE, expectedKey);
+
+    assertThat(storedValue).isPresent();
+    assertThat(storedValue.get())
+        .isEqualTo(BonsaiArchiveFlatDbStrategy.DELETED_STORAGE_VALUE); // Empty byte array marker
+  }
+
+  @Test
+  public void removeStorageShouldDeleteOrphanedDataWhenHistoryExists() {
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000401").addressHash();
+    final Hash slotHash = Hash.wrap(Bytes32.leftPad(Bytes.fromHexString("0x01")));
+    final Bytes historicalValue = Bytes.fromHexString("0xAABBCCDD");
+    final Bytes orphanedValue = Bytes.fromHexString("0x11223344");
+
+    // Setup: Write historical storage data at block 10
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    Supplier<Optional<BonsaiContext>> context10 = () -> Optional.of(new BonsaiContext(10L));
+    archiveFlatDbStrategy.putFlatAccountStorageValueByStorageSlotHash(
+        storage, tx, accountHash, slotHash, historicalValue, context10);
+    tx.commit();
+
+    // Setup: Write orphaned storage data at block 20 (from abandoned chain)
+    tx = storage.startTransaction();
+    Supplier<Optional<BonsaiContext>> context20 = () -> Optional.of(new BonsaiContext(20L));
+    archiveFlatDbStrategy.putFlatAccountStorageValueByStorageSlotHash(
+        storage, tx, accountHash, slotHash, orphanedValue, context20);
+    tx.commit();
+
+    // Scenario: Reorg cleanup at block 20 - orphaned data exists + history exists
+    // Expected: DELETE the orphaned entry (reveal historical data at block 10)
+
+    tx = storage.startTransaction();
+    archiveFlatDbStrategy.removeFlatAccountStorageValueByStorageSlotHash(
+        storage, tx, accountHash, slotHash, context20);
+    tx.commit();
+
+    // Verify orphaned data at block 20 was deleted
+    final byte[] naturalKey =
+        BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey(accountHash, slotHash);
+    final byte[] keyBlock20 =
+        Bytes.concatenate(Bytes.of(naturalKey), Bytes.ofUnsignedLong(20)).toArrayUnsafe();
+    final Optional<byte[]> valueAtBlock20 = storage.get(ACCOUNT_STORAGE_STORAGE, keyBlock20);
+    assertThat(valueAtBlock20).isEmpty(); // Should be deleted, not marked
+
+    // Verify historical data at block 10 still exists
+    final byte[] keyBlock10 =
+        Bytes.concatenate(Bytes.of(naturalKey), Bytes.ofUnsignedLong(10)).toArrayUnsafe();
+    final Optional<byte[]> valueAtBlock10 = storage.get(ACCOUNT_STORAGE_STORAGE, keyBlock10);
+    assertThat(valueAtBlock10).isPresent();
+    assertThat(Bytes.wrap(valueAtBlock10.get())).isEqualTo(historicalValue);
+  }
+
+  @Test
+  public void removeStorageShouldWriteMarkerForOrphanedDataWhenNoHistory() {
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000402").addressHash();
+    final Hash slotHash = Hash.wrap(Bytes32.leftPad(Bytes.fromHexString("0x02")));
+    final Bytes orphanedValue = Bytes.fromHexString("0x55667788");
+
+    // Setup: Write orphaned storage data at block 20 (no historical data before this)
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    Supplier<Optional<BonsaiContext>> context20 = () -> Optional.of(new BonsaiContext(20L));
+    archiveFlatDbStrategy.putFlatAccountStorageValueByStorageSlotHash(
+        storage, tx, accountHash, slotHash, orphanedValue, context20);
+    tx.commit();
+
+    // Scenario: Reorg cleanup at block 20 - orphaned data exists but NO history
+    // Expected: Write MARKER (overwrite orphaned data to prevent reads)
+
+    tx = storage.startTransaction();
+    archiveFlatDbStrategy.removeFlatAccountStorageValueByStorageSlotHash(
+        storage, tx, accountHash, slotHash, context20);
+    tx.commit();
+
+    // Verify a deletion marker was written at block 20 (not deleted)
+    final byte[] naturalKey =
+        BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey(accountHash, slotHash);
+    final byte[] keyBlock20 =
+        Bytes.concatenate(Bytes.of(naturalKey), Bytes.ofUnsignedLong(20)).toArrayUnsafe();
+    final Optional<byte[]> valueAtBlock20 = storage.get(ACCOUNT_STORAGE_STORAGE, keyBlock20);
+
+    assertThat(valueAtBlock20).isPresent();
+    assertThat(valueAtBlock20.get()).isEqualTo(BonsaiArchiveFlatDbStrategy.DELETED_STORAGE_VALUE);
   }
 }
