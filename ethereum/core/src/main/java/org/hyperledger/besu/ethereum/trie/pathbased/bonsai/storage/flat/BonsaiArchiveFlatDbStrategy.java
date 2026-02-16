@@ -126,7 +126,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       accountFound = Optional.empty();
     }
 
-    LOG.info(
+    LOG.debug(
         "getFlatAccount: hash={}, readContext={}, found={}, value={}",
         accountHash,
         readContext,
@@ -257,7 +257,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
         calculateArchiveKeyWithMinSuffix(
             Optional.of(writeContext), accountHash.getBytes().toArrayUnsafe());
 
-    LOG.info(
+    LOG.debug(
         "putFlatAccount: hash={}, writeContext={}, value={}",
         accountHash,
         writeContext,
@@ -295,14 +295,14 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
       if (hasHistory) {
         // Historical data exists → DELETE to reveal it
-        LOG.info(
+        LOG.debug(
             "removeFlatAccount: DELETE orphaned data (history exists): hash={}, writeContext={}",
             accountHash,
             writeContext);
         transaction.remove(ACCOUNT_INFO_STATE, keySuffixed);
       } else {
         // No historical data → MARKER to overwrite orphaned data
-        LOG.info(
+        LOG.debug(
             "removeFlatAccount: MARKER for orphaned data (no history): hash={}, writeContext={}",
             accountHash,
             writeContext);
@@ -311,38 +311,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     } else {
       // No data at current block → this is SELFDESTRUCT (account being destroyed during commit)
       // Always write MARKER to hide any historical data
-      LOG.info(
+      LOG.debug(
           "removeFlatAccount: MARKER for SELFDESTRUCT: hash={}, writeContext={}",
           accountHash,
           writeContext);
       transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
     }
-  }
-
-  /**
-   * Deletes an orphaned account entry at the given block context. Used during archive mode rollback
-   * to remove stale chain data that would otherwise mask valid data at earlier block numbers.
-   *
-   * <p>Unlike {@link #removeFlatAccount} which writes a deletion marker, this method actually
-   * removes the key-value entry from the database. This is necessary during reorg handling to
-   * prevent orphaned data from the old chain from masking valid data from the new chain.
-   *
-   * @param transaction the storage transaction
-   * @param accountHash the hash of the account to delete
-   * @param blockNumber the block number context of the orphaned entry
-   */
-  public void deleteFlatAccountAtBlock(
-      final SegmentedKeyValueStorageTransaction transaction,
-      final Hash accountHash,
-      final long blockNumber) {
-
-    byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(
-            Optional.of(new BonsaiContext(blockNumber)), accountHash.getBytes().toArrayUnsafe());
-
-    LOG.info("deleteFlatAccountAtBlock: hash={}, blockNumber={}", accountHash, blockNumber);
-
-    transaction.remove(ACCOUNT_INFO_STATE, keySuffixed);
   }
 
   private byte[] trimSuffix(final byte[] suffixedAddress) {
@@ -402,7 +376,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       getStorageValueFlatDatabaseCounter.inc();
     }
 
-    LOG.info(
+    LOG.debug(
         "getFlatStorageValueByStorageSlotKey: hash={}, readContext={}, found={}, value={}",
         accountHash,
         readContext,
@@ -483,7 +457,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
       if (hasHistory) {
         // Historical data exists → DELETE to reveal it
-        LOG.info(
+        LOG.debug(
             "removeFlatAccountStorageValueByStorageSlotHash: DELETE orphaned data (history exists): accountHash={}, slotHash={}, writeContext={}",
             accountHash,
             slotHash,
@@ -491,7 +465,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
         transaction.remove(ACCOUNT_STORAGE_STORAGE, keySuffixed);
       } else {
         // No historical data → MARKER to overwrite orphaned data
-        LOG.info(
+        LOG.debug(
             "removeFlatAccountStorageValueByStorageSlotHash: MARKER for orphaned data (no history): accountHash={}, slotHash={}, writeContext={}",
             accountHash,
             slotHash,
@@ -500,41 +474,13 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       }
     } else {
       // No data at current block → this is SELFDESTRUCT (storage being cleared during commit)
-      LOG.info(
+      LOG.debug(
           "removeFlatAccountStorageValueByStorageSlotHash: MARKER for SELFDESTRUCT: accountHash={}, slotHash={}, writeContext={}",
           accountHash,
           slotHash,
           writeContext);
       transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
     }
-  }
-
-  /**
-   * Deletes an orphaned storage entry at the given block context. Used during archive mode rollback
-   * to remove stale chain data that would otherwise mask valid data at earlier block numbers.
-   *
-   * @param transaction the storage transaction
-   * @param accountHash the hash of the account
-   * @param slotHash the hash of the storage slot to delete
-   * @param blockNumber the block number context of the orphaned entry
-   */
-  public void deleteFlatStorageAtBlock(
-      final SegmentedKeyValueStorageTransaction transaction,
-      final Hash accountHash,
-      final Hash slotHash,
-      final long blockNumber) {
-
-    byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
-    byte[] keySuffixed =
-        calculateArchiveKeyWithMinSuffix(Optional.of(new BonsaiContext(blockNumber)), naturalKey);
-
-    LOG.info(
-        "deleteFlatStorageAtBlock: accountHash={}, slotHash={}, blockNumber={}",
-        accountHash,
-        slotHash,
-        blockNumber);
-
-    transaction.remove(ACCOUNT_STORAGE_STORAGE, keySuffixed);
   }
 
   /**

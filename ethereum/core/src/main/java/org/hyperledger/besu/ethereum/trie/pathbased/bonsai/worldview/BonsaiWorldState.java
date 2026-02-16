@@ -510,9 +510,9 @@ public class BonsaiWorldState extends PathBasedWorldState {
       final BonsaiWorldStateUpdateAccumulator worldStateUpdater,
       final long targetBlockNumber) {
 
-    // Delete orphaned account entries at each tracked block number.
-    // In archive mode, we need to actually DELETE the orphaned entries (not write deletion markers)
-    // because deletion markers would mask valid data at earlier block numbers.
+    // Remove orphaned account entries at each tracked block number.
+    // Smart detection in removeFlatAccount will decide whether to DELETE (reveal history) or
+    // write a MARKER (barrier) based on whether historical data exists.
     // Skip at the target block number where the new chain's data was written.
     for (Map.Entry<Long, Set<Address>> entry :
         worldStateUpdater.getAccountsRemovedByBlock().entrySet()) {
@@ -524,7 +524,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
             (accountValue != null
                 && accountValue.getUpdated() != null
                 && blockNumber == targetBlockNumber);
-        LOG.atInfo()
+        LOG.atDebug()
             .setMessage(
                 "writeRollbackDeletionMarkers: account={}, blockNumber={}, targetBlock={}, inAccumulator={}, updated={}, wasReCreatedAtTargetBlock={}")
             .addArgument(address)
@@ -535,9 +535,10 @@ public class BonsaiWorldState extends PathBasedWorldState {
             .addArgument(wasReCreatedAtTargetBlock)
             .log();
         if (!wasReCreatedAtTargetBlock) {
-          // Delete the orphaned entry - account doesn't exist at target, or this is not target
-          // block
-          stateUpdater.deleteAccountInfoStateAtBlock(address.addressHash(), blockNumber);
+          // Remove the orphaned entry - account doesn't exist at target, or this is not target
+          // block. The smart detection in removeFlatAccount will decide whether to DELETE
+          // (reveal history) or write a MARKER (barrier).
+          stateUpdater.removeAccountInfoStateAtBlock(address.addressHash(), blockNumber);
         }
         // If account was re-created at the target block, skip deletion to preserve the new data
       }
@@ -562,8 +563,10 @@ public class BonsaiWorldState extends PathBasedWorldState {
           }
 
           if (!wasReCreatedAtTargetBlock) {
-            // Delete the orphaned entry
-            stateUpdater.deleteStorageValueBySlotHashAtBlock(
+            // Remove the orphaned entry. The smart detection in
+            // removeFlatAccountStorageValueByStorageSlotHash
+            // will decide whether to DELETE (reveal history) or write a MARKER (barrier).
+            stateUpdater.removeStorageValueBySlotHashAtBlock(
                 addressHash, slotKey.getSlotHash(), blockNumber);
           }
         }
