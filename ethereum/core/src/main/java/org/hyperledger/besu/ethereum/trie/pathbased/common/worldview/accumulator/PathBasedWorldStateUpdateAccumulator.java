@@ -651,6 +651,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
    * @param blockNumber the target block number for deletion markers
    */
   public void setRollbackTargetBlock(final long blockNumber) {
+    LOG.info("setRollbackTargetBlock: blockNumber={}", blockNumber);
     this.currentRollbackTargetBlock = blockNumber;
   }
 

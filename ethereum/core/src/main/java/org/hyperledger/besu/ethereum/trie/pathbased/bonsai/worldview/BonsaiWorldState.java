@@ -60,9 +60,12 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.rlp.RLP;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @SuppressWarnings("rawtypes")
 public class BonsaiWorldState extends PathBasedWorldState {
+  private static final Logger LOG = LoggerFactory.getLogger(BonsaiWorldState.class);
 
   protected BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader;
   private final CodeCache codeCache;
@@ -489,42 +492,87 @@ public class BonsaiWorldState extends PathBasedWorldState {
   }
 
   /**
-   * Writes deletion markers for all items removed during rollback, using their tracked block
-   * contexts. This is called once at the end of archive mode rollback to write markers at all
-   * intermediate blocks.
+   * Writes deletion markers for items removed during rollback, using their tracked block contexts.
+   * This is called once at the end of archive mode rollback to write markers at all intermediate
+   * blocks.
+   *
+   * <p>IMPORTANT: We only skip writing deletion markers at the target block number (where valid
+   * data was just written). For all other block numbers in the tracked set, we must write deletion
+   * markers to mask orphaned data from the old chain.
    *
    * @param stateUpdater the updater to write deletion markers to
    * @param worldStateUpdater the accumulator containing tracked rollback deletions
+   * @param targetBlockNumber the block number where valid data was written (skip deletion marker
+   *     here)
    */
   public void writeRollbackDeletionMarkers(
       final BonsaiWorldStateKeyValueStorage.Updater stateUpdater,
-      final BonsaiWorldStateUpdateAccumulator worldStateUpdater) {
+      final BonsaiWorldStateUpdateAccumulator worldStateUpdater,
+      final long targetBlockNumber) {
 
-    // Write account deletion markers at each tracked block number
+    // Delete orphaned account entries at each tracked block number.
+    // In archive mode, we need to actually DELETE the orphaned entries (not write deletion markers)
+    // because deletion markers would mask valid data at earlier block numbers.
+    // Skip at the target block number where the new chain's data was written.
     for (Map.Entry<Long, Set<Address>> entry :
         worldStateUpdater.getAccountsRemovedByBlock().entrySet()) {
       long blockNumber = entry.getKey();
       for (Address address : entry.getValue()) {
-        stateUpdater.removeAccountInfoStateAtBlock(address.addressHash(), blockNumber);
+        // Check if this account was re-created during rollforward AND this is the target block
+        var accountValue = worldStateUpdater.getAccountsToUpdate().get(address);
+        boolean wasReCreatedAtTargetBlock =
+            (accountValue != null
+                && accountValue.getUpdated() != null
+                && blockNumber == targetBlockNumber);
+        LOG.atInfo()
+            .setMessage(
+                "writeRollbackDeletionMarkers: account={}, blockNumber={}, targetBlock={}, inAccumulator={}, updated={}, wasReCreatedAtTargetBlock={}")
+            .addArgument(address)
+            .addArgument(blockNumber)
+            .addArgument(targetBlockNumber)
+            .addArgument(accountValue != null)
+            .addArgument(accountValue != null ? accountValue.getUpdated() : "N/A")
+            .addArgument(wasReCreatedAtTargetBlock)
+            .log();
+        if (!wasReCreatedAtTargetBlock) {
+          // Delete the orphaned entry - account doesn't exist at target, or this is not target
+          // block
+          stateUpdater.deleteAccountInfoStateAtBlock(address.addressHash(), blockNumber);
+        }
+        // If account was re-created at the target block, skip deletion to preserve the new data
       }
     }
 
-    // Write storage deletion markers at each tracked block number
+    // Delete orphaned storage entries at each tracked block number.
+    // Skip at the target block number where the new chain's data was written.
     for (Map.Entry<Long, Map<Address, Set<StorageSlotKey>>> blockEntry :
         worldStateUpdater.getStorageRemovedByBlock().entrySet()) {
       long blockNumber = blockEntry.getKey();
       for (Map.Entry<Address, Set<StorageSlotKey>> addrEntry : blockEntry.getValue().entrySet()) {
-        Hash addressHash = addrEntry.getKey().addressHash();
+        Address address = addrEntry.getKey();
+        Hash addressHash = address.addressHash();
+        var storageMap = worldStateUpdater.getStorageToUpdate().get(address);
+
         for (StorageSlotKey slotKey : addrEntry.getValue()) {
-          stateUpdater.removeStorageValueBySlotHashAtBlock(
-              addressHash, slotKey.getSlotHash(), blockNumber);
+          // Check if this storage slot was re-created AND this is the target block
+          boolean wasReCreatedAtTargetBlock = false;
+          if (storageMap != null && blockNumber == targetBlockNumber) {
+            var slotValue = storageMap.get(slotKey);
+            wasReCreatedAtTargetBlock = (slotValue != null && slotValue.getUpdated() != null);
+          }
+
+          if (!wasReCreatedAtTargetBlock) {
+            // Delete the orphaned entry
+            stateUpdater.deleteStorageValueBySlotHashAtBlock(
+                addressHash, slotKey.getSlotHash(), blockNumber);
+          }
         }
       }
     }
 
-    // Note: Code deletion markers are handled by account removal in archive mode.
-    // The code storage uses account hash as the key prefix, so when an account is marked
-    // as deleted, the code is effectively marked as deleted too.
+    // Note: Code deletion is handled by account removal in archive mode.
+    // The code storage uses account hash as the key prefix, so when an account entry is deleted,
+    // the code is effectively unreachable too.
   }
 
   @Override

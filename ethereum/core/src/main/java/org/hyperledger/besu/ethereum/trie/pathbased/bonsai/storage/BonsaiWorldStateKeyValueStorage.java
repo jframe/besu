@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
@@ -292,6 +293,22 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
       return this;
     }
 
+    /**
+     * Deletes an orphaned account entry at the given block number. Used during archive mode
+     * rollback to remove stale chain data that would otherwise mask valid data.
+     *
+     * @param accountHash the hash of the account to delete
+     * @param blockNumber the block number context of the orphaned entry
+     * @return this updater
+     */
+    public Updater deleteAccountInfoStateAtBlock(final Hash accountHash, final long blockNumber) {
+      if (flatDbStrategy instanceof BonsaiArchiveFlatDbStrategy archiveStrategy) {
+        archiveStrategy.deleteFlatAccountAtBlock(
+            composedWorldStateTransaction, accountHash, blockNumber);
+      }
+      return this;
+    }
+
     public Updater putAccountInfoState(final Hash accountHash, final Bytes accountValue) {
       if (accountValue.isEmpty()) {
         // Don't save empty values
@@ -381,6 +398,24 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
           accountHash,
           slotHash,
           () -> Optional.of(new BonsaiContext(blockNumber)));
+      return this;
+    }
+
+    /**
+     * Deletes an orphaned storage entry at the given block number. Used during archive mode
+     * rollback to remove stale chain data that would otherwise mask valid data.
+     *
+     * @param accountHash the hash of the account
+     * @param slotHash the hash of the storage slot to delete
+     * @param blockNumber the block number context of the orphaned entry
+     * @return this updater
+     */
+    public synchronized Updater deleteStorageValueBySlotHashAtBlock(
+        final Hash accountHash, final Hash slotHash, final long blockNumber) {
+      if (flatDbStrategy instanceof BonsaiArchiveFlatDbStrategy archiveStrategy) {
+        archiveStrategy.deleteFlatStorageAtBlock(
+            composedWorldStateTransaction, accountHash, slotHash, blockNumber);
+      }
       return this;
     }
 

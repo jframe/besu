@@ -25,8 +25,10 @@ import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldStateUpdateAccumulator;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.cache.PathBasedCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
@@ -56,6 +58,9 @@ import org.slf4j.LoggerFactory;
 public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
 
   private static final Logger LOG = LoggerFactory.getLogger(PathBasedWorldStateProvider.class);
+
+  /** Record to hold a TrieLog with its block number for archive mode rollback tracking. */
+  private record TrieLogWithBlockNumber(TrieLog trieLog, long blockNumber) {}
 
   protected final Blockchain blockchain;
 
@@ -255,21 +260,42 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         final Optional<BlockHeader> maybePersistedHeader =
             blockchain.getBlockHeader(mutableState.blockHash()).map(BlockHeader.class::cast);
 
-        final List<TrieLog> rollBacks = new ArrayList<>();
+        final List<TrieLogWithBlockNumber> rollBacks = new ArrayList<>();
         final List<TrieLog> rollForwards = new ArrayList<>();
         if (maybePersistedHeader.isEmpty()) {
-          trieLogManager.getTrieLogLayer(mutableState.blockHash()).ifPresent(rollBacks::add);
+          // No persisted header means we don't have a block number, use -1 as fallback
+          trieLogManager
+              .getTrieLogLayer(mutableState.blockHash())
+              .ifPresent(tl -> rollBacks.add(new TrieLogWithBlockNumber(tl, -1)));
         } else {
           BlockHeader targetHeader = blockchain.getBlockHeader(blockHash).get();
           BlockHeader persistedHeader = maybePersistedHeader.get();
+          LOG.info(
+              "Rolling from persisted block {} (height {}) to target block {} (height {})",
+              persistedHeader.getBlockHash(),
+              persistedHeader.getNumber(),
+              targetHeader.getBlockHash(),
+              targetHeader.getNumber());
           // roll back from persisted to even with target
           Hash persistedBlockHash = persistedHeader.getBlockHash();
           while (persistedHeader.getNumber() > targetHeader.getNumber()) {
-            LOG.debug("Rollback {}", persistedBlockHash);
-            rollBacks.add(trieLogManager.getTrieLogLayer(persistedBlockHash).get());
+            LOG.info(
+                "Regular Rollback: adding block {} at height {}",
+                persistedBlockHash,
+                persistedHeader.getNumber());
+            final long blockNum = persistedHeader.getNumber();
+            rollBacks.add(
+                new TrieLogWithBlockNumber(
+                    trieLogManager.getTrieLogLayer(persistedBlockHash).get(), blockNum));
             persistedHeader = blockchain.getBlockHeader(persistedHeader.getParentHash()).get();
             persistedBlockHash = persistedHeader.getBlockHash();
           }
+          LOG.info(
+              "After regular rollback: persisted at {} (height {}), target at {} (height {})",
+              persistedBlockHash,
+              persistedHeader.getNumber(),
+              targetHeader.getBlockHash(),
+              targetHeader.getNumber());
           // roll forward to target
           Hash targetBlockHash = targetHeader.getBlockHash();
           while (persistedHeader.getNumber() < targetHeader.getNumber()) {
@@ -280,18 +306,34 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
           }
 
           // roll back in tandem until we hit a shared state
+          LOG.info(
+              "Checking paired rollback: persistedBlockHash={}, targetBlockHash={}, equal={}",
+              persistedBlockHash,
+              targetBlockHash,
+              persistedBlockHash.equals(targetBlockHash));
           while (!persistedBlockHash.equals(targetBlockHash)) {
-            LOG.debug("Paired Rollback {}", persistedBlockHash);
-            LOG.debug("Paired Rollforward {}", targetBlockHash);
+            LOG.info(
+                "Paired Rollback: adding block {} at height {}",
+                persistedBlockHash,
+                persistedHeader.getNumber());
+            LOG.info(
+                "Paired Rollforward: adding block {} at height {}",
+                targetBlockHash,
+                targetHeader.getNumber());
             rollForwards.add(trieLogManager.getTrieLogLayer(targetBlockHash).get());
             targetHeader = blockchain.getBlockHeader(targetHeader.getParentHash()).get();
 
-            rollBacks.add(trieLogManager.getTrieLogLayer(persistedBlockHash).get());
+            // Capture block number BEFORE moving to parent (important for archive mode)
+            final long pairedBlockNum = persistedHeader.getNumber();
+            rollBacks.add(
+                new TrieLogWithBlockNumber(
+                    trieLogManager.getTrieLogLayer(persistedBlockHash).get(), pairedBlockNum));
             persistedHeader = blockchain.getBlockHeader(persistedHeader.getParentHash()).get();
 
             targetBlockHash = targetHeader.getBlockHash();
             persistedBlockHash = persistedHeader.getBlockHash();
           }
+          LOG.info("Final rollBacks size: {}", rollBacks.size());
         }
 
         // attempt the state rolling
@@ -303,27 +345,36 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             mutableState.getWorldStateStorage().getFlatDbMode() == FlatDbMode.ARCHIVE;
 
         try {
-          for (final TrieLog rollBack : rollBacks) {
+          for (final TrieLogWithBlockNumber rollBackWithNum : rollBacks) {
+            final TrieLog rollBack = rollBackWithNum.trieLog();
+            final long capturedBlockNumber = rollBackWithNum.blockNumber();
             LOG.debug("Attempting Rollback of {}", rollBack.getBlockHash());
 
             // For archive mode: set the target block number for deletion marker tracking
             // The target is the SAME block as the data being rolled back, because archive mode
             // search finds the entry with the highest suffix <= read context. To mask orphaned
             // data at block N, we need a deletion marker at block N (same suffix).
-            // First try the trie log's block number, then fall back to looking up the block header.
+            // Use the captured block number from when we collected the rollback (before headers
+            // became unavailable for orphaned blocks).
             if (isArchiveMode) {
-              Optional<Long> blockNumber = rollBack.getBlockNumber();
-              if (blockNumber.isEmpty()) {
-                // Try to get block number from blockchain (if block header still exists)
-                blockNumber =
-                    blockchain.getBlockHeader(rollBack.getBlockHash()).map(BlockHeader::getNumber);
+              if (capturedBlockNumber >= 0) {
+                pathBasedUpdater.setRollbackTargetBlock(capturedBlockNumber);
+              } else {
+                // Fallback: try the trie log's block number or blockchain lookup
+                Optional<Long> blockNumber = rollBack.getBlockNumber();
+                if (blockNumber.isEmpty()) {
+                  blockNumber =
+                      blockchain
+                          .getBlockHeader(rollBack.getBlockHash())
+                          .map(BlockHeader::getNumber);
+                }
+                blockNumber.ifPresentOrElse(
+                    pathBasedUpdater::setRollbackTargetBlock,
+                    () ->
+                        LOG.warn(
+                            "Archive rollback: could not determine block number for hash {}",
+                            rollBack.getBlockHash()));
               }
-              blockNumber.ifPresentOrElse(
-                  blockNum -> pathBasedUpdater.setRollbackTargetBlock(blockNum),
-                  () ->
-                      LOG.warn(
-                          "Archive rollback: could not determine block number for hash {}",
-                          rollBack.getBlockHash()));
             }
 
             pathBasedUpdater.rollBack(rollBack);
@@ -333,6 +384,25 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             LOG.debug("Attempting Rollforward of {}", rollForwards.get(i).getBlockHash());
             pathBasedUpdater.rollForward(forward);
           }
+
+          // For archive mode: set the write context to the TARGET block before commit
+          // This ensures the committed changes are written with the correct block suffix
+          if (isArchiveMode && mutableState instanceof BonsaiArchiveWorldState archiveWorldState) {
+            BlockHeader targetHeader = blockchain.getBlockHeader(blockHash).orElse(null);
+            if (targetHeader != null) {
+              LOG.atInfo()
+                  .setMessage("Setting write context to block {} before commit")
+                  .addArgument(targetHeader.getNumber())
+                  .log();
+              archiveWorldState.setWriteContext(new BonsaiContext(targetHeader.getNumber()));
+            }
+          } else if (isArchiveMode) {
+            LOG.atWarn()
+                .setMessage("Archive mode but mutableState is not BonsaiArchiveWorldState: {}")
+                .addArgument(mutableState.getClass().getName())
+                .log();
+          }
+
           pathBasedUpdater.commit();
 
           // For archive mode: write deletion markers at all tracked intermediate blocks
@@ -343,7 +413,12 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
                 || !bonsaiUpdater.getStorageRemovedByBlock().isEmpty()) {
               BonsaiWorldStateKeyValueStorage.Updater stateUpdater =
                   (BonsaiWorldStateKeyValueStorage.Updater) bonsaiState.getUpdaterForPersist();
-              bonsaiState.writeRollbackDeletionMarkers(stateUpdater, bonsaiUpdater);
+              // Pass the target block number so we skip deletion markers only at that suffix
+              // (where valid data was just written), not at all block numbers
+              long targetBlockNumber =
+                  blockchain.getBlockHeader(blockHash).map(BlockHeader::getNumber).orElse(-1L);
+              bonsaiState.writeRollbackDeletionMarkers(
+                  stateUpdater, bonsaiUpdater, targetBlockNumber);
               stateUpdater.commitComposedOnly();
             }
             pathBasedUpdater.clearRollbackDeletionTracking();
@@ -362,12 +437,13 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
         } catch (final Exception e) {
           // if we fail we must clean up the updater
           pathBasedUpdater.reset();
-          LOG.atDebug()
-              .setMessage("State rolling failed on {} for block hash {}")
+          LOG.atInfo()
+              .setMessage("State rolling failed on {} for block hash {}: {}")
               .addArgument(mutableState.getWorldStateStorage().getClass().getSimpleName())
               .addArgument(blockHash)
-              .addArgument(e)
+              .addArgument(e.toString())
               .log();
+          e.printStackTrace();
 
           return Optional.empty();
         }

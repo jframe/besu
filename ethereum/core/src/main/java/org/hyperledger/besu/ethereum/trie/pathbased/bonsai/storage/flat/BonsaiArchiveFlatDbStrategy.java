@@ -79,7 +79,6 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
       final Supplier<Optional<BonsaiContext>> readContextSupplier) {
 
     getAccountCounter.inc();
-    Optional<SegmentedKeyValueStorage.NearestKeyValue> accountFound;
 
     // Get read context - if not available, use MAX_SUFFIX to get latest value
     // This handles cases like snapshot storage where we want the most recent value
@@ -90,6 +89,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
         calculateArchiveKeyWithMaxSuffix(readContext, accountHash.getBytes().toArrayUnsafe());
 
     // Find the nearest account state for this address and block context
+    // First try the primary segment, then fall back to archive segment
     Optional<SegmentedKeyValueStorage.NearestKeyValue> nearestAccount =
         storage
             .getNearestBefore(ACCOUNT_INFO_STATE, keyNearest)
@@ -98,25 +98,32 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
                     accountHash.getBytes().commonPrefixLength(found.key())
                         >= accountHash.getBytes().size());
 
-    // If there isn't a match look in the archive DB segment
-    if (nearestAccount.isEmpty()) {
-      accountFound =
+    if (nearestAccount.isPresent()) {
+      getAccountFoundInFlatDatabaseCounter.inc();
+    } else {
+      // Try archive DB segment
+      nearestAccount =
           storage
               .getNearestBefore(ACCOUNT_INFO_STATE_ARCHIVE, keyNearest)
               .filter(
                   found ->
                       accountHash.getBytes().commonPrefixLength(found.key())
                           >= accountHash.getBytes().size());
-
-      if (accountFound.isPresent()) {
+      if (nearestAccount.isPresent()) {
         getAccountFromArchiveCounter.inc();
       } else {
         getAccountNotFoundInFlatDatabaseCounter.inc();
       }
-    } else {
+    }
 
-      accountFound = nearestAccount;
-      getAccountFoundInFlatDatabaseCounter.inc();
+    // Check if the found entry is a deletion marker
+    // A deletion marker means the account was deleted at that block - return empty
+    Optional<SegmentedKeyValueStorage.NearestKeyValue> accountFound = nearestAccount;
+    if (nearestAccount.isPresent()
+        && Arrays.areEqual(
+            DELETED_ACCOUNT_VALUE, nearestAccount.get().value().orElse(DELETED_ACCOUNT_VALUE))) {
+      // This is a deletion marker - account doesn't exist at this context
+      accountFound = Optional.empty();
     }
 
     LOG.info(
@@ -130,18 +137,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
             .map(Bytes::toHexString)
             .orElse("empty"));
 
-    if (accountFound.isPresent()) {
-      // The entry exists (so metrics are still incremented) but we don't return deleted values
-      return accountFound
-          .filter(
-              found ->
-                  !Arrays.areEqual(
-                      DELETED_ACCOUNT_VALUE, found.value().orElse(DELETED_ACCOUNT_VALUE)))
-          // return empty when we find a "deleted value key"
-          .flatMap(SegmentedKeyValueStorage.NearestKeyValue::wrapBytes);
-    }
-
-    return Optional.empty();
+    return accountFound.flatMap(SegmentedKeyValueStorage.NearestKeyValue::wrapBytes);
   }
 
   @Override
@@ -261,6 +257,12 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
         calculateArchiveKeyWithMinSuffix(
             Optional.of(writeContext), accountHash.getBytes().toArrayUnsafe());
 
+    LOG.info(
+        "putFlatAccount: hash={}, writeContext={}, value={}",
+        accountHash,
+        writeContext,
+        accountValue);
+
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, accountValue.toArrayUnsafe());
   }
 
@@ -282,6 +284,32 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     LOG.info("removeFlatAccount: hash={}, writeContext={}", accountHash, writeContext);
 
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
+  }
+
+  /**
+   * Deletes an orphaned account entry at the given block context. Used during archive mode rollback
+   * to remove stale chain data that would otherwise mask valid data at earlier block numbers.
+   *
+   * <p>Unlike {@link #removeFlatAccount} which writes a deletion marker, this method actually
+   * removes the key-value entry from the database. This is necessary during reorg handling to
+   * prevent orphaned data from the old chain from masking valid data from the new chain.
+   *
+   * @param transaction the storage transaction
+   * @param accountHash the hash of the account to delete
+   * @param blockNumber the block number context of the orphaned entry
+   */
+  public void deleteFlatAccountAtBlock(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final Hash accountHash,
+      final long blockNumber) {
+
+    byte[] keySuffixed =
+        calculateArchiveKeyWithMinSuffix(
+            Optional.of(new BonsaiContext(blockNumber)), accountHash.getBytes().toArrayUnsafe());
+
+    LOG.info("deleteFlatAccountAtBlock: hash={}, blockNumber={}", accountHash, blockNumber);
+
+    transaction.remove(ACCOUNT_INFO_STATE, keySuffixed);
   }
 
   private byte[] trimSuffix(final byte[] suffixedAddress) {
@@ -415,6 +443,34 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
         writeContext);
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
+  }
+
+  /**
+   * Deletes an orphaned storage entry at the given block context. Used during archive mode rollback
+   * to remove stale chain data that would otherwise mask valid data at earlier block numbers.
+   *
+   * @param transaction the storage transaction
+   * @param accountHash the hash of the account
+   * @param slotHash the hash of the storage slot to delete
+   * @param blockNumber the block number context of the orphaned entry
+   */
+  public void deleteFlatStorageAtBlock(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final Hash accountHash,
+      final Hash slotHash,
+      final long blockNumber) {
+
+    byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
+    byte[] keySuffixed =
+        calculateArchiveKeyWithMinSuffix(Optional.of(new BonsaiContext(blockNumber)), naturalKey);
+
+    LOG.info(
+        "deleteFlatStorageAtBlock: accountHash={}, slotHash={}, blockNumber={}",
+        accountHash,
+        slotHash,
+        blockNumber);
+
+    transaction.remove(ACCOUNT_STORAGE_STORAGE, keySuffixed);
   }
 
   public static byte[] calculateNaturalSlotKey(final Hash accountHash, final Hash slotHash) {

@@ -1083,6 +1083,17 @@ public class BonsaiArchiveReorgTest {
             Bytes.fromHexString("73"), ACCOUNT_B.getBytes(), Bytes.fromHexString("FF"));
     Bytes initCode = createInitCode(selfDestructCode);
     Address contractA = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+    System.out.println(
+        "Test addresses: contractA="
+            + contractA
+            + ", ACCOUNT_A="
+            + ACCOUNT_A
+            + ", ACCOUNT_B="
+            + ACCOUNT_B
+            + ", ACCOUNT_C="
+            + ACCOUNT_C
+            + ", sender="
+            + Address.extract(sender.getPublicKey()));
 
     // Chain A: Deploy contract with 3 ETH
     Block block2A =
@@ -1711,6 +1722,238 @@ public class BonsaiArchiveReorgTest {
           .as("Account %d should not exist after reorg", i)
           .isNull();
     }
+  }
+
+  /**
+   * Tests the exact scenario from production: a 1-block reorg at height N followed by executing
+   * block N+1. This reproduces the bug where "Block context not present" warning appears during
+   * reorg, causing orphaned data to leak into subsequent block execution.
+   *
+   * <p>Scenario:
+   *
+   * <pre>
+   * 1. Chain: genesis → ... → block N-1 → block N (version A) - creates ACCOUNT_A
+   * 2. Reorg: block N (version B) replaces block N (version A) - creates ACCOUNT_B instead
+   * 3. Execute block N+1 on chain B - reads state that should NOT include ACCOUNT_A
+   * </pre>
+   *
+   * <p>If deletion markers aren't written correctly during the reorg, block N+1's execution will
+   * read orphaned ACCOUNT_A data, causing state root mismatch.
+   */
+  @Test
+  void shouldHandleOneBlockReorgFollowedByNewBlock() {
+    // Build chain to block N-1 (common ancestor)
+    BlockHeader blockNMinus1 = buildEmptyChainToBlock(5);
+
+    // Block N (version A): Creates ACCOUNT_A with 1 ETH and sets storage on a contract
+    Bytes runtimeCode = Bytes.fromHexString("60003560005500"); // SSTORE(0, calldata)
+    Bytes initCode = createInitCode(runtimeCode);
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Chain A: Deploy contract + transfer to ACCOUNT_A
+    Block blockNA =
+        forTransactions(
+            List.of(
+                createContractDeployment(initCode, ONE_ETH),
+                createTransaction(ACCOUNT_A, TWO_ETH, 1)),
+            blockNMinus1);
+    executeBlock(archiveProvider.getWorldState(), blockNA);
+
+    // Verify chain A state
+    assertAccountExists(ACCOUNT_A);
+    assertBalance(ACCOUNT_A, TWO_ETH);
+    assertAccountExists(contractAddress);
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(6L);
+
+    // Now reorg: Block N (version B) - creates ACCOUNT_B instead, different contract storage
+    Block blockNB =
+        forTransactions(
+            List.of(
+                createContractDeployment(initCode, FIVE_ETH),
+                createTransaction(ACCOUNT_B, THREE_ETH, 1)),
+            blockNMinus1);
+
+    // Execute the reorg - this is where deletion markers should be written
+    reorgFrom(blockNMinus1, blockNB);
+
+    // Verify reorg state - ACCOUNT_A should NOT exist (orphaned from chain A)
+    assertAccountNull(ACCOUNT_A); // Critical: if this fails, deletion markers didn't work
+    assertAccountExists(ACCOUNT_B);
+    assertBalance(ACCOUNT_B, THREE_ETH);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
+        .isEqualTo(FIVE_ETH);
+
+    // NOW: Execute block N+1 on chain B
+    // This is where the production bug manifests - if orphaned data leaks, state root will mismatch
+    Block blockNPlus1 =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xBB)), 2),
+                createTransaction(ACCOUNT_B, TWO_ETH, 3),
+                createTransaction(ACCOUNT_C, ONE_ETH, 4)),
+            blockNB.getHeader());
+
+    // This should succeed - if deletion markers are wrong, we get StateRootMismatchException
+    BlockProcessingResult result = executeBlock(archiveProvider.getWorldState(), blockNPlus1);
+    assertThat(result.isSuccessful())
+        .as("Block N+1 should execute successfully after 1-block reorg")
+        .isTrue();
+
+    // Final state verification
+    assertAccountNull(ACCOUNT_A); // Still should not exist
+    assertBalance(ACCOUNT_B, FIVE_ETH); // 3 ETH from block NB + 2 ETH from block N+1
+    assertBalance(ACCOUNT_C, ONE_ETH);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xBB));
+  }
+
+  /**
+   * Tests rapid sequential block imports at the same height followed by the next block. This
+   * reproduces the exact production log pattern:
+   *
+   * <pre>
+   * 06:14:17 - Imported #N (hash A)
+   * 06:14:26 - Imported #N (hash B) ← REORG
+   * 06:14:39 - Block #N+1 FAILS with invalid state root
+   * </pre>
+   *
+   * <p>The key aspect is that the reorg happens via normal block import flow (not explicit reorg),
+   * simulating how consensus layer sends competing blocks.
+   */
+  @Test
+  void shouldHandleRapidReorgAtSameHeightFollowedByNextBlock() {
+    // Build chain to block N-1
+    BlockHeader parentHeader = buildEmptyChainToBlock(10);
+    long blockN = parentHeader.getNumber() + 1;
+
+    // Block N (version A): First block at height N
+    Block blockNA =
+        forTransactions(
+            List.of(
+                createTransaction(ACCOUNT_A, ONE_ETH, 0), createTransaction(ACCOUNT_B, ONE_ETH, 1)),
+            parentHeader);
+    executeBlock(archiveProvider.getWorldState(), blockNA);
+
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(blockN);
+    assertBalance(ACCOUNT_A, ONE_ETH);
+    assertBalance(ACCOUNT_B, ONE_ETH);
+
+    // Block N (version B): Second block at same height - triggers reorg
+    // This simulates receiving a competing block from consensus layer
+    Block blockNB =
+        forTransactions(
+            List.of(
+                createTransaction(ACCOUNT_C, THREE_ETH, 0),
+                createTransaction(ACCOUNT_A, TWO_ETH, 1) // Same account as chain A but different
+                // amount
+                ),
+            parentHeader);
+
+    // Reorg to chain B
+    reorgFrom(parentHeader, blockNB);
+
+    // Verify reorg completed correctly
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(blockN);
+    assertAccountNull(ACCOUNT_B); // Only existed in chain A - CRITICAL CHECK
+    assertBalance(ACCOUNT_C, THREE_ETH);
+    assertBalance(ACCOUNT_A, TWO_ETH); // Chain B's value, not chain A's
+
+    // Block N+1: Next block on chain B
+    // If orphaned data from chain A leaks, this will fail with state root mismatch
+    Block blockNPlus1 =
+        forTransactions(
+            List.of(
+                createTransaction(ACCOUNT_C, ONE_ETH, 2), createTransaction(ACCOUNT_A, ONE_ETH, 3)),
+            blockNB.getHeader());
+
+    BlockProcessingResult result = executeBlock(archiveProvider.getWorldState(), blockNPlus1);
+    assertThat(result.isSuccessful())
+        .as("Block N+1 should succeed after rapid reorg at block N")
+        .isTrue();
+
+    // Final verification
+    assertAccountNull(ACCOUNT_B); // Still should not exist
+    assertBalance(ACCOUNT_C, Wei.of(4_000_000_000_000_000_000L)); // 3 + 1 ETH
+    assertBalance(ACCOUNT_A, THREE_ETH); // 2 + 1 ETH
+  }
+
+  /**
+   * Tests that state remains correct when multiple blocks are built on top of a reorg'd block. This
+   * ensures deletion markers properly mask orphaned data for the entire subsequent chain.
+   */
+  @Test
+  void shouldMaintainCorrectStateForMultipleBlocksAfterReorg() {
+    // Build to block 5
+    BlockHeader forkPoint = buildEmptyChainToBlock(5);
+
+    // Chain A: 3 blocks creating accounts and storage
+    Bytes runtimeCode = Bytes.fromHexString("60003560005500");
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    Block block6A =
+        forTransactions(
+            List.of(createContractDeployment(createInitCode(runtimeCode), ONE_ETH)), forkPoint);
+    executeBlock(archiveProvider.getWorldState(), block6A);
+
+    Block block7A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xAA)), 1),
+                createTransaction(ACCOUNT_A, ONE_ETH, 2)),
+            block6A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block7A);
+
+    Block block8A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xBB)), 3),
+                createTransaction(ACCOUNT_B, TWO_ETH, 4)),
+            block7A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block8A);
+
+    // Verify chain A state
+    assertBalance(ACCOUNT_A, ONE_ETH);
+    assertBalance(ACCOUNT_B, TWO_ETH);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xBB));
+
+    // Reorg at block 6 - different contract deployment and transfers
+    Block block6B =
+        forTransactions(
+            List.of(
+                createContractDeployment(createInitCode(runtimeCode), FIVE_ETH),
+                createTransaction(ACCOUNT_C, ONE_ETH, 1)),
+            forkPoint);
+    reorgFrom(forkPoint, block6B);
+
+    // Verify state immediately after reorg (before any subsequent blocks)
+    assertThat(archiveProvider.getWorldState().get(contractAddress))
+        .as("Contract should exist after reorg")
+        .isNotNull();
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
+        .as("Contract balance should be 5 ETH (from chain B) immediately after reorg")
+        .isEqualTo(FIVE_ETH);
+
+    // Build blocks 7B, 8B, 9B, 10B on chain B
+    // Use executeBlockAndUpdateHead to properly persist and update world state context
+    BlockHeader parentHeader = block6B.getHeader();
+    for (int i = 7; i <= 10; i++) {
+      Block block =
+          forTransactions(
+              List.of(createTransaction(ACCOUNT_C, ONE_ETH, i - 5)), // nonces 2, 3, 4, 5
+              parentHeader);
+      executeBlockAndUpdateHead(block);
+      parentHeader = block.getHeader();
+    }
+
+    // Verify final state - orphaned data must not leak
+    assertAccountNull(ACCOUNT_A); // Only in chain A
+    assertAccountNull(ACCOUNT_B); // Only in chain A
+    assertBalance(ACCOUNT_C, FIVE_ETH); // 1 ETH × 5 blocks (6B through 10B)
+    // Contract exists from block 6B deployment
+    assertAccountExists(contractAddress);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
+        .isEqualTo(FIVE_ETH);
+    // Storage should be empty - no writes in chain B after deploy
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.ZERO);
   }
 
   /**
