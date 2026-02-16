@@ -485,9 +485,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
    * @return true if non-marker data exists at any block < blockNumber
    */
   boolean hasHistoricalAccountDataBefore(
-      final SegmentedKeyValueStorage storage,
-      final Hash accountHash,
-      final long blockNumber) {
+      final SegmentedKeyValueStorage storage, final Hash accountHash, final long blockNumber) {
 
     if (blockNumber == 0) {
       return false; // No blocks before genesis
@@ -503,6 +501,44 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
             () -> Optional.empty(), // worldStateRootHash not needed for this check
             null, // nodeLoader not needed
             accountHash,
+            storage,
+            readContext);
+
+    return historicalData.isPresent();
+  }
+
+  /**
+   * Checks if legitimate (non-marker) storage data exists before the given block number. Used by
+   * smart detection to decide between deletion (reveal history) vs marker (barrier).
+   *
+   * <p>Package-private for testing.
+   *
+   * @param storage the key-value storage
+   * @param accountHash the account hash
+   * @param slotHash the storage slot hash
+   * @param blockNumber the block number to search before
+   * @return true if non-marker data exists at any block < blockNumber
+   */
+  boolean hasHistoricalStorageDataBefore(
+      final SegmentedKeyValueStorage storage,
+      final Hash accountHash,
+      final Hash slotHash,
+      final long blockNumber) {
+
+    if (blockNumber == 0) {
+      return false; // No blocks before genesis
+    }
+
+    Supplier<Optional<BonsaiContext>> readContext =
+        () -> Optional.of(new BonsaiContext(blockNumber - 1));
+
+    Optional<Bytes> historicalData =
+        getFlatStorageValueByStorageSlotKey(
+            () -> Optional.empty(), // worldStateRootHash not needed for this check
+            () -> Optional.empty(), // storageRoot not needed
+            null, // nodeLoader not needed
+            accountHash,
+            new StorageSlotKey(slotHash, Optional.empty()),
             storage,
             readContext);
 

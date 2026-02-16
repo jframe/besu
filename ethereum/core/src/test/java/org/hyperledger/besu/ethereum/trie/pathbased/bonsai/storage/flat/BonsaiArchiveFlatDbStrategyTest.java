@@ -30,6 +30,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -260,5 +261,74 @@ public class BonsaiArchiveFlatDbStrategyTest {
         archiveFlatDbStrategy.hasHistoricalAccountDataBefore(storage, accountHash, 20);
 
     assertThat(hasData).isFalse();
+  }
+
+  @Test
+  public void hasHistoricalStorageDataBeforeShouldReturnTrueWhenDataExists() {
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000200").addressHash();
+    final Hash slotHash = Hash.wrap(Bytes32.leftPad(Bytes.fromHexString("0x01")));
+    final Bytes storageValue = Bytes.fromHexString("0x9988776655");
+
+    // Write storage data at block 10
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    Supplier<Optional<BonsaiContext>> context10 = () -> Optional.of(new BonsaiContext(10L));
+    archiveFlatDbStrategy.putFlatAccountStorageValueByStorageSlotHash(
+        storage, tx, accountHash, slotHash, storageValue, context10);
+    tx.commit();
+
+    // Check if historical storage data exists before block 20
+    boolean hasData =
+        archiveFlatDbStrategy.hasHistoricalStorageDataBefore(storage, accountHash, slotHash, 20);
+
+    assertThat(hasData).isTrue();
+  }
+
+  @Test
+  public void hasHistoricalStorageDataBeforeShouldReturnFalseWhenNoDataExists() {
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000201").addressHash();
+    final Hash slotHash = Hash.wrap(Bytes32.leftPad(Bytes.fromHexString("0x02")));
+
+    // No data written for this storage slot
+
+    // Check if historical storage data exists before block 20
+    boolean hasData =
+        archiveFlatDbStrategy.hasHistoricalStorageDataBefore(storage, accountHash, slotHash, 20);
+
+    assertThat(hasData).isFalse();
+  }
+
+  @Test
+  public void hasHistoricalStorageDataBeforeShouldReturnFalseForGenesisBlock() {
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000202").addressHash();
+    final Hash slotHash = Hash.hash(Bytes.of(1));
+
+    // Check for historical data before genesis (block 0)
+    boolean hasHistory =
+        archiveFlatDbStrategy.hasHistoricalStorageDataBefore(storage, accountHash, slotHash, 0L);
+
+    assertThat(hasHistory).isFalse();
+  }
+
+  @Test
+  public void hasHistoricalStorageDataBeforeShouldIgnoreDeletionMarkers() {
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000203").addressHash();
+    final Hash slotHash = Hash.hash(Bytes.of(1));
+
+    // Write deletion marker at block 10
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    Supplier<Optional<BonsaiContext>> context = () -> Optional.of(new BonsaiContext(10L));
+    archiveFlatDbStrategy.removeFlatAccountStorageValueByStorageSlotHash(
+        storage, tx, accountHash, slotHash, context);
+    tx.commit();
+
+    // Check for historical data before block 20 (only marker exists)
+    boolean hasHistory =
+        archiveFlatDbStrategy.hasHistoricalStorageDataBefore(storage, accountHash, slotHash, 20L);
+
+    assertThat(hasHistory).isFalse();
   }
 }
