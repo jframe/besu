@@ -77,4 +77,9 @@ public class BonsaiContext {
   public Optional<Long> getBlockNumber() {
     return Optional.ofNullable(blockNumber.get());
   }
+
+  @Override
+  public String toString() {
+    return "BonsaiContext{" + "blockNumber=" + blockNumber + ", blockHeader=" + blockHeader + '}';
+  }
 }

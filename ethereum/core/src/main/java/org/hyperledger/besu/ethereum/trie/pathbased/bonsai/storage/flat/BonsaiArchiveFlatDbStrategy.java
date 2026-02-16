@@ -279,6 +279,8 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
         calculateArchiveKeyWithMinSuffix(
             Optional.of(writeContext), accountHash.getBytes().toArrayUnsafe());
 
+    LOG.info("removeFlatAccount: hash={}, writeContext={}", accountHash, writeContext);
+
     transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
   }
 
@@ -406,6 +408,11 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     byte[] naturalKey = calculateNaturalSlotKey(accountHash, slotHash);
     // insert a key suffixed with block context, with 'deleted account' value
     byte[] keySuffixed = calculateArchiveKeyWithMinSuffix(Optional.of(writeContext), naturalKey);
+
+    LOG.info(
+        "removeFlatAccountStorageValueByStorageSlotHash: hash={}, writeContext={}",
+        accountHash,
+        writeContext);
 
     transaction.put(ACCOUNT_STORAGE_STORAGE, keySuffixed, DELETED_STORAGE_VALUE);
   }
