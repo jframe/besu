@@ -473,6 +473,42 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     transaction.remove(ACCOUNT_STORAGE_STORAGE, keySuffixed);
   }
 
+  /**
+   * Checks if legitimate (non-marker) account data exists before the given block number. Used by
+   * smart detection to decide between deletion (reveal history) vs marker (barrier).
+   *
+   * <p>Package-private for testing.
+   *
+   * @param storage the key-value storage
+   * @param accountHash the account hash to check
+   * @param blockNumber the block number to search before
+   * @return true if non-marker data exists at any block < blockNumber
+   */
+  boolean hasHistoricalAccountDataBefore(
+      final SegmentedKeyValueStorage storage,
+      final Hash accountHash,
+      final long blockNumber) {
+
+    if (blockNumber == 0) {
+      return false; // No blocks before genesis
+    }
+
+    // Reuse getFlatAccount with readContext = blockNumber - 1
+    // This searches for the nearest non-marker entry before blockNumber
+    Supplier<Optional<BonsaiContext>> readContext =
+        () -> Optional.of(new BonsaiContext(blockNumber - 1));
+
+    Optional<Bytes> historicalData =
+        getFlatAccount(
+            () -> Optional.empty(), // worldStateRootHash not needed for this check
+            null, // nodeLoader not needed
+            accountHash,
+            storage,
+            readContext);
+
+    return historicalData.isPresent();
+  }
+
   public static byte[] calculateNaturalSlotKey(final Hash accountHash, final Hash slotHash) {
     return Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe();
   }
