@@ -275,15 +275,48 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
     // Get write context or default to genesis
     BonsaiContext writeContext = writeContextSupplier.get().orElse(new BonsaiContext(0L));
+    long blockNumber = writeContext.getBlockNumber().orElse(0L);
 
-    // insert a key suffixed with block context, with 'deleted account' value
+    // Calculate the key for this account at the current block
     byte[] keySuffixed =
         calculateArchiveKeyWithMinSuffix(
             Optional.of(writeContext), accountHash.getBytes().toArrayUnsafe());
 
-    LOG.info("removeFlatAccount: hash={}, writeContext={}", accountHash, writeContext);
+    // SMART DETECTION: Check if data exists at current block
+    Optional<byte[]> currentData = storage.get(ACCOUNT_INFO_STATE, keySuffixed);
 
-    transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
+    boolean isReorgCleanup =
+        currentData.isPresent() && !Arrays.areEqual(currentData.get(), DELETED_ACCOUNT_VALUE);
+
+    if (isReorgCleanup) {
+      // Data exists at current block → this is reorg cleanup (orphaned data from abandoned chain)
+      // Check if historical data exists before this block
+      boolean hasHistory = hasHistoricalAccountDataBefore(storage, accountHash, blockNumber);
+
+      if (hasHistory) {
+        // Historical data exists → DELETE to reveal it
+        LOG.info(
+            "removeFlatAccount: DELETE orphaned data (history exists): hash={}, writeContext={}",
+            accountHash,
+            writeContext);
+        transaction.remove(ACCOUNT_INFO_STATE, keySuffixed);
+      } else {
+        // No historical data → MARKER to overwrite orphaned data
+        LOG.info(
+            "removeFlatAccount: MARKER for orphaned data (no history): hash={}, writeContext={}",
+            accountHash,
+            writeContext);
+        transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
+      }
+    } else {
+      // No data at current block → this is SELFDESTRUCT (account being destroyed during commit)
+      // Always write MARKER to hide any historical data
+      LOG.info(
+          "removeFlatAccount: MARKER for SELFDESTRUCT: hash={}, writeContext={}",
+          accountHash,
+          writeContext);
+      transaction.put(ACCOUNT_INFO_STATE, keySuffixed, DELETED_ACCOUNT_VALUE);
+    }
   }
 
   /**
