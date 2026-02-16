@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
@@ -394,6 +395,14 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Optional<byte[]> valueAtBlock10 = storage.get(ACCOUNT_INFO_STATE, keyBlock10);
     assertThat(valueAtBlock10).isPresent();
     assertThat(Bytes.wrap(valueAtBlock10.get())).isEqualTo(historicalValue);
+
+    // Verify that reading at block 20 now reveals the historical value from block 10
+    Supplier<Optional<BonsaiContext>> readBlock20 = () -> Optional.of(new BonsaiContext(20L));
+    Optional<Bytes> readValue =
+        archiveFlatDbStrategy.getFlatAccount(
+            () -> Optional.empty(), null, accountHash, storage, readBlock20);
+    assertThat(readValue).isPresent();
+    assertThat(readValue.get()).isEqualTo(historicalValue);
   }
 
   @Test
@@ -497,6 +506,20 @@ public class BonsaiArchiveFlatDbStrategyTest {
     final Optional<byte[]> valueAtBlock10 = storage.get(ACCOUNT_STORAGE_STORAGE, keyBlock10);
     assertThat(valueAtBlock10).isPresent();
     assertThat(Bytes.wrap(valueAtBlock10.get())).isEqualTo(historicalValue);
+
+    // Verify that reading at block 20 now reveals the historical value from block 10
+    Supplier<Optional<BonsaiContext>> readBlock20 = () -> Optional.of(new BonsaiContext(20L));
+    Optional<Bytes> readValue =
+        archiveFlatDbStrategy.getFlatStorageValueByStorageSlotKey(
+            () -> Optional.empty(),
+            () -> Optional.empty(),
+            null,
+            accountHash,
+            new StorageSlotKey(slotHash, Optional.empty()),
+            storage,
+            readBlock20);
+    assertThat(readValue).isPresent();
+    assertThat(readValue.get()).isEqualTo(historicalValue);
   }
 
   @Test
