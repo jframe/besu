@@ -759,9 +759,24 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     } else {
       if (expectedValue == null) {
         if (accountValue.getUpdated() != null) {
-          throw new IllegalStateException(
-              String.format(
-                  "Expected to create account, but the account exists.  Address=%s", address));
+          // In archive mode during rollforward, the account may have been pre-persisted by
+          // a parallel world state (e.g., wsAtForkPoint.persist()). This is valid as long as
+          // the existing account matches the expected replacement value from the trie log.
+          // Verify they match and continue to update the accumulator so the account will be
+          // written to the correct storage suffix during persist.
+          if (replacementValue != null) {
+            assertCloseEnoughForDiffing(
+                accountValue.getUpdated(),
+                replacementValue,
+                "Address="
+                    + address
+                    + " Pre-persisted account value in archive rollforward (expected to create)");
+            // Continue to update accumulator - don't return early
+          } else {
+            throw new IllegalStateException(
+                String.format(
+                    "Expected to create account, but the account exists.  Address=%s", address));
+          }
         }
       } else {
         assertCloseEnoughForDiffing(
@@ -928,10 +943,18 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
       if ((expectedValue == null || expectedValue.isZero())
           && existingSlotValue != null
           && !existingSlotValue.isZero()) {
-        throw new IllegalStateException(
-            String.format(
-                "Expected to create slot, but the slot exists. Account=%s SlotKey=%s expectedValue=%s existingValue=%s",
-                address, storageSlotKey, expectedValue, existingSlotValue));
+        // In archive mode during rollforward, the storage may have been pre-persisted by
+        // a parallel world state (e.g., wsAtForkPoint.persist()). This is valid as long as
+        // the existing value matches the expected replacement value from the trie log.
+        // Continue to update the accumulator so the storage will be written to the correct
+        // suffix during persist.
+        if (replacementValue == null || !isSlotEquals(replacementValue, existingSlotValue)) {
+          throw new IllegalStateException(
+              String.format(
+                  "Expected to create slot, but the slot exists. Account=%s SlotKey=%s expectedValue=%s existingValue=%s",
+                  address, storageSlotKey, expectedValue, existingSlotValue));
+        }
+        // Continue to update accumulator - don't return early
       }
       if (!isSlotEquals(expectedValue, existingSlotValue)) {
         throw new IllegalStateException(

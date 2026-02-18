@@ -496,14 +496,14 @@ public class BonsaiWorldState extends PathBasedWorldState {
    * This is called once at the end of archive mode rollback to write markers at all intermediate
    * blocks.
    *
-   * <p>IMPORTANT: We only skip writing deletion markers at the target block number (where valid
-   * data was just written). For all other block numbers in the tracked set, we must write deletion
-   * markers to mask orphaned data from the old chain.
+   * <p>IMPORTANT: We skip writing deletion markers for accounts/storage that were re-created by a
+   * rollforward. Since rollforwards now write data at their correct block suffix, we check if the
+   * account/storage has an updated value in the accumulator. If it does, it means the rollforward
+   * wrote canonical data at that suffix, and we should not overwrite it with a deletion marker.
    *
    * @param stateUpdater the updater to write deletion markers to
    * @param worldStateUpdater the accumulator containing tracked rollback deletions
-   * @param targetBlockNumber the block number where valid data was written (skip deletion marker
-   *     here)
+   * @param targetBlockNumber the final target block number (used for logging only now)
    */
   public void writeRollbackDeletionMarkers(
       final BonsaiWorldStateKeyValueStorage.Updater stateUpdater,
@@ -513,39 +513,47 @@ public class BonsaiWorldState extends PathBasedWorldState {
     // Remove orphaned account entries at each tracked block number.
     // Smart detection in removeFlatAccount will decide whether to DELETE (reveal history) or
     // write a MARKER (barrier) based on whether historical data exists.
-    // Skip at the target block number where the new chain's data was written.
+    // Skip ONLY at the target block number if the account was re-created by rollforward
+    // (canonical chain has data at that suffix). But still write deletion markers at other
+    // block numbers to mask orphaned data from the abandoned chain.
     for (Map.Entry<Long, Set<Address>> entry :
         worldStateUpdater.getAccountsRemovedByBlock().entrySet()) {
       long blockNumber = entry.getKey();
       for (Address address : entry.getValue()) {
-        // Check if this account was re-created during rollforward AND this is the target block
+        // Check if this account was re-created during rollforward
         var accountValue = worldStateUpdater.getAccountsToUpdate().get(address);
-        boolean wasReCreatedAtTargetBlock =
-            (accountValue != null
-                && accountValue.getUpdated() != null
-                && blockNumber == targetBlockNumber);
+        boolean wasReCreatedByRollforward =
+            (accountValue != null && accountValue.getUpdated() != null);
+        // Only skip deletion at the TARGET block (where canonical data is being written).
+        // For other blocks (orphaned intermediate blocks), we MUST write deletion markers
+        // to mask the abandoned chain's data.
+        boolean skipDeletion = wasReCreatedByRollforward && blockNumber == targetBlockNumber;
         LOG.atDebug()
             .setMessage(
-                "writeRollbackDeletionMarkers: account={}, blockNumber={}, targetBlock={}, inAccumulator={}, updated={}, wasReCreatedAtTargetBlock={}")
+                "writeRollbackDeletionMarkers: account={}, blockNumber={}, targetBlock={}, inAccumulator={}, updated={}, wasReCreatedByRollforward={}, skipDeletion={}")
             .addArgument(address)
             .addArgument(blockNumber)
             .addArgument(targetBlockNumber)
             .addArgument(accountValue != null)
             .addArgument(accountValue != null ? accountValue.getUpdated() : "N/A")
-            .addArgument(wasReCreatedAtTargetBlock)
+            .addArgument(wasReCreatedByRollforward)
+            .addArgument(skipDeletion)
             .log();
-        if (!wasReCreatedAtTargetBlock) {
-          // Remove the orphaned entry - account doesn't exist at target, or this is not target
-          // block. The smart detection in removeFlatAccount will decide whether to DELETE
+        if (!skipDeletion) {
+          // Remove the orphaned entry - either the account was NOT re-created, or this is
+          // an intermediate block where the orphaned data must be masked.
+          // The smart detection in removeFlatAccount will decide whether to DELETE
           // (reveal history) or write a MARKER (barrier).
           stateUpdater.removeAccountInfoStateAtBlock(address.addressHash(), blockNumber);
         }
-        // If account was re-created at the target block, skip deletion to preserve the new data
+        // If account was re-created by rollforward at this specific block, skip deletion
+        // to preserve the canonical data
       }
     }
 
     // Delete orphaned storage entries at each tracked block number.
-    // Skip at the target block number where the new chain's data was written.
+    // Skip ONLY at the target block number if the storage was re-created by rollforward.
+    // For other blocks (orphaned intermediate blocks), we MUST write deletion markers.
     for (Map.Entry<Long, Map<Address, Set<StorageSlotKey>>> blockEntry :
         worldStateUpdater.getStorageRemovedByBlock().entrySet()) {
       long blockNumber = blockEntry.getKey();
@@ -555,16 +563,21 @@ public class BonsaiWorldState extends PathBasedWorldState {
         var storageMap = worldStateUpdater.getStorageToUpdate().get(address);
 
         for (StorageSlotKey slotKey : addrEntry.getValue()) {
-          // Check if this storage slot was re-created AND this is the target block
-          boolean wasReCreatedAtTargetBlock = false;
-          if (storageMap != null && blockNumber == targetBlockNumber) {
+          // Check if this storage slot was re-created during rollforward
+          boolean wasReCreatedByRollforward = false;
+          if (storageMap != null) {
             var slotValue = storageMap.get(slotKey);
-            wasReCreatedAtTargetBlock = (slotValue != null && slotValue.getUpdated() != null);
+            wasReCreatedByRollforward = (slotValue != null && slotValue.getUpdated() != null);
           }
 
-          if (!wasReCreatedAtTargetBlock) {
-            // Remove the orphaned entry. The smart detection in
-            // removeFlatAccountStorageValueByStorageSlotHash
+          // Only skip deletion at the TARGET block (where canonical data is being written).
+          // For other blocks (orphaned intermediate blocks), we MUST write deletion markers.
+          boolean skipDeletion = wasReCreatedByRollforward && blockNumber == targetBlockNumber;
+
+          if (!skipDeletion) {
+            // Remove the orphaned entry - either the storage was NOT re-created, or this is
+            // an intermediate block where the orphaned data must be masked.
+            // The smart detection in removeFlatAccountStorageValueByStorageSlotHash
             // will decide whether to DELETE (reveal history) or write a MARKER (barrier).
             stateUpdater.removeStorageValueBySlotHashAtBlock(
                 addressHash, slotKey.getSlotHash(), blockNumber);

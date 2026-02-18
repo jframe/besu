@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.AccountValue;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPException;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
@@ -214,5 +215,17 @@ public class BonsaiAccount extends PathBasedAccount {
         throw new IllegalStateException(context + ": Storage Roots differ");
       }
     }
+  }
+
+  /**
+   * Serializes an AccountValue to RLP-encoded Bytes.
+   *
+   * @param accountValue the account value to serialize
+   * @return the RLP-encoded bytes
+   */
+  public static Bytes serializeAccountValue(final AccountValue accountValue) {
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    accountValue.writeTo(out);
+    return out.encoded();
   }
 }

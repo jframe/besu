@@ -25,10 +25,8 @@ import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldStateUpdateAccumulator;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.cache.PathBasedCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
@@ -59,8 +57,11 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
 
   private static final Logger LOG = LoggerFactory.getLogger(PathBasedWorldStateProvider.class);
 
-  /** Record to hold a TrieLog with its block number for archive mode rollback tracking. */
+  /** Record to hold a TrieLog with its block number for archive mode tracking. */
   private record TrieLogWithBlockNumber(TrieLog trieLog, long blockNumber) {}
+
+  /** Record to hold a TrieLog with its block header for archive mode rollforward tracking. */
+  private record TrieLogWithBlockHeader(TrieLog trieLog, BlockHeader blockHeader) {}
 
   protected final Blockchain blockchain;
 
@@ -261,7 +262,7 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             blockchain.getBlockHeader(mutableState.blockHash()).map(BlockHeader.class::cast);
 
         final List<TrieLogWithBlockNumber> rollBacks = new ArrayList<>();
-        final List<TrieLog> rollForwards = new ArrayList<>();
+        final List<TrieLogWithBlockHeader> rollForwards = new ArrayList<>();
         if (maybePersistedHeader.isEmpty()) {
           // No persisted header means we don't have a block number, use -1 as fallback
           trieLogManager
@@ -300,7 +301,11 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
           Hash targetBlockHash = targetHeader.getBlockHash();
           while (persistedHeader.getNumber() < targetHeader.getNumber()) {
             LOG.debug("Rollforward {}", targetBlockHash);
-            rollForwards.add(trieLogManager.getTrieLogLayer(targetBlockHash).get());
+            // Capture the header BEFORE moving to parent (important for archive mode write context)
+            final BlockHeader forwardHeader = targetHeader;
+            rollForwards.add(
+                new TrieLogWithBlockHeader(
+                    trieLogManager.getTrieLogLayer(targetBlockHash).get(), forwardHeader));
             targetHeader = blockchain.getBlockHeader(targetHeader.getParentHash()).get();
             targetBlockHash = targetHeader.getBlockHash();
           }
@@ -320,7 +325,11 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
                 "Paired Rollforward: adding block {} at height {}",
                 targetBlockHash,
                 targetHeader.getNumber());
-            rollForwards.add(trieLogManager.getTrieLogLayer(targetBlockHash).get());
+            // Capture the header BEFORE moving to parent (important for archive mode write context)
+            final BlockHeader forwardHeader = targetHeader;
+            rollForwards.add(
+                new TrieLogWithBlockHeader(
+                    trieLogManager.getTrieLogLayer(targetBlockHash).get(), forwardHeader));
             targetHeader = blockchain.getBlockHeader(targetHeader.getParentHash()).get();
 
             // Capture block number BEFORE moving to parent (important for archive mode)
@@ -379,33 +388,9 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
 
             pathBasedUpdater.rollBack(rollBack);
           }
-          for (int i = rollForwards.size() - 1; i >= 0; i--) {
-            final var forward = rollForwards.get(i);
-            LOG.debug("Attempting Rollforward of {}", rollForwards.get(i).getBlockHash());
-            pathBasedUpdater.rollForward(forward);
-          }
 
-          // For archive mode: set the write context to the TARGET block before commit
-          // This ensures the committed changes are written with the correct block suffix
-          if (isArchiveMode && mutableState instanceof BonsaiArchiveWorldState archiveWorldState) {
-            BlockHeader targetHeader = blockchain.getBlockHeader(blockHash).orElse(null);
-            if (targetHeader != null) {
-              LOG.atInfo()
-                  .setMessage("Setting write context to block {} before commit")
-                  .addArgument(targetHeader.getNumber())
-                  .log();
-              archiveWorldState.setWriteContext(new BonsaiContext(targetHeader.getNumber()));
-            }
-          } else if (isArchiveMode) {
-            LOG.atWarn()
-                .setMessage("Archive mode but mutableState is not BonsaiArchiveWorldState: {}")
-                .addArgument(mutableState.getClass().getName())
-                .log();
-          }
-
-          pathBasedUpdater.commit();
-
-          // For archive mode: write deletion markers at all tracked intermediate blocks
+          // For archive mode: write deletion markers BEFORE applying rollforwards.
+          // This ensures orphaned data is masked before we write canonical data.
           if (isArchiveMode
               && mutableState instanceof BonsaiWorldState bonsaiState
               && pathBasedUpdater instanceof BonsaiWorldStateUpdateAccumulator bonsaiUpdater) {
@@ -424,7 +409,27 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             pathBasedUpdater.clearRollbackDeletionTracking();
           }
 
-          mutableState.persist(blockchain.getBlockHeader(blockHash).get());
+          // Apply rollforwards and persist each at its correct block height.
+          // In archive mode, each block's data must be written at that block's suffix,
+          // not at the target block's suffix. This handles late-detected reorgs where
+          // the rollforward block height differs from the target block height.
+          for (int i = rollForwards.size() - 1; i >= 0; i--) {
+            final var forwardWithHeader = rollForwards.get(i);
+            LOG.debug("Attempting Rollforward of {}", forwardWithHeader.trieLog().getBlockHash());
+            pathBasedUpdater.rollForward(forwardWithHeader.trieLog());
+
+            // In archive mode, persist after each rollforward at that block's height
+            if (isArchiveMode) {
+              pathBasedUpdater.commit();
+              mutableState.persist(forwardWithHeader.blockHeader());
+            }
+          }
+
+          // For non-archive mode, do a single commit and persist at the target block
+          if (!isArchiveMode) {
+            pathBasedUpdater.commit();
+            mutableState.persist(blockchain.getBlockHeader(blockHash).get());
+          }
 
           LOG.debug(
               "Archive rolling finished, {} now at {}",

@@ -1991,6 +1991,106 @@ public class BonsaiArchiveReorgTest {
     assertBalance(ACCOUNT_B, TEN_ETH);
   }
 
+  /**
+   * Tests that deletion markers are written at intermediate block heights during reorg. This is a
+   * regression test for an issue where orphaned data from intermediate blocks on the abandoned
+   * chain was visible when querying at those block heights.
+   *
+   * <p>Scenario:
+   *
+   * <ul>
+   *   <li>Fork point at block 5
+   *   <li>Chain A: blocks 6A, 7A, 8A each modify an account (account exists at suffixes 6, 7, 8)
+   *   <li>Chain B: block 6B creates the same account with different balance
+   *   <li>After reorg, historical queries at heights 7 and 8 must return chain B's data (from
+   *       suffix 6), NOT the orphaned data from chain A (at suffixes 7 and 8)
+   * </ul>
+   *
+   * <p>The fix ensures deletion markers are written at ALL intermediate block heights (7 and 8),
+   * not just at the target block (6) where the canonical data is written.
+   */
+  @Test
+  void shouldWriteDeletionMarkersAtIntermediateBlocksDuringReorg() {
+    // Build to block 5 as the fork point
+    BlockHeader forkPoint = buildEmptyChainToBlock(5);
+
+    // Chain A: Create account and modify it across multiple blocks
+    // Block 6A: Create account with 1 ETH
+    Block block6A = forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), forkPoint);
+    executeBlock(archiveProvider.getWorldState(), block6A);
+    assertBalance(ACCOUNT_A, ONE_ETH);
+
+    // Block 7A: Add 1 ETH more (total 2 ETH)
+    Block block7A =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 1)), block6A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block7A);
+    assertBalance(ACCOUNT_A, TWO_ETH);
+
+    // Block 8A: Add 1 ETH more (total 3 ETH)
+    Block block8A =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 2)), block7A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block8A);
+    assertBalance(ACCOUNT_A, THREE_ETH);
+
+    // Verify chain A data is stored at each block height
+    assertThat(getHistoricalWorldState(block6A.getHeader()).get(ACCOUNT_A).getBalance())
+        .as("Chain A block 6 should have 1 ETH")
+        .isEqualTo(ONE_ETH);
+    assertThat(getHistoricalWorldState(block7A.getHeader()).get(ACCOUNT_A).getBalance())
+        .as("Chain A block 7 should have 2 ETH")
+        .isEqualTo(TWO_ETH);
+    assertThat(getHistoricalWorldState(block8A.getHeader()).get(ACCOUNT_A).getBalance())
+        .as("Chain A block 8 should have 3 ETH")
+        .isEqualTo(THREE_ETH);
+
+    // Reorg at block 6 - create the SAME account but with different balance (5 ETH)
+    Block block6B = forTransactions(List.of(createTransaction(ACCOUNT_A, FIVE_ETH, 0)), forkPoint);
+    reorgFrom(forkPoint, block6B);
+
+    // Verify current state shows chain B's balance
+    assertBalance(ACCOUNT_A, FIVE_ETH);
+
+    // CRITICAL: Query historical states at block heights 7 and 8
+    // These blocks don't exist on chain B, but the queries must NOT return chain A's orphaned data.
+    // Instead, they should return chain B's data from block 6B (the nearest valid data).
+
+    // Build blocks 7B and 8B on chain B so we can query at those heights
+    Block block7B =
+        forTransactions(List.of(createTransaction(ACCOUNT_B, ONE_ETH, 1)), block6B.getHeader());
+    executeBlockAndUpdateHead(block7B);
+
+    Block block8B =
+        forTransactions(List.of(createTransaction(ACCOUNT_B, ONE_ETH, 2)), block7B.getHeader());
+    executeBlockAndUpdateHead(block8B);
+
+    // Now query historical state at block 7B - should return ACCOUNT_A with 5 ETH (from chain B),
+    // NOT 2 ETH (orphaned data from chain A's block 7A)
+    var wsAtBlock7B = getHistoricalWorldState(block7B.getHeader());
+    assertThat(wsAtBlock7B.get(ACCOUNT_A)).as("ACCOUNT_A should exist at block 7B").isNotNull();
+    assertThat(wsAtBlock7B.get(ACCOUNT_A).getBalance())
+        .as("ACCOUNT_A at block 7B should have 5 ETH (chain B), not 2 ETH (orphaned chain A)")
+        .isEqualTo(FIVE_ETH);
+
+    // Query historical state at block 8B - should return ACCOUNT_A with 5 ETH (from chain B),
+    // NOT 3 ETH (orphaned data from chain A's block 8A)
+    var wsAtBlock8B = getHistoricalWorldState(block8B.getHeader());
+    assertThat(wsAtBlock8B.get(ACCOUNT_A)).as("ACCOUNT_A should exist at block 8B").isNotNull();
+    assertThat(wsAtBlock8B.get(ACCOUNT_A).getBalance())
+        .as("ACCOUNT_A at block 8B should have 5 ETH (chain B), not 3 ETH (orphaned chain A)")
+        .isEqualTo(FIVE_ETH);
+
+    // Verify ACCOUNT_B exists only on chain B
+    assertThat(wsAtBlock7B.get(ACCOUNT_B)).as("ACCOUNT_B should exist at block 7B").isNotNull();
+    assertThat(wsAtBlock7B.get(ACCOUNT_B).getBalance())
+        .as("ACCOUNT_B at block 7B should have 1 ETH")
+        .isEqualTo(ONE_ETH);
+
+    assertThat(wsAtBlock8B.get(ACCOUNT_B)).as("ACCOUNT_B should exist at block 8B").isNotNull();
+    assertThat(wsAtBlock8B.get(ACCOUNT_B).getBalance())
+        .as("ACCOUNT_B at block 8B should have 2 ETH")
+        .isEqualTo(TWO_ETH);
+  }
+
   private void executeReorg(
       final Block alternateBlock,
       final MutableWorldState wsAtForkPoint,
