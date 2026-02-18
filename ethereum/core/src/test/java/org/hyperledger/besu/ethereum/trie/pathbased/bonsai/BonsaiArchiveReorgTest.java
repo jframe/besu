@@ -2091,6 +2091,392 @@ public class BonsaiArchiveReorgTest {
         .isEqualTo(TWO_ETH);
   }
 
+  /**
+   * Tests that storage deletion markers are written at intermediate block heights during reorg.
+   * This mirrors the account deletion marker test but focuses on storage slots.
+   *
+   * <p>Scenario:
+   *
+   * <ul>
+   *   <li>Fork point at block 5 with a deployed contract
+   *   <li>Chain A: blocks 6A, 7A, 8A each modify storage slot 0 (values stored at suffixes 6, 7, 8)
+   *   <li>Chain B: block 6B modifies storage slot 0 to a different value
+   *   <li>After reorg, historical queries at heights 7 and 8 must return chain B's value (from
+   *       suffix 6), NOT the orphaned values from chain A (at suffixes 7 and 8)
+   * </ul>
+   *
+   * <p>This is a critical regression test - storage deletion markers use the same logic as account
+   * deletion markers and must be written at ALL intermediate blocks to mask orphaned data.
+   */
+  @Test
+  void shouldWriteStorageDeletionMarkersAtIntermediateBlocksDuringReorg() {
+    // Build to block 5 as fork point
+    BlockHeader forkPoint = buildEmptyChainToBlock(5);
+
+    // Deploy contract that stores calldata at slot 0
+    Bytes runtimeCode = Bytes.fromHexString("60003560005500");
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+    Block deployBlock =
+        forTransactions(
+            List.of(createContractDeployment(createInitCode(runtimeCode), Wei.ZERO)), forkPoint);
+    executeBlock(archiveProvider.getWorldState(), deployBlock);
+    forkPoint = deployBlock.getHeader(); // Use deployment block as new fork point
+
+    // Chain A: Modify storage slot 0 across multiple blocks (blocks 7A, 8A, 9A)
+    Block block7A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xAA)), 1)),
+            forkPoint);
+    executeBlock(archiveProvider.getWorldState(), block7A);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xAA));
+
+    Block block8A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xBB)), 2)),
+            block7A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block8A);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xBB));
+
+    Block block9A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xCC)), 3)),
+            block8A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block9A);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xCC));
+
+    // Verify chain A storage values at each block height
+    assertThat(
+            getHistoricalWorldState(block7A.getHeader())
+                .get(contractAddress)
+                .getStorageValue(UInt256.ZERO))
+        .as("Chain A block 7 should have storage value 0xAA")
+        .isEqualTo(UInt256.valueOf(0xAA));
+    assertThat(
+            getHistoricalWorldState(block8A.getHeader())
+                .get(contractAddress)
+                .getStorageValue(UInt256.ZERO))
+        .as("Chain A block 8 should have storage value 0xBB")
+        .isEqualTo(UInt256.valueOf(0xBB));
+    assertThat(
+            getHistoricalWorldState(block9A.getHeader())
+                .get(contractAddress)
+                .getStorageValue(UInt256.ZERO))
+        .as("Chain A block 9 should have storage value 0xCC")
+        .isEqualTo(UInt256.valueOf(0xCC));
+
+    // Reorg at block 7: set DIFFERENT storage value
+    Block block7B =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0xFF)), 1)),
+            forkPoint);
+    reorgFrom(forkPoint, block7B);
+
+    // Verify current state shows chain B's storage value
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xFF));
+
+    // Build blocks 8B and 9B on chain B
+    Block block8B =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 2)), block7B.getHeader());
+    executeBlockAndUpdateHead(block8B);
+
+    Block block9B =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 3)), block8B.getHeader());
+    executeBlockAndUpdateHead(block9B);
+
+    // CRITICAL: Query historical storage at intermediate blocks (8B and 9B)
+    // These blocks don't modify storage on chain B, but the queries must NOT return chain A's
+    // orphaned storage values. Instead, they should return chain B's value from block 7B.
+
+    var wsAtBlock8B = getHistoricalWorldState(block8B.getHeader());
+    assertThat(wsAtBlock8B.get(contractAddress).getStorageValue(UInt256.ZERO))
+        .as("Storage at block 8B should be 0xFF (chain B), not 0xBB (orphaned chain A)")
+        .isEqualTo(UInt256.valueOf(0xFF));
+
+    var wsAtBlock9B = getHistoricalWorldState(block9B.getHeader());
+    assertThat(wsAtBlock9B.get(contractAddress).getStorageValue(UInt256.ZERO))
+        .as("Storage at block 9B should be 0xFF (chain B), not 0xCC (orphaned chain A)")
+        .isEqualTo(UInt256.valueOf(0xFF));
+
+    // Verify current head state also has correct storage
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0xFF));
+  }
+
+  /**
+   * Tests that contract code changes are properly handled during reorg when a contract is
+   * self-destructed on chain A but redeployed with different code on chain B.
+   *
+   * <p>Scenario:
+   *
+   * <ul>
+   *   <li>Fork point at block 5
+   *   <li>Chain A: Deploy contract with code A at block 6A, self-destruct at block 7A
+   *   <li>Chain B: Deploy contract with different code B at block 6B
+   *   <li>After reorg, historical queries must show code B, NOT orphaned code A
+   * </ul>
+   *
+   * <p>This ensures that contract code deletion markers work correctly and orphaned code from
+   * self-destructed contracts on abandoned chains doesn't leak through.
+   */
+  @Test
+  void shouldHandleSelfDestructFollowedByRedeploymentWithDifferentCode() {
+    BlockHeader forkPoint = buildEmptyChainToBlock(5);
+
+    // Code A: Stores 0xAA at slot 0
+    Bytes runtimeCodeA = Bytes.fromHexString("60AA60005500");
+    // Code B: Stores 0xBB at slot 0
+    Bytes runtimeCodeB = Bytes.fromHexString("60BB60005500");
+
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Chain A: Deploy contract A, then self-destruct
+    Block block6A =
+        forTransactions(
+            List.of(createContractDeployment(createInitCode(runtimeCodeA), ONE_ETH)), forkPoint);
+    executeBlock(archiveProvider.getWorldState(), block6A);
+    assertAccountExists(contractAddress);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getCode())
+        .isEqualTo(runtimeCodeA);
+
+    // Self-destruct contract (bytecode: PUSH20 <ACCOUNT_A address> SELFDESTRUCT)
+    Bytes selfDestructCall =
+        Bytes.concatenate(
+            Bytes.fromHexString("73"), ACCOUNT_A.getBytes(), Bytes.fromHexString("FF"));
+    Block block7A =
+        forTransactions(
+            List.of(
+                createContractDeployment(createInitCode(selfDestructCall), Wei.ZERO),
+                createContractCallWithValue(contractAddress, Wei.ZERO, 2)),
+            block6A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block7A);
+
+    // Build block 8A to create intermediate block
+    Block block8A =
+        forTransactions(List.of(createTransaction(ACCOUNT_C, ONE_ETH, 3)), block7A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block8A);
+
+    // Chain B: Deploy different contract at same address
+    Block block6B =
+        forTransactions(
+            List.of(createContractDeployment(createInitCode(runtimeCodeB), FIVE_ETH)), forkPoint);
+    reorgFrom(forkPoint, block6B);
+
+    // Verify current state has contract B
+    assertAccountExists(contractAddress);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getCode())
+        .as("Current state should have code B")
+        .isEqualTo(runtimeCodeB);
+    assertThat(archiveProvider.getWorldState().get(contractAddress).getBalance())
+        .as("Contract should have 5 ETH from chain B")
+        .isEqualTo(FIVE_ETH);
+
+    // Build blocks 7B and 8B
+    Block block7B =
+        forTransactions(List.of(createTransaction(ACCOUNT_C, ONE_ETH, 1)), block6B.getHeader());
+    executeBlockAndUpdateHead(block7B);
+
+    Block block8B =
+        forTransactions(List.of(createTransaction(ACCOUNT_C, ONE_ETH, 2)), block7B.getHeader());
+    executeBlockAndUpdateHead(block8B);
+
+    // CRITICAL: Verify contract code at intermediate blocks is code B, not orphaned code A
+    var wsAtBlock7B = getHistoricalWorldState(block7B.getHeader());
+    assertThat(wsAtBlock7B.get(contractAddress))
+        .as("Contract should exist at block 7B")
+        .isNotNull();
+    assertThat(wsAtBlock7B.get(contractAddress).getCode())
+        .as("Contract code at block 7B should be code B, not orphaned code A")
+        .isEqualTo(runtimeCodeB);
+
+    var wsAtBlock8B = getHistoricalWorldState(block8B.getHeader());
+    assertThat(wsAtBlock8B.get(contractAddress))
+        .as("Contract should exist at block 8B")
+        .isNotNull();
+    assertThat(wsAtBlock8B.get(contractAddress).getCode())
+        .as("Contract code at block 8B should be code B, not orphaned code A")
+        .isEqualTo(runtimeCodeB);
+
+    // Verify ACCOUNT_A does NOT have self-destruct refund from orphaned chain A
+    assertThat(wsAtBlock7B.get(ACCOUNT_A))
+        .as("ACCOUNT_A should not exist (self-destruct was on orphaned chain A)")
+        .isNull();
+    assertThat(wsAtBlock8B.get(ACCOUNT_A)).as("ACCOUNT_A should not exist at block 8B").isNull();
+  }
+
+  /**
+   * Tests that deletion markers are written for storage slots that exist on chain A but not on
+   * chain B during a reorg. Uses simple slot 0 modifications but across different blocks to test
+   * the deletion marker logic.
+   *
+   * <p>Scenario:
+   *
+   * <ul>
+   *   <li>Fork point at block 5 with a deployed contract
+   *   <li>Chain A: Modify slot 0 at blocks 7A and 8A (values at suffixes 7, 8)
+   *   <li>Chain B: Modify slot 0 at block 7B, then delete slot 0 at block 8B
+   *   <li>After reorg, query at block 8B must return 0 (deleted), not orphaned value from chain A
+   * </ul>
+   */
+  @Test
+  void shouldHandleStorageSlotDeletionAtIntermediateBlocks() {
+    // Build to block 5, then deploy contract
+    BlockHeader forkPoint = buildEmptyChainToBlock(5);
+
+    // Deploy contract that stores calldata at slot 0
+    Bytes runtimeCode = Bytes.fromHexString("60003560005500");
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+    Block deployBlock =
+        forTransactions(
+            List.of(createContractDeployment(createInitCode(runtimeCode), Wei.ZERO)), forkPoint);
+    executeBlock(archiveProvider.getWorldState(), deployBlock);
+    forkPoint = deployBlock.getHeader();
+
+    // Chain A: Set slot 0 to different values at each block
+    Block block7A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0x77)), 1)),
+            forkPoint);
+    executeBlock(archiveProvider.getWorldState(), block7A);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0x77));
+
+    Block block8A =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0x88)), 2)),
+            block7A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block8A);
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.valueOf(0x88));
+
+    // Chain B: Set slot 0, then delete it
+    Block block7B =
+        forTransactions(
+            List.of(
+                createContractCallWithData(contractAddress, Bytes32.leftPad(Bytes.of(0x99)), 1)),
+            forkPoint);
+    reorgFrom(forkPoint, block7B);
+
+    Block block8B =
+        forTransactions(
+            List.of(createContractCallWithData(contractAddress, Bytes32.ZERO, 2)),
+            block7B.getHeader());
+    executeBlockAndUpdateHead(block8B);
+
+    // CRITICAL: Verify slot 0 is zero at block 8B (deleted on chain B), not 0x88 (orphaned chain
+    // A)
+    var wsAtBlock8B = getHistoricalWorldState(block8B.getHeader());
+    assertThat(wsAtBlock8B.get(contractAddress).getStorageValue(UInt256.ZERO))
+        .as("Storage at block 8B should be 0 (deleted on chain B), not 0x88 (orphaned chain A)")
+        .isEqualTo(UInt256.ZERO);
+
+    // Verify current head state
+    assertStorageValue(contractAddress, UInt256.ZERO, UInt256.ZERO);
+  }
+
+  /**
+   * Tests late-detected reorgs where the divergence point is discovered multiple blocks after the
+   * fork. This simulates the production scenario where block N is on chain A, but the reorg isn't
+   * detected until block N+2 or later.
+   *
+   * <p>Scenario (mirrors production logs):
+   *
+   * <ul>
+   *   <li>Fork point at block 5
+   *   <li>Block 6 imported on chain A (2db73... in prod logs)
+   *   <li>Block 6 on chain B (f814c... in prod logs) exists but not canonical yet
+   *   <li>Block 7 on chain B imported
+   *   <li>Block 8 on chain B imported - REORG DETECTED HERE
+   *   <li>System must: rollback 6A, rollforward 6B + 7B + 8B
+   *   <li>Each rollforward block's data MUST be written at its own block height, not at block 8
+   * </ul>
+   *
+   * <p>This is a regression test for the "wrong write context" bug where all rollforward data was
+   * written at the target block's suffix instead of each rollforward block's suffix.
+   */
+  @Test
+  void shouldHandleLateDetectedReorgWithMultipleRollforwardBlocks() {
+    BlockHeader forkPoint = buildEmptyChainToBlock(5);
+
+    // Chain A: Build block 6A with ACCOUNT_A receiving 1 ETH
+    Block block6A = forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 0)), forkPoint);
+    executeBlock(archiveProvider.getWorldState(), block6A);
+    assertBalance(ACCOUNT_A, ONE_ETH);
+
+    // Build blocks 7A and 8A
+    Block block7A =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 1)), block6A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block7A);
+    assertBalance(ACCOUNT_A, TWO_ETH);
+
+    Block block8A =
+        forTransactions(List.of(createTransaction(ACCOUNT_A, ONE_ETH, 2)), block7A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block8A);
+    assertBalance(ACCOUNT_A, THREE_ETH);
+
+    // Simulate late detection: Apply chain B starting at block 6
+    // Block 6B: ACCOUNT_B receives 5 ETH (different from chain A)
+    Block block6B = forTransactions(List.of(createTransaction(ACCOUNT_B, FIVE_ETH, 0)), forkPoint);
+
+    // Apply the reorg at block 6
+    // This sets up the canonical chain B at block 6
+    reorgFrom(forkPoint, block6B);
+
+    // Now build blocks 7B and 8B on top of 6B
+    // Block 7B: ACCOUNT_B receives 1 more ETH
+    Block block7B =
+        forTransactions(List.of(createTransaction(ACCOUNT_B, ONE_ETH, 1)), block6B.getHeader());
+    executeBlockAndUpdateHead(block7B);
+
+    // Block 8B: ACCOUNT_B receives 1 more ETH
+    Block block8B =
+        forTransactions(List.of(createTransaction(ACCOUNT_B, ONE_ETH, 2)), block7B.getHeader());
+    executeBlockAndUpdateHead(block8B);
+
+    // Verify final state
+    assertAccountNull(ACCOUNT_A); // Only exists on chain A
+    assertThat(archiveProvider.getWorldState().get(ACCOUNT_B).getBalance())
+        .as("ACCOUNT_B should have 7 ETH total (5 + 1 + 1)")
+        .isEqualTo(Wei.of(7_000_000_000_000_000_000L));
+
+    // CRITICAL: Each rollforward block's data must be at its correct block height
+    // Query at block 6B - should show ACCOUNT_B with 5 ETH (from block 6B)
+    var wsAtBlock6B = getHistoricalWorldState(block6B.getHeader());
+    assertThat(wsAtBlock6B.get(ACCOUNT_B)).as("ACCOUNT_B should exist at block 6B").isNotNull();
+    assertThat(wsAtBlock6B.get(ACCOUNT_B).getBalance())
+        .as("ACCOUNT_B at block 6B should have 5 ETH")
+        .isEqualTo(FIVE_ETH);
+    assertThat(wsAtBlock6B.get(ACCOUNT_A))
+        .as("ACCOUNT_A should not exist at block 6B (only on chain A)")
+        .isNull();
+
+    // Query at block 7B - should show ACCOUNT_B with 6 ETH (5 from 6B + 1 from 7B)
+    var wsAtBlock7B = getHistoricalWorldState(block7B.getHeader());
+    assertThat(wsAtBlock7B.get(ACCOUNT_B)).as("ACCOUNT_B should exist at block 7B").isNotNull();
+    assertThat(wsAtBlock7B.get(ACCOUNT_B).getBalance())
+        .as("ACCOUNT_B at block 7B should have 6 ETH")
+        .isEqualTo(Wei.of(6_000_000_000_000_000_000L));
+    assertThat(wsAtBlock7B.get(ACCOUNT_A))
+        .as("ACCOUNT_A should not exist at block 7B (orphaned data masked)")
+        .isNull();
+
+    // Query at block 8B - should show ACCOUNT_B with 7 ETH
+    var wsAtBlock8B = getHistoricalWorldState(block8B.getHeader());
+    assertThat(wsAtBlock8B.get(ACCOUNT_B)).as("ACCOUNT_B should exist at block 8B").isNotNull();
+    assertThat(wsAtBlock8B.get(ACCOUNT_B).getBalance())
+        .as("ACCOUNT_B at block 8B should have 7 ETH")
+        .isEqualTo(Wei.of(7_000_000_000_000_000_000L));
+    assertThat(wsAtBlock8B.get(ACCOUNT_A))
+        .as("ACCOUNT_A should not exist at block 8B (orphaned data masked)")
+        .isNull();
+
+    // The key validation: If the fix is working correctly, each block's data is stored at its
+    // suffix. If broken, all chain B data would be at suffix 8, and queries at blocks 6 and 7
+    // would find orphaned chain A data.
+  }
+
   private void executeReorg(
       final Block alternateBlock,
       final MutableWorldState wsAtForkPoint,
