@@ -18,6 +18,7 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.RpcMethod;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequestContext;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcResponse;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcSuccessResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiver;
 
@@ -43,6 +44,9 @@ public class DebugTriggerBonsaiArchiver implements JsonRpcMethod {
           requestContext.getRequest().getId(), RpcErrorType.INTERNAL_ERROR);
     }
 
-    return null; // Placeholder
+    final BonsaiArchiver archiver = bonsaiArchiver.get();
+    archiver.triggerArchiving();
+
+    return new JsonRpcSuccessResponse(requestContext.getRequest().getId(), true);
   }
 }

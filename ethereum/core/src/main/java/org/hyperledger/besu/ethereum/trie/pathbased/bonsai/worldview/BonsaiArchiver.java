@@ -218,6 +218,24 @@ public class BonsaiArchiver implements BlockAddedObserver {
     return archivedAccountStateCount.get() + archivedAccountStorageCount.get();
   }
 
+  /**
+   * Manually trigger archiving process asynchronously.
+   * This is safe to call multiple times - if archiving is already in progress,
+   * the new invocation will exit gracefully.
+   */
+  public void triggerArchiving() {
+    executeAsync.accept(
+        () -> {
+          if (archiveMutex.tryLock()) {
+            try {
+              moveBlockStateToArchive();
+            } finally {
+              archiveMutex.unlock();
+            }
+          }
+        });
+  }
+
   private final Lock archiveMutex = new ReentrantLock(true);
 
   @Override

@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequest;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequestContext;
@@ -22,6 +23,7 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorR
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcSuccessResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiver;
 
 import java.util.Optional;
 
@@ -40,5 +42,26 @@ public class DebugTriggerBonsaiArchiverTest {
     assertThat(response).isInstanceOf(JsonRpcErrorResponse.class);
     final JsonRpcErrorResponse errorResponse = (JsonRpcErrorResponse) response;
     assertThat(errorResponse.getErrorType()).isEqualTo(RpcErrorType.INTERNAL_ERROR);
+  }
+
+  @Test
+  public void shouldReturnTrueWhenArchiverPresent() {
+    final BonsaiArchiver mockArchiver = mock(BonsaiArchiver.class);
+    final DebugTriggerBonsaiArchiver method = new DebugTriggerBonsaiArchiver(Optional.of(mockArchiver));
+    final JsonRpcRequestContext request =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_triggerBonsaiArchiver", new Object[] {}));
+
+    final JsonRpcResponse response = method.response(request);
+
+    assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
+    final JsonRpcSuccessResponse successResponse = (JsonRpcSuccessResponse) response;
+    assertThat(successResponse.getResult()).isEqualTo(true);
+  }
+
+  @Test
+  public void shouldReturnCorrectMethodName() {
+    final DebugTriggerBonsaiArchiver method = new DebugTriggerBonsaiArchiver(Optional.empty());
+
+    assertThat(method.getName()).isEqualTo("debug_triggerBonsaiArchiver");
   }
 }
