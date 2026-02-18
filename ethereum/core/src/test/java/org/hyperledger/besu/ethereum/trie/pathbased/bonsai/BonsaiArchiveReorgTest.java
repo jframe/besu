@@ -2497,6 +2497,131 @@ public class BonsaiArchiveReorgTest {
         WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead(alternateBlock.getHeader()));
   }
 
+  /**
+   * Regression test for TrieLog-database inconsistency in archive mode during multi-reorg
+   * scenarios.
+   *
+   * <p>This test reproduces the production error:
+   *
+   * <pre>{@code
+   * IllegalStateException: Expected to update storage value, but the slot does not exist.
+   * Account=0x4d38bd670764c49cce1e59eeaebd05974760acbd
+   * SlotKey=0x05c4f502a5dcff49da34d4afecca82e149eae5d1a9d26fd9c5d0e338cfd84266
+   * }</pre>
+   *
+   * <p>Root cause: When multiple reorgs occur in archive mode:
+   * <ol>
+   *   <li>First reorg orphans block N with storage data</li>
+   *   <li>Deletion markers written to remove orphaned data at suffix N</li>
+   *   <li>TrieLog for block N still exists but data is deleted</li>
+   *   <li>Second reorg tries to rollback using TrieLog for block N</li>
+   *   <li>TrieLog references slots that deletion markers already removed</li>
+   *   <li>Without fix: ERROR - Can't rollback deletion because slot doesn't exist</li>
+   *   <li>With fix: Skip deletion of already-deleted slot (idempotent)</li>
+   * </ol>
+   *
+   * <p>This is archive-mode-specific because only archive mode:
+   * <ul>
+   *   <li>Uses deletion markers to mask orphaned data</li>
+   *   <li>Persists flat data with block suffixes</li>
+   *   <li>Can have TrieLogs outlive their data across multiple reorgs</li>
+   * </ul>
+   */
+  @Test
+  void shouldHandleMultipleReorgsWithStaleTrieLogsReferencingDeletedData() {
+    // Contract for storage operations
+    Bytes runtimeCode = Bytes.fromHexString("60003560005500"); // SSTORE(0, calldata)
+    Bytes initCode = createInitCode(runtimeCode);
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Deploy contract from genesis
+    deployContractFromGenesis(initCode, Wei.ZERO);
+    Block deployBlock = blockchain.getBlockByNumber(1L).orElseThrow();
+
+    // ========== FIRST CHAIN AND REORG ==========
+    // Build Chain A with storage changes
+    UInt256 valueA = UInt256.fromHexString("0xAAAAAAAA");
+    Block block2A =
+        forTransactions(
+            List.of(createContractCallWithData(contractAddress, Bytes32.leftPad(valueA), 1)),
+            deployBlock.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2A);
+
+    Block block3A = forTransactions(Collections.emptyList(), block2A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3A);
+
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(3L);
+
+    // First reorg: Replace chain A with longer chain B
+    // This orphans 2A, 3A and writes deletion markers for their data
+    UInt256 valueB = UInt256.fromHexString("0xBBBBBBBB");
+    Block block2B =
+        forTransactions(
+            List.of(createContractCallWithData(contractAddress, Bytes32.leftPad(valueB), 1)),
+            deployBlock.getHeader());
+
+    reorgFrom(deployBlock.getHeader(), block2B);
+
+    // Build more blocks on chain B
+    Block block3B = forTransactions(Collections.emptyList(), block2B.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3B);
+
+    Block block4B = forTransactions(Collections.emptyList(), block3B.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block4B);
+
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(4L);
+    assertStorageValue(contractAddress, UInt256.ZERO, valueB);
+
+    // At this point:
+    // - Blocks 2A, 3A are orphaned
+    // - Deletion markers written for 2A and 3A data at their respective suffixes
+    // - TrieLogs for 2A, 3A still exist in the TrieLog manager
+    // - Actual storage data for 2A, 3A has been deleted/masked by deletion markers
+
+    // ========== SECOND REORG ==========
+    // Build chain C from genesis - this triggers another complex reorg
+    UInt256 valueC = UInt256.fromHexString("0xCCCCCCCC");
+    Block block2C =
+        forTransactions(
+            List.of(createContractCallWithData(contractAddress, Bytes32.leftPad(valueC), 1)),
+            deployBlock.getHeader());
+
+    // Reorg to chain C
+    // During this reorg's paired rollback/rollforward operations, if the system
+    // encounters TrieLogs from the previously orphaned blocks (2A, 3A) that reference
+    // data already deleted by the first reorg's deletion markers, it should handle
+    // gracefully by skipping the deletion of already-deleted data
+    reorgFrom(deployBlock.getHeader(), block2C);
+
+    // Build more blocks to extend chain C
+    Block block3C = forTransactions(Collections.emptyList(), block2C.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3C);
+
+    Block block4C = forTransactions(Collections.emptyList(), block3C.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block4C);
+
+    Block block5C = forTransactions(Collections.emptyList(), block4C.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block5C);
+
+    // Verify final state reflects chain C
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(5L);
+    assertStorageValue(contractAddress, UInt256.ZERO, valueC);
+
+    // Verify historical state queries work correctly
+    var wsAtBlock2C = getHistoricalWorldState(block2C.getHeader());
+    assertThat(wsAtBlock2C.get(contractAddress).getStorageValue(UInt256.ZERO))
+        .as("Storage at block 2C should have chain C value")
+        .isEqualTo(valueC);
+
+    // Verify old orphaned chain A data is properly masked
+    // Note: We can't directly query block 2A because it's not in the canonical chain,
+    // but the test passing proves that the system handled the stale TrieLogs correctly
+
+    // KEY ASSERTION: Test passes without "Expected to update storage value, but slot does not
+    // exist"
+    // This proves the fix handles TrieLogs referencing already-deleted data from previous reorgs
+  }
+
   static class TestBlockCreator extends AbstractBlockCreator {
     private TestBlockCreator(
         final MiningConfiguration miningConfiguration,

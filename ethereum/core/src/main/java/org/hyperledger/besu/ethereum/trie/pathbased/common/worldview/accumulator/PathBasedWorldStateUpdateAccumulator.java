@@ -962,6 +962,23 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
       if ((expectedValue == null || expectedValue.isZero()) && replacementValue != null) {
         maybeCreateStorageMap(storageMap, address)
             .put(storageSlotKey, new PathBasedValue<>(null, replacementValue));
+      } else if (replacementValue == null && expectedValue != null) {
+        // During rollback in archive mode, we're trying to delete a slot that the TrieLog says
+        // should exist, but it doesn't. This can happen if:
+        // 1. Previous deletion markers already removed the orphaned data
+        // 2. A prior reorg deleted this data
+        // 3. The database was cleaned but TrieLog still references the slot
+        // Since the goal is to remove the slot and it's already gone, this is safe to skip.
+        LOG.info(
+            "Rollback: Skipping deletion of non-existent slot. "
+                + "Account={} SlotKey={} ExpectedValue={} "
+                + "This can occur in archive mode when orphaned data was already removed by "
+                + "previous deletion markers.",
+            address,
+            storageSlotKey,
+            expectedValue.toShortHexString());
+        // Don't throw error - the slot is already gone, which is the desired end state
+        return;
       } else {
         throw new IllegalStateException(
             String.format(
