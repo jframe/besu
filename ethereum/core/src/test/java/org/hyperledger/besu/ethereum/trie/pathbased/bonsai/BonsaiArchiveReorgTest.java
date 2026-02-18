@@ -2622,6 +2622,127 @@ public class BonsaiArchiveReorgTest {
     // This proves the fix handles TrieLogs referencing already-deleted data from previous reorgs
   }
 
+  /**
+   * Regression test for value mismatch where accumulator already has the target value.
+   *
+   * <p>This test reproduces the production error:
+   *
+   * <pre>{@code
+   * Old value of slot does not match expected value.
+   * Expected=0x87b7f84db94aaa
+   * Actual=0xb919f2401a0aaa
+   * Replacement=0xb919f2401a0aaa  (← Same as Actual!)
+   * }</pre>
+   *
+   * <p>Root cause: During rollback in archive mode after deletion markers:
+   * <ol>
+   *   <li>TrieLog expects slot to have value X (the "updated" value to be rolled back)</li>
+   *   <li>Accumulator has value Y (the "prior" value from previous operations)</li>
+   *   <li>We want to set it to value Y (the rollback target)</li>
+   *   <li>But it's already Y! State is already correct.</li>
+   *   <li>Without fix: Error because X ≠ Y</li>
+   *   <li>With fix: Skip operation since slot already has target value Y</li>
+   * </ol>
+   *
+   * <p>This occurs when deletion markers or previous operations already moved the slot to the
+   * target state, making the rollback a no-op.
+   */
+  @Test
+  void shouldHandleRollbackWhenSlotAlreadyHasTargetValue() {
+    // Contract for storage operations
+    Bytes runtimeCode = Bytes.fromHexString("60003560005500");
+    Bytes initCode = createInitCode(runtimeCode);
+    Address contractAddress = Address.contractAddress(Address.extract(sender.getPublicKey()), 0L);
+
+    // Deploy contract
+    deployContractFromGenesis(initCode, Wei.ZERO);
+    Block deployBlock = blockchain.getBlockByNumber(1L).orElseThrow();
+
+    // Build chain A: block 2A modifies storage multiple times
+    // First set slot to value A
+    UInt256 valueA1 = UInt256.fromHexString("0xAAAA1111");
+    Block block2A =
+        forTransactions(
+            List.of(createContractCallWithData(contractAddress, Bytes32.leftPad(valueA1), 1)),
+            deployBlock.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block2A);
+
+    // Then set slot to value A2 (in block 3A)
+    UInt256 valueA2 = UInt256.fromHexString("0xAAAA2222");
+    Block block3A =
+        forTransactions(
+            List.of(createContractCallWithData(contractAddress, Bytes32.leftPad(valueA2), 2)),
+            block2A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3A);
+
+    // Build more blocks on chain A
+    Block block4A = forTransactions(Collections.emptyList(), block3A.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block4A);
+
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(4L);
+    assertStorageValue(contractAddress, UInt256.ZERO, valueA2);
+
+    // First reorg: Replace chain A with chain B
+    // Chain B sets the slot to a different value
+    UInt256 valueB = UInt256.fromHexString("0xBBBB1111");
+    Block block2B =
+        forTransactions(
+            List.of(createContractCallWithData(contractAddress, Bytes32.leftPad(valueB), 1)),
+            deployBlock.getHeader());
+
+    reorgFrom(deployBlock.getHeader(), block2B);
+
+    Block block3B = forTransactions(Collections.emptyList(), block2B.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3B);
+
+    Block block4B = forTransactions(Collections.emptyList(), block3B.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block4B);
+
+    Block block5B = forTransactions(Collections.emptyList(), block4B.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block5B);
+
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(5L);
+    assertStorageValue(contractAddress, UInt256.ZERO, valueB);
+
+    // Second reorg: Back to a chain similar to A but longer
+    // This creates a scenario where during rollback of chain B,
+    // the accumulator may already have values that match what we're rolling back to
+    UInt256 valueC = UInt256.fromHexString("0xCCCC1111");
+    Block block2C =
+        forTransactions(
+            List.of(createContractCallWithData(contractAddress, Bytes32.leftPad(valueC), 1)),
+            deployBlock.getHeader());
+
+    reorgFrom(deployBlock.getHeader(), block2C);
+
+    // Build a longer chain C
+    Block block3C = forTransactions(Collections.emptyList(), block2C.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block3C);
+
+    Block block4C = forTransactions(Collections.emptyList(), block3C.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block4C);
+
+    Block block5C = forTransactions(Collections.emptyList(), block4C.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block5C);
+
+    Block block6C = forTransactions(Collections.emptyList(), block5C.getHeader());
+    executeBlock(archiveProvider.getWorldState(), block6C);
+
+    // Verify final state
+    assertThat(blockchain.getChainHeadBlockNumber()).isEqualTo(6L);
+    assertStorageValue(contractAddress, UInt256.ZERO, valueC);
+
+    // Historical queries should work
+    var wsAtBlock2C = getHistoricalWorldState(block2C.getHeader());
+    assertThat(wsAtBlock2C.get(contractAddress).getStorageValue(UInt256.ZERO))
+        .as("Storage at block 2C")
+        .isEqualTo(valueC);
+
+    // The test passes if no "Old value of slot does not match expected value" error occurs
+    // when the accumulator already has the target value from previous operations.
+    // The fix detects existingValue == replacementValue and skips the operation.
+  }
+
   static class TestBlockCreator extends AbstractBlockCreator {
     private TestBlockCreator(
         final MiningConfiguration miningConfiguration,

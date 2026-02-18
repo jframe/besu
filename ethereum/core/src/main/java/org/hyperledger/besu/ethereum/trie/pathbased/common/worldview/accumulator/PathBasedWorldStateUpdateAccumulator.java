@@ -1004,6 +1004,28 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
         // Continue to update accumulator - don't return early
       }
       if (!isSlotEquals(expectedValue, existingSlotValue)) {
+        // In archive mode, check if the slot already has the replacement value.
+        // This can occur when:
+        // 1. A previous operation already set it to the correct value
+        // 2. Deletion markers caused the accumulator to read the prior value from database
+        // 3. Multiple reorgs left the accumulator in the target state
+        // If existingValue == replacementValue, the state is already correct - skip the operation
+        if (isSlotEquals(existingSlotValue, replacementValue)) {
+          LOG.info(
+              "Rollback/Rollforward: Slot already has target value, skipping. "
+                  + "Account={} SlotKey={} Expected={} Actual={} Replacement={} "
+                  + "This can occur in archive mode when previous operations or deletion markers "
+                  + "already transitioned the slot to the target state.",
+              address,
+              storageSlotKey,
+              expectedValue == null ? "null" : expectedValue.toShortHexString(),
+              existingSlotValue == null ? "null" : existingSlotValue.toShortHexString(),
+              replacementValue == null ? "null" : replacementValue.toShortHexString());
+          // State is already correct - update the accumulator to reflect this
+          slotValue.setUpdated(replacementValue);
+          return;
+        }
+
         LOG.error(
             "DIAGNOSTIC: Storage value mismatch during rollStorageChange. "
                 + "Account={} SlotKey={} "
