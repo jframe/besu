@@ -695,6 +695,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
   }
 
   public void rollForward(final TrieLog layer) {
+    LOG.info("DIAGNOSTIC: Rolling forward TrieLog blockHash={}", layer.getBlockHash());
     layer
         .getAccountChanges()
         .forEach(
@@ -707,14 +708,29 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     layer
         .getStorageChanges()
         .forEach(
-            (address, storage) ->
-                storage.forEach(
-                    (storageSlotKey, value) ->
-                        rollStorageChange(
-                            address, storageSlotKey, value.getPrior(), value.getUpdated())));
+            (address, storage) -> {
+              LOG.info(
+                  "DIAGNOSTIC: Rollforward storage changes for account={}, slots={}",
+                  address,
+                  storage.size());
+              storage.forEach(
+                  (storageSlotKey, value) -> {
+                    LOG.info(
+                        "DIAGNOSTIC: Rollforward storage - account={} slot={} prior={} updated={}",
+                        address,
+                        storageSlotKey,
+                        value.getPrior() == null ? "null" : value.getPrior().toShortHexString(),
+                        value.getUpdated() == null
+                            ? "null"
+                            : value.getUpdated().toShortHexString());
+                    rollStorageChange(
+                        address, storageSlotKey, value.getPrior(), value.getUpdated());
+                  });
+            });
   }
 
   public void rollBack(final TrieLog layer) {
+    LOG.debug("DIAGNOSTIC: Rolling back TrieLog blockHash={}", layer.getBlockHash());
     layer
         .getAccountChanges()
         .forEach(
@@ -727,11 +743,25 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     layer
         .getStorageChanges()
         .forEach(
-            (address, storage) ->
-                storage.forEach(
-                    (storageSlotKey, value) ->
-                        rollStorageChange(
-                            address, storageSlotKey, value.getUpdated(), value.getPrior())));
+            (address, storage) -> {
+              LOG.info(
+                  "DIAGNOSTIC: Rollback storage changes for account={}, slots={}",
+                  address,
+                  storage.size());
+              storage.forEach(
+                  (storageSlotKey, value) -> {
+                    LOG.info(
+                        "DIAGNOSTIC: Rollback storage - account={} slot={} prior={} updated={}",
+                        address,
+                        storageSlotKey,
+                        value.getPrior() == null ? "null" : value.getPrior().toShortHexString(),
+                        value.getUpdated() == null
+                            ? "null"
+                            : value.getUpdated().toShortHexString());
+                    rollStorageChange(
+                        address, storageSlotKey, value.getUpdated(), value.getPrior());
+                  });
+            });
   }
 
   private void rollAccountChange(
@@ -957,13 +987,32 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
         // Continue to update accumulator - don't return early
       }
       if (!isSlotEquals(expectedValue, existingSlotValue)) {
+        LOG.error(
+            "DIAGNOSTIC: Storage value mismatch during rollStorageChange. "
+                + "Account={} SlotKey={} "
+                + "TrieLogExpected={} AccumulatorActual={} TrieLogReplacement={} "
+                + "SlotPrior={} SlotUpdated={} "
+                + "InAccumulator={} CurrentRollbackTarget={} "
+                + "FlatDbMode={}",
+            address,
+            storageSlotKey,
+            expectedValue == null ? "null" : expectedValue.toShortHexString(),
+            existingSlotValue == null ? "null" : existingSlotValue.toShortHexString(),
+            replacementValue == null ? "null" : replacementValue.toShortHexString(),
+            slotValue.getPrior() == null ? "null" : slotValue.getPrior().toShortHexString(),
+            slotValue.getUpdated() == null ? "null" : slotValue.getUpdated().toShortHexString(),
+            (slotValue != null),
+            currentRollbackTargetBlock,
+            wrappedWorldView().getWorldStateStorage().getFlatDbMode());
+
         throw new IllegalStateException(
             String.format(
-                "Old value of slot does not match expected value. Account=%s SlotKey=%s Expected=%s Actual=%s",
+                "Old value of slot does not match expected value. Account=%s SlotKey=%s Expected=%s Actual=%s Replacement=%s",
                 address,
                 storageSlotKey,
                 expectedValue == null ? "null" : expectedValue.toShortHexString(),
-                existingSlotValue == null ? "null" : existingSlotValue.toShortHexString()));
+                existingSlotValue == null ? "null" : existingSlotValue.toShortHexString(),
+                replacementValue == null ? "null" : replacementValue.toShortHexString()));
       }
       // Track ALL storage changes for archive mode deletion markers.
       // In archive mode, each block's data is stored with that block's suffix. When rolling back,
