@@ -199,6 +199,9 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
   /** Manages a cache of bad blocks globally */
   protected final BadBlockManager badBlockManager = new BadBlockManager();
 
+  /** The Bonsai archiver */
+  protected BonsaiArchiver bonsaiArchiver;
+
   private int maxRemotelyInitiatedPeers;
 
   /** The Chain pruner configuration. */
@@ -917,7 +920,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         ethPeers,
         storageProvider,
         dataStorageConfiguration,
-        transactionSimulator);
+        transactionSimulator,
+        Optional.ofNullable(bonsaiArchiver));
   }
 
   private void preloadBlockHeaderCache(
@@ -1001,6 +1005,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             metricsSystem);
 
     archiver.initialize();
+    this.bonsaiArchiver = archiver;
     LOG.info("Bonsai archiver initialised");
     return archiver;
   }
