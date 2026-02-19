@@ -229,6 +229,51 @@ collect_metrics() {
     echo "${timestamp},${block_number},${execution_time},${cpu_seconds},${memory_bytes},${gc_count},${gc_time}" >> "$METRICS_CSV"
 }
 
+collect_rpc_latency() {
+    local timestamp method block_param response latency success error_code
+    timestamp=$(date +%s)
+
+    # Helper to record result
+    record() {
+        method="$1"
+        block_param="$2"
+        response="$3"
+        latency=$(echo "$response" | cut -d',' -f1)
+        success=$(echo "$response" | cut -d',' -f2)
+        error_code=$(echo "$response" | cut -d',' -f3)
+        echo "${timestamp},${method},${block_param},${latency},${success},${error_code}" >> "$RPC_CSV"
+    }
+
+    # Baseline
+    record "eth_blockNumber" "n/a" "$(rpc_call "eth_blockNumber" "[]")"
+
+    # Block retrieval
+    record "eth_getBlockByNumber" "latest" "$(rpc_call "eth_getBlockByNumber" "[\"latest\", false]")"
+
+    # Account balance - latest
+    record "eth_getBalance" "latest" "$(rpc_call "eth_getBalance" "[\"$TEST_ADDRESS\", \"latest\"]")"
+
+    # Account balance - historical
+    local hist_hex
+    hist_hex=$(printf "0x%x" "$HISTORICAL_BLOCK")
+    record "eth_getBalance" "$HISTORICAL_BLOCK" "$(rpc_call "eth_getBalance" "[\"$TEST_ADDRESS\", \"$hist_hex\"]")"
+
+    # Storage - latest
+    record "eth_getStorageAt" "latest" "$(rpc_call "eth_getStorageAt" "[\"$TEST_ADDRESS\", \"$TEST_SLOT\", \"latest\"]")"
+
+    # Storage - historical
+    record "eth_getStorageAt" "$HISTORICAL_BLOCK" "$(rpc_call "eth_getStorageAt" "[\"$TEST_ADDRESS\", \"$TEST_SLOT\", \"$hist_hex\"]")"
+
+    # eth_call - latest
+    record "eth_call" "latest" "$(rpc_call "eth_call" "[{\"to\": \"$TEST_ADDRESS\"}, \"latest\"]")"
+
+    # eth_call - historical
+    record "eth_call" "$HISTORICAL_BLOCK" "$(rpc_call "eth_call" "[{\"to\": \"$TEST_ADDRESS\"}, \"$hist_hex\"]")"
+
+    # Transaction receipt
+    record "eth_getTransactionReceipt" "n/a" "$(rpc_call "eth_getTransactionReceipt" "[\"0x0000000000000000000000000000000000000000000000000000000000000000\"]")"
+}
+
 setup
 echo ""
 echo "Setup complete. Ready to collect metrics."
