@@ -41,7 +41,7 @@ public class DebugTriggerBonsaiArchiver implements JsonRpcMethod {
   public JsonRpcResponse response(final JsonRpcRequestContext requestContext) {
     if (bonsaiArchiver.isEmpty()) {
       return new JsonRpcErrorResponse(
-          requestContext.getRequest().getId(), RpcErrorType.INTERNAL_ERROR);
+          requestContext.getRequest().getId(), RpcErrorType.METHOD_NOT_ENABLED);
     }
 
     final BonsaiArchiver archiver = bonsaiArchiver.get();

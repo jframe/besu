@@ -42,7 +42,7 @@ public class DebugTriggerBonsaiArchiverTest {
 
     assertThat(response).isInstanceOf(JsonRpcErrorResponse.class);
     final JsonRpcErrorResponse errorResponse = (JsonRpcErrorResponse) response;
-    assertThat(errorResponse.getErrorType()).isEqualTo(RpcErrorType.INTERNAL_ERROR);
+    assertThat(errorResponse.getErrorType()).isEqualTo(RpcErrorType.METHOD_NOT_ENABLED);
   }
 
   @Test
