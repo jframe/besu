@@ -197,6 +197,38 @@ setup() {
     echo "  Summary: $SUMMARY_CSV"
 }
 
+collect_metrics() {
+    local timestamp block_number execution_time cpu_seconds memory_bytes gc_count gc_time
+    local metrics_raw
+
+    timestamp=$(date +%s)
+    block_number=$(get_block_number)
+
+    # Fetch Prometheus metrics
+    metrics_raw=$(curl -s "$METRICS_URL" 2>/dev/null) || metrics_raw=""
+
+    if [[ -z "$metrics_raw" ]]; then
+        echo "WARN: Could not fetch metrics from $METRICS_URL"
+        return
+    fi
+
+    # Parse metrics (use 0 if not found)
+    execution_time=$(echo "$metrics_raw" | grep -E '^besu_block_processing_execution_time_head ' | awk '{print $2}' || echo "0")
+    cpu_seconds=$(echo "$metrics_raw" | grep -E '^process_cpu_seconds_total ' | awk '{print $2}' || echo "0")
+    memory_bytes=$(echo "$metrics_raw" | grep -E '^jvm_memory_used_bytes\{area="heap"' | awk '{print $2}' || echo "0")
+    gc_count=$(echo "$metrics_raw" | grep -E '^jvm_gc_pause_seconds_count' | awk '{sum+=$2} END {print sum}' || echo "0")
+    gc_time=$(echo "$metrics_raw" | grep -E '^jvm_gc_pause_seconds_sum' | awk '{sum+=$2} END {print sum}' || echo "0")
+
+    # Default to 0 if empty
+    execution_time=${execution_time:-0}
+    cpu_seconds=${cpu_seconds:-0}
+    memory_bytes=${memory_bytes:-0}
+    gc_count=${gc_count:-0}
+    gc_time=${gc_time:-0}
+
+    echo "${timestamp},${block_number},${execution_time},${cpu_seconds},${memory_bytes},${gc_count},${gc_time}" >> "$METRICS_CSV"
+}
+
 setup
 echo ""
 echo "Setup complete. Ready to collect metrics."
