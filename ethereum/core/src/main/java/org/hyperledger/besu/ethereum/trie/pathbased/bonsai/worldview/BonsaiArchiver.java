@@ -51,7 +51,12 @@ public class BonsaiArchiver implements BlockAddedObserver {
   private final PathBasedWorldStateKeyValueStorage rootWorldStateStorage;
   private final Blockchain blockchain;
   private final Consumer<Runnable> executeAsync;
-  private static final int CATCHUP_LIMIT = 1000;
+  private static final int CATCHUP_LIMIT = 50_000;
+
+  @SuppressWarnings("UnusedVariable")
+  private static final int BATCH_SIZE = 10_000;
+
+  private static final int PROGRESS_LOG_INTERVAL = 1_000;
   private static final int DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE = 10;
   private final TrieLogManager trieLogManager;
   protected final MetricsSystem metricsSystem;
@@ -192,7 +197,7 @@ public class BonsaiArchiver implements BlockAddedObserver {
 
                 // Update local var for logging progress
                 latestArchivedBlock.set(block.getKey());
-                if (latestArchivedBlock.get() % 100 == 0) {
+                if (latestArchivedBlock.get() % PROGRESS_LOG_INTERVAL == 0) {
                   // Log progress in case catching up causes there to be a large number of keys
                   // to move
                   LOG.atInfo()
