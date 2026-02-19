@@ -141,3 +141,62 @@ get_block_number() {
     result=$(echo "$response" | cut -d',' -f4)
     printf "%d" "$result"
 }
+
+setup() {
+    echo ""
+    echo "=== Setup ==="
+
+    # Check dependencies
+    for cmd in curl jq awk bc; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo "ERROR: Required command '$cmd' not found"
+            exit 1
+        fi
+    done
+    echo "Dependencies OK"
+
+    # Verify node is responding
+    echo -n "Checking node connectivity... "
+    local response
+    response=$(rpc_call "eth_blockNumber" "[]")
+    local success
+    success=$(echo "$response" | cut -d',' -f2)
+    if [[ "$success" != "true" ]]; then
+        echo "FAILED"
+        echo "ERROR: Cannot connect to node at $RPC_URL"
+        exit 1
+    fi
+    echo "OK"
+
+    # Get current block number
+    CURRENT_BLOCK=$(get_block_number)
+    echo "Current block: $CURRENT_BLOCK"
+
+    # Set historical block if not specified
+    if [[ -z "$HISTORICAL_BLOCK" ]]; then
+        HISTORICAL_BLOCK=$((CURRENT_BLOCK - 100000))
+        if [[ $HISTORICAL_BLOCK -lt 1 ]]; then
+            HISTORICAL_BLOCK=1
+        fi
+    fi
+    echo "Historical block for queries: $HISTORICAL_BLOCK"
+
+    # Create output directory
+    mkdir -p "$OUTPUT_DIR"
+    METRICS_CSV="${OUTPUT_DIR}/${LABEL}_metrics.csv"
+    RPC_CSV="${OUTPUT_DIR}/${LABEL}_rpc_latency.csv"
+    SUMMARY_CSV="${OUTPUT_DIR}/${LABEL}_summary.csv"
+
+    # Initialize CSV headers
+    echo "timestamp,block_number,execution_time_ms,cpu_seconds,memory_bytes,gc_count,gc_time_seconds" > "$METRICS_CSV"
+    echo "timestamp,method,block_param,latency_ms,success,error_code" > "$RPC_CSV"
+
+    echo "Output files:"
+    echo "  Metrics: $METRICS_CSV"
+    echo "  RPC Latency: $RPC_CSV"
+    echo "  Summary: $SUMMARY_CSV"
+}
+
+setup
+echo ""
+echo "Setup complete. Ready to collect metrics."
