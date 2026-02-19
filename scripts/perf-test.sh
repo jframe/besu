@@ -103,3 +103,41 @@ echo "Test Address:     ${TEST_ADDRESS}"
 echo "Test Slot:        ${TEST_SLOT}"
 echo "Output Directory: ${OUTPUT_DIR}"
 echo "======================================"
+
+# JSON-RPC helper - returns "latency_ms,success,error_code,result"
+rpc_call() {
+    local method="$1"
+    local params="$2"
+    local start_ms end_ms latency_ms response error_code result success
+
+    start_ms=$(date +%s%3N)
+    response=$(curl -s -X POST "$RPC_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$params,\"id\":1}" \
+        2>/dev/null) || response=""
+    end_ms=$(date +%s%3N)
+    latency_ms=$((end_ms - start_ms))
+
+    if [[ -z "$response" ]]; then
+        echo "${latency_ms},false,connection_error,"
+        return
+    fi
+
+    error_code=$(echo "$response" | jq -r '.error.code // empty')
+    if [[ -n "$error_code" ]]; then
+        echo "${latency_ms},false,${error_code},"
+        return
+    fi
+
+    result=$(echo "$response" | jq -r '.result // empty')
+    echo "${latency_ms},true,,${result}"
+}
+
+# Get current block number
+get_block_number() {
+    local response
+    response=$(rpc_call "eth_blockNumber" "[]")
+    local result
+    result=$(echo "$response" | cut -d',' -f4)
+    printf "%d" "$result"
+}
