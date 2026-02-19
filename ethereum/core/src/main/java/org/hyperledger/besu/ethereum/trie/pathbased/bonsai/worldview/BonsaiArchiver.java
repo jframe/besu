@@ -92,7 +92,16 @@ public class BonsaiArchiver implements BlockAddedObserver {
 
   public void initialize() {
     // Read from the DB where we got to previously
-    latestArchivedBlock.set(rootWorldStateStorage.getLatestArchivedBlock().orElse(0L));
+    long previousValue = latestArchivedBlock.get();
+    long newValue = rootWorldStateStorage.getLatestArchivedBlock().orElse(0L);
+    latestArchivedBlock.set(newValue);
+    if (previousValue != newValue) {
+      LOG.atInfo()
+          .setMessage("Archiver: Initialized latestArchivedBlock from {} to {}")
+          .addArgument(previousValue)
+          .addArgument(newValue)
+          .log();
+    }
   }
 
   public long getPendingBlocksCount() {
@@ -318,14 +327,20 @@ public class BonsaiArchiver implements BlockAddedObserver {
    * archiving is already in progress, the new invocation will exit gracefully.
    */
   public void triggerArchiving() {
+    LOG.atInfo().setMessage("Archiver: Manual trigger requested").log();
     executeAsync.accept(
         () -> {
           if (archiveMutex.tryLock()) {
+            LOG.atInfo().setMessage("Archiver: Manual trigger - acquired lock, starting").log();
             try {
               moveBlockStateToArchive();
             } finally {
               archiveMutex.unlock();
             }
+          } else {
+            LOG.atInfo()
+                .setMessage("Archiver: Manual trigger - skipped, archiving already in progress")
+                .log();
           }
         });
   }
@@ -335,21 +350,31 @@ public class BonsaiArchiver implements BlockAddedObserver {
   @Override
   public void onBlockAdded(final BlockAddedEvent addedBlockContext) {
     initialize();
-    final Optional<Long> blockNumber = Optional.of(addedBlockContext.getHeader().getNumber());
-    blockNumber.ifPresent(
-        blockNum -> {
-          // Since moving blocks can be done in batches we only want
-          // one instance running at a time
-          executeAsync.accept(
-              () -> {
-                if (archiveMutex.tryLock()) {
-                  try {
-                    moveBlockStateToArchive();
-                  } finally {
-                    archiveMutex.unlock();
-                  }
-                }
-              });
+    final long blockNum = addedBlockContext.getHeader().getNumber();
+    LOG.atDebug()
+        .setMessage("Archiver: onBlockAdded triggered for block {}")
+        .addArgument(blockNum)
+        .log();
+    // Since moving blocks can be done in batches we only want
+    // one instance running at a time
+    executeAsync.accept(
+        () -> {
+          if (archiveMutex.tryLock()) {
+            LOG.atDebug()
+                .setMessage("Archiver: Block {} trigger - acquired lock, starting")
+                .addArgument(blockNum)
+                .log();
+            try {
+              moveBlockStateToArchive();
+            } finally {
+              archiveMutex.unlock();
+            }
+          } else {
+            LOG.atTrace()
+                .setMessage("Archiver: Block {} trigger - skipped, already in progress")
+                .addArgument(blockNum)
+                .log();
+          }
         });
   }
 }
