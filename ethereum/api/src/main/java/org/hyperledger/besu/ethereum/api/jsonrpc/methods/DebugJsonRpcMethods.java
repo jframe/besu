@@ -36,6 +36,7 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugTraceBloc
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugTraceBlockByNumber;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugTraceCall;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugTraceTransaction;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.DebugTriggerBonsaiArchiver;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.JsonRpcMethod;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.processor.BlockReplay;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.processor.BlockTracer;
@@ -47,10 +48,12 @@ import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.transaction.TransactionSimulator;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiver;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Optional;
 
 public class DebugJsonRpcMethods extends ApiGroupJsonRpcMethods {
 
@@ -65,6 +68,7 @@ public class DebugJsonRpcMethods extends ApiGroupJsonRpcMethods {
   private final Path dataDir;
   private final TransactionSimulator transactionSimulator;
   private final EthScheduler ethScheduler;
+  private final Optional<BonsaiArchiver> bonsaiArchiver;
 
   DebugJsonRpcMethods(
       final BlockchainQueries blockchainQueries,
@@ -75,7 +79,8 @@ public class DebugJsonRpcMethods extends ApiGroupJsonRpcMethods {
       final Synchronizer synchronizer,
       final Path dataDir,
       final TransactionSimulator transactionSimulator,
-      final EthScheduler ethScheduler) {
+      final EthScheduler ethScheduler,
+      final Optional<BonsaiArchiver> bonsaiArchiver) {
     this.blockchainQueries = blockchainQueries;
     this.protocolContext = protocolContext;
     this.protocolSchedule = protocolSchedule;
@@ -85,6 +90,7 @@ public class DebugJsonRpcMethods extends ApiGroupJsonRpcMethods {
     this.dataDir = dataDir;
     this.transactionSimulator = transactionSimulator;
     this.ethScheduler = ethScheduler;
+    this.bonsaiArchiver = bonsaiArchiver;
   }
 
   @Override
@@ -121,6 +127,7 @@ public class DebugJsonRpcMethods extends ApiGroupJsonRpcMethods {
         new DebugGetRawBlock(blockchainQueries),
         new DebugGetRawReceipts(blockchainQueries),
         new DebugGetRawTransaction(blockchainQueries),
-        new DebugTraceCall(blockchainQueries, protocolSchedule, transactionSimulator));
+        new DebugTraceCall(blockchainQueries, protocolSchedule, transactionSimulator),
+        new DebugTriggerBonsaiArchiver(bonsaiArchiver));
   }
 }

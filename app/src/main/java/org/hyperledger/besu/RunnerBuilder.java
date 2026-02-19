@@ -1313,7 +1313,8 @@ public class RunnerBuilder {
                 balConfiguration,
                 enodeDnsConfiguration,
                 transactionSimulator,
-                ethScheduler);
+                ethScheduler,
+                besuController.getBonsaiArchiver());
     methods.putAll(besuController.getAdditionalJsonRpcMethods(jsonRpcApis));
 
     final var pluginMethods =

@@ -159,7 +159,8 @@ public class JsonRpcHttpServiceTestBase {
                 BalConfiguration.DEFAULT,
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
     disabledRpcMethods = new HashMap<>();
     addedRpcMethods = new HashSet<>();
 

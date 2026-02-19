@@ -169,7 +169,8 @@ public class JsonRpcHttpServiceTlsClientAuthTest {
                 BalConfiguration.DEFAULT,
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
 
     System.setProperty("javax.net.ssl.trustStore", CLIENT_AS_CA_CERT.getKeyStoreFile().toString());
     System.setProperty(

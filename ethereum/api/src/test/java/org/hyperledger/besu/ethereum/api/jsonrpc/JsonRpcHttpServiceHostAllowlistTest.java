@@ -153,7 +153,8 @@ public class JsonRpcHttpServiceHostAllowlistTest {
                 BalConfiguration.DEFAULT,
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
     service = createJsonRpcHttpService();
     service.start().join();
 

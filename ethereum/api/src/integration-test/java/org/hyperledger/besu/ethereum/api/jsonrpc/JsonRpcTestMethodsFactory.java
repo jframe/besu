@@ -231,6 +231,7 @@ public class JsonRpcTestMethodsFactory {
             BalConfiguration.DEFAULT,
             Optional.empty(),
             transactionSimulator,
-            new DeterministicEthScheduler());
+            new DeterministicEthScheduler(),
+            Optional.empty());
   }
 }

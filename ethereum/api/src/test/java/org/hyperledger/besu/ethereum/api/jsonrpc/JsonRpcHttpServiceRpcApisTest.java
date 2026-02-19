@@ -248,7 +248,8 @@ public class JsonRpcHttpServiceRpcApisTest {
                 BalConfiguration.DEFAULT,
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
     final JsonRpcHttpService jsonRpcHttpService =
         new JsonRpcHttpService(
             vertx,
@@ -385,7 +386,8 @@ public class JsonRpcHttpServiceRpcApisTest {
                 BalConfiguration.DEFAULT,
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
     final JsonRpcHttpService jsonRpcHttpService =
         new JsonRpcHttpService(
             vertx,

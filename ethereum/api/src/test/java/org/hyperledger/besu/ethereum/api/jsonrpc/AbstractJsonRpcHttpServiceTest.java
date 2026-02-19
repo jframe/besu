@@ -219,7 +219,8 @@ public abstract class AbstractJsonRpcHttpServiceTest {
             BalConfiguration.DEFAULT,
             Optional.empty(),
             transactionSimulator,
-            new EthScheduler(1, 1, 1, new NoOpMetricsSystem()));
+            new EthScheduler(1, 1, 1, new NoOpMetricsSystem()),
+            Optional.empty());
   }
 
   protected void startService() throws Exception {

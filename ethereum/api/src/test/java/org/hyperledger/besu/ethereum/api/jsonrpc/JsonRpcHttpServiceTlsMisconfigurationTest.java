@@ -153,7 +153,8 @@ class JsonRpcHttpServiceTlsMisconfigurationTest {
                 BalConfiguration.DEFAULT,
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
   }
 
   @AfterEach
