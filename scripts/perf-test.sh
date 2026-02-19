@@ -274,6 +274,36 @@ collect_rpc_latency() {
     record "eth_getTransactionReceipt" "n/a" "$(rpc_call "eth_getTransactionReceipt" "[\"0x0000000000000000000000000000000000000000000000000000000000000000\"]")"
 }
 
+run_collection() {
+    local end_time iterations
+    end_time=$(($(date +%s) + DURATION))
+    iterations=0
+
+    echo ""
+    echo "=== Starting Collection ==="
+    echo "Will run for ${DURATION} seconds (until $(date -d @$end_time 2>/dev/null || date -r $end_time))"
+    echo ""
+
+    while [[ $(date +%s) -lt $end_time ]]; do
+        iterations=$((iterations + 1))
+        echo -n "Iteration $iterations at $(date '+%H:%M:%S')... "
+
+        collect_metrics
+        collect_rpc_latency
+
+        echo "done"
+
+        # Sleep until next interval
+        local next_run=$(($(date +%s) + INTERVAL))
+        while [[ $(date +%s) -lt $next_run ]] && [[ $(date +%s) -lt $end_time ]]; do
+            sleep 1
+        done
+    done
+
+    echo ""
+    echo "Collection complete. $iterations iterations recorded."
+}
+
 setup
 echo ""
 echo "Setup complete. Ready to collect metrics."
