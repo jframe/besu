@@ -55,8 +55,8 @@ public class BonsaiArchiver implements BlockAddedObserver {
   private final Blockchain blockchain;
   private final Consumer<Runnable> executeAsync;
 
-  /** Maximum blocks to archive per invocation (increased from 1,000 for performance). */
-  private static final int CATCHUP_LIMIT = 50_000;
+  /** Maximum blocks to archive per invocation. */
+  private static final int CATCHUP_LIMIT = 5_000;
 
   /** Entries to accumulate before committing a batch transaction. */
   private static final int BATCH_SIZE = 10_000;
@@ -99,37 +99,15 @@ public class BonsaiArchiver implements BlockAddedObserver {
     return blockchain.getChainHeadBlockNumber() - latestArchivedBlock.get();
   }
 
-  /**
-   * Pre-populate header and TrieLog caches for the batch of blocks to archive. This avoids repeated
-   * DB lookups during archiving.
-   */
-  private void populateCaches(
-      final SortedMap<Long, Hash> blocksToArchive,
-      final Map<Hash, BlockHeader> headerCache,
-      final Map<Hash, TrieLog> trieLogCache) {
-    blocksToArchive.forEach(
-        (blockNum, blockHash) -> {
-          // Cache the block header
-          blockchain
-              .getBlockHeader(blockHash)
-              .ifPresent(
-                  header -> {
-                    headerCache.put(blockHash, header);
-                    // Also cache the parent header (needed for archiving)
-                    blockchain
-                        .getBlockHeader(header.getParentHash())
-                        .ifPresent(parent -> headerCache.put(header.getParentHash(), parent));
-                  });
-          // Cache the TrieLog
-          trieLogManager
-              .getTrieLogLayer(blockHash)
-              .ifPresent(log -> trieLogCache.put(blockHash, log));
-        });
-    LOG.atDebug()
-        .setMessage("Pre-populated caches: {} headers, {} trieLogs")
-        .addArgument(headerCache.size())
-        .addArgument(trieLogCache.size())
-        .log();
+  /** Get or cache header for a block hash. Headers are small so safe to cache. */
+  private Optional<BlockHeader> getCachedHeader(
+      final Hash blockHash, final Map<Hash, BlockHeader> headerCache) {
+    if (headerCache.containsKey(blockHash)) {
+      return Optional.ofNullable(headerCache.get(blockHash));
+    }
+    Optional<BlockHeader> header = blockchain.getBlockHeader(blockHash);
+    header.ifPresent(h -> headerCache.put(blockHash, h));
+    return header;
   }
 
   // Move state and storage entries from their primary DB segments to their archive DB segments.
@@ -179,10 +157,8 @@ public class BonsaiArchiver implements BlockAddedObserver {
         .addArgument(blocksToArchive.lastKey())
         .log();
 
-    // Pre-populate caches to avoid repeated lookups
+    // Header cache (headers are small, safe to cache)
     final Map<Hash, BlockHeader> headerCache = new HashMap<>();
-    final Map<Hash, TrieLog> trieLogCache = new HashMap<>();
-    populateCaches(blocksToArchive, headerCache, trieLogCache);
 
     // Use holder to allow reassignment in loop
     final var txHolder =
@@ -198,39 +174,50 @@ public class BonsaiArchiver implements BlockAddedObserver {
           .addArgument(block.getKey())
           .log();
 
-      // Use cached header instead of DB lookup
-      BlockHeader blockHeader = headerCache.get(blockHash);
-      BlockHeader parentHeader =
-          blockHeader != null ? headerCache.get(blockHeader.getParentHash()) : null;
+      // Use lazy cached headers (headers are small)
+      Optional<BlockHeader> blockHeaderOpt = getCachedHeader(blockHash, headerCache);
+      if (blockHeaderOpt.isEmpty()) {
+        continue;
+      }
+      BlockHeader blockHeader = blockHeaderOpt.get();
+      Optional<BlockHeader> parentHeaderOpt =
+          getCachedHeader(blockHeader.getParentHash(), headerCache);
+      if (parentHeaderOpt.isEmpty()) {
+        continue;
+      }
+      BlockHeader parentHeader = parentHeaderOpt.get();
 
-      // Use cached TrieLog instead of DB lookup
-      TrieLog trieLog = trieLogCache.get(blockHash);
-      if (trieLog != null && parentHeader != null) {
-        for (var entry : trieLog.getAccountChanges().entrySet()) {
+      // Fetch TrieLog on demand (not cached - too large)
+      Optional<TrieLog> trieLogOpt = trieLogManager.getTrieLogLayer(blockHash);
+      if (trieLogOpt.isEmpty()) {
+        continue;
+      }
+      TrieLog trieLog = trieLogOpt.get();
+      // Process account and storage changes
+      for (var entry : trieLog.getAccountChanges().entrySet()) {
+        int count =
+            rootWorldStateStorage.archivePreviousAccountStateBatched(
+                txHolder.tx, parentHeader, entry.getKey().addressHash());
+        archivedAccountStateCount += count;
+        batchEntryCount += count;
+      }
+
+      LOG.atTrace()
+          .setMessage("Archiving all storage state for block {}")
+          .addArgument(block.getKey())
+          .log();
+
+      for (var entry : trieLog.getStorageChanges().entrySet()) {
+        for (var slotEntry : entry.getValue().entrySet()) {
           int count =
-              rootWorldStateStorage.archivePreviousAccountStateBatched(
-                  txHolder.tx, parentHeader, entry.getKey().addressHash());
-          archivedAccountStateCount += count;
+              rootWorldStateStorage.archivePreviousStorageStateBatched(
+                  txHolder.tx,
+                  parentHeader,
+                  Bytes.concatenate(
+                      entry.getKey().addressHash().getBytes(),
+                      slotEntry.getKey().getSlotHash().getBytes()));
+          archivedAccountStorageCount += count;
           batchEntryCount += count;
-        }
-
-        LOG.atTrace()
-            .setMessage("Archiving all storage state for block {}")
-            .addArgument(block.getKey())
-            .log();
-
-        for (var entry : trieLog.getStorageChanges().entrySet()) {
-          for (var slotEntry : entry.getValue().entrySet()) {
-            int count =
-                rootWorldStateStorage.archivePreviousStorageStateBatched(
-                    txHolder.tx,
-                    parentHeader,
-                    Bytes.concatenate(
-                        entry.getKey().addressHash().getBytes(),
-                        slotEntry.getKey().getSlotHash().getBytes()));
-            archivedAccountStorageCount += count;
-            batchEntryCount += count;
-          }
         }
       }
 
