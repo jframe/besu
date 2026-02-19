@@ -15,10 +15,13 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.mockito.Mockito.spy;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
@@ -29,6 +32,7 @@ import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -62,7 +66,7 @@ class BonsaiArchiverTest {
   }
 
   @Test
-  void archivePreviousAccountStateBatched_addsToTransaction_doesNotCommit() {
+  void archivePreviousAccountStateBatched_returnsZero_whenNoDataExists() {
     final BlockHeader header = blockBuilder.number(100).buildHeader();
     final Hash accountHash = Hash.hash(Bytes.fromHexString("0x1234"));
 
@@ -70,13 +74,74 @@ class BonsaiArchiverTest {
     SegmentedKeyValueStorageTransaction tx =
         storage.getComposedWorldStateStorage().startTransaction();
 
-    // Call the batched method
+    // Call the batched method with empty storage
     int archivedCount = storage.archivePreviousAccountStateBatched(tx, header, accountHash);
 
-    // The transaction should NOT have been committed (no entries to archive in empty storage)
+    // No entries to archive in empty storage
     assertThat(archivedCount).isEqualTo(0);
+  }
 
-    // Verify the transaction was not committed by the method itself
-    // (we would commit it externally after batching multiple calls)
+  @Test
+  void archivePreviousAccountStateBatched_addsToTransaction_doesNotCommit() {
+    // Set up: Create account data at block 50
+    final Address testAddress = Address.fromHexString("0x1111111111111111111111111111111111111111");
+    final Hash accountHash = testAddress.addressHash();
+    final Bytes32 accountValue = Bytes32.random();
+
+    // Put account data at block 50
+    updateStorageArchiveBlock(50);
+    storage.updater().putAccountInfoState(accountHash, accountValue).commit();
+
+    // Now we're at block 100
+    updateStorageArchiveBlock(100);
+
+    // Verify the data exists in ACCOUNT_INFO_STATE before archiving
+    long countBeforeArchive =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE).count();
+    assertThat(countBeforeArchive).isGreaterThan(0);
+
+    // Create a transaction that we'll pass in (but NOT commit)
+    SegmentedKeyValueStorageTransaction tx =
+        storage.getComposedWorldStateStorage().startTransaction();
+
+    // Call the batched method with header for block 100
+    // This should find the account state from block 50 and add it to the transaction
+    final BlockHeader header = blockBuilder.number(100).buildHeader();
+    int archivedCount = storage.archivePreviousAccountStateBatched(tx, header, accountHash);
+
+    // Should have archived at least 1 entry
+    assertThat(archivedCount).isGreaterThan(0);
+
+    // CRITICAL: Verify the transaction was NOT committed by the method
+    // The data should still be in ACCOUNT_INFO_STATE (not yet moved to archive)
+    // because we haven't committed the transaction
+    long countAfterBatch =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE).count();
+    assertThat(countAfterBatch)
+        .as("Data should still be in original segment since tx was not committed")
+        .isEqualTo(countBeforeArchive);
+
+    // The archive segment should still be empty (only has the archived block marker)
+    long archiveCount =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE).count();
+    assertThat(archiveCount)
+        .as("Archive segment should have no account data yet (only block marker if present)")
+        .isLessThanOrEqualTo(1);
+
+    // Now commit the transaction and verify data moves
+    tx.commit();
+
+    // After commit, the data should be moved from ACCOUNT_INFO_STATE to ACCOUNT_INFO_STATE_ARCHIVE
+    long countAfterCommit =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE).count();
+    assertThat(countAfterCommit)
+        .as("Data should be removed from original segment after commit")
+        .isLessThan(countBeforeArchive);
+
+    long archiveCountAfterCommit =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE).count();
+    assertThat(archiveCountAfterCommit)
+        .as("Data should now be in archive segment")
+        .isGreaterThan(archiveCount);
   }
 }
