@@ -51,12 +51,17 @@ public class BonsaiArchiver implements BlockAddedObserver {
   private final PathBasedWorldStateKeyValueStorage rootWorldStateStorage;
   private final Blockchain blockchain;
   private final Consumer<Runnable> executeAsync;
+
+  /** Maximum blocks to archive per invocation (increased from 1,000 for performance). */
   private static final int CATCHUP_LIMIT = 50_000;
 
-  @SuppressWarnings("UnusedVariable")
+  /** Entries to accumulate before committing a batch transaction (used in batched archiving). */
+  @SuppressWarnings("UnusedVariable") // Used in Task 5 refactoring
   private static final int BATCH_SIZE = 10_000;
 
+  /** Log archiving progress every N blocks. */
   private static final int PROGRESS_LOG_INTERVAL = 1_000;
+
   private static final int DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE = 10;
   private final TrieLogManager trieLogManager;
   protected final MetricsSystem metricsSystem;
