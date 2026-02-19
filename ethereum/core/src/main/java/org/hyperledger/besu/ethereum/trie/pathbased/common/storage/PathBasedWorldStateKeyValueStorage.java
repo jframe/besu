@@ -352,6 +352,71 @@ public abstract class PathBasedWorldStateKeyValueStorage
   }
 
   /**
+   * Archive previous storage state using an existing transaction (batched). Does NOT commit -
+   * caller manages transaction lifecycle.
+   *
+   * @param tx the transaction to add operations to
+   * @param previousBlockHeader the block header for the previous block
+   * @param storageSlotKey the storage slot to archive old state for (accountHash + slotHash)
+   * @return the number of storage states that were added to the transaction
+   */
+  public int archivePreviousStorageStateBatched(
+      final SegmentedKeyValueStorageTransaction tx,
+      final BlockHeader previousBlockHeader,
+      final Bytes storageSlotKey) {
+    AtomicInteger archivedStorageCount = new AtomicInteger();
+    try {
+      final BonsaiContext previousContext = new BonsaiContext(previousBlockHeader.getNumber());
+      final Bytes previousKey =
+          Bytes.of(
+              BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(
+                  previousContext, storageSlotKey.toArrayUnsafe()));
+
+      Optional<SegmentedKeyValueStorage.NearestKeyValue> nextMatch;
+
+      while ((nextMatch =
+              composedWorldStateStorage
+                  .getNearestBefore(ACCOUNT_STORAGE_STORAGE, previousKey)
+                  .filter(
+                      found ->
+                          found.value().isPresent()
+                              && storageSlotKey.commonPrefixLength(found.key())
+                                  >= storageSlotKey.size()))
+          .isPresent()) {
+        nextMatch.stream()
+            .forEach(
+                (nearestKey) -> {
+                  tx.remove(ACCOUNT_STORAGE_STORAGE, nearestKey.key().toArrayUnsafe());
+                  tx.put(
+                      ACCOUNT_STORAGE_ARCHIVE,
+                      nearestKey.key().toArrayUnsafe(),
+                      nearestKey.value().get());
+                  archivedStorageCount.getAndIncrement();
+                });
+      }
+
+      if (archivedStorageCount.get() == 0) {
+        LOG.atTrace()
+            .setMessage("no previous storage found for block {}, slot hash {}")
+            .addArgument(previousBlockHeader.getNumber())
+            .addArgument(storageSlotKey)
+            .log();
+      } else {
+        LOG.atDebug()
+            .setMessage("{} storage entries batched for block {}, slot hash {}")
+            .addArgument(archivedStorageCount.get())
+            .addArgument(previousBlockHeader.getNumber())
+            .addArgument(storageSlotKey)
+            .log();
+      }
+    } catch (Exception e) {
+      LOG.error("Error batching storage state for slot {} to archived storage", storageSlotKey, e);
+    }
+
+    return archivedStorageCount.get();
+  }
+
+  /**
    * Move old storage state from the primary DB segment to the archive segment that will only be
    * used for historic state queries. This prevents performance degradation over time for writes to
    * the primary DB segments.

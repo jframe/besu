@@ -144,4 +144,19 @@ class BonsaiArchiverTest {
         .as("Data should now be in archive segment")
         .isGreaterThan(archiveCount);
   }
+
+  @Test
+  void archivePreviousStorageStateBatched_returnsZero_whenNoDataExists() {
+    final BlockHeader header = blockBuilder.number(100).buildHeader();
+    final Hash accountHash = Hash.hash(Bytes.fromHexString("0x1234"));
+    final Hash slotHash = Hash.hash(Bytes.fromHexString("0x5678"));
+    final Bytes storageSlotKey = Bytes.concatenate(accountHash, slotHash);
+
+    SegmentedKeyValueStorageTransaction tx =
+        storage.getComposedWorldStateStorage().startTransaction();
+
+    int archivedCount = storage.archivePreviousStorageStateBatched(tx, header, storageSlotKey);
+
+    assertThat(archivedCount).isEqualTo(0);
+  }
 }
