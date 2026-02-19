@@ -115,16 +115,29 @@ public class BonsaiArchiver implements BlockAddedObserver {
   // DB segments to live state only. Returns the number of state and storage entries moved.
   public int moveBlockStateToArchive() {
     final long startTime = System.nanoTime();
-    final long retainAboveThisBlock =
-        blockchain.getChainHeadBlockNumber() - DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE;
+    final long chainHead = blockchain.getChainHeadBlockNumber();
+    final long retainAboveThisBlock = chainHead - DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE;
+    final long currentArchived = latestArchivedBlock.get();
+
+    LOG.atInfo()
+        .setMessage(
+            "Archiver starting: chainHead={}, latestArchived={}, retainAbove={}, pendingBlocks={}")
+        .addArgument(chainHead)
+        .addArgument(currentArchived)
+        .addArgument(retainAboveThisBlock)
+        .addArgument(retainAboveThisBlock - currentArchived - 1)
+        .log();
 
     if (rootWorldStateStorage.getFlatDbMode().getVersion() == Bytes.EMPTY) {
+      LOG.atWarn().setMessage("Archiver: DB mode version not set, skipping").log();
       throw new IllegalStateException("DB mode version not set");
     }
 
     int archivedAccountStateCount = 0;
     int archivedAccountStorageCount = 0;
     int batchEntryCount = 0;
+    int blocksProcessed = 0;
+    int blocksSkipped = 0;
 
     final SortedMap<Long, Hash> blocksToArchive;
     synchronized (this) {
@@ -148,11 +161,13 @@ public class BonsaiArchiver implements BlockAddedObserver {
     }
 
     if (blocksToArchive.isEmpty()) {
+      LOG.atInfo().setMessage("Archiver: No blocks to archive (already caught up)").log();
       return 0;
     }
 
-    LOG.atDebug()
-        .setMessage("Moving state to archive storage: {} to {} ")
+    LOG.atInfo()
+        .setMessage("Archiver: Processing {} blocks from {} to {}")
+        .addArgument(blocksToArchive.size())
         .addArgument(blocksToArchive.firstKey())
         .addArgument(blocksToArchive.lastKey())
         .log();
@@ -177,12 +192,24 @@ public class BonsaiArchiver implements BlockAddedObserver {
       // Use lazy cached headers (headers are small)
       Optional<BlockHeader> blockHeaderOpt = getCachedHeader(blockHash, headerCache);
       if (blockHeaderOpt.isEmpty()) {
+        LOG.atWarn()
+            .setMessage("Archiver: Skipping block {} - header not found for hash {}")
+            .addArgument(block.getKey())
+            .addArgument(blockHash)
+            .log();
+        blocksSkipped++;
         continue;
       }
       BlockHeader blockHeader = blockHeaderOpt.get();
       Optional<BlockHeader> parentHeaderOpt =
           getCachedHeader(blockHeader.getParentHash(), headerCache);
       if (parentHeaderOpt.isEmpty()) {
+        LOG.atWarn()
+            .setMessage("Archiver: Skipping block {} - parent header not found for hash {}")
+            .addArgument(block.getKey())
+            .addArgument(blockHeader.getParentHash())
+            .log();
+        blocksSkipped++;
         continue;
       }
       BlockHeader parentHeader = parentHeaderOpt.get();
@@ -190,9 +217,24 @@ public class BonsaiArchiver implements BlockAddedObserver {
       // Fetch TrieLog on demand (not cached - too large)
       Optional<TrieLog> trieLogOpt = trieLogManager.getTrieLogLayer(blockHash);
       if (trieLogOpt.isEmpty()) {
+        LOG.atWarn()
+            .setMessage("Archiver: Skipping block {} - TrieLog not found for hash {}")
+            .addArgument(block.getKey())
+            .addArgument(blockHash)
+            .log();
+        blocksSkipped++;
         continue;
       }
       TrieLog trieLog = trieLogOpt.get();
+
+      int accountChanges = trieLog.getAccountChanges().size();
+      int storageChanges = trieLog.getStorageChanges().size();
+      LOG.atDebug()
+          .setMessage("Archiver: Block {} has {} account changes, {} storage changes")
+          .addArgument(block.getKey())
+          .addArgument(accountChanges)
+          .addArgument(storageChanges)
+          .log();
       // Process account and storage changes
       for (var entry : trieLog.getAccountChanges().entrySet()) {
         int count =
@@ -221,10 +263,7 @@ public class BonsaiArchiver implements BlockAddedObserver {
         }
       }
 
-      LOG.atTrace()
-          .setMessage("All account state and storage batched for block {}")
-          .addArgument(block.getKey())
-          .log();
+      blocksProcessed++;
 
       // Commit batch if we've accumulated enough entries
       if (batchEntryCount >= BATCH_SIZE) {
@@ -253,18 +292,18 @@ public class BonsaiArchiver implements BlockAddedObserver {
     final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
     final int totalEntries = archivedAccountStateCount + archivedAccountStorageCount;
 
-    LOG.atDebug()
+    LOG.atInfo()
         .setMessage(
-            "finished moving state for blocks {} to {}. Archived {} account state entries, {} account storage entries")
-        .addArgument(blocksToArchive.firstKey())
-        .addArgument(latestArchivedBlock.get())
+            "Archiver complete: blocks processed={}, skipped={}, account entries={}, storage entries={}")
+        .addArgument(blocksProcessed)
+        .addArgument(blocksSkipped)
         .addArgument(archivedAccountStateCount)
         .addArgument(archivedAccountStorageCount)
         .log();
 
     if (totalEntries > 0) {
       LOG.atInfo()
-          .setMessage("Archived {} entries in {} ms ({} entries/sec)")
+          .setMessage("Archiver: {} entries in {} ms ({} entries/sec)")
           .addArgument(totalEntries)
           .addArgument(durationMs)
           .addArgument(durationMs > 0 ? (totalEntries * 1000L / durationMs) : totalEntries)
