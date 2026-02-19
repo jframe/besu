@@ -111,7 +111,7 @@ rpc_call() {
     local start_ms end_ms latency_ms response error_code result success
 
     start_ms=$(date +%s%3N)
-    response=$(curl -s -X POST "$RPC_URL" \
+    response=$(curl -s --max-time 30 -X POST "$RPC_URL" \
         -H "Content-Type: application/json" \
         -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$params,\"id\":1}" \
         2>/dev/null) || response=""
