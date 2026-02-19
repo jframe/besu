@@ -18,16 +18,19 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.SortedMap;
 import java.util.TreeMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -55,8 +58,7 @@ public class BonsaiArchiver implements BlockAddedObserver {
   /** Maximum blocks to archive per invocation (increased from 1,000 for performance). */
   private static final int CATCHUP_LIMIT = 50_000;
 
-  /** Entries to accumulate before committing a batch transaction (used in batched archiving). */
-  @SuppressWarnings("UnusedVariable") // Used in Task 5 refactoring
+  /** Entries to accumulate before committing a batch transaction. */
   private static final int BATCH_SIZE = 10_000;
 
   /** Log archiving progress every N blocks. */
@@ -97,10 +99,44 @@ public class BonsaiArchiver implements BlockAddedObserver {
     return blockchain.getChainHeadBlockNumber() - latestArchivedBlock.get();
   }
 
+  /**
+   * Pre-populate header and TrieLog caches for the batch of blocks to archive. This avoids repeated
+   * DB lookups during archiving.
+   */
+  private void populateCaches(
+      final SortedMap<Long, Hash> blocksToArchive,
+      final Map<Hash, BlockHeader> headerCache,
+      final Map<Hash, TrieLog> trieLogCache) {
+    blocksToArchive.forEach(
+        (blockNum, blockHash) -> {
+          // Cache the block header
+          blockchain
+              .getBlockHeader(blockHash)
+              .ifPresent(
+                  header -> {
+                    headerCache.put(blockHash, header);
+                    // Also cache the parent header (needed for archiving)
+                    blockchain
+                        .getBlockHeader(header.getParentHash())
+                        .ifPresent(parent -> headerCache.put(header.getParentHash(), parent));
+                  });
+          // Cache the TrieLog
+          trieLogManager
+              .getTrieLogLayer(blockHash)
+              .ifPresent(log -> trieLogCache.put(blockHash, log));
+        });
+    LOG.atDebug()
+        .setMessage("Pre-populated caches: {} headers, {} trieLogs")
+        .addArgument(headerCache.size())
+        .addArgument(trieLogCache.size())
+        .log();
+  }
+
   // Move state and storage entries from their primary DB segments to their archive DB segments.
   // This is intended to maintain good performance for new block imports by keeping the primary
   // DB segments to live state only. Returns the number of state and storage entries moved.
   public int moveBlockStateToArchive() {
+    final long startTime = System.nanoTime();
     final long retainAboveThisBlock =
         blockchain.getChainHeadBlockNumber() - DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE;
 
@@ -108,13 +144,10 @@ public class BonsaiArchiver implements BlockAddedObserver {
       throw new IllegalStateException("DB mode version not set");
     }
 
-    AtomicInteger archivedAccountStateCount = new AtomicInteger();
-    AtomicInteger archivedAccountStorageCount = new AtomicInteger();
+    int archivedAccountStateCount = 0;
+    int archivedAccountStorageCount = 0;
+    int batchEntryCount = 0;
 
-    // Typically we will move all storage and state for a single block i.e. when a new block is
-    // imported, move state for block-N. There are cases where we catch-up and move old state
-    // for a number of blocks so we may iterate over a number of blocks archiving their state,
-    // not just a single one.
     final SortedMap<Long, Hash> blocksToArchive;
     synchronized (this) {
       blocksToArchive = new TreeMap<>();
@@ -136,96 +169,122 @@ public class BonsaiArchiver implements BlockAddedObserver {
       }
     }
 
-    if (blocksToArchive.size() > 0) {
-      LOG.atDebug()
-          .setMessage("Moving state to archive storage: {} to {} ")
-          .addArgument(blocksToArchive.firstKey())
-          .addArgument(blocksToArchive.lastKey())
+    if (blocksToArchive.isEmpty()) {
+      return 0;
+    }
+
+    LOG.atDebug()
+        .setMessage("Moving state to archive storage: {} to {} ")
+        .addArgument(blocksToArchive.firstKey())
+        .addArgument(blocksToArchive.lastKey())
+        .log();
+
+    // Pre-populate caches to avoid repeated lookups
+    final Map<Hash, BlockHeader> headerCache = new HashMap<>();
+    final Map<Hash, TrieLog> trieLogCache = new HashMap<>();
+    populateCaches(blocksToArchive, headerCache, trieLogCache);
+
+    // Use holder to allow reassignment in loop
+    final var txHolder =
+        new Object() {
+          SegmentedKeyValueStorageTransaction tx =
+              rootWorldStateStorage.getComposedWorldStateStorage().startTransaction();
+        };
+
+    for (var block : blocksToArchive.entrySet()) {
+      Hash blockHash = block.getValue();
+      LOG.atTrace()
+          .setMessage("Archiving all account state for block {}")
+          .addArgument(block.getKey())
           .log();
 
-      // Determine which world state keys have changed in the last N blocks by looking at the
-      // trie logs for the blocks. Then move the old keys to the archive segment (if and only if
-      // they have changed)
-      blocksToArchive
-          .entrySet()
-          .forEach(
-              (block) -> {
-                Hash blockHash = block.getValue();
-                LOG.atDebug()
-                    .setMessage("Archiving all account state for block {}")
-                    .addArgument(block.getKey())
-                    .log();
-                Optional<TrieLog> trieLog = trieLogManager.getTrieLogLayer(blockHash);
-                if (trieLog.isPresent()) {
-                  trieLog
-                      .get()
-                      .getAccountChanges()
-                      .forEach(
-                          (address, change) -> {
-                            // Move any previous state for this account
-                            archivedAccountStateCount.addAndGet(
-                                rootWorldStateStorage.archivePreviousAccountState(
-                                    blockchain.getBlockHeader(
-                                        blockchain.getBlockHeader(blockHash).get().getParentHash()),
-                                    address.addressHash()));
-                          });
-                  LOG.atDebug()
-                      .setMessage("Archiving all storage state for block {}")
-                      .addArgument(block.getKey())
-                      .log();
-                  trieLog
-                      .get()
-                      .getStorageChanges()
-                      .forEach(
-                          (address, storageSlotKey) -> {
-                            storageSlotKey.forEach(
-                                (slotKey, slotValue) -> {
-                                  // Move any previous state for this account
-                                  archivedAccountStorageCount.addAndGet(
-                                      rootWorldStateStorage.archivePreviousStorageState(
-                                          blockchain.getBlockHeader(
-                                              blockchain
-                                                  .getBlockHeader(blockHash)
-                                                  .get()
-                                                  .getParentHash()),
-                                          Bytes.concatenate(
-                                              address.addressHash().getBytes(),
-                                              slotKey.getSlotHash().getBytes())));
-                                });
-                          });
-                }
-                LOG.atDebug()
-                    .setMessage("All account state and storage archived for block {}")
-                    .addArgument(block.getKey())
-                    .log();
-                rootWorldStateStorage.setLatestArchivedBlock(block.getKey());
+      // Use cached header instead of DB lookup
+      BlockHeader blockHeader = headerCache.get(blockHash);
+      BlockHeader parentHeader =
+          blockHeader != null ? headerCache.get(blockHeader.getParentHash()) : null;
 
-                // Update local var for logging progress
-                latestArchivedBlock.set(block.getKey());
-                if (latestArchivedBlock.get() % PROGRESS_LOG_INTERVAL == 0) {
-                  // Log progress in case catching up causes there to be a large number of keys
-                  // to move
-                  LOG.atInfo()
-                      .setMessage(
-                          "archive progress: state up to block {} archived ({} behind chain head {})")
-                      .addArgument(latestArchivedBlock.get())
-                      .addArgument(blockchain.getChainHeadBlockNumber() - latestArchivedBlock.get())
-                      .addArgument(blockchain.getChainHeadBlockNumber())
-                      .log();
-                }
-              });
+      // Use cached TrieLog instead of DB lookup
+      TrieLog trieLog = trieLogCache.get(blockHash);
+      if (trieLog != null && parentHeader != null) {
+        for (var entry : trieLog.getAccountChanges().entrySet()) {
+          int count =
+              rootWorldStateStorage.archivePreviousAccountStateBatched(
+                  txHolder.tx, parentHeader, entry.getKey().addressHash());
+          archivedAccountStateCount += count;
+          batchEntryCount += count;
+        }
 
-      LOG.atDebug()
-          .setMessage(
-              "finished moving state for blocks {} to {}. Archived {} account state entries, {} account storage entries")
-          .addArgument(blocksToArchive.firstKey())
-          .addArgument(latestArchivedBlock.get())
-          .addArgument(archivedAccountStateCount.get())
-          .addArgument(archivedAccountStorageCount.get())
+        LOG.atTrace()
+            .setMessage("Archiving all storage state for block {}")
+            .addArgument(block.getKey())
+            .log();
+
+        for (var entry : trieLog.getStorageChanges().entrySet()) {
+          for (var slotEntry : entry.getValue().entrySet()) {
+            int count =
+                rootWorldStateStorage.archivePreviousStorageStateBatched(
+                    txHolder.tx,
+                    parentHeader,
+                    Bytes.concatenate(
+                        entry.getKey().addressHash().getBytes(),
+                        slotEntry.getKey().getSlotHash().getBytes()));
+            archivedAccountStorageCount += count;
+            batchEntryCount += count;
+          }
+        }
+      }
+
+      LOG.atTrace()
+          .setMessage("All account state and storage batched for block {}")
+          .addArgument(block.getKey())
+          .log();
+
+      // Commit batch if we've accumulated enough entries
+      if (batchEntryCount >= BATCH_SIZE) {
+        txHolder.tx.commit();
+        batchEntryCount = 0;
+        txHolder.tx = rootWorldStateStorage.getComposedWorldStateStorage().startTransaction();
+      }
+
+      // Update progress marker periodically
+      latestArchivedBlock.set(block.getKey());
+      if (latestArchivedBlock.get() % PROGRESS_LOG_INTERVAL == 0) {
+        rootWorldStateStorage.setLatestArchivedBlock(block.getKey());
+        LOG.atInfo()
+            .setMessage("archive progress: state up to block {} archived ({} behind chain head {})")
+            .addArgument(latestArchivedBlock.get())
+            .addArgument(blockchain.getChainHeadBlockNumber() - latestArchivedBlock.get())
+            .addArgument(blockchain.getChainHeadBlockNumber())
+            .log();
+      }
+    }
+
+    // Final commit for any remaining entries
+    txHolder.tx.commit();
+    rootWorldStateStorage.setLatestArchivedBlock(latestArchivedBlock.get());
+
+    final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+    final int totalEntries = archivedAccountStateCount + archivedAccountStorageCount;
+
+    LOG.atDebug()
+        .setMessage(
+            "finished moving state for blocks {} to {}. Archived {} account state entries, {} account storage entries")
+        .addArgument(blocksToArchive.firstKey())
+        .addArgument(latestArchivedBlock.get())
+        .addArgument(archivedAccountStateCount)
+        .addArgument(archivedAccountStorageCount)
+        .log();
+
+    if (totalEntries > 0) {
+      LOG.atInfo()
+          .setMessage("Archived {} entries in {} ms ({} entries/sec)")
+          .addArgument(totalEntries)
+          .addArgument(durationMs)
+          .addArgument(durationMs > 0 ? (totalEntries * 1000L / durationMs) : totalEntries)
           .log();
     }
 
-    return archivedAccountStateCount.get() + archivedAccountStorageCount.get();
+    return totalEntries;
   }
 
   /**
