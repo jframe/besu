@@ -304,6 +304,75 @@ run_collection() {
     echo "Collection complete. $iterations iterations recorded."
 }
 
+generate_summary() {
+    echo ""
+    echo "=== Generating Summary ==="
+
+    # Summary header
+    echo "metric,count,min,max,avg,p50,p95,p99" > "$SUMMARY_CSV"
+
+    # Summarize RPC latencies by method
+    local methods
+    methods=$(tail -n +2 "$RPC_CSV" | cut -d',' -f1 | sort -u)
+
+    for method in $methods; do
+        # Get latencies for successful calls only
+        local latencies
+        latencies=$(grep "^[0-9]*,${method}," "$RPC_CSV" | grep ",true," | cut -d',' -f4 | sort -n)
+
+        if [[ -z "$latencies" ]]; then
+            echo "${method},0,,,,,," >> "$SUMMARY_CSV"
+            continue
+        fi
+
+        local count min max sum avg p50 p95 p99
+        count=$(echo "$latencies" | wc -l | tr -d ' ')
+        min=$(echo "$latencies" | head -1)
+        max=$(echo "$latencies" | tail -1)
+        sum=$(echo "$latencies" | awk '{sum+=$1} END {print sum}')
+        avg=$(echo "scale=2; $sum / $count" | bc)
+
+        # Percentiles
+        p50_idx=$(echo "scale=0; $count * 0.50 / 1" | bc)
+        p95_idx=$(echo "scale=0; $count * 0.95 / 1" | bc)
+        p99_idx=$(echo "scale=0; $count * 0.99 / 1" | bc)
+
+        p50=$(echo "$latencies" | sed -n "${p50_idx}p")
+        p95=$(echo "$latencies" | sed -n "${p95_idx}p")
+        p99=$(echo "$latencies" | sed -n "${p99_idx}p")
+
+        # Handle edge cases
+        [[ -z "$p50" ]] && p50=$max
+        [[ -z "$p95" ]] && p95=$max
+        [[ -z "$p99" ]] && p99=$max
+
+        echo "${method},${count},${min},${max},${avg},${p50},${p95},${p99}" >> "$SUMMARY_CSV"
+    done
+
+    # Add block execution time summary from metrics
+    local exec_times
+    exec_times=$(tail -n +2 "$METRICS_CSV" | cut -d',' -f3 | grep -v "^0$" | sort -n)
+
+    if [[ -n "$exec_times" ]]; then
+        local count min max sum avg
+        count=$(echo "$exec_times" | wc -l | tr -d ' ')
+        min=$(echo "$exec_times" | head -1)
+        max=$(echo "$exec_times" | tail -1)
+        sum=$(echo "$exec_times" | awk '{sum+=$1} END {print sum}')
+        avg=$(echo "scale=2; $sum / $count" | bc)
+        echo "block_execution_time,${count},${min},${max},${avg},,," >> "$SUMMARY_CSV"
+    fi
+
+    echo "Summary written to $SUMMARY_CSV"
+    echo ""
+    echo "=== Results ==="
+    column -t -s',' "$SUMMARY_CSV"
+}
+
 setup
+run_collection
+generate_summary
+
 echo ""
-echo "Setup complete. Ready to collect metrics."
+echo "Performance test complete!"
+echo "Results saved to: $OUTPUT_DIR"
