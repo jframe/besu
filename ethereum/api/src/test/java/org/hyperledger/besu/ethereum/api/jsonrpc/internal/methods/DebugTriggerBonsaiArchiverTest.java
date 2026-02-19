@@ -36,7 +36,8 @@ public class DebugTriggerBonsaiArchiverTest {
   public void shouldReturnErrorWhenArchiverNotPresent() {
     final DebugTriggerBonsaiArchiver method = new DebugTriggerBonsaiArchiver(Optional.empty());
     final JsonRpcRequestContext request =
-        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_triggerBonsaiArchiver", new Object[] {}));
+        new JsonRpcRequestContext(
+            new JsonRpcRequest("2.0", "debug_triggerBonsaiArchiver", new Object[] {}));
 
     final JsonRpcResponse response = method.response(request);
 
@@ -48,9 +49,11 @@ public class DebugTriggerBonsaiArchiverTest {
   @Test
   public void shouldReturnTrueWhenArchiverPresent() {
     final BonsaiArchiver mockArchiver = mock(BonsaiArchiver.class);
-    final DebugTriggerBonsaiArchiver method = new DebugTriggerBonsaiArchiver(Optional.of(mockArchiver));
+    final DebugTriggerBonsaiArchiver method =
+        new DebugTriggerBonsaiArchiver(Optional.of(mockArchiver));
     final JsonRpcRequestContext request =
-        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_triggerBonsaiArchiver", new Object[] {}));
+        new JsonRpcRequestContext(
+            new JsonRpcRequest("2.0", "debug_triggerBonsaiArchiver", new Object[] {}));
 
     final JsonRpcResponse response = method.response(request);
 

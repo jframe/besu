@@ -219,9 +219,8 @@ public class BonsaiArchiver implements BlockAddedObserver {
   }
 
   /**
-   * Manually trigger archiving process asynchronously.
-   * This is safe to call multiple times - if archiving is already in progress,
-   * the new invocation will exit gracefully.
+   * Manually trigger archiving process asynchronously. This is safe to call multiple times - if
+   * archiving is already in progress, the new invocation will exit gracefully.
    */
   public void triggerArchiving() {
     executeAsync.accept(
