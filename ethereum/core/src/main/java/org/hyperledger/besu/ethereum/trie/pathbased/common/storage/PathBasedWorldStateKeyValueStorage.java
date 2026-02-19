@@ -287,6 +287,71 @@ public abstract class PathBasedWorldStateKeyValueStorage
   }
 
   /**
+   * Archive previous account state using an existing transaction (batched). Does NOT commit -
+   * caller manages transaction lifecycle.
+   *
+   * @param tx the transaction to add operations to
+   * @param previousBlockHeader the block header for the previous block
+   * @param accountHash the account to archive old state for
+   * @return the number of account states that were added to the transaction
+   */
+  public int archivePreviousAccountStateBatched(
+      final SegmentedKeyValueStorageTransaction tx,
+      final BlockHeader previousBlockHeader,
+      final Hash accountHash) {
+    AtomicInteger archivedStateCount = new AtomicInteger();
+    try {
+      final BonsaiContext previousContext = new BonsaiContext(previousBlockHeader.getNumber());
+      final Bytes previousKey =
+          Bytes.of(
+              BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(
+                  previousContext, accountHash.getBytes().toArrayUnsafe()));
+
+      Optional<SegmentedKeyValueStorage.NearestKeyValue> nextMatch;
+
+      while ((nextMatch =
+              composedWorldStateStorage
+                  .getNearestBefore(ACCOUNT_INFO_STATE, previousKey)
+                  .filter(
+                      found ->
+                          found.value().isPresent()
+                              && accountHash.getBytes().commonPrefixLength(found.key())
+                                  >= accountHash.getBytes().size()))
+          .isPresent()) {
+        nextMatch.stream()
+            .forEach(
+                (nearestKey) -> {
+                  tx.remove(ACCOUNT_INFO_STATE, nearestKey.key().toArrayUnsafe());
+                  tx.put(
+                      ACCOUNT_INFO_STATE_ARCHIVE,
+                      nearestKey.key().toArrayUnsafe(),
+                      nearestKey.value().get());
+                  archivedStateCount.getAndIncrement();
+                });
+      }
+
+      if (archivedStateCount.get() == 0) {
+        LOG.atTrace()
+            .setMessage("no previous state found for block {}, address hash {}")
+            .addArgument(previousBlockHeader.getNumber())
+            .addArgument(accountHash)
+            .log();
+      } else {
+        LOG.atDebug()
+            .setMessage("{} account state entries batched for block {}, address hash {}")
+            .addArgument(archivedStateCount.get())
+            .addArgument(previousBlockHeader.getNumber())
+            .addArgument(accountHash)
+            .log();
+      }
+    } catch (Exception e) {
+      LOG.error("Error batching account state for account {} to archived storage", accountHash, e);
+    }
+
+    return archivedStateCount.get();
+  }
+
+  /**
    * Move old storage state from the primary DB segment to the archive segment that will only be
    * used for historic state queries. This prevents performance degradation over time for writes to
    * the primary DB segments.
