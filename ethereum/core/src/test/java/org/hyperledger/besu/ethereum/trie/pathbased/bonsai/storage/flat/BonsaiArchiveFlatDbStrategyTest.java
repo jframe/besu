@@ -27,9 +27,11 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.util.Arrays;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -189,5 +191,46 @@ public class BonsaiArchiveFlatDbStrategyTest {
         WORLD_BLOCK_NUMBER_KEY,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
     tx.commit();
+  }
+
+  @Test
+  void extractBlockNumber_returnsCorrectValue() {
+    // Key format: [hash (32 bytes)][blockNumber (8 bytes big-endian)]
+    byte[] hash = new byte[32];
+    Arrays.fill(hash, (byte) 0xAB);
+
+    long expectedBlockNumber = 12345L;
+    byte[] key =
+        BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(
+            new BonsaiContext(expectedBlockNumber), hash);
+
+    long extracted = BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(key);
+
+    assertThat(extracted).isEqualTo(expectedBlockNumber);
+  }
+
+  @Test
+  void extractBlockNumber_handlesZero() {
+    byte[] hash = new byte[32];
+    byte[] key =
+        BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(
+            new BonsaiContext(0L), hash);
+
+    long extracted = BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(key);
+
+    assertThat(extracted).isEqualTo(0L);
+  }
+
+  @Test
+  void extractBlockNumber_handlesLargeBlockNumber() {
+    byte[] hash = new byte[32];
+    long largeBlock = 100_000_000L;
+    byte[] key =
+        BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(
+            new BonsaiContext(largeBlock), hash);
+
+    long extracted = BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(key);
+
+    assertThat(extracted).isEqualTo(largeBlock);
   }
 }

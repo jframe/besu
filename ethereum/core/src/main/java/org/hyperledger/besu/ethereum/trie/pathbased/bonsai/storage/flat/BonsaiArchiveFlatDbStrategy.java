@@ -415,6 +415,19 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     return Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe();
   }
 
+  /**
+   * Extract the block number from an archive key. Key format: [hash (32 bytes for account, 64
+   * bytes for storage)][blockNumber (8 bytes big-endian)]
+   *
+   * @param key the archive key
+   * @return the block number encoded in the key
+   */
+  public static long extractBlockNumberFromKey(final byte[] key) {
+    // Block number is always the last 8 bytes, big-endian
+    int offset = key.length - 8;
+    return Bytes.wrap(key, offset, 8).toLong();
+  }
+
   public static byte[] calculateArchiveKeyWithMinSuffix(
       final BonsaiContext context, final byte[] naturalKey) {
     return calculateArchiveKeyWithSuffix(Optional.of(context), naturalKey, MIN_BLOCK_SUFFIX);
