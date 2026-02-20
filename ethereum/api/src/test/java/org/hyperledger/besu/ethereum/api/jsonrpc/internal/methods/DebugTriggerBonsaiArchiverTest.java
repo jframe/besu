@@ -60,7 +60,7 @@ public class DebugTriggerBonsaiArchiverTest {
     assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
     final JsonRpcSuccessResponse successResponse = (JsonRpcSuccessResponse) response;
     assertThat(successResponse.getResult()).isEqualTo(true);
-    verify(mockArchiver).triggerArchiving();
+    verify(mockArchiver).triggerArchiving(false);
   }
 
   @Test
@@ -68,5 +68,39 @@ public class DebugTriggerBonsaiArchiverTest {
     final DebugTriggerBonsaiArchiver method = new DebugTriggerBonsaiArchiver(Optional.empty());
 
     assertThat(method.getName()).isEqualTo("debug_triggerBonsaiArchiver");
+  }
+
+  @Test
+  public void shouldAcceptForceFullScanParameter() {
+    final BonsaiArchiver mockArchiver = mock(BonsaiArchiver.class);
+    final DebugTriggerBonsaiArchiver method =
+        new DebugTriggerBonsaiArchiver(Optional.of(mockArchiver));
+
+    // Call with forceFullScan=true parameter
+    final JsonRpcRequestContext request =
+        new JsonRpcRequestContext(
+            new JsonRpcRequest("2.0", "debug_triggerBonsaiArchiver", new Object[] {true}));
+
+    final JsonRpcResponse response = method.response(request);
+
+    assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
+    verify(mockArchiver).triggerArchiving(true);
+  }
+
+  @Test
+  public void shouldDefaultToFalseWhenNoParameter() {
+    final BonsaiArchiver mockArchiver = mock(BonsaiArchiver.class);
+    final DebugTriggerBonsaiArchiver method =
+        new DebugTriggerBonsaiArchiver(Optional.of(mockArchiver));
+
+    // Call without parameters
+    final JsonRpcRequestContext request =
+        new JsonRpcRequestContext(
+            new JsonRpcRequest("2.0", "debug_triggerBonsaiArchiver", new Object[] {}));
+
+    final JsonRpcResponse response = method.response(request);
+
+    assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
+    verify(mockArchiver).triggerArchiving(false);
   }
 }

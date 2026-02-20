@@ -44,8 +44,16 @@ public class DebugTriggerBonsaiArchiver implements JsonRpcMethod {
           requestContext.getRequest().getId(), RpcErrorType.METHOD_NOT_ENABLED);
     }
 
+    // Check for optional forceFullScan parameter
+    boolean forceFullScan = false;
+    try {
+      forceFullScan = requestContext.getOptionalParameter(0, Boolean.class).orElse(false);
+    } catch (Exception e) {
+      // Ignore - use default
+    }
+
     final BonsaiArchiver archiver = bonsaiArchiver.get();
-    archiver.triggerArchiving();
+    archiver.triggerArchiving(forceFullScan);
 
     return new JsonRpcSuccessResponse(requestContext.getRequest().getId(), true);
   }
