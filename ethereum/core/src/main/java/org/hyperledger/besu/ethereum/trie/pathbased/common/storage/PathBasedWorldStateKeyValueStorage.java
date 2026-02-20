@@ -299,7 +299,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
       final SegmentedKeyValueStorageTransaction tx,
       final BlockHeader previousBlockHeader,
       final Hash accountHash) {
-    AtomicInteger archivedStateCount = new AtomicInteger();
+    int archivedStateCount = 0;
     try {
       final BonsaiContext previousContext = new BonsaiContext(previousBlockHeader.getNumber());
       final Bytes previousKey =
@@ -307,30 +307,28 @@ public abstract class PathBasedWorldStateKeyValueStorage
               BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(
                   previousContext, accountHash.getBytes().toArrayUnsafe()));
 
-      Optional<SegmentedKeyValueStorage.NearestKeyValue> nextMatch;
+      // Find the single nearest entry before this block for this account
+      // (there should be at most one entry per account that needs archiving per call)
+      Optional<SegmentedKeyValueStorage.NearestKeyValue> match =
+          composedWorldStateStorage
+              .getNearestBefore(ACCOUNT_INFO_STATE, previousKey)
+              .filter(
+                  found ->
+                      found.value().isPresent()
+                          && accountHash.getBytes().commonPrefixLength(found.key())
+                              >= accountHash.getBytes().size());
 
-      while ((nextMatch =
-              composedWorldStateStorage
-                  .getNearestBefore(ACCOUNT_INFO_STATE, previousKey)
-                  .filter(
-                      found ->
-                          found.value().isPresent()
-                              && accountHash.getBytes().commonPrefixLength(found.key())
-                                  >= accountHash.getBytes().size()))
-          .isPresent()) {
-        nextMatch.stream()
-            .forEach(
-                (nearestKey) -> {
-                  tx.remove(ACCOUNT_INFO_STATE, nearestKey.key().toArrayUnsafe());
-                  tx.put(
-                      ACCOUNT_INFO_STATE_ARCHIVE,
-                      nearestKey.key().toArrayUnsafe(),
-                      nearestKey.value().get());
-                  archivedStateCount.getAndIncrement();
-                });
+      if (match.isPresent()) {
+        SegmentedKeyValueStorage.NearestKeyValue nearestKey = match.get();
+        tx.remove(ACCOUNT_INFO_STATE, nearestKey.key().toArrayUnsafe());
+        tx.put(
+            ACCOUNT_INFO_STATE_ARCHIVE,
+            nearestKey.key().toArrayUnsafe(),
+            nearestKey.value().get());
+        archivedStateCount = 1;
       }
 
-      if (archivedStateCount.get() == 0) {
+      if (archivedStateCount == 0) {
         LOG.atTrace()
             .setMessage("no previous state found for block {}, address hash {}")
             .addArgument(previousBlockHeader.getNumber())
@@ -339,7 +337,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
       } else {
         LOG.atDebug()
             .setMessage("{} account state entries batched for block {}, address hash {}")
-            .addArgument(archivedStateCount.get())
+            .addArgument(archivedStateCount)
             .addArgument(previousBlockHeader.getNumber())
             .addArgument(accountHash)
             .log();
@@ -348,7 +346,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
       LOG.error("Error batching account state for account {} to archived storage", accountHash, e);
     }
 
-    return archivedStateCount.get();
+    return archivedStateCount;
   }
 
   /**
@@ -364,7 +362,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
       final SegmentedKeyValueStorageTransaction tx,
       final BlockHeader previousBlockHeader,
       final Bytes storageSlotKey) {
-    AtomicInteger archivedStorageCount = new AtomicInteger();
+    int archivedStorageCount = 0;
     try {
       final BonsaiContext previousContext = new BonsaiContext(previousBlockHeader.getNumber());
       final Bytes previousKey =
@@ -372,30 +370,28 @@ public abstract class PathBasedWorldStateKeyValueStorage
               BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(
                   previousContext, storageSlotKey.toArrayUnsafe()));
 
-      Optional<SegmentedKeyValueStorage.NearestKeyValue> nextMatch;
+      // Find the single nearest entry before this block for this storage slot
+      // (there should be at most one entry per slot that needs archiving per call)
+      Optional<SegmentedKeyValueStorage.NearestKeyValue> match =
+          composedWorldStateStorage
+              .getNearestBefore(ACCOUNT_STORAGE_STORAGE, previousKey)
+              .filter(
+                  found ->
+                      found.value().isPresent()
+                          && storageSlotKey.commonPrefixLength(found.key())
+                              >= storageSlotKey.size());
 
-      while ((nextMatch =
-              composedWorldStateStorage
-                  .getNearestBefore(ACCOUNT_STORAGE_STORAGE, previousKey)
-                  .filter(
-                      found ->
-                          found.value().isPresent()
-                              && storageSlotKey.commonPrefixLength(found.key())
-                                  >= storageSlotKey.size()))
-          .isPresent()) {
-        nextMatch.stream()
-            .forEach(
-                (nearestKey) -> {
-                  tx.remove(ACCOUNT_STORAGE_STORAGE, nearestKey.key().toArrayUnsafe());
-                  tx.put(
-                      ACCOUNT_STORAGE_ARCHIVE,
-                      nearestKey.key().toArrayUnsafe(),
-                      nearestKey.value().get());
-                  archivedStorageCount.getAndIncrement();
-                });
+      if (match.isPresent()) {
+        SegmentedKeyValueStorage.NearestKeyValue nearestKey = match.get();
+        tx.remove(ACCOUNT_STORAGE_STORAGE, nearestKey.key().toArrayUnsafe());
+        tx.put(
+            ACCOUNT_STORAGE_ARCHIVE,
+            nearestKey.key().toArrayUnsafe(),
+            nearestKey.value().get());
+        archivedStorageCount = 1;
       }
 
-      if (archivedStorageCount.get() == 0) {
+      if (archivedStorageCount == 0) {
         LOG.atTrace()
             .setMessage("no previous storage found for block {}, slot hash {}")
             .addArgument(previousBlockHeader.getNumber())
@@ -404,7 +400,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
       } else {
         LOG.atDebug()
             .setMessage("{} storage entries batched for block {}, slot hash {}")
-            .addArgument(archivedStorageCount.get())
+            .addArgument(archivedStorageCount)
             .addArgument(previousBlockHeader.getNumber())
             .addArgument(storageSlotKey)
             .log();
@@ -413,7 +409,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
       LOG.error("Error batching storage state for slot {} to archived storage", storageSlotKey, e);
     }
 
-    return archivedStorageCount.get();
+    return archivedStorageCount;
   }
 
   /**

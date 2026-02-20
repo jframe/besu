@@ -323,6 +323,51 @@ public class BonsaiArchiver implements BlockAddedObserver {
   }
 
   /**
+   * Archive old state using full segment scan instead of TrieLog-driven approach. More efficient
+   * for bulk archiving when many blocks are pending.
+   *
+   * @return total entries archived (accounts + storage)
+   */
+  public int moveBlockStateToArchiveByFullScan() {
+    final long startTime = System.nanoTime();
+    final long chainHead = blockchain.getChainHeadBlockNumber();
+    final long archiveBeforeBlock = chainHead - DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE;
+
+    LOG.info(
+        "Full scan archiver starting: archiving entries before block {}, chainHead={}",
+        archiveBeforeBlock,
+        chainHead);
+
+    if (rootWorldStateStorage.getFlatDbMode().getVersion() == Bytes.EMPTY) {
+      LOG.warn("Archiver: DB mode version not set, skipping");
+      throw new IllegalStateException("DB mode version not set");
+    }
+
+    int accountsArchived =
+        rootWorldStateStorage.archiveAccountStateByFullScan(archiveBeforeBlock, BATCH_SIZE);
+    int storageArchived =
+        rootWorldStateStorage.archiveStorageStateByFullScan(archiveBeforeBlock, BATCH_SIZE);
+
+    int totalArchived = accountsArchived + storageArchived;
+
+    // Update progress marker
+    if (archiveBeforeBlock > 0) {
+      latestArchivedBlock.set(archiveBeforeBlock - 1);
+      rootWorldStateStorage.setLatestArchivedBlock(archiveBeforeBlock - 1);
+    }
+
+    final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+    LOG.info(
+        "Full scan archiver complete: {} accounts, {} storage entries in {} ms ({} entries/sec)",
+        accountsArchived,
+        storageArchived,
+        durationMs,
+        durationMs > 0 ? (totalArchived * 1000L / durationMs) : totalArchived);
+
+    return totalArchived;
+  }
+
+  /**
    * Manually trigger archiving process asynchronously. This is safe to call multiple times - if
    * archiving is already in progress, the new invocation will exit gracefully.
    */
