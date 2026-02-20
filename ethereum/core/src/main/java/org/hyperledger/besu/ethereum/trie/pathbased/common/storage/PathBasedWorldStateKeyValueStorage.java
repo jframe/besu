@@ -576,6 +576,57 @@ public abstract class PathBasedWorldStateKeyValueStorage
     return archivedCount.get();
   }
 
+  /**
+   * Archive all storage state entries older than the specified block using a full sequential scan.
+   * This is more efficient than per-slot seeking for bulk archiving operations.
+   *
+   * @param archiveBeforeBlock entries with blockNumber < this will be archived
+   * @param batchSize commit transaction after this many entries
+   * @return total entries archived
+   */
+  public int archiveStorageStateByFullScan(final long archiveBeforeBlock, final int batchSize) {
+    final AtomicInteger archivedCount = new AtomicInteger(0);
+    final AtomicInteger batchCount = new AtomicInteger(0);
+
+    final var txHolder =
+        new Object() {
+          SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
+        };
+
+    try {
+      composedWorldStateStorage
+          .stream(ACCOUNT_STORAGE_STORAGE)
+          .forEach(
+              entry -> {
+                long blockNumber =
+                    BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(entry.getKey());
+
+                if (blockNumber < archiveBeforeBlock) {
+                  txHolder.tx.remove(ACCOUNT_STORAGE_STORAGE, entry.getKey());
+                  txHolder.tx.put(ACCOUNT_STORAGE_ARCHIVE, entry.getKey(), entry.getValue());
+                  archivedCount.incrementAndGet();
+
+                  if (batchCount.incrementAndGet() >= batchSize) {
+                    txHolder.tx.commit();
+                    batchCount.set(0);
+                    txHolder.tx = composedWorldStateStorage.startTransaction();
+                  }
+                }
+              });
+
+      txHolder.tx.commit();
+
+    } catch (Exception e) {
+      LOG.error("Error during full scan storage archiving", e);
+    }
+
+    LOG.info(
+        "Full scan archived {} storage entries below block {}",
+        archivedCount.get(),
+        archiveBeforeBlock);
+    return archivedCount.get();
+  }
+
   public Optional<Long> getLatestArchivedBlock() {
     return composedWorldStateStorage
         .get(ACCOUNT_INFO_STATE_ARCHIVE, ARCHIVED_BLOCKS)

@@ -266,4 +266,37 @@ class BonsaiArchiverTest {
 
     assertThat(archived).isEqualTo(0);
   }
+
+  @Test
+  void archiveStorageStateByFullScan_archivesEntriesBelowThreshold() {
+    final Address testAddress =
+        Address.fromHexString("0x6666666666666666666666666666666666666666");
+    final Hash accountHash = testAddress.addressHash();
+    final Hash slotHash = Hash.hash(Bytes.fromHexString("0x1234"));
+
+    // Write storage at blocks 10, 20, 30, 40
+    for (long block : new long[] {10L, 20L, 30L, 40L}) {
+      updateStorageArchiveBlock(block);
+      storage.updater().putStorageValueBySlotHash(accountHash, slotHash, Bytes32.random()).commit();
+    }
+
+    // Count storage entries before
+    long countBefore = storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
+    assertThat(countBefore).isEqualTo(4);
+
+    // Archive everything before block 35
+    int archived = storage.archiveStorageStateByFullScan(35L, 1000);
+
+    // Should archive blocks 10, 20, 30 (3 entries)
+    assertThat(archived).isEqualTo(3);
+
+    // Verify only 1 entry remains in live segment
+    long countAfter = storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
+    assertThat(countAfter).isEqualTo(1);
+
+    // Verify 3 entries in archive
+    long archiveCount =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_ARCHIVE).count();
+    assertThat(archiveCount).isEqualTo(3);
+  }
 }
