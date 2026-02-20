@@ -529,7 +529,9 @@ public abstract class PathBasedWorldStateKeyValueStorage
    */
   public int archiveAccountStateByFullScan(final long archiveBeforeBlock, final int batchSize) {
     final AtomicInteger archivedCount = new AtomicInteger(0);
+    final AtomicInteger scannedCount = new AtomicInteger(0);
     final AtomicInteger batchCount = new AtomicInteger(0);
+    final long startTime = System.nanoTime();
 
     // Use holder for transaction to allow reassignment
     final var txHolder =
@@ -542,6 +544,16 @@ public abstract class PathBasedWorldStateKeyValueStorage
           .stream(ACCOUNT_INFO_STATE)
           .forEach(
               entry -> {
+                scannedCount.incrementAndGet();
+
+                // Log progress every 100,000 entries scanned
+                if (scannedCount.get() % 100_000 == 0) {
+                  LOG.info(
+                      "Full scan account progress: scanned {} entries, archived {} so far",
+                      scannedCount.get(),
+                      archivedCount.get());
+                }
+
                 long blockNumber =
                     BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(entry.getKey());
 
@@ -565,10 +577,12 @@ public abstract class PathBasedWorldStateKeyValueStorage
       LOG.error("Error during full scan account archiving", e);
     }
 
+    long durationMs = (System.nanoTime() - startTime) / 1_000_000;
     LOG.info(
-        "Full scan archived {} account entries below block {}",
+        "Full scan account complete: scanned {} entries, archived {} in {} ms",
+        scannedCount.get(),
         archivedCount.get(),
-        archiveBeforeBlock);
+        durationMs);
     return archivedCount.get();
   }
 
@@ -582,7 +596,9 @@ public abstract class PathBasedWorldStateKeyValueStorage
    */
   public int archiveStorageStateByFullScan(final long archiveBeforeBlock, final int batchSize) {
     final AtomicInteger archivedCount = new AtomicInteger(0);
+    final AtomicInteger scannedCount = new AtomicInteger(0);
     final AtomicInteger batchCount = new AtomicInteger(0);
+    final long startTime = System.nanoTime();
 
     final var txHolder =
         new Object() {
@@ -594,6 +610,16 @@ public abstract class PathBasedWorldStateKeyValueStorage
           .stream(ACCOUNT_STORAGE_STORAGE)
           .forEach(
               entry -> {
+                scannedCount.incrementAndGet();
+
+                // Log progress every 100,000 entries scanned
+                if (scannedCount.get() % 100_000 == 0) {
+                  LOG.info(
+                      "Full scan storage progress: scanned {} entries, archived {} so far",
+                      scannedCount.get(),
+                      archivedCount.get());
+                }
+
                 long blockNumber =
                     BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(entry.getKey());
 
@@ -616,10 +642,12 @@ public abstract class PathBasedWorldStateKeyValueStorage
       LOG.error("Error during full scan storage archiving", e);
     }
 
+    long durationMs = (System.nanoTime() - startTime) / 1_000_000;
     LOG.info(
-        "Full scan archived {} storage entries below block {}",
+        "Full scan storage complete: scanned {} entries, archived {} in {} ms",
+        scannedCount.get(),
         archivedCount.get(),
-        archiveBeforeBlock);
+        durationMs);
     return archivedCount.get();
   }
 
