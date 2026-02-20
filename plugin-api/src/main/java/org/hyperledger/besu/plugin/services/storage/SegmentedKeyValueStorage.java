@@ -179,6 +179,17 @@ public interface SegmentedKeyValueStorage extends Closeable {
   boolean isClosed();
 
   /**
+   * Get an estimate of the number of keys in the specified segment. This is an approximation and
+   * may not be exact, but is useful for progress reporting during bulk operations.
+   *
+   * @param segmentIdentifier the segment to estimate key count for
+   * @return estimated number of keys, or 0 if estimation is not supported
+   */
+  default long estimateKeyCount(final SegmentIdentifier segmentIdentifier) {
+    return 0L;
+  }
+
+  /**
    * record type used to wrap responses from getNearestTo, includes the matched key and the value.
    *
    * @param key the matched (nearest) key

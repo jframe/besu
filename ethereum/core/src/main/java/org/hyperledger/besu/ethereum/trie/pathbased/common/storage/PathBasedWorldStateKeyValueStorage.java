@@ -533,6 +533,11 @@ public abstract class PathBasedWorldStateKeyValueStorage
     final AtomicInteger batchCount = new AtomicInteger(0);
     final long startTime = System.nanoTime();
 
+    // Get estimated total keys for percentage calculation
+    final long estimatedTotalKeys = composedWorldStateStorage.estimateKeyCount(ACCOUNT_INFO_STATE);
+    LOG.info(
+        "Full scan account starting: estimated {} total keys to scan", estimatedTotalKeys);
+
     // Use holder for transaction to allow reassignment
     final var txHolder =
         new Object() {
@@ -548,9 +553,15 @@ public abstract class PathBasedWorldStateKeyValueStorage
 
                 // Log progress every 100,000 entries scanned
                 if (scannedCount.get() % 100_000 == 0) {
+                  final double percentage =
+                      estimatedTotalKeys > 0
+                          ? (scannedCount.get() * 100.0 / estimatedTotalKeys)
+                          : 0;
                   LOG.info(
-                      "Full scan account progress: scanned {} entries, archived {} so far",
+                      "Full scan account progress: {}/{} ({}%), archived {} so far",
                       scannedCount.get(),
+                      estimatedTotalKeys,
+                      String.format("%.1f", percentage),
                       archivedCount.get());
                 }
 
@@ -600,6 +611,12 @@ public abstract class PathBasedWorldStateKeyValueStorage
     final AtomicInteger batchCount = new AtomicInteger(0);
     final long startTime = System.nanoTime();
 
+    // Get estimated total keys for percentage calculation
+    final long estimatedTotalKeys =
+        composedWorldStateStorage.estimateKeyCount(ACCOUNT_STORAGE_STORAGE);
+    LOG.info(
+        "Full scan storage starting: estimated {} total keys to scan", estimatedTotalKeys);
+
     final var txHolder =
         new Object() {
           SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
@@ -614,9 +631,15 @@ public abstract class PathBasedWorldStateKeyValueStorage
 
                 // Log progress every 100,000 entries scanned
                 if (scannedCount.get() % 100_000 == 0) {
+                  final double percentage =
+                      estimatedTotalKeys > 0
+                          ? (scannedCount.get() * 100.0 / estimatedTotalKeys)
+                          : 0;
                   LOG.info(
-                      "Full scan storage progress: scanned {} entries, archived {} so far",
+                      "Full scan storage progress: {}/{} ({}%), archived {} so far",
                       scannedCount.get(),
+                      estimatedTotalKeys,
+                      String.format("%.1f", percentage),
                       archivedCount.get());
                 }
 

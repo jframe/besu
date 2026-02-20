@@ -493,6 +493,17 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   }
 
   @Override
+  public long estimateKeyCount(final SegmentIdentifier segmentIdentifier) {
+    try {
+      return getDB()
+          .getLongProperty(safeColumnHandle(segmentIdentifier), "rocksdb.estimate-num-keys");
+    } catch (RocksDBException e) {
+      LOG.debug("Failed to estimate key count for segment {}", segmentIdentifier.getName(), e);
+      return 0L;
+    }
+  }
+
+  @Override
   public Set<byte[]> getAllKeysThat(
       final SegmentIdentifier segmentIdentifier, final Predicate<byte[]> returnCondition) {
     return stream(segmentIdentifier)
