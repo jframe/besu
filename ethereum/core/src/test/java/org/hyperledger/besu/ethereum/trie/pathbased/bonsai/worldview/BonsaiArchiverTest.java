@@ -299,4 +299,114 @@ class BonsaiArchiverTest {
         storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_ARCHIVE).count();
     assertThat(archiveCount).isEqualTo(3);
   }
+
+  @Test
+  void fullScanAndBatchedArchiving_produceSameResults() {
+    // This integration test verifies that full scan archiving and batched (TrieLog-driven)
+    // archiving produce equivalent results
+
+    // Create two separate storage instances with identical data
+    BonsaiWorldStateKeyValueStorage storage1 =
+        spy(
+            new BonsaiWorldStateKeyValueStorage(
+                new InMemoryKeyValueStorageProvider(),
+                new NoOpMetricsSystem(),
+                DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG));
+    storage1.upgradeToFullFlatDbMode();
+
+    BonsaiWorldStateKeyValueStorage storage2 =
+        spy(
+            new BonsaiWorldStateKeyValueStorage(
+                new InMemoryKeyValueStorageProvider(),
+                new NoOpMetricsSystem(),
+                DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG));
+    storage2.upgradeToFullFlatDbMode();
+
+    // Same test data for both
+    final Address testAddress =
+        Address.fromHexString("0x7777777777777777777777777777777777777777");
+    final Hash accountHash = testAddress.addressHash();
+    final Bytes32 value1 = Bytes32.fromHexString("0x1111111111111111111111111111111111111111111111111111111111111111");
+    final Bytes32 value2 = Bytes32.fromHexString("0x2222222222222222222222222222222222222222222222222222222222222222");
+    final Bytes32 value3 = Bytes32.fromHexString("0x3333333333333333333333333333333333333333333333333333333333333333");
+
+    // Write same data to both storages at blocks 10, 20, 30
+    for (BonsaiWorldStateKeyValueStorage s : new BonsaiWorldStateKeyValueStorage[] {storage1, storage2}) {
+      // Block 10
+      SegmentedKeyValueStorageTransaction tx1 = s.getComposedWorldStateStorage().startTransaction();
+      tx1.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(10).toArrayUnsafe());
+      tx1.commit();
+      s.updater().putAccountInfoState(accountHash, value1).commit();
+
+      // Block 20
+      SegmentedKeyValueStorageTransaction tx2 = s.getComposedWorldStateStorage().startTransaction();
+      tx2.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(20).toArrayUnsafe());
+      tx2.commit();
+      s.updater().putAccountInfoState(accountHash, value2).commit();
+
+      // Block 30
+      SegmentedKeyValueStorageTransaction tx3 = s.getComposedWorldStateStorage().startTransaction();
+      tx3.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(30).toArrayUnsafe());
+      tx3.commit();
+      s.updater().putAccountInfoState(accountHash, value3).commit();
+    }
+
+    // Archive entries before block 25 using FULL SCAN on storage1
+    int fullScanArchived = storage1.archiveAccountStateByFullScan(25L, 1000);
+
+    // Archive entries before block 25 using BATCHED method on storage2
+    // This simulates TrieLog-driven archiving for specific accounts
+    final BlockHeader header = blockBuilder.number(25).buildHeader();
+    SegmentedKeyValueStorageTransaction batchTx = storage2.getComposedWorldStateStorage().startTransaction();
+    int batchedArchived = storage2.archivePreviousAccountStateBatched(batchTx, header, accountHash);
+    batchTx.commit();
+
+    // Both methods should archive the same number of entries (blocks 10, 20 = 2 entries)
+    assertThat(fullScanArchived).isEqualTo(2);
+    assertThat(batchedArchived).isEqualTo(1); // Batched method processes one entry at a time
+
+    // Both storages should have same count in live segment (block 30 only)
+    long live1 = storage1.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
+        .count();
+    long live2 = storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
+        .count();
+
+    // Full scan archived 2 entries (blocks 10, 20), leaving 1 (block 30)
+    assertThat(live1).isEqualTo(1);
+    // Batched only archived 1 entry per call (need multiple calls for multiple entries)
+    // So it has 2 remaining (blocks 20, 30)
+    assertThat(live2).isEqualTo(2);
+
+    // For full equivalence test, we need to call batched multiple times
+    // Let's do another batched call
+    SegmentedKeyValueStorageTransaction batchTx2 = storage2.getComposedWorldStateStorage().startTransaction();
+    storage2.archivePreviousAccountStateBatched(batchTx2, header, accountHash);
+    batchTx2.commit();
+
+    // Now both should have same live count
+    long live2After = storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
+        .count();
+    assertThat(live2After).isEqualTo(1);
+
+    // Both storages should have same count in archive segment
+    long archive1 = storage1.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
+        .count();
+    long archive2 = storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
+        .count();
+    assertThat(archive1).isEqualTo(2);
+    assertThat(archive2).isEqualTo(2);
+
+    // Clean up
+    try {
+      storage1.close();
+      storage2.close();
+    } catch (Exception e) {
+      // Ignore close exceptions in test
+    }
+  }
 }
