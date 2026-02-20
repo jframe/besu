@@ -21,6 +21,7 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBa
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -31,7 +32,6 @@ import java.util.Arrays;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -213,8 +213,7 @@ public class BonsaiArchiveFlatDbStrategyTest {
   void extractBlockNumber_handlesZero() {
     byte[] hash = new byte[32];
     byte[] key =
-        BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(
-            new BonsaiContext(0L), hash);
+        BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix(new BonsaiContext(0L), hash);
 
     long extracted = BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(key);
 

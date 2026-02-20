@@ -416,8 +416,8 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   }
 
   /**
-   * Extract the block number from an archive key. Key format: [hash (32 bytes for account, 64
-   * bytes for storage)][blockNumber (8 bytes big-endian)]
+   * Extract the block number from an archive key. Key format: [hash (32 bytes for account, 64 bytes
+   * for storage)][blockNumber (8 bytes big-endian)]
    *
    * @param key the archive key
    * @return the block number encoded in the key
