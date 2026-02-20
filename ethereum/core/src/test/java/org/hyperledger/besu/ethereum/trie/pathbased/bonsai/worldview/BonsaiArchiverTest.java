@@ -240,17 +240,43 @@ class BonsaiArchiverTest {
 
   @Test
   void archiveAccountStateByFullScan_respectsBatchSize() {
-    // Setup: Create 10 accounts with data at block 5
+    // Setup: Create 10 accounts, each with 2 versions (at block 5 and block 50)
+    // This gives us 10 entries to archive (block 5 versions) and 10 to keep (block 50 versions)
+    for (int i = 0; i < 10; i++) {
+      Address addr = Address.fromHexString(String.format("0x%040d", i));
+      // First version at block 5
+      updateStorageArchiveBlock(5);
+      storage.updater().putAccountInfoState(addr.addressHash(), Bytes32.random()).commit();
+      // Second version at block 50
+      updateStorageArchiveBlock(50);
+      storage.updater().putAccountInfoState(addr.addressHash(), Bytes32.random()).commit();
+    }
+
+    // Archive with batch size of 3 - should archive the 10 older entries (block 5 versions)
+    // keeping the 10 most recent entries (block 50 versions) in live segment
+    int archived = storage.archiveAccountStateByFullScan(100L, 3);
+
+    assertThat(archived).isEqualTo(10);
+  }
+
+  @Test
+  void archiveAccountStateByFullScan_preservesMostRecentEntry() {
+    // Setup: Create 10 accounts with ONLY ONE entry each at block 5
+    // These should NOT be archived because they are the most recent (and only) entry
     updateStorageArchiveBlock(5);
     for (int i = 0; i < 10; i++) {
       Address addr = Address.fromHexString(String.format("0x%040d", i));
       storage.updater().putAccountInfoState(addr.addressHash(), Bytes32.random()).commit();
     }
 
-    // Archive with batch size of 3 - should still archive all 10
+    // Try to archive - should archive 0 because each entry is the most recent for its account
     int archived = storage.archiveAccountStateByFullScan(100L, 3);
 
-    assertThat(archived).isEqualTo(10);
+    assertThat(archived).isEqualTo(0);
+
+    // All entries should still be in the live segment
+    long countAfter = storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE).count();
+    assertThat(countAfter).isEqualTo(10);
   }
 
   @Test

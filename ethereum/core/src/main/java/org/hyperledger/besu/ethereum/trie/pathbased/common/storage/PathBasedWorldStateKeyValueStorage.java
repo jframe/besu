@@ -41,6 +41,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.util.Subscribers;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.NavigableMap;
 import java.util.Optional;
@@ -519,29 +520,44 @@ public abstract class PathBasedWorldStateKeyValueStorage
     }
   }
 
+  /** Account hash is the first 32 bytes of the key. */
+  private static final int ACCOUNT_HASH_LENGTH = 32;
+
+  /** Storage slot key is 64 bytes (32 byte account hash + 32 byte slot hash). */
+  private static final int STORAGE_SLOT_KEY_LENGTH = 64;
+
   /**
    * Archive all account state entries older than the specified block using a full sequential scan.
    * This is more efficient than per-account seeking for bulk archiving operations.
    *
-   * @param archiveBeforeBlock entries with blockNumber < this will be archived
+   * <p>IMPORTANT: This method preserves the most recent entry for each account hash in the live
+   * segment. Only older historical entries are moved to archive. This ensures that accounts which
+   * have never changed still have their current state accessible in the live segment.
+   *
+   * @param archiveBeforeBlock entries with blockNumber < this will be archived (if not most recent)
    * @param batchSize commit transaction after this many entries
    * @return total entries archived
    */
   public int archiveAccountStateByFullScan(final long archiveBeforeBlock, final int batchSize) {
-    final AtomicInteger archivedCount = new AtomicInteger(0);
-    final AtomicInteger scannedCount = new AtomicInteger(0);
-    final AtomicInteger batchCount = new AtomicInteger(0);
     final long startTime = System.nanoTime();
 
     // Get estimated total keys for percentage calculation
     final long estimatedTotalKeys = composedWorldStateStorage.estimateKeyCount(ACCOUNT_INFO_STATE);
-    LOG.info(
-        "Full scan account starting: estimated {} total keys to scan", estimatedTotalKeys);
+    LOG.info("Full scan account starting: estimated {} total keys to scan", estimatedTotalKeys);
 
-    // Use holder for transaction to allow reassignment
-    final var txHolder =
+    // Use holder for mutable state within lambda
+    final var state =
         new Object() {
           SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
+          int archivedCount = 0;
+          int scannedCount = 0;
+          int batchCount = 0;
+          int skippedAsMostRecent = 0;
+          // Track previous entry to determine if it's the most recent for its hash
+          byte[] prevKey = null;
+          byte[] prevValue = null;
+          byte[] prevHash = null;
+          long prevBlockNumber = -1;
         };
 
     try {
@@ -549,40 +565,63 @@ public abstract class PathBasedWorldStateKeyValueStorage
           .stream(ACCOUNT_INFO_STATE)
           .forEach(
               entry -> {
-                scannedCount.incrementAndGet();
+                state.scannedCount++;
+
+                // Extract current entry's hash (first 32 bytes)
+                final byte[] currentHash = new byte[ACCOUNT_HASH_LENGTH];
+                System.arraycopy(entry.getKey(), 0, currentHash, 0, ACCOUNT_HASH_LENGTH);
+
+                // If we have a previous entry and it has the SAME hash as current,
+                // then previous is NOT the most recent - safe to archive it
+                if (state.prevKey != null && Arrays.equals(state.prevHash, currentHash)) {
+                  // Previous entry is not the most recent for this hash
+                  if (state.prevBlockNumber < archiveBeforeBlock) {
+                    state.tx.remove(ACCOUNT_INFO_STATE, state.prevKey);
+                    state.tx.put(ACCOUNT_INFO_STATE_ARCHIVE, state.prevKey, state.prevValue);
+                    state.archivedCount++;
+
+                    if (++state.batchCount >= batchSize) {
+                      state.tx.commit();
+                      state.batchCount = 0;
+                      state.tx = composedWorldStateStorage.startTransaction();
+                    }
+                  }
+                } else if (state.prevKey != null) {
+                  // Hash changed - previous entry was the most recent for its hash
+                  // Do NOT archive it, even if below threshold
+                  state.skippedAsMostRecent++;
+                }
 
                 // Log progress every 100,000 entries scanned
-                if (scannedCount.get() % 100_000 == 0) {
+                if (state.scannedCount % 100_000 == 0) {
                   final double percentage =
                       estimatedTotalKeys > 0
-                          ? (scannedCount.get() * 100.0 / estimatedTotalKeys)
+                          ? (state.scannedCount * 100.0 / estimatedTotalKeys)
                           : 0;
                   LOG.info(
-                      "Full scan account progress: {}/{} ({}%), archived {} so far",
-                      scannedCount.get(),
+                      "Full scan account progress: {}/{} ({}%), archived {}, kept {} as most recent",
+                      state.scannedCount,
                       estimatedTotalKeys,
                       String.format("%.1f", percentage),
-                      archivedCount.get());
+                      state.archivedCount,
+                      state.skippedAsMostRecent);
                 }
 
-                long blockNumber =
+                // Update previous entry tracking
+                state.prevKey = entry.getKey();
+                state.prevValue = entry.getValue();
+                state.prevHash = currentHash;
+                state.prevBlockNumber =
                     BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(entry.getKey());
-
-                if (blockNumber < archiveBeforeBlock) {
-                  txHolder.tx.remove(ACCOUNT_INFO_STATE, entry.getKey());
-                  txHolder.tx.put(ACCOUNT_INFO_STATE_ARCHIVE, entry.getKey(), entry.getValue());
-                  archivedCount.incrementAndGet();
-
-                  if (batchCount.incrementAndGet() >= batchSize) {
-                    txHolder.tx.commit();
-                    batchCount.set(0);
-                    txHolder.tx = composedWorldStateStorage.startTransaction();
-                  }
-                }
               });
 
+      // Don't archive the last entry - it's the most recent for its hash
+      if (state.prevKey != null) {
+        state.skippedAsMostRecent++;
+      }
+
       // Commit any remaining entries
-      txHolder.tx.commit();
+      state.tx.commit();
 
     } catch (Exception e) {
       LOG.error("Error during full scan account archiving", e);
@@ -590,36 +629,47 @@ public abstract class PathBasedWorldStateKeyValueStorage
 
     long durationMs = (System.nanoTime() - startTime) / 1_000_000;
     LOG.info(
-        "Full scan account complete: scanned {} entries, archived {} in {} ms",
-        scannedCount.get(),
-        archivedCount.get(),
+        "Full scan account complete: scanned {} entries, archived {}, kept {} as most recent, in {} ms",
+        state.scannedCount,
+        state.archivedCount,
+        state.skippedAsMostRecent,
         durationMs);
-    return archivedCount.get();
+    return state.archivedCount;
   }
 
   /**
    * Archive all storage state entries older than the specified block using a full sequential scan.
    * This is more efficient than per-slot seeking for bulk archiving operations.
    *
-   * @param archiveBeforeBlock entries with blockNumber < this will be archived
+   * <p>IMPORTANT: This method preserves the most recent entry for each storage slot in the live
+   * segment. Only older historical entries are moved to archive. This ensures that storage slots
+   * which have never changed still have their current state accessible in the live segment.
+   *
+   * @param archiveBeforeBlock entries with blockNumber < this will be archived (if not most recent)
    * @param batchSize commit transaction after this many entries
    * @return total entries archived
    */
   public int archiveStorageStateByFullScan(final long archiveBeforeBlock, final int batchSize) {
-    final AtomicInteger archivedCount = new AtomicInteger(0);
-    final AtomicInteger scannedCount = new AtomicInteger(0);
-    final AtomicInteger batchCount = new AtomicInteger(0);
     final long startTime = System.nanoTime();
 
     // Get estimated total keys for percentage calculation
     final long estimatedTotalKeys =
         composedWorldStateStorage.estimateKeyCount(ACCOUNT_STORAGE_STORAGE);
-    LOG.info(
-        "Full scan storage starting: estimated {} total keys to scan", estimatedTotalKeys);
+    LOG.info("Full scan storage starting: estimated {} total keys to scan", estimatedTotalKeys);
 
-    final var txHolder =
+    // Use holder for mutable state within lambda
+    final var state =
         new Object() {
           SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
+          int archivedCount = 0;
+          int scannedCount = 0;
+          int batchCount = 0;
+          int skippedAsMostRecent = 0;
+          // Track previous entry to determine if it's the most recent for its slot
+          byte[] prevKey = null;
+          byte[] prevValue = null;
+          byte[] prevSlotKey = null; // 64 bytes: accountHash + slotHash
+          long prevBlockNumber = -1;
         };
 
     try {
@@ -627,39 +677,63 @@ public abstract class PathBasedWorldStateKeyValueStorage
           .stream(ACCOUNT_STORAGE_STORAGE)
           .forEach(
               entry -> {
-                scannedCount.incrementAndGet();
+                state.scannedCount++;
+
+                // Extract current entry's slot key (first 64 bytes: accountHash + slotHash)
+                final byte[] currentSlotKey = new byte[STORAGE_SLOT_KEY_LENGTH];
+                System.arraycopy(entry.getKey(), 0, currentSlotKey, 0, STORAGE_SLOT_KEY_LENGTH);
+
+                // If we have a previous entry and it has the SAME slot key as current,
+                // then previous is NOT the most recent - safe to archive it
+                if (state.prevKey != null && Arrays.equals(state.prevSlotKey, currentSlotKey)) {
+                  // Previous entry is not the most recent for this slot
+                  if (state.prevBlockNumber < archiveBeforeBlock) {
+                    state.tx.remove(ACCOUNT_STORAGE_STORAGE, state.prevKey);
+                    state.tx.put(ACCOUNT_STORAGE_ARCHIVE, state.prevKey, state.prevValue);
+                    state.archivedCount++;
+
+                    if (++state.batchCount >= batchSize) {
+                      state.tx.commit();
+                      state.batchCount = 0;
+                      state.tx = composedWorldStateStorage.startTransaction();
+                    }
+                  }
+                } else if (state.prevKey != null) {
+                  // Slot key changed - previous entry was the most recent for its slot
+                  // Do NOT archive it, even if below threshold
+                  state.skippedAsMostRecent++;
+                }
 
                 // Log progress every 100,000 entries scanned
-                if (scannedCount.get() % 100_000 == 0) {
+                if (state.scannedCount % 100_000 == 0) {
                   final double percentage =
                       estimatedTotalKeys > 0
-                          ? (scannedCount.get() * 100.0 / estimatedTotalKeys)
+                          ? (state.scannedCount * 100.0 / estimatedTotalKeys)
                           : 0;
                   LOG.info(
-                      "Full scan storage progress: {}/{} ({}%), archived {} so far",
-                      scannedCount.get(),
+                      "Full scan storage progress: {}/{} ({}%), archived {}, kept {} as most recent",
+                      state.scannedCount,
                       estimatedTotalKeys,
                       String.format("%.1f", percentage),
-                      archivedCount.get());
+                      state.archivedCount,
+                      state.skippedAsMostRecent);
                 }
 
-                long blockNumber =
+                // Update previous entry tracking
+                state.prevKey = entry.getKey();
+                state.prevValue = entry.getValue();
+                state.prevSlotKey = currentSlotKey;
+                state.prevBlockNumber =
                     BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(entry.getKey());
-
-                if (blockNumber < archiveBeforeBlock) {
-                  txHolder.tx.remove(ACCOUNT_STORAGE_STORAGE, entry.getKey());
-                  txHolder.tx.put(ACCOUNT_STORAGE_ARCHIVE, entry.getKey(), entry.getValue());
-                  archivedCount.incrementAndGet();
-
-                  if (batchCount.incrementAndGet() >= batchSize) {
-                    txHolder.tx.commit();
-                    batchCount.set(0);
-                    txHolder.tx = composedWorldStateStorage.startTransaction();
-                  }
-                }
               });
 
-      txHolder.tx.commit();
+      // Don't archive the last entry - it's the most recent for its slot
+      if (state.prevKey != null) {
+        state.skippedAsMostRecent++;
+      }
+
+      // Commit any remaining entries
+      state.tx.commit();
 
     } catch (Exception e) {
       LOG.error("Error during full scan storage archiving", e);
@@ -667,11 +741,12 @@ public abstract class PathBasedWorldStateKeyValueStorage
 
     long durationMs = (System.nanoTime() - startTime) / 1_000_000;
     LOG.info(
-        "Full scan storage complete: scanned {} entries, archived {} in {} ms",
-        scannedCount.get(),
-        archivedCount.get(),
+        "Full scan storage complete: scanned {} entries, archived {}, kept {} as most recent, in {} ms",
+        state.scannedCount,
+        state.archivedCount,
+        state.skippedAsMostRecent,
         durationMs);
-    return archivedCount.get();
+    return state.archivedCount;
   }
 
   public Optional<Long> getLatestArchivedBlock() {
