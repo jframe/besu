@@ -65,6 +65,10 @@ public class BonsaiArchiver implements BlockAddedObserver {
   private static final int PROGRESS_LOG_INTERVAL = 100;
 
   private static final int DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE = 10;
+
+  /** Threshold of pending blocks above which full scan is used instead of TrieLog-driven. */
+  private static final long FULL_SCAN_THRESHOLD = 10_000;
+
   private final TrieLogManager trieLogManager;
   protected final MetricsSystem metricsSystem;
 
@@ -369,38 +373,57 @@ public class BonsaiArchiver implements BlockAddedObserver {
 
   /**
    * Manually trigger archiving process asynchronously. This is safe to call multiple times - if
-   * archiving is already in progress, the new invocation will exit gracefully.
+   * archiving is already in progress, the new invocation will exit gracefully. Uses hybrid
+   * strategy: full scan for bulk catch-up, TrieLog-driven for incremental updates.
    */
   public void triggerArchiving() {
-    LOG.atInfo().setMessage("Archiver: Manual trigger requested").log();
+    triggerArchiving(false);
+  }
+
+  /**
+   * Manually trigger archiving process asynchronously with option to force full scan mode.
+   *
+   * @param forceFullScan if true, always use full scan; if false, auto-select based on pending
+   *     blocks
+   */
+  public void triggerArchiving(final boolean forceFullScan) {
+    LOG.info("Archiver: Manual trigger requested (forceFullScan={})", forceFullScan);
     executeAsync.accept(
         () -> {
           if (archiveMutex.tryLock()) {
-            LOG.atInfo().setMessage("Archiver: Manual trigger - acquired lock, starting").log();
+            LOG.info("Archiver: Manual trigger - acquired lock, starting");
             try {
-              // Loop until all pending blocks are archived
-              int totalBlocksProcessed = 0;
-              int batchBlocksProcessed;
-              while ((batchBlocksProcessed = moveBlockStateToArchive()) > 0) {
-                totalBlocksProcessed += batchBlocksProcessed;
-                LOG.atInfo()
-                    .setMessage(
-                        "Archiver: Manual trigger - batch completed, {} blocks processed so far, {} blocks pending")
-                    .addArgument(totalBlocksProcessed)
-                    .addArgument(getPendingBlocksCount())
-                    .log();
+              initialize();
+              long pendingBlocks = getPendingBlocksCount();
+
+              if (forceFullScan || pendingBlocks > FULL_SCAN_THRESHOLD) {
+                LOG.info(
+                    "Archiver: {} blocks pending, using full scan strategy",
+                    pendingBlocks);
+                int totalArchived = moveBlockStateToArchiveByFullScan();
+                LOG.info("Archiver: Full scan completed, {} entries archived", totalArchived);
+              } else {
+                LOG.info(
+                    "Archiver: {} blocks pending, using TrieLog-driven strategy",
+                    pendingBlocks);
+                int totalBlocksProcessed = 0;
+                int batchBlocksProcessed;
+                while ((batchBlocksProcessed = moveBlockStateToArchive()) > 0) {
+                  totalBlocksProcessed += batchBlocksProcessed;
+                  LOG.info(
+                      "Archiver: Manual trigger - batch completed, {} blocks processed so far, {} blocks pending",
+                      totalBlocksProcessed,
+                      getPendingBlocksCount());
+                }
+                LOG.info(
+                    "Archiver: Manual trigger - completed, {} total blocks processed",
+                    totalBlocksProcessed);
               }
-              LOG.atInfo()
-                  .setMessage("Archiver: Manual trigger - completed, {} total blocks processed")
-                  .addArgument(totalBlocksProcessed)
-                  .log();
             } finally {
               archiveMutex.unlock();
             }
           } else {
-            LOG.atInfo()
-                .setMessage("Archiver: Manual trigger - skipped, archiving already in progress")
-                .log();
+            LOG.info("Archiver: Manual trigger - skipped, archiving already in progress");
           }
         });
   }
