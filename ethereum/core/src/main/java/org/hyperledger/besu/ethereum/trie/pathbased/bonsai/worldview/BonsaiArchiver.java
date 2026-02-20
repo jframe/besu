@@ -56,13 +56,13 @@ public class BonsaiArchiver implements BlockAddedObserver {
   private final Consumer<Runnable> executeAsync;
 
   /** Maximum blocks to archive per invocation. */
-  private static final int CATCHUP_LIMIT = 5_000;
+  private static final int CATCHUP_LIMIT = 500;
 
   /** Entries to accumulate before committing a batch transaction. */
-  private static final int BATCH_SIZE = 10_000;
+  private static final int BATCH_SIZE = 500;
 
   /** Log archiving progress every N blocks. */
-  private static final int PROGRESS_LOG_INTERVAL = 1_000;
+  private static final int PROGRESS_LOG_INTERVAL = 100;
 
   private static final int DISTANCE_FROM_HEAD_BEFORE_ARCHIVING_OLD_STATE = 10;
   private final TrieLogManager trieLogManager;
@@ -333,7 +333,22 @@ public class BonsaiArchiver implements BlockAddedObserver {
           if (archiveMutex.tryLock()) {
             LOG.atInfo().setMessage("Archiver: Manual trigger - acquired lock, starting").log();
             try {
-              moveBlockStateToArchive();
+              // Loop until all pending blocks are archived
+              int totalBlocksProcessed = 0;
+              int batchBlocksProcessed;
+              while ((batchBlocksProcessed = moveBlockStateToArchive()) > 0) {
+                totalBlocksProcessed += batchBlocksProcessed;
+                LOG.atInfo()
+                    .setMessage(
+                        "Archiver: Manual trigger - batch completed, {} blocks processed so far, {} blocks pending")
+                    .addArgument(totalBlocksProcessed)
+                    .addArgument(getPendingBlocksCount())
+                    .log();
+              }
+              LOG.atInfo()
+                  .setMessage("Archiver: Manual trigger - completed, {} total blocks processed")
+                  .addArgument(totalBlocksProcessed)
+                  .log();
             } finally {
               archiveMutex.unlock();
             }
