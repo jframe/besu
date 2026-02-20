@@ -17,6 +17,8 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.mockito.Mockito.spy;
@@ -184,5 +186,84 @@ class BonsaiArchiverTest {
 
     // Verify the test ran (even if no entries archived from empty storage)
     assertThat(totalArchived).isGreaterThanOrEqualTo(0);
+  }
+
+  @Test
+  void archiveAccountStateByFullScan_archivesEntriesBelowThreshold() {
+    // Setup: Create account data at multiple blocks
+    final Address testAddress =
+        Address.fromHexString("0x4444444444444444444444444444444444444444");
+    final Hash accountHash = testAddress.addressHash();
+
+    // Write state at blocks 10, 20, 30, 40
+    for (long block : new long[] {10L, 20L, 30L, 40L}) {
+      updateStorageArchiveBlock(block);
+      storage.updater().putAccountInfoState(accountHash, Bytes32.random()).commit();
+    }
+
+    // Count entries before
+    long countBefore =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(countBefore).isEqualTo(4);
+
+    // Archive everything before block 35
+    int archived = storage.archiveAccountStateByFullScan(35L, 1000);
+
+    // Should archive blocks 10, 20, 30 (3 entries)
+    assertThat(archived).isEqualTo(3);
+
+    // Verify only block 40 remains in live segment
+    long countAfter =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(countAfter).isEqualTo(1);
+
+    // Verify 3 entries in archive
+    long archiveCount =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(archiveCount).isEqualTo(3);
+  }
+
+  @Test
+  void archiveAccountStateByFullScan_respectsBatchSize() {
+    // Setup: Create 10 accounts with data at block 5
+    updateStorageArchiveBlock(5);
+    for (int i = 0; i < 10; i++) {
+      Address addr = Address.fromHexString(String.format("0x%040d", i));
+      storage.updater().putAccountInfoState(addr.addressHash(), Bytes32.random()).commit();
+    }
+
+    // Archive with batch size of 3 - should still archive all 10
+    int archived = storage.archiveAccountStateByFullScan(100L, 3);
+
+    assertThat(archived).isEqualTo(10);
+  }
+
+  @Test
+  void archiveAccountStateByFullScan_returnsZeroWhenNothingToArchive() {
+    // Setup: Create data at block 100
+    updateStorageArchiveBlock(100);
+    final Address testAddress =
+        Address.fromHexString("0x5555555555555555555555555555555555555555");
+    storage.updater().putAccountInfoState(testAddress.addressHash(), Bytes32.random()).commit();
+
+    // Try to archive before block 50 - nothing qualifies
+    int archived = storage.archiveAccountStateByFullScan(50L, 1000);
+
+    assertThat(archived).isEqualTo(0);
   }
 }
