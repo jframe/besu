@@ -323,9 +323,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
         SegmentedKeyValueStorage.NearestKeyValue nearestKey = match.get();
         tx.remove(ACCOUNT_INFO_STATE, nearestKey.key().toArrayUnsafe());
         tx.put(
-            ACCOUNT_INFO_STATE_ARCHIVE,
-            nearestKey.key().toArrayUnsafe(),
-            nearestKey.value().get());
+            ACCOUNT_INFO_STATE_ARCHIVE, nearestKey.key().toArrayUnsafe(), nearestKey.value().get());
         archivedStateCount = 1;
       }
 
@@ -385,10 +383,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
       if (match.isPresent()) {
         SegmentedKeyValueStorage.NearestKeyValue nearestKey = match.get();
         tx.remove(ACCOUNT_STORAGE_STORAGE, nearestKey.key().toArrayUnsafe());
-        tx.put(
-            ACCOUNT_STORAGE_ARCHIVE,
-            nearestKey.key().toArrayUnsafe(),
-            nearestKey.value().get());
+        tx.put(ACCOUNT_STORAGE_ARCHIVE, nearestKey.key().toArrayUnsafe(), nearestKey.value().get());
         archivedStorageCount = 1;
       }
 
@@ -561,8 +556,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
         };
 
     try {
-      composedWorldStateStorage
-          .stream(ACCOUNT_INFO_STATE)
+      composedWorldStateStorage.stream(ACCOUNT_INFO_STATE)
           .forEach(
               entry -> {
                 state.scannedCount++;
@@ -673,8 +667,7 @@ public abstract class PathBasedWorldStateKeyValueStorage
         };
 
     try {
-      composedWorldStateStorage
-          .stream(ACCOUNT_STORAGE_STORAGE)
+      composedWorldStateStorage.stream(ACCOUNT_STORAGE_STORAGE)
           .forEach(
               entry -> {
                 state.scannedCount++;
@@ -747,6 +740,204 @@ public abstract class PathBasedWorldStateKeyValueStorage
         state.skippedAsMostRecent,
         durationMs);
     return state.archivedCount;
+  }
+
+  /**
+   * Repair account state by restoring entries that were incorrectly archived by the buggy full
+   * scan. This scans the archive segment and for each unique account hash, checks if there's an
+   * entry in the live segment. If not, copies the most recent entry from archive to live.
+   *
+   * @param batchSize commit transaction after this many entries
+   * @return number of entries restored to live segment
+   */
+  public int repairAccountStateFromArchive(final int batchSize) {
+    final long startTime = System.nanoTime();
+    LOG.info("Starting account state repair from archive...");
+
+    int repairedCount = 0;
+    int scannedCount = 0;
+    int batchCount = 0;
+    byte[] prevHash = null;
+    byte[] mostRecentKey = null;
+    byte[] mostRecentValue = null;
+    long mostRecentBlock = -1;
+
+    SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
+
+    try {
+      var iterator = composedWorldStateStorage.stream(ACCOUNT_INFO_STATE_ARCHIVE).iterator();
+
+      while (iterator.hasNext()) {
+        var entry = iterator.next();
+        scannedCount++;
+
+        // Extract hash (first 32 bytes)
+        final byte[] currentHash = new byte[ACCOUNT_HASH_LENGTH];
+        System.arraycopy(entry.getKey(), 0, currentHash, 0, ACCOUNT_HASH_LENGTH);
+        final long currentBlock =
+            BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(entry.getKey());
+
+        if (prevHash != null && !Arrays.equals(prevHash, currentHash)) {
+          // Hash changed - check if previous hash needs repair
+          if (mostRecentKey != null
+              && !existsInLiveSegment(prevHash, ACCOUNT_INFO_STATE, ACCOUNT_HASH_LENGTH)) {
+            tx.put(ACCOUNT_INFO_STATE, mostRecentKey, mostRecentValue);
+            repairedCount++;
+            if (++batchCount >= batchSize) {
+              tx.commit();
+              batchCount = 0;
+              tx = composedWorldStateStorage.startTransaction();
+            }
+          }
+          // Reset for new hash
+          mostRecentKey = null;
+          mostRecentValue = null;
+          mostRecentBlock = -1;
+        }
+
+        // Track most recent for current hash
+        if (mostRecentKey == null || currentBlock > mostRecentBlock) {
+          mostRecentKey = entry.getKey();
+          mostRecentValue = entry.getValue();
+          mostRecentBlock = currentBlock;
+        }
+
+        prevHash = currentHash;
+
+        if (scannedCount % 100_000 == 0) {
+          LOG.info(
+              "Account repair progress: scanned {} archive entries, repaired {} so far",
+              scannedCount,
+              repairedCount);
+        }
+      }
+
+      // Check the last hash
+      if (prevHash != null
+          && mostRecentKey != null
+          && !existsInLiveSegment(prevHash, ACCOUNT_INFO_STATE, ACCOUNT_HASH_LENGTH)) {
+        tx.put(ACCOUNT_INFO_STATE, mostRecentKey, mostRecentValue);
+        repairedCount++;
+      }
+
+      tx.commit();
+
+    } catch (Exception e) {
+      LOG.error("Error during account state repair", e);
+    }
+
+    long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+    LOG.info(
+        "Account repair complete: scanned {} archive entries, repaired {} in {} ms",
+        scannedCount,
+        repairedCount,
+        durationMs);
+    return repairedCount;
+  }
+
+  /**
+   * Repair storage state by restoring entries that were incorrectly archived by the buggy full
+   * scan.
+   *
+   * @param batchSize commit transaction after this many entries
+   * @return number of entries restored to live segment
+   */
+  public int repairStorageStateFromArchive(final int batchSize) {
+    final long startTime = System.nanoTime();
+    LOG.info("Starting storage state repair from archive...");
+
+    int repairedCount = 0;
+    int scannedCount = 0;
+    int batchCount = 0;
+    byte[] prevSlotKey = null;
+    byte[] mostRecentKey = null;
+    byte[] mostRecentValue = null;
+    long mostRecentBlock = -1;
+
+    SegmentedKeyValueStorageTransaction tx = composedWorldStateStorage.startTransaction();
+
+    try {
+      var iterator = composedWorldStateStorage.stream(ACCOUNT_STORAGE_ARCHIVE).iterator();
+
+      while (iterator.hasNext()) {
+        var entry = iterator.next();
+        scannedCount++;
+
+        // Extract slot key (first 64 bytes)
+        final byte[] currentSlotKey = new byte[STORAGE_SLOT_KEY_LENGTH];
+        System.arraycopy(entry.getKey(), 0, currentSlotKey, 0, STORAGE_SLOT_KEY_LENGTH);
+        final long currentBlock =
+            BonsaiArchiveFlatDbStrategy.extractBlockNumberFromKey(entry.getKey());
+
+        if (prevSlotKey != null && !Arrays.equals(prevSlotKey, currentSlotKey)) {
+          // Slot changed - check if previous slot needs repair
+          if (mostRecentKey != null
+              && !existsInLiveSegment(
+                  prevSlotKey, ACCOUNT_STORAGE_STORAGE, STORAGE_SLOT_KEY_LENGTH)) {
+            tx.put(ACCOUNT_STORAGE_STORAGE, mostRecentKey, mostRecentValue);
+            repairedCount++;
+            if (++batchCount >= batchSize) {
+              tx.commit();
+              batchCount = 0;
+              tx = composedWorldStateStorage.startTransaction();
+            }
+          }
+          mostRecentKey = null;
+          mostRecentValue = null;
+          mostRecentBlock = -1;
+        }
+
+        // Track most recent for current slot
+        if (mostRecentKey == null || currentBlock > mostRecentBlock) {
+          mostRecentKey = entry.getKey();
+          mostRecentValue = entry.getValue();
+          mostRecentBlock = currentBlock;
+        }
+
+        prevSlotKey = currentSlotKey;
+
+        if (scannedCount % 100_000 == 0) {
+          LOG.info(
+              "Storage repair progress: scanned {} archive entries, repaired {} so far",
+              scannedCount,
+              repairedCount);
+        }
+      }
+
+      // Check the last slot
+      if (prevSlotKey != null
+          && mostRecentKey != null
+          && !existsInLiveSegment(prevSlotKey, ACCOUNT_STORAGE_STORAGE, STORAGE_SLOT_KEY_LENGTH)) {
+        tx.put(ACCOUNT_STORAGE_STORAGE, mostRecentKey, mostRecentValue);
+        repairedCount++;
+      }
+
+      tx.commit();
+
+    } catch (Exception e) {
+      LOG.error("Error during storage state repair", e);
+    }
+
+    long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+    LOG.info(
+        "Storage repair complete: scanned {} archive entries, repaired {} in {} ms",
+        scannedCount,
+        repairedCount,
+        durationMs);
+    return repairedCount;
+  }
+
+  private boolean existsInLiveSegment(
+      final byte[] hashOrSlotKey, final SegmentIdentifier liveSegment, final int keyLength) {
+    // Build search key with max block number to find any entry for this hash/slot
+    byte[] searchKey = new byte[keyLength + 8];
+    System.arraycopy(hashOrSlotKey, 0, searchKey, 0, keyLength);
+    Arrays.fill(searchKey, keyLength, keyLength + 8, (byte) 0xFF);
+
+    return composedWorldStateStorage
+        .getNearestBefore(liveSegment, Bytes.wrap(searchKey))
+        .filter(found -> Bytes.wrap(hashOrSlotKey).commonPrefixLength(found.key()) >= keyLength)
+        .isPresent();
   }
 
   public Optional<Long> getLatestArchivedBlock() {

@@ -191,8 +191,7 @@ class BonsaiArchiverTest {
   @Test
   void archiveAccountStateByFullScan_archivesEntriesBelowThreshold() {
     // Setup: Create account data at multiple blocks
-    final Address testAddress =
-        Address.fromHexString("0x4444444444444444444444444444444444444444");
+    final Address testAddress = Address.fromHexString("0x4444444444444444444444444444444444444444");
     final Hash accountHash = testAddress.addressHash();
 
     // Write state at blocks 10, 20, 30, 40
@@ -283,8 +282,7 @@ class BonsaiArchiverTest {
   void archiveAccountStateByFullScan_returnsZeroWhenNothingToArchive() {
     // Setup: Create data at block 100
     updateStorageArchiveBlock(100);
-    final Address testAddress =
-        Address.fromHexString("0x5555555555555555555555555555555555555555");
+    final Address testAddress = Address.fromHexString("0x5555555555555555555555555555555555555555");
     storage.updater().putAccountInfoState(testAddress.addressHash(), Bytes32.random()).commit();
 
     // Try to archive before block 50 - nothing qualifies
@@ -295,8 +293,7 @@ class BonsaiArchiverTest {
 
   @Test
   void archiveStorageStateByFullScan_archivesEntriesBelowThreshold() {
-    final Address testAddress =
-        Address.fromHexString("0x6666666666666666666666666666666666666666");
+    final Address testAddress = Address.fromHexString("0x6666666666666666666666666666666666666666");
     final Hash accountHash = testAddress.addressHash();
     final Hash slotHash = Hash.hash(Bytes.fromHexString("0x1234"));
 
@@ -307,7 +304,8 @@ class BonsaiArchiverTest {
     }
 
     // Count storage entries before
-    long countBefore = storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
+    long countBefore =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
     assertThat(countBefore).isEqualTo(4);
 
     // Archive everything before block 35
@@ -317,7 +315,8 @@ class BonsaiArchiverTest {
     assertThat(archived).isEqualTo(3);
 
     // Verify only 1 entry remains in live segment
-    long countAfter = storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
+    long countAfter =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
     assertThat(countAfter).isEqualTo(1);
 
     // Verify 3 entries in archive
@@ -349,30 +348,36 @@ class BonsaiArchiverTest {
     storage2.upgradeToFullFlatDbMode();
 
     // Same test data for both
-    final Address testAddress =
-        Address.fromHexString("0x7777777777777777777777777777777777777777");
+    final Address testAddress = Address.fromHexString("0x7777777777777777777777777777777777777777");
     final Hash accountHash = testAddress.addressHash();
-    final Bytes32 value1 = Bytes32.fromHexString("0x1111111111111111111111111111111111111111111111111111111111111111");
-    final Bytes32 value2 = Bytes32.fromHexString("0x2222222222222222222222222222222222222222222222222222222222222222");
-    final Bytes32 value3 = Bytes32.fromHexString("0x3333333333333333333333333333333333333333333333333333333333333333");
+    final Bytes32 value1 =
+        Bytes32.fromHexString("0x1111111111111111111111111111111111111111111111111111111111111111");
+    final Bytes32 value2 =
+        Bytes32.fromHexString("0x2222222222222222222222222222222222222222222222222222222222222222");
+    final Bytes32 value3 =
+        Bytes32.fromHexString("0x3333333333333333333333333333333333333333333333333333333333333333");
 
     // Write same data to both storages at blocks 10, 20, 30
-    for (BonsaiWorldStateKeyValueStorage s : new BonsaiWorldStateKeyValueStorage[] {storage1, storage2}) {
+    for (BonsaiWorldStateKeyValueStorage s :
+        new BonsaiWorldStateKeyValueStorage[] {storage1, storage2}) {
       // Block 10
       SegmentedKeyValueStorageTransaction tx1 = s.getComposedWorldStateStorage().startTransaction();
-      tx1.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(10).toArrayUnsafe());
+      tx1.put(
+          TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(10).toArrayUnsafe());
       tx1.commit();
       s.updater().putAccountInfoState(accountHash, value1).commit();
 
       // Block 20
       SegmentedKeyValueStorageTransaction tx2 = s.getComposedWorldStateStorage().startTransaction();
-      tx2.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(20).toArrayUnsafe());
+      tx2.put(
+          TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(20).toArrayUnsafe());
       tx2.commit();
       s.updater().putAccountInfoState(accountHash, value2).commit();
 
       // Block 30
       SegmentedKeyValueStorageTransaction tx3 = s.getComposedWorldStateStorage().startTransaction();
-      tx3.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(30).toArrayUnsafe());
+      tx3.put(
+          TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(30).toArrayUnsafe());
       tx3.commit();
       s.updater().putAccountInfoState(accountHash, value3).commit();
     }
@@ -383,7 +388,8 @@ class BonsaiArchiverTest {
     // Archive entries before block 25 using BATCHED method on storage2
     // This simulates TrieLog-driven archiving for specific accounts
     final BlockHeader header = blockBuilder.number(25).buildHeader();
-    SegmentedKeyValueStorageTransaction batchTx = storage2.getComposedWorldStateStorage().startTransaction();
+    SegmentedKeyValueStorageTransaction batchTx =
+        storage2.getComposedWorldStateStorage().startTransaction();
     int batchedArchived = storage2.archivePreviousAccountStateBatched(batchTx, header, accountHash);
     batchTx.commit();
 
@@ -392,12 +398,20 @@ class BonsaiArchiverTest {
     assertThat(batchedArchived).isEqualTo(1); // Batched method processes one entry at a time
 
     // Both storages should have same count in live segment (block 30 only)
-    long live1 = storage1.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
-        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
-        .count();
-    long live2 = storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
-        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
-        .count();
+    long live1 =
+        storage1.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    long live2 =
+        storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
 
     // Full scan archived 2 entries (blocks 10, 20), leaving 1 (block 30)
     assertThat(live1).isEqualTo(1);
@@ -407,23 +421,36 @@ class BonsaiArchiverTest {
 
     // For full equivalence test, we need to call batched multiple times
     // Let's do another batched call
-    SegmentedKeyValueStorageTransaction batchTx2 = storage2.getComposedWorldStateStorage().startTransaction();
+    SegmentedKeyValueStorageTransaction batchTx2 =
+        storage2.getComposedWorldStateStorage().startTransaction();
     storage2.archivePreviousAccountStateBatched(batchTx2, header, accountHash);
     batchTx2.commit();
 
     // Now both should have same live count
-    long live2After = storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
-        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
-        .count();
+    long live2After =
+        storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
     assertThat(live2After).isEqualTo(1);
 
     // Both storages should have same count in archive segment
-    long archive1 = storage1.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
-        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
-        .count();
-    long archive2 = storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
-        .filter(p -> accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey())) >= accountHash.size())
-        .count();
+    long archive1 =
+        storage1.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    long archive2 =
+        storage2.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
     assertThat(archive1).isEqualTo(2);
     assertThat(archive2).isEqualTo(2);
 
@@ -434,5 +461,277 @@ class BonsaiArchiverTest {
     } catch (Exception e) {
       // Ignore close exceptions in test
     }
+  }
+
+  @Test
+  void repairAccountStateFromArchive_restoresEntriesMissingFromLiveSegment() {
+    // Setup: Create an account with data at a single block
+    final Address testAddress = Address.fromHexString("0x8888888888888888888888888888888888888888");
+    final Hash accountHash = testAddress.addressHash();
+    final Bytes32 accountValue = Bytes32.random();
+
+    // Put account data at block 10
+    updateStorageArchiveBlock(10);
+    storage.updater().putAccountInfoState(accountHash, accountValue).commit();
+
+    // Verify the entry exists in live segment
+    long liveBefore =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(liveBefore).isEqualTo(1);
+
+    // Simulate buggy full scan: manually move the entry to archive segment
+    // This mimics what the old buggy code would have done - archive the ONLY entry
+    SegmentedKeyValueStorageTransaction moveTx =
+        storage.getComposedWorldStateStorage().startTransaction();
+
+    // Find the entry in live segment and move it to archive
+    storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+        .filter(
+            p ->
+                accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                    >= accountHash.size())
+        .forEach(
+            pair -> {
+              // Copy to archive
+              moveTx.put(ACCOUNT_INFO_STATE_ARCHIVE, pair.getKey(), pair.getValue());
+              // Remove from live
+              moveTx.remove(ACCOUNT_INFO_STATE, pair.getKey());
+            });
+    moveTx.commit();
+
+    // Verify the entry is now only in archive
+    long liveAfterMove =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(liveAfterMove).isEqualTo(0);
+
+    long archiveAfterMove =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(archiveAfterMove).isEqualTo(1);
+
+    // Run repair
+    int repaired = storage.repairAccountStateFromArchive(100);
+
+    // Should have repaired 1 entry
+    assertThat(repaired).isEqualTo(1);
+
+    // Verify the entry is now restored to live segment
+    long liveAfterRepair =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(liveAfterRepair).isEqualTo(1);
+
+    // Archive should still have the entry (repair copies, doesn't move)
+    long archiveAfterRepair =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(archiveAfterRepair).isEqualTo(1);
+  }
+
+  @Test
+  void repairAccountStateFromArchive_doesNotRestoreIfLiveEntryExists() {
+    // Setup: Create an account with data at multiple blocks
+    final Address testAddress = Address.fromHexString("0x9999999999999999999999999999999999999999");
+    final Hash accountHash = testAddress.addressHash();
+
+    // Put account data at block 10 and block 20
+    updateStorageArchiveBlock(10);
+    storage.updater().putAccountInfoState(accountHash, Bytes32.random()).commit();
+    updateStorageArchiveBlock(20);
+    storage.updater().putAccountInfoState(accountHash, Bytes32.random()).commit();
+
+    // Archive entries before block 15 (should archive block 10 entry)
+    int archived = storage.archiveAccountStateByFullScan(15L, 100);
+    assertThat(archived).isEqualTo(1);
+
+    // Verify: 1 in live (block 20), 1 in archive (block 10)
+    long liveCount =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(liveCount).isEqualTo(1);
+
+    long archiveCount =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(archiveCount).isEqualTo(1);
+
+    // Run repair - should not restore because live segment already has an entry
+    int repaired = storage.repairAccountStateFromArchive(100);
+
+    // Should have repaired 0 entries (live segment already has the account)
+    assertThat(repaired).isEqualTo(0);
+
+    // Live count should remain 1
+    long liveCountAfter =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(liveCountAfter).isEqualTo(1);
+  }
+
+  @Test
+  void repairStorageStateFromArchive_restoresEntriesMissingFromLiveSegment() {
+    // Setup: Create storage data at a single block
+    final Address testAddress = Address.fromHexString("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    final Hash accountHash = testAddress.addressHash();
+    final Hash slotHash = Hash.hash(Bytes.fromHexString("0xABCD"));
+    final Bytes32 storageValue = Bytes32.random();
+
+    // Put storage data at block 10
+    updateStorageArchiveBlock(10);
+    storage.updater().putStorageValueBySlotHash(accountHash, slotHash, storageValue).commit();
+
+    // Verify the entry exists in live segment
+    long liveBefore =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
+    assertThat(liveBefore).isEqualTo(1);
+
+    // Simulate buggy full scan: manually move the entry to archive segment
+    SegmentedKeyValueStorageTransaction moveTx =
+        storage.getComposedWorldStateStorage().startTransaction();
+
+    storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE)
+        .forEach(
+            pair -> {
+              moveTx.put(ACCOUNT_STORAGE_ARCHIVE, pair.getKey(), pair.getValue());
+              moveTx.remove(ACCOUNT_STORAGE_STORAGE, pair.getKey());
+            });
+    moveTx.commit();
+
+    // Verify the entry is now only in archive
+    long liveAfterMove =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
+    assertThat(liveAfterMove).isEqualTo(0);
+
+    long archiveAfterMove =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_ARCHIVE).count();
+    assertThat(archiveAfterMove).isEqualTo(1);
+
+    // Run repair
+    int repaired = storage.repairStorageStateFromArchive(100);
+
+    // Should have repaired 1 entry
+    assertThat(repaired).isEqualTo(1);
+
+    // Verify the entry is now restored to live segment
+    long liveAfterRepair =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE).count();
+    assertThat(liveAfterRepair).isEqualTo(1);
+  }
+
+  @Test
+  void repairAccountStateFromArchive_restoresMostRecentEntryWhenMultipleInArchive() {
+    // Setup: Create an account with data at multiple blocks, all incorrectly archived
+    final Address testAddress = Address.fromHexString("0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    final Hash accountHash = testAddress.addressHash();
+    final Bytes32 value10 =
+        Bytes32.fromHexString("0x1010101010101010101010101010101010101010101010101010101010101010");
+    final Bytes32 value20 =
+        Bytes32.fromHexString("0x2020202020202020202020202020202020202020202020202020202020202020");
+    final Bytes32 value30 =
+        Bytes32.fromHexString("0x3030303030303030303030303030303030303030303030303030303030303030");
+
+    // Put account data at blocks 10, 20, 30
+    updateStorageArchiveBlock(10);
+    storage.updater().putAccountInfoState(accountHash, value10).commit();
+    updateStorageArchiveBlock(20);
+    storage.updater().putAccountInfoState(accountHash, value20).commit();
+    updateStorageArchiveBlock(30);
+    storage.updater().putAccountInfoState(accountHash, value30).commit();
+
+    // Simulate buggy full scan: move ALL entries to archive
+    SegmentedKeyValueStorageTransaction moveTx =
+        storage.getComposedWorldStateStorage().startTransaction();
+
+    storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+        .filter(
+            p ->
+                accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                    >= accountHash.size())
+        .forEach(
+            pair -> {
+              moveTx.put(ACCOUNT_INFO_STATE_ARCHIVE, pair.getKey(), pair.getValue());
+              moveTx.remove(ACCOUNT_INFO_STATE, pair.getKey());
+            });
+    moveTx.commit();
+
+    // Verify all 3 entries are in archive, none in live
+    long liveAfterMove =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(liveAfterMove).isEqualTo(0);
+
+    long archiveAfterMove =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE_ARCHIVE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(archiveAfterMove).isEqualTo(3);
+
+    // Run repair
+    int repaired = storage.repairAccountStateFromArchive(100);
+
+    // Should have repaired 1 entry (the most recent one - block 30)
+    assertThat(repaired).isEqualTo(1);
+
+    // Verify only 1 entry is restored to live segment
+    long liveAfterRepair =
+        storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+            .filter(
+                p ->
+                    accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                        >= accountHash.size())
+            .count();
+    assertThat(liveAfterRepair).isEqualTo(1);
+
+    // Verify the restored entry has the most recent value (block 30)
+    storage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE)
+        .filter(
+            p ->
+                accountHash.getBytes().commonPrefixLength(Bytes.wrap(p.getKey()))
+                    >= accountHash.size())
+        .forEach(
+            pair -> {
+              assertThat(Bytes.wrap(pair.getValue())).isEqualTo(value30);
+            });
   }
 }

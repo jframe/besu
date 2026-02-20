@@ -397,15 +397,12 @@ public class BonsaiArchiver implements BlockAddedObserver {
               long pendingBlocks = getPendingBlocksCount();
 
               if (forceFullScan || pendingBlocks > FULL_SCAN_THRESHOLD) {
-                LOG.info(
-                    "Archiver: {} blocks pending, using full scan strategy",
-                    pendingBlocks);
+                LOG.info("Archiver: {} blocks pending, using full scan strategy", pendingBlocks);
                 int totalArchived = moveBlockStateToArchiveByFullScan();
                 LOG.info("Archiver: Full scan completed, {} entries archived", totalArchived);
               } else {
                 LOG.info(
-                    "Archiver: {} blocks pending, using TrieLog-driven strategy",
-                    pendingBlocks);
+                    "Archiver: {} blocks pending, using TrieLog-driven strategy", pendingBlocks);
                 int totalBlocksProcessed = 0;
                 int batchBlocksProcessed;
                 while ((batchBlocksProcessed = moveBlockStateToArchive()) > 0) {
@@ -457,6 +454,36 @@ public class BonsaiArchiver implements BlockAddedObserver {
                 .setMessage("Archiver: Block {} trigger - skipped, already in progress")
                 .addArgument(blockNum)
                 .log();
+          }
+        });
+  }
+
+  /**
+   * Repair state that was incorrectly archived by the buggy full scan. This scans the archive
+   * segments and restores entries to the live segment where the live segment has no entry for that
+   * account/slot.
+   *
+   * <p>This should be run once on nodes that used the buggy full scan archiving.
+   */
+  public void triggerRepair() {
+    LOG.info("Archiver: Repair requested");
+    executeAsync.accept(
+        () -> {
+          if (archiveMutex.tryLock()) {
+            LOG.info("Archiver: Repair - acquired lock, starting");
+            try {
+              int accountsRepaired =
+                  rootWorldStateStorage.repairAccountStateFromArchive(BATCH_SIZE);
+              int storageRepaired = rootWorldStateStorage.repairStorageStateFromArchive(BATCH_SIZE);
+              LOG.info(
+                  "Archiver: Repair completed - {} accounts, {} storage entries restored",
+                  accountsRepaired,
+                  storageRepaired);
+            } finally {
+              archiveMutex.unlock();
+            }
+          } else {
+            LOG.info("Archiver: Repair - skipped, archiving already in progress");
           }
         });
   }
