@@ -95,6 +95,12 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private static final String SNAP_FLAT_STORAGE_HEALED_COUNT_PER_REQUEST_FLAG =
       "--Xsnapsync-synchronizer-flat-slot-healed-count-per-request";
 
+  private static final String SNAP_FLAT_DB_HEAL_RANGE_COUNT_FLAG =
+      "--Xsnapsync-synchronizer-flat-db-heal-range-count";
+
+  private static final String SNAP_FLAT_DB_HEAL_MAX_OUTSTANDING_REQUESTS_FLAG =
+      "--Xsnapsync-synchronizer-flat-db-heal-max-outstanding-requests";
+
   private static final String CHECKPOINT_POST_MERGE_FLAG = "--Xcheckpoint-post-merge-enabled";
 
   private static final String SNAP_SYNC_SAVE_PRE_CHECKPOINT_HEADERS_ONLY_FLAG =
@@ -341,6 +347,23 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       SnapSyncConfiguration.DEFAULT_LOCAL_FLAT_STORAGE_COUNT_TO_HEAL_PER_REQUEST;
 
   @CommandLine.Option(
+      names = SNAP_FLAT_DB_HEAL_RANGE_COUNT_FLAG,
+      hidden = true,
+      paramLabel = "<INTEGER>",
+      description =
+          "Number of initial account ranges generated at the start of flat DB heal (default: ${DEFAULT-VALUE})")
+  private int snapsyncFlatDbHealRangeCount = SnapSyncConfiguration.DEFAULT_FLAT_DB_HEAL_RANGE_COUNT;
+
+  @CommandLine.Option(
+      names = SNAP_FLAT_DB_HEAL_MAX_OUTSTANDING_REQUESTS_FLAG,
+      hidden = true,
+      paramLabel = "<INTEGER>",
+      description =
+          "Max concurrent requests for flat DB heal pipelines (default: ${DEFAULT-VALUE})")
+  private int snapsyncFlatDbHealMaxOutstandingRequests =
+      SnapSyncConfiguration.DEFAULT_FLAT_DB_HEAL_MAX_OUTSTANDING_REQUESTS;
+
+  @CommandLine.Option(
       names = {SNAP_SERVER_ENABLED_FLAG},
       paramLabel = "<Boolean>",
       arity = "0..1",
@@ -484,6 +507,10 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
         config.getSnapSyncConfiguration().getLocalFlatAccountCountToHealPerRequest();
     options.snapsyncFlatStorageHealedCountPerRequest =
         config.getSnapSyncConfiguration().getLocalFlatStorageCountToHealPerRequest();
+    options.snapsyncFlatDbHealRangeCount =
+        config.getSnapSyncConfiguration().getFlatDbHealRangeCount();
+    options.snapsyncFlatDbHealMaxOutstandingRequests =
+        config.getSnapSyncConfiguration().getFlatDbHealMaxOutstandingRequests();
     options.snapsyncServerEnabled = config.getSnapSyncConfiguration().isSnapServerEnabled();
     options.snapTransactionIndexingEnabled =
         config.getSnapSyncConfiguration().isSnapSyncTransactionIndexingEnabled();
@@ -528,6 +555,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             .trienodeCountPerRequest(snapsyncTrieNodeCountPerRequest)
             .localFlatAccountCountToHealPerRequest(snapsyncFlatAccountHealedCountPerRequest)
             .localFlatStorageCountToHealPerRequest(snapsyncFlatStorageHealedCountPerRequest)
+            .flatDbHealRangeCount(snapsyncFlatDbHealRangeCount)
+            .flatDbHealMaxOutstandingRequests(snapsyncFlatDbHealMaxOutstandingRequests)
             .isSnapServerEnabled(snapsyncServerEnabled)
             .isSnapSyncTransactionIndexingEnabled(snapTransactionIndexingEnabled)
             .build());
@@ -598,6 +627,10 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             OptionParser.format(snapsyncFlatAccountHealedCountPerRequest),
             SNAP_FLAT_STORAGE_HEALED_COUNT_PER_REQUEST_FLAG,
             OptionParser.format(snapsyncFlatStorageHealedCountPerRequest),
+            SNAP_FLAT_DB_HEAL_RANGE_COUNT_FLAG,
+            OptionParser.format(snapsyncFlatDbHealRangeCount),
+            SNAP_FLAT_DB_HEAL_MAX_OUTSTANDING_REQUESTS_FLAG,
+            OptionParser.format(snapsyncFlatDbHealMaxOutstandingRequests),
             SNAP_SERVER_ENABLED_FLAG,
             OptionParser.format(snapsyncServerEnabled),
             SNAP_TRANSACTION_INDEXING_ENABLED_FLAG,

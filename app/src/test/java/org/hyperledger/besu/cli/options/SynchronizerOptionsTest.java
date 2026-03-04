@@ -79,6 +79,10 @@ public class SynchronizerOptionsTest
                     SnapSyncConfiguration.DEFAULT_BYTECODE_COUNT_PER_REQUEST + 2)
                 .isSnapServerEnabled(Boolean.TRUE)
                 .isSnapSyncTransactionIndexingEnabled(Boolean.TRUE)
+                .flatDbHealRangeCount(
+                    SnapSyncConfiguration.DEFAULT_FLAT_DB_HEAL_RANGE_COUNT + 64)
+                .flatDbHealMaxOutstandingRequests(
+                    SnapSyncConfiguration.DEFAULT_FLAT_DB_HEAL_MAX_OUTSTANDING_REQUESTS + 50)
                 .build())
         .snapSyncSavePreCheckpointHeadersOnlyEnabled(
             SnapSyncConfiguration.DEFAULT_SNAP_SYNC_SAVE_PRE_MERGE_HEADERS_ONLY_ENABLED)
