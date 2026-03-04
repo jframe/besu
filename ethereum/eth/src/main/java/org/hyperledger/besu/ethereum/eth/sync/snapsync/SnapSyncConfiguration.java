@@ -31,10 +31,16 @@ public class SnapSyncConfiguration {
       384; // The default number of trienode entries to download from peers per request.
 
   public static final int DEFAULT_LOCAL_FLAT_ACCOUNT_COUNT_TO_HEAL_PER_REQUEST =
-      128; // The default number of flat accounts entries to verify and heal per request.
+      1024; // The default number of flat accounts entries to verify and heal per request.
 
   public static final int DEFAULT_LOCAL_FLAT_STORAGE_COUNT_TO_HEAL_PER_REQUEST =
       1024; // The default number of flat slots entries to verify and heal per request.
+
+  public static final int DEFAULT_FLAT_DB_HEAL_RANGE_COUNT =
+      256; // The default number of initial account ranges to generate when starting flat DB heal.
+
+  public static final int DEFAULT_FLAT_DB_HEAL_MAX_OUTSTANDING_REQUESTS =
+      200; // The default max concurrent requests for flat DB heal pipelines.
 
   public static final Boolean DEFAULT_SNAP_SERVER_ENABLED = Boolean.FALSE;
 
@@ -78,6 +84,16 @@ public class SnapSyncConfiguration {
   @Value.Default
   public int getLocalFlatStorageCountToHealPerRequest() {
     return DEFAULT_LOCAL_FLAT_STORAGE_COUNT_TO_HEAL_PER_REQUEST;
+  }
+
+  @Value.Default
+  public int getFlatDbHealRangeCount() {
+    return DEFAULT_FLAT_DB_HEAL_RANGE_COUNT;
+  }
+
+  @Value.Default
+  public int getFlatDbHealMaxOutstandingRequests() {
+    return DEFAULT_FLAT_DB_HEAL_MAX_OUTSTANDING_REQUESTS;
   }
 
   @Value.Default
