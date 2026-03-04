@@ -226,6 +226,8 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
           SnapWorldStateDownloadProcess.builder()
               .configuration(snapSyncConfiguration)
               .maxOutstandingRequests(maxOutstandingRequests)
+              .flatDbHealMaxOutstandingRequests(
+                  snapSyncConfiguration.getFlatDbHealMaxOutstandingRequests())
               .dynamicPivotBlockSelector(dynamicPivotBlockManager)
               .loadLocalDataStep(
                   new LoadLocalDataStep(

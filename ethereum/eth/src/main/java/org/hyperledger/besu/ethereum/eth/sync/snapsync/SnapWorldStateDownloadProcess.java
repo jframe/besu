@@ -152,6 +152,7 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
 
     private SnapSyncConfiguration snapSyncConfiguration;
     private int maxOutstandingRequests;
+    private int flatDbHealMaxOutstandingRequests;
     private SnapWorldDownloadState downloadState;
     private MetricsSystem metricsSystem;
     private LoadLocalDataStep loadLocalDataStep;
@@ -174,6 +175,11 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
 
     public Builder maxOutstandingRequests(final int maxOutstandingRequests) {
       this.maxOutstandingRequests = maxOutstandingRequests;
+      return this;
+    }
+
+    public Builder flatDbHealMaxOutstandingRequests(final int flatDbHealMaxOutstandingRequests) {
+      this.flatDbHealMaxOutstandingRequests = flatDbHealMaxOutstandingRequests;
       return this;
     }
 
@@ -424,7 +430,7 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
               .thenProcessAsync(
                   "batchDownloadFlatAccountData",
                   requestTask -> requestDataStep.requestLocalFlatAccounts(requestTask),
-                  maxOutstandingRequests)
+                  flatDbHealMaxOutstandingRequests)
               .thenProcess(
                   "batchHealAndPersistFlatAccountData",
                   task -> persistDataStep.healFlatDatabase(task))
@@ -443,7 +449,7 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
               .thenProcessAsyncOrdered(
                   "batchDownloadFlatStorageData",
                   requestTask -> requestDataStep.requestLocalFlatStorages(requestTask),
-                  maxOutstandingRequests)
+                  flatDbHealMaxOutstandingRequests)
               .thenProcess(
                   "batchHealAndPersistFlatStorageData",
                   task -> persistDataStep.healFlatDatabase(task))
