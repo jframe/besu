@@ -26,6 +26,7 @@ import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.ImmutableSnapSyncConfiguration;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.Block;
@@ -139,7 +140,8 @@ public class SnapWorldDownloadStateTest {
             metricsManager,
             clock,
             ethContext,
-            SyncDurationMetrics.NO_OP_SYNC_DURATION_METRICS);
+            SyncDurationMetrics.NO_OP_SYNC_DURATION_METRICS,
+            SnapSyncConfiguration.getDefault());
     final DynamicPivotBlockSelector dynamicPivotBlockManager =
         mock(DynamicPivotBlockSelector.class);
     doAnswer(
@@ -509,6 +511,41 @@ public class SnapWorldDownloadStateTest {
                 Bytes.EMPTY, Bytes32.wrap(ROOT_NODE_HASH.getBytes())))
         .isEmpty();
     assertThat(downloadState.isDownloading()).isTrue();
+  }
+
+  @ParameterizedTest
+  @ArgumentsSource(SnapWorldDownloadStateTestArguments.class)
+  public void startFlatDatabaseHealEnqueuesConfiguredRangeCount(
+      final DataStorageFormat storageFormat, final boolean isFlatDbEnabled) {
+    setUp(storageFormat);
+    Assumptions.assumeTrue(isFlatDbEnabled);
+
+    final int rangeCount = 32;
+    final SnapSyncConfiguration config =
+        ImmutableSnapSyncConfiguration.builder().flatDbHealRangeCount(rangeCount).build();
+    downloadState =
+        new SnapWorldDownloadState(
+            worldStateStorageCoordinator,
+            snapContext,
+            blockchain,
+            snapSyncState,
+            pendingRequests,
+            MAX_REQUESTS_WITHOUT_PROGRESS,
+            MIN_MILLIS_BEFORE_STALLING,
+            metricsManager,
+            clock,
+            ethContext,
+            SyncDurationMetrics.NO_OP_SYNC_DURATION_METRICS,
+            config);
+    downloadState.setPivotBlockSelector(dynamicPivotBlockManager);
+    downloadState.setRootNodeData(ROOT_NODE_DATA);
+
+    when(snapSyncState.isHealFlatDatabaseInProgress()).thenReturn(false);
+
+    downloadState.startFlatDatabaseHeal(header);
+
+    assertThat(downloadState.pendingAccountFlatDatabaseHealingRequests.size())
+        .isEqualTo(rangeCount);
   }
 
   @Test

@@ -87,6 +87,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
 
   private final SnapSyncStatePersistenceManager snapContext;
   private final SnapSyncProcessState snapSyncState;
+  private final SnapSyncConfiguration snapSyncConfiguration;
 
   // blockchain
   private final Blockchain blockchain;
@@ -110,7 +111,8 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
       final SnapSyncMetricsManager metricsManager,
       final Clock clock,
       final EthContext ethContext,
-      final SyncDurationMetrics syncDurationMetrics) {
+      final SyncDurationMetrics syncDurationMetrics,
+      final SnapSyncConfiguration snapSyncConfiguration) {
     super(
         worldStateStorageCoordinator,
         pendingRequests,
@@ -124,6 +126,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
     this.metricsManager = metricsManager;
     this.blockObserverId = blockchain.observeBlockAdded(createBlockchainObserver());
     this.ethContext = ethContext;
+    this.snapSyncConfiguration = snapSyncConfiguration;
 
     final MetricsSystem metricsSystem = metricsManager.getMetricsSystem();
     metricsSystem.createLongGauge(
@@ -288,7 +291,8 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
     LOG.info("Initiating the healing process for the flat database");
     syncDurationMetrics.startTimer(SyncDurationMetrics.Labels.FLAT_DB_HEAL);
     snapSyncState.setHealFlatDatabaseInProgress(true);
-    final Map<Bytes32, Bytes32> ranges = RangeManager.generateAllRanges(16);
+    final Map<Bytes32, Bytes32> ranges =
+        RangeManager.generateAllRanges(snapSyncConfiguration.getFlatDbHealRangeCount());
     ranges.forEach(
         (key, value) ->
             enqueueRequest(

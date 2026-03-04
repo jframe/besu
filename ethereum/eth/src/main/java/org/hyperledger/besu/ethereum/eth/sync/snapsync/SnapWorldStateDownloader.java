@@ -166,7 +166,8 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
               snapsyncMetricsManager,
               clock,
               ethContext,
-              syncDurationMetrics);
+              syncDurationMetrics,
+              snapSyncConfiguration);
 
       final Map<Bytes32, Bytes32> ranges = RangeManager.generateAllRanges(16);
       snapsyncMetricsManager.initRange(ranges);
