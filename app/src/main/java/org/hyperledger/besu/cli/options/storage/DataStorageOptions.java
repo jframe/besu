@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.cli.options.storage;
 
+import static org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration.DEFAULT_ARCHIVE_BOUNDARY;
 import static org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration.DEFAULT_RECEIPT_COMPACTION_ENABLED;
 
 import org.hyperledger.besu.cli.options.CLIOptions;
@@ -53,6 +54,14 @@ public class DataStorageOptions implements CLIOptions<DataStorageConfiguration> 
       description =
           "Convenience option to enable online history pruning and configure BlobDB garbage collection settings (default: ${DEFAULT-VALUE}). \"--history-expiry-prune\" is deprecated and will be removed in a future release.")
   private Boolean historyExpiryPrune = false;
+
+  @CommandLine.Option(
+      names = {"--Xbonsai-archive-boundary"},
+      hidden = true,
+      paramLabel = "<INTEGER>",
+      description =
+          "Number of blocks from HEAD before data moves to archive layer (default: ${DEFAULT-VALUE})")
+  private int archiveBoundary = DEFAULT_ARCHIVE_BOUNDARY;
 
   /**
    * Options specific to path-based storage modes. Holds the necessary parameters to configure
@@ -97,6 +106,7 @@ public class DataStorageOptions implements CLIOptions<DataStorageConfiguration> 
         PathBasedExtraStorageOptions.fromConfig(
             domainObject.getPathBasedExtraStorageConfiguration());
     dataStorageOptions.historyExpiryPrune = domainObject.getHistoryExpiryPruneEnabled();
+    dataStorageOptions.archiveBoundary = domainObject.getArchiveBoundary();
     return dataStorageOptions;
   }
 
@@ -107,6 +117,7 @@ public class DataStorageOptions implements CLIOptions<DataStorageConfiguration> 
             .dataStorageFormat(dataStorageFormat)
             .receiptCompactionEnabled(receiptCompactionEnabled)
             .historyExpiryPruneEnabled(historyExpiryPrune)
+            .archiveBoundary(archiveBoundary)
             .pathBasedExtraStorageConfiguration(pathBasedExtraStorageOptions.toDomainObject());
     return builder.build();
   }
