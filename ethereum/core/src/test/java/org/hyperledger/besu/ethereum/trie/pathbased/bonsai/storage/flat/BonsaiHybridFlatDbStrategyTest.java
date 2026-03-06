@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
@@ -137,11 +138,11 @@ public class BonsaiHybridFlatDbStrategyTest {
     hybridStrategy.putFlatAccount(context, tx, accountHash, accountValue);
     tx.commit();
 
-    // Should be stored with [hash+blockNumber] key
+    // Should be stored with [hash+blockNumber] key in the dedicated flat-archive segment
     final byte[] expectedKey =
         Bytes.concatenate(accountHash.getBytes(), Bytes.ofUnsignedLong(blockNumber))
             .toArrayUnsafe();
-    final Optional<byte[]> storedValue = storage.get(ACCOUNT_INFO_STATE, expectedKey);
+    final Optional<byte[]> storedValue = storage.get(ACCOUNT_INFO_STATE_ARCHIVE, expectedKey);
     assertThat(storedValue).isPresent();
     assertThat(Bytes.wrap(storedValue.get())).isEqualTo(accountValue);
   }
@@ -166,10 +167,13 @@ public class BonsaiHybridFlatDbStrategyTest {
     final byte[] key1 =
         Bytes.concatenate(accountHash.getBytes(), Bytes.ofUnsignedLong(1L)).toArrayUnsafe();
 
-    assertThat(storage.get(ACCOUNT_INFO_STATE, key0)).isPresent();
-    assertThat(Bytes.wrap(storage.get(ACCOUNT_INFO_STATE, key0).get())).isEqualTo(block0Value);
-    assertThat(storage.get(ACCOUNT_INFO_STATE, key1)).isPresent();
-    assertThat(Bytes.wrap(storage.get(ACCOUNT_INFO_STATE, key1).get())).isEqualTo(block1Value);
+    // Archive entries for different blocks are stored in the dedicated flat-archive segment
+    assertThat(storage.get(ACCOUNT_INFO_STATE_ARCHIVE, key0)).isPresent();
+    assertThat(Bytes.wrap(storage.get(ACCOUNT_INFO_STATE_ARCHIVE, key0).get()))
+        .isEqualTo(block0Value);
+    assertThat(storage.get(ACCOUNT_INFO_STATE_ARCHIVE, key1)).isPresent();
+    assertThat(Bytes.wrap(storage.get(ACCOUNT_INFO_STATE_ARCHIVE, key1).get()))
+        .isEqualTo(block1Value);
   }
 
   // ======================== Read routing ========================
@@ -250,8 +254,12 @@ public class BonsaiHybridFlatDbStrategyTest {
 
     final Optional<Bytes> result =
         hybridStrategy.getFlatStorageValueByStorageSlotKey(
-            Optional::empty, Optional::empty, (loc, hash) -> Optional.empty(),
-            accountHash, slotKey, storage);
+            Optional::empty,
+            Optional::empty,
+            (loc, hash) -> Optional.empty(),
+            accountHash,
+            slotKey,
+            storage);
 
     assertThat(result).isPresent();
     assertThat(result.get()).isEqualTo(bonsaiSlotValue);
@@ -274,7 +282,10 @@ public class BonsaiHybridFlatDbStrategyTest {
 
     tx = storage.startTransaction();
     hybridStrategy.putFlatAccountStorageValueByStorageSlotHash(
-        new BonsaiContext(historicalBlock), tx, accountHash, slotKey.getSlotHash(),
+        new BonsaiContext(historicalBlock),
+        tx,
+        accountHash,
+        slotKey.getSlotHash(),
         historicalSlotValue);
     tx.commit();
 
@@ -283,8 +294,12 @@ public class BonsaiHybridFlatDbStrategyTest {
 
     final Optional<Bytes> result =
         hybridStrategy.getFlatStorageValueByStorageSlotKey(
-            Optional::empty, Optional::empty, (loc, hash) -> Optional.empty(),
-            accountHash, slotKey, storage);
+            Optional::empty,
+            Optional::empty,
+            (loc, hash) -> Optional.empty(),
+            accountHash,
+            slotKey,
+            storage);
 
     assertThat(result).isPresent();
     assertThat(result.get()).isEqualTo(historicalSlotValue);
@@ -307,7 +322,8 @@ public class BonsaiHybridFlatDbStrategyTest {
     setWorldBlockNumber(headBlock);
 
     final NavigableMap<Bytes32, Bytes> accounts =
-        hybridStrategy.streamAccountFlatDatabase(storage, Bytes32.ZERO, Bytes32.wrap(Bytes.repeat((byte) 0xFF, 32)), Long.MAX_VALUE);
+        hybridStrategy.streamAccountFlatDatabase(
+            storage, Bytes32.ZERO, Bytes32.wrap(Bytes.repeat((byte) 0xFF, 32)), Long.MAX_VALUE);
 
     assertThat(accounts).containsKey(Bytes32.wrap(accountHash.getBytes()));
     assertThat(accounts.get(Bytes32.wrap(accountHash.getBytes()))).isEqualTo(bonsaiValue);
@@ -315,19 +331,24 @@ public class BonsaiHybridFlatDbStrategyTest {
 
   @Test
   public void historicalBlockAccountStreamUsesArchiveLayer() {
-    // Use a distinct account that has only an archive entry (no competing bonsai key).
-    // SegmentedInMemoryKeyValueStorage's getNearestBefore uses a prefix-match predicate that
-    // differs from RocksDB's SeekForPrev: a 32-byte bonsai key is treated as a "prefix" of a
-    // 40-byte archive search target and takes precedence. Testing routing correctness here
-    // (archive strategy is invoked) requires isolating the archive key from bonsai interference.
-    final Hash archiveOnlyAccount =
+    // The same account has both a current bonsai entry (in ACCOUNT_INFO_STATE) and a historical
+    // archive entry (in ACCOUNT_INFO_STATE_ARCHIVE). Historical streams read only from
+    // ACCOUNT_INFO_STATE_ARCHIVE, so the correct historical value is returned even when a
+    // current bonsai entry exists for the same account.
+    final Hash accountHash =
         Address.fromHexString("0x0000000000000000000000000000000000000031").addressHash();
-    final Bytes archiveValue = Bytes.fromHexString("0x112233");
+    final Bytes currentValue = Bytes.fromHexString("0xBBCCDD");
+    final Bytes historicalValue = Bytes.fromHexString("0x112233");
     final long headBlock = 1000L;
     final long historicalBlock = headBlock - ARCHIVE_BOUNDARY; // = 488, not recent
 
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    hybridStrategy.putFlatAccount(new BonsaiContext(historicalBlock), tx, archiveOnlyAccount, archiveValue);
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    hybridStrategy.putFlatAccount(storage, tx, accountHash, currentValue);
+    tx.commit();
+
+    tx = storage.startTransaction();
+    hybridStrategy.putFlatAccount(
+        new BonsaiContext(historicalBlock), tx, accountHash, historicalValue);
     tx.commit();
 
     headBlockNumber.set(headBlock);
@@ -337,8 +358,8 @@ public class BonsaiHybridFlatDbStrategyTest {
         hybridStrategy.streamAccountFlatDatabase(
             storage, Bytes32.ZERO, Bytes32.wrap(Bytes.repeat((byte) 0xFF, 32)), Long.MAX_VALUE);
 
-    assertThat(accounts).containsKey(Bytes32.wrap(archiveOnlyAccount.getBytes()));
-    assertThat(accounts.get(Bytes32.wrap(archiveOnlyAccount.getBytes()))).isEqualTo(archiveValue);
+    assertThat(accounts).containsKey(Bytes32.wrap(accountHash.getBytes()));
+    assertThat(accounts.get(Bytes32.wrap(accountHash.getBytes()))).isEqualTo(historicalValue);
   }
 
   // ======================== Storage stream routing ========================
@@ -361,25 +382,40 @@ public class BonsaiHybridFlatDbStrategyTest {
 
     final NavigableMap<Bytes32, Bytes> slots =
         hybridStrategy.streamStorageFlatDatabase(
-            storage, accountHash, Bytes32.ZERO, Bytes32.wrap(Bytes.repeat((byte) 0xFF, 32)), Long.MAX_VALUE);
+            storage,
+            accountHash,
+            Bytes32.ZERO,
+            Bytes32.wrap(Bytes.repeat((byte) 0xFF, 32)),
+            Long.MAX_VALUE);
 
     assertThat(slots).containsKey(Bytes32.wrap(slotKey.getSlotHash().getBytes()));
   }
 
   @Test
   public void historicalBlockStorageStreamUsesArchiveLayer() {
-    // Use a distinct account/slot that has only an archive entry (no competing bonsai key).
-    // See comment in historicalBlockAccountStreamUsesArchiveLayer for why.
-    final Hash archiveOnlyAccount =
+    // Same account/slot has both a current bonsai entry and a historical archive entry.
+    // Historical streams use ACCOUNT_STORAGE_ARCHIVE, so the slot is returned from the
+    // correct segment without interference from the bonsai entry in ACCOUNT_STORAGE_STORAGE.
+    final Hash accountHash =
         Address.fromHexString("0x0000000000000000000000000000000000000041").addressHash();
     final StorageSlotKey slotKey = new StorageSlotKey(UInt256.ONE);
+    final Bytes currentSlotValue = Bytes.fromHexString("0xCCDD");
     final Bytes archiveSlotValue = Bytes.fromHexString("0xAABB");
     final long headBlock = 1000L;
     final long historicalBlock = headBlock - ARCHIVE_BOUNDARY; // = 488, not recent
 
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     hybridStrategy.putFlatAccountStorageValueByStorageSlotHash(
-        new BonsaiContext(historicalBlock), tx, archiveOnlyAccount, slotKey.getSlotHash(), archiveSlotValue);
+        storage, tx, accountHash, slotKey.getSlotHash(), currentSlotValue);
+    tx.commit();
+
+    tx = storage.startTransaction();
+    hybridStrategy.putFlatAccountStorageValueByStorageSlotHash(
+        new BonsaiContext(historicalBlock),
+        tx,
+        accountHash,
+        slotKey.getSlotHash(),
+        archiveSlotValue);
     tx.commit();
 
     headBlockNumber.set(headBlock);
@@ -387,7 +423,11 @@ public class BonsaiHybridFlatDbStrategyTest {
 
     final NavigableMap<Bytes32, Bytes> slots =
         hybridStrategy.streamStorageFlatDatabase(
-            storage, archiveOnlyAccount, Bytes32.ZERO, Bytes32.wrap(Bytes.repeat((byte) 0xFF, 32)), Long.MAX_VALUE);
+            storage,
+            accountHash,
+            Bytes32.ZERO,
+            Bytes32.wrap(Bytes.repeat((byte) 0xFF, 32)),
+            Long.MAX_VALUE);
 
     assertThat(slots).containsKey(Bytes32.wrap(slotKey.getSlotHash().getBytes()));
   }

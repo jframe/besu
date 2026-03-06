@@ -211,13 +211,12 @@ public class BonsaiHybridFlatDbStrategy extends BonsaiFlatDbStrategy {
     bonsaiStrategy.resetOnResync(storage);
   }
 
-  // ======================== Streaming (routes by block age, same as reads) ========================
+  // ======================== Streaming (routes by block age, same as reads)
+  // ========================
 
   @Override
   protected Stream<Pair<Bytes32, Bytes>> accountsToPairStream(
-      final SegmentedKeyValueStorage storage,
-      final Bytes startKeyHash,
-      final Bytes32 endKeyHash) {
+      final SegmentedKeyValueStorage storage, final Bytes startKeyHash, final Bytes32 endKeyHash) {
     if (isRecentBlock(getTargetBlock(storage), headBlockSupplier.getAsLong(), archiveBoundary)) {
       return bonsaiStrategy.accountsToPairStream(storage, startKeyHash, endKeyHash);
     }
