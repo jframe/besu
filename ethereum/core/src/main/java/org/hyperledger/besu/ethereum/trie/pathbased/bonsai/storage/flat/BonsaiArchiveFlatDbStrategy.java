@@ -96,7 +96,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     }
   }
 
-  private Optional<BonsaiContext> getStateArchiveContextForRead(
+  protected Optional<BonsaiContext> getStateArchiveContextForRead(
       final SegmentedKeyValueStorage storage) {
     // For Bonsai archive get the flat DB context to use for reading archive entries
     Optional<byte[]> archiveContext = storage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY);
@@ -174,6 +174,19 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     return Optional.empty();
   }
 
+  // Archive account keys are [hash(32) + blockN(8)] = 40 bytes.
+  // Bonsai account keys are [hash(32)] = 32 bytes. Filter to only process archive-length keys.
+  // TODO: In hybrid mode (BonsaiHybridFlatDbStrategy), both 32-byte bonsai keys and 40-byte
+  //  archive keys coexist in ACCOUNT_INFO_STATE. The filter below makes trimSuffix safe, but
+  //  getNearestBefore([hash+MAX_SUFFIX]) may still return the 32-byte bonsai key ahead of a
+  //  40-byte archive key due to in-memory storage prefix-match semantics (differs from RocksDB
+  //  SeekForPrev). This means historical stream results can be incorrect when both key types
+  //  exist for the same account. A separate segment for archive keys would eliminate the conflict.
+  private static final int ARCHIVE_ACCOUNT_KEY_LENGTH = Bytes32.SIZE + Long.BYTES;
+  // Archive storage keys are [accountHash(32) + slotHash(32) + blockN(8)] = 72 bytes.
+  // Bonsai storage keys are [accountHash(32) + slotHash(32)] = 64 bytes.
+  private static final int ARCHIVE_STORAGE_KEY_LENGTH = Bytes32.SIZE * 2 + Long.BYTES;
+
   @Override
   protected Stream<Pair<Bytes32, Bytes>> accountsToPairStream(
       final SegmentedKeyValueStorage storage, final Bytes startKeyHash, final Bytes32 endKeyHash) {
@@ -183,6 +196,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
                 ACCOUNT_INFO_STATE,
                 calculateArchiveKeyNoContextMinSuffix(startKeyHash.toArrayUnsafe()),
                 calculateArchiveKeyNoContextMaxSuffix(endKeyHash.toArrayUnsafe()))
+            .filter(e -> e.getKey().length == ARCHIVE_ACCOUNT_KEY_LENGTH)
             .map(e -> Bytes.of(calculateArchiveKeyNoContextMaxSuffix(trimSuffix(e.getKey()))))
             .distinct()
             .map(
@@ -202,6 +216,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
             .streamFromKey(
                 ACCOUNT_INFO_STATE,
                 calculateArchiveKeyNoContextMinSuffix(startKeyHash.toArrayUnsafe()))
+            .filter(e -> e.getKey().length == ARCHIVE_ACCOUNT_KEY_LENGTH)
             .map(e -> Bytes.of(calculateArchiveKeyNoContextMaxSuffix(trimSuffix(e.getKey()))))
             .distinct()
             .map(
@@ -224,6 +239,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
             ACCOUNT_STORAGE_STORAGE,
             calculateArchiveKeyNoContextMinSuffix(
                 calculateNaturalSlotKey(accountHash, Hash.wrap(Bytes32.wrap(startKeyHash)))))
+        .filter(e -> e.getKey().length == ARCHIVE_STORAGE_KEY_LENGTH)
         .map(e -> Bytes.of(calculateArchiveKeyNoContextMaxSuffix(trimSuffix(e.getKey()))))
         .takeWhile(pair -> pair.slice(0, Bytes32.SIZE).equals(accountHash.getBytes()))
         .distinct()
@@ -255,6 +271,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
                 calculateNaturalSlotKey(accountHash, Hash.wrap(Bytes32.wrap(startKeyHash)))),
             calculateArchiveKeyNoContextMaxSuffix(
                 calculateNaturalSlotKey(accountHash, Hash.wrap(endKeyHash))))
+        .filter(e -> e.getKey().length == ARCHIVE_STORAGE_KEY_LENGTH)
         .map(e -> Bytes.of(calculateArchiveKeyNoContextMaxSuffix(trimSuffix(e.getKey()))))
         .takeWhile(pair -> pair.slice(0, Bytes32.SIZE).equals(accountHash.getBytes()))
         .distinct()
