@@ -1050,13 +1050,18 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         MonitoredExecutors.newScheduledThreadPool("archive-migrator", 1, metricsSystem);
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
+    final PathBasedExtraStorageConfiguration.PathBasedUnstable unstable =
+        dataStorageConfiguration.getPathBasedExtraStorageConfiguration().getUnstable();
     return new BonsaiFlatDbToArchiveMigrator(
         worldStateKeyValueStorage,
         trieLogManager,
         blockchain,
         migrationExecutor,
         metricsSystem,
-        archiveStrategy);
+        archiveStrategy,
+        unstable.getArchiveMigrationMaxWritesPerSecond(),
+        unstable.getArchiveMigrationMaxBlocksPerBatch(),
+        unstable.getArchiveMigrationMaxWritesPerBatch());
   }
 
   /**
