@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManage
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
+import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
@@ -34,6 +35,7 @@ import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
@@ -42,6 +44,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.util.concurrent.RateLimiter;
 import org.apache.commons.lang3.time.DurationFormatUtils;
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -65,6 +68,19 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
   protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
 
+  private final RateLimiter rateLimiter;
+  private final int maxBlocksPerBatch;
+  private final int maxWritesPerBatch;
+
+  // Metrics
+  private final Counter writesCounter;
+  private final Counter batchesCounter;
+  private final Counter rateLimiterWaitMsCounter;
+  private final LabelledMetric<Counter> batchFlushReasonCounter;
+  private final AtomicLong lastBatchWrites = new AtomicLong(0);
+  private final AtomicLong lastBatchBlocks = new AtomicLong(0);
+  private final AtomicLong lastCommitDurationMs = new AtomicLong(0);
+
   /**
    * Creates a new BonsaiFlatDbToArchiveMigrator.
    *
@@ -74,6 +90,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    * @param executorService the executor service for running migration on a separate thread
    * @param metricsSystem the metrics system for tracking migration progress
    * @param archiveStrategy the archive flat DB strategy for writing archive keys
+   * @param maxWritesPerSecond the maximum number of RocksDB writes per second (rate limiter)
+   * @param maxBlocksPerBatch the maximum number of blocks to accumulate before committing a batch
+   * @param maxWritesPerBatch the maximum number of estimated writes before committing a batch
    */
   public BonsaiFlatDbToArchiveMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -81,17 +100,59 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final Blockchain blockchain,
       final ScheduledExecutorService executorService,
       final MetricsSystem metricsSystem,
-      final BonsaiArchiveFlatDbStrategy archiveStrategy) {
+      final BonsaiArchiveFlatDbStrategy archiveStrategy,
+      final int maxWritesPerSecond,
+      final int maxBlocksPerBatch,
+      final int maxWritesPerBatch) {
     this.worldStateStorage = worldStateStorage;
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.archiveStrategy = archiveStrategy;
+    this.rateLimiter = RateLimiter.create(maxWritesPerSecond);
+    this.maxBlocksPerBatch = maxBlocksPerBatch;
+    this.maxWritesPerBatch = maxWritesPerBatch;
     this.migratedBlocksCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.BLOCKCHAIN,
-            "bonsai_archive_migration_block",
-            "Bonsai archive migration head block");
+            "bonsai_archive_migration_blocks_total",
+            "Total blocks processed by the archive migrator");
+    this.writesCounter =
+        metricsSystem.createCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "bonsai_archive_migration_writes_total",
+            "Total estimated RocksDB writes performed by the archive migrator");
+    this.batchesCounter =
+        metricsSystem.createCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "bonsai_archive_migration_batches_total",
+            "Total number of batch commits performed by the archive migrator");
+    this.rateLimiterWaitMsCounter =
+        metricsSystem.createCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "bonsai_archive_migration_rate_limiter_wait_ms_total",
+            "Total milliseconds spent waiting in the archive migration rate limiter");
+    this.batchFlushReasonCounter =
+        metricsSystem.createLabelledCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "bonsai_archive_migration_batch_flush_total",
+            "Number of archive migration batch flushes by trigger reason",
+            "reason");
+    metricsSystem.createGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_archive_migration_last_batch_writes",
+        "Write count of the most recently committed archive migration batch",
+        () -> (double) lastBatchWrites.get());
+    metricsSystem.createGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_archive_migration_last_batch_blocks",
+        "Block count of the most recently committed archive migration batch",
+        () -> (double) lastBatchBlocks.get());
+    metricsSystem.createGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_archive_migration_last_commit_duration_ms",
+        "Duration in milliseconds of the most recent archive migration batch commit",
+        () -> (double) lastCommitDurationMs.get());
   }
 
   /**
@@ -123,24 +184,51 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final long startBlock = lastProcessedBlock + 1;
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
-      for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
 
+      int batchBlockCount = 0;
+      int batchWrites = 0;
+      long currentBlock = startBlock - 1;
+      SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+
+      for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
+        currentBlock = blockNumber;
         final Optional<TrieLog> maybeTrieLog =
             blockchain
                 .getBlockHeader(blockNumber)
                 .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
 
-        final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
         try {
           if (maybeTrieLog.isPresent()) {
+            batchWrites += estimateWrites(maybeTrieLog.get());
             processBlock(maybeTrieLog.get(), blockNumber, tx);
             migratedBlocksCounter.inc();
           } else if (blockNumber > 0) {
             throw new IllegalStateException("No trie log found for block " + blockNumber);
           }
-          // Always save progress, even for blocks with no trie log
-          saveProgress(blockNumber, tx);
-          tx.commit();
+          batchBlockCount++;
+
+          if (batchBlockCount >= maxBlocksPerBatch || batchWrites >= maxWritesPerBatch) {
+            final String flushReason =
+                batchWrites >= maxWritesPerBatch ? "write_ceiling" : "block_ceiling";
+            saveProgress(blockNumber, tx);
+            final long commitStart = System.currentTimeMillis();
+            tx.commit();
+            lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
+
+            final long waitStart = System.currentTimeMillis();
+            rateLimiter.acquire(batchWrites);
+            final long waitMs = System.currentTimeMillis() - waitStart;
+            rateLimiterWaitMsCounter.inc(waitMs);
+            writesCounter.inc(batchWrites);
+            batchesCounter.inc();
+            batchFlushReasonCounter.labels(flushReason).inc();
+            lastBatchWrites.set(batchWrites);
+            lastBatchBlocks.set(batchBlockCount);
+
+            tx = storage.startTransaction();
+            batchBlockCount = 0;
+            batchWrites = 0;
+          }
         } catch (final Exception e) {
           LOG.error("Failed to process block {}, rolling back transaction", blockNumber, e);
           try {
@@ -156,6 +244,30 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         logProgress(blockNumber, startBlock, target.get());
       }
 
+      // Flush remaining batch
+      if (batchBlockCount > 0) {
+        try {
+          saveProgress(currentBlock, tx);
+          final long commitStart = System.currentTimeMillis();
+          tx.commit();
+          lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
+          writesCounter.inc(batchWrites);
+          batchesCounter.inc();
+          lastBatchWrites.set(batchWrites);
+          lastBatchBlocks.set(batchBlockCount);
+        } catch (final Exception e) {
+          LOG.error("Failed to commit final migration batch, rolling back", e);
+          try {
+            tx.rollback();
+          } catch (final Exception rollbackException) {
+            LOG.error("Failed to rollback final migration batch", rollbackException);
+          }
+          throw new IllegalStateException("Migration failed at final batch: " + e.getMessage(), e);
+        }
+      } else {
+        tx.rollback();
+      }
+
       worldStateStorage.upgradeToArchiveFlatDbMode();
       logCompletion(startBlock, target.get(), migrationStartTime);
 
@@ -165,6 +277,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     } finally {
       migrationRunning.set(false);
     }
+  }
+
+  private int estimateWrites(final TrieLog trieLog) {
+    return trieLog.getAccountChanges().size()
+        + trieLog.getStorageChanges().values().stream().mapToInt(Map::size).sum();
   }
 
   @Override
