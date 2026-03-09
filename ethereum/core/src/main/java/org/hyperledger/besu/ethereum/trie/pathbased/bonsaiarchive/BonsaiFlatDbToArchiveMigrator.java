@@ -215,10 +215,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             tx.commit();
             lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
 
-            final long waitStart = System.currentTimeMillis();
-            rateLimiter.acquire(batchWrites);
-            final long waitMs = System.currentTimeMillis() - waitStart;
-            rateLimiterWaitMsCounter.inc(waitMs);
+            if (batchWrites > 0) {
+              final long waitStart = System.currentTimeMillis();
+              rateLimiter.acquire(batchWrites);
+              rateLimiterWaitMsCounter.inc(System.currentTimeMillis() - waitStart);
+            }
             writesCounter.inc(batchWrites);
             batchesCounter.inc();
             batchFlushReasonCounter.labels(flushReason).inc();
@@ -269,7 +270,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       }
 
       worldStateStorage.upgradeToArchiveFlatDbMode();
-      logCompletion(startBlock, target.get(), migrationStartTime);
+      logCompletion(startBlock, currentBlock, migrationStartTime);
 
     } catch (final Exception e) {
       LOG.error("Bonsai to Bonsai archive migration failed", e);
