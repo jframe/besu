@@ -126,14 +126,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockImportList
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
-        while (blockImportInProgress.get()) {
-          try {
-            Thread.sleep(10); // 10ms poll interval
-          } catch (final InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Migration interrupted while waiting for block import", e);
-          }
-        }
+        blockUntilNotImportingBlock();
 
         final Optional<TrieLog> maybeTrieLog =
             blockchain
@@ -174,6 +167,17 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockImportList
       throw new RuntimeException(e);
     } finally {
       migrationRunning.set(false);
+    }
+  }
+
+  private void blockUntilNotImportingBlock() {
+    while (blockImportInProgress.get()) {
+      try {
+        Thread.sleep(10); // 10ms poll interval
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new RuntimeException("Migration interrupted while waiting for block import", e);
+      }
     }
   }
 
