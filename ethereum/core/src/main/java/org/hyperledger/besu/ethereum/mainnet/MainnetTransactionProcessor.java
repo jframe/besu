@@ -86,6 +86,8 @@ public class MainnetTransactionProcessor {
 
   private final TransferLogEmitter transferLogEmitter;
 
+  private final FrameTransactionProcessor frameTransactionProcessor;
+
   private MainnetTransactionProcessor(
       final GasCalculator gasCalculator,
       final TransactionValidatorFactory transactionValidatorFactory,
@@ -109,6 +111,9 @@ public class MainnetTransactionProcessor {
     this.coinbaseFeePriceCalculator = coinbaseFeePriceCalculator;
     this.maybeCodeDelegationProcessor = Optional.ofNullable(maybeCodeDelegationProcessor);
     this.transferLogEmitter = transferLogEmitter;
+    this.frameTransactionProcessor =
+        new FrameTransactionProcessor(
+            gasCalculator, feeMarket, coinbaseFeePriceCalculator, this, maxStackSize);
   }
 
   /**
@@ -205,6 +210,17 @@ public class MainnetTransactionProcessor {
       final TransactionValidationParams transactionValidationParams,
       final Wei blobGasPrice,
       final Optional<AccessLocationTracker> accessLocationTracker) {
+    if (transaction.getType().equals(TransactionType.FRAME)) {
+      return frameTransactionProcessor.process(
+          worldState,
+          blockHeader,
+          transaction,
+          miningBeneficiary,
+          operationTracer,
+          blockHashLookup,
+          transactionValidationParams);
+    }
+
     try {
       final var transactionValidator = transactionValidatorFactory.get();
       LOG.trace("Starting execution of {}", transaction);
