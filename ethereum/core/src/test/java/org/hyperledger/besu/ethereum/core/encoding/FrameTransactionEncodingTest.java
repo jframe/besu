@@ -20,7 +20,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Transaction;
-import org.hyperledger.besu.ethereum.core.transaction.Frame;
+import org.hyperledger.besu.datatypes.Frame;
 
 import java.math.BigInteger;
 import java.util.List;

@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.core.transaction;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Frame;
 
 import java.util.Optional;
 

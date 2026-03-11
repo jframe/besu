@@ -44,7 +44,7 @@ import org.hyperledger.besu.ethereum.core.kzg.Blob;
 import org.hyperledger.besu.ethereum.core.kzg.BlobsWithCommitments;
 import org.hyperledger.besu.ethereum.core.kzg.KZGCommitment;
 import org.hyperledger.besu.ethereum.core.kzg.KZGProof;
-import org.hyperledger.besu.ethereum.core.transaction.Frame;
+import org.hyperledger.besu.datatypes.Frame;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
@@ -795,6 +795,7 @@ public class Transaction
    *
    * @return optional list of frames
    */
+  @Override
   public Optional<List<Frame>> getFrames() {
     return frames;
   }
@@ -804,6 +805,7 @@ public class Transaction
    *
    * @return optional explicit sender address
    */
+  @Override
   public Optional<Address> getFrameSender() {
     return frameSender;
   }

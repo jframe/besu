@@ -1184,6 +1184,17 @@ public class MessageFrame {
   }
 
   /**
+   * Sets a context variable. Allows EVM operations to store per-transaction state that persists
+   * across opcode calls within the same message frame (e.g. APPROVE scope for EIP-8141 frames).
+   *
+   * @param name the variable name
+   * @param value the value to store
+   */
+  public void setContextVariable(final String name, final Object value) {
+    contextVariables.put(name, value);
+  }
+
+  /**
    * Sets current operation.
    *
    * @param currentOperation the current operation

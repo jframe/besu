@@ -277,6 +277,24 @@ public interface Transaction {
   Optional<List<CodeDelegation>> getCodeDelegationList();
 
   /**
+   * Returns the list of frames if this is a FRAME transaction (EIP-8141).
+   *
+   * @return optional list of frames
+   */
+  default Optional<List<Frame>> getFrames() {
+    return Optional.empty();
+  }
+
+  /**
+   * Returns the explicit sender address if this is a FRAME transaction (EIP-8141).
+   *
+   * @return optional sender address
+   */
+  default Optional<Address> getFrameSender() {
+    return Optional.empty();
+  }
+
+  /**
    * Returns the size of the code delegation list.
    *
    * @return the size of the code delegation list

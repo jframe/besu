@@ -133,6 +133,10 @@ import org.hyperledger.besu.evm.operation.SwapOperation;
 import org.hyperledger.besu.evm.operation.TLoadOperation;
 import org.hyperledger.besu.evm.operation.TStoreOperation;
 import org.hyperledger.besu.evm.operation.TimestampOperation;
+import org.hyperledger.besu.evm.operation.ApproveOperation;
+import org.hyperledger.besu.evm.operation.TxParamCopyOperation;
+import org.hyperledger.besu.evm.operation.TxParamLoadOperation;
+import org.hyperledger.besu.evm.operation.TxParamSizeOperation;
 import org.hyperledger.besu.evm.operation.XorOperation;
 import org.hyperledger.besu.evm.operation.XorOperationOptimized;
 
@@ -1512,5 +1516,38 @@ public class MainnetEVMs {
       final BigInteger chainID,
       final EvmConfiguration evmConfiguration) {
     registerFutureEipsOperations(registry, gasCalculator, chainID, evmConfiguration);
+  }
+
+  /**
+   * Creates an EVM instance with the full EIP-8141 FRAME transaction opcode set, extending the
+   * experimental EIPs registry with APPROVE, TXPARAMLOAD, TXPARAMSIZE, and TXPARAMCOPY.
+   *
+   * @param gasCalculator the gas calculator
+   * @param chainId the chain id
+   * @param evmConfiguration the evm configuration
+   * @return the evm
+   */
+  public static EVM frameTx(
+      final GasCalculator gasCalculator,
+      final BigInteger chainId,
+      final EvmConfiguration evmConfiguration) {
+    final OperationRegistry registry =
+        experimentalEipsOperations(gasCalculator, chainId, evmConfiguration);
+    registerFrameTxOperations(registry, gasCalculator);
+    return new EVM(registry, gasCalculator, evmConfiguration, EvmSpecVersion.EXPERIMENTAL_EIPS);
+  }
+
+  /**
+   * Registers the EIP-8141 FRAME transaction opcodes into the provided registry.
+   *
+   * @param registry the operation registry
+   * @param gasCalculator the gas calculator
+   */
+  public static void registerFrameTxOperations(
+      final OperationRegistry registry, final GasCalculator gasCalculator) {
+    registry.put(new ApproveOperation(gasCalculator));
+    registry.put(new TxParamLoadOperation(gasCalculator));
+    registry.put(new TxParamSizeOperation(gasCalculator));
+    registry.put(new TxParamCopyOperation(gasCalculator));
   }
 }

@@ -16,7 +16,7 @@ package org.hyperledger.besu.ethereum.core.encoding;
 
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Transaction;
-import org.hyperledger.besu.ethereum.core.transaction.Frame;
+import org.hyperledger.besu.datatypes.Frame;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
 import java.util.List;
