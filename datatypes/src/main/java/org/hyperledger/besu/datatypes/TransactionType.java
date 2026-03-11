@@ -29,7 +29,9 @@ public enum TransactionType {
   /** Blob transaction type. */
   BLOB(0x03),
   /** Eip7702 transaction type. */
-  DELEGATE_CODE(0x04);
+  DELEGATE_CODE(0x04),
+  /** Frame transaction type (EIP-8141). */
+  FRAME(0x06);
 
   private static final Set<TransactionType> ACCESS_LIST_SUPPORTED_TRANSACTION_TYPES =
       EnumSet.of(ACCESS_LIST, EIP1559, BLOB, DELEGATE_CODE);
@@ -52,7 +54,7 @@ public enum TransactionType {
       new TransactionType[Byte.toUnsignedInt(MAX_LEGACY_TX_OPAQUE_BYTE) + 1];
 
   private static final TransactionType[] transactionTypeByEthSerializedType =
-      new TransactionType[values().length];
+      new TransactionType[0x0f];
 
   static {
     EnumSet.allOf(TransactionType.class).stream()

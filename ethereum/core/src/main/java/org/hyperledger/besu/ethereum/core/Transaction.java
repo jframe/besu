@@ -44,6 +44,7 @@ import org.hyperledger.besu.ethereum.core.kzg.Blob;
 import org.hyperledger.besu.ethereum.core.kzg.BlobsWithCommitments;
 import org.hyperledger.besu.ethereum.core.kzg.KZGCommitment;
 import org.hyperledger.besu.ethereum.core.kzg.KZGProof;
+import org.hyperledger.besu.ethereum.core.transaction.Frame;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
@@ -131,6 +132,10 @@ public class Transaction
 
   private final Optional<Bytes> rawRlp;
 
+  // EIP-8141 FRAME transaction fields
+  private final Optional<List<Frame>> frames;
+  private final Optional<Address> frameSender;
+
   public static Builder builder() {
     return new Builder();
   }
@@ -210,7 +215,9 @@ public class Transaction
       final Optional<Bytes> rawRlp,
       final Optional<Hash> hash,
       final Optional<Integer> sizeForAnnouncement,
-      final Optional<Integer> sizeForBlockInclusion) {
+      final Optional<Integer> sizeForBlockInclusion,
+      final Optional<List<Frame>> frames,
+      final Optional<Address> frameSender) {
 
     if (!forCopy) {
       if (transactionType.requiresChainId()) {
@@ -231,10 +238,14 @@ public class Transaction
             maybeAccessList.isPresent(), "Must specify access list for access list transaction");
       }
 
-      if (versionedHashes.isPresent() || maxFeePerBlobGas.isPresent()) {
-        checkArgument(
-            transactionType.supportsBlob(),
-            "Must not specify blob versioned hashes or max fee per blob gas for transaction not supporting it");
+      // FRAME transactions may carry blob-related fields (max_fee_per_blob_gas,
+      // blob_versioned_hashes) for future compatibility; skip the blob check for FRAME.
+      if (!Objects.equals(transactionType, TransactionType.FRAME)) {
+        if (versionedHashes.isPresent() || maxFeePerBlobGas.isPresent()) {
+          checkArgument(
+              transactionType.supportsBlob(),
+              "Must not specify blob versioned hashes or max fee per blob gas for transaction not supporting it");
+        }
       }
 
       if (transactionType.supportsBlob()) {
@@ -252,6 +263,14 @@ public class Transaction
             maybeCodeDelegationList.isPresent(),
             "Must specify code delegation authorizations for code delegation transaction");
       }
+
+      if (Objects.equals(transactionType, TransactionType.FRAME)) {
+        checkArgument(
+            frames.isPresent() && !frames.get().isEmpty(),
+            "FRAME transaction must have at least one frame");
+        checkArgument(
+            frameSender.isPresent(), "FRAME transaction must have an explicit sender address");
+      }
     }
 
     this.transactionType = transactionType;
@@ -266,7 +285,7 @@ public class Transaction
     this.signature = signature;
     this.payload = payload;
     this.maybeAccessList = maybeAccessList;
-    this.sender = sender;
+    this.sender = frameSender.orElse(sender);
     this.chainId = chainId;
     this.versionedHashes = versionedHashes;
     this.blobsWithCommitments = blobsWithCommitments;
@@ -275,6 +294,8 @@ public class Transaction
     hash.ifPresent(h -> this.hash = h);
     sizeForAnnouncement.ifPresent(i -> this.sizeForAnnouncement = i);
     sizeForBlockInclusion.ifPresent(i -> this.sizeForBlockInclusion = i);
+    this.frames = frames;
+    this.frameSender = frameSender;
   }
 
   /**
@@ -765,6 +786,24 @@ public class Transaction
   }
 
   /**
+   * Returns the list of frames for a FRAME transaction (EIP-8141).
+   *
+   * @return optional list of frames
+   */
+  public Optional<List<Frame>> getFrames() {
+    return frames;
+  }
+
+  /**
+   * Returns the explicit sender address for a FRAME transaction (EIP-8141).
+   *
+   * @return optional explicit sender address
+   */
+  public Optional<Address> getFrameSender() {
+    return frameSender;
+  }
+
+  /**
    * Return the list of transaction hashes extracted from the collection of Transaction passed as
    * argument
    *
@@ -901,6 +940,9 @@ public class Transaction
                       () ->
                           new IllegalStateException(
                               "Developer error: the transaction should be guaranteed to have a code delegations here")));
+          case FRAME ->
+              throw new IllegalStateException(
+                  "FRAME transactions use explicit sender; sender recovery hash is not applicable");
         };
     return preimage;
   }
@@ -1069,6 +1111,65 @@ public class Transaction
               rlpOutput.endList();
             });
     return Bytes.concatenate(Bytes.of(TransactionType.DELEGATE_CODE.getSerializedType()), encoded);
+  }
+
+  /**
+   * Computes the preimage for a FRAME transaction's sig hash. VERIFY frame data fields are replaced
+   * with empty bytes so the signer commits to the frame structure but not the VERIFY calldata.
+   *
+   * @param chainId the chain id
+   * @param nonce the nonce
+   * @param frameSender the explicit sender address
+   * @param frames the list of frames
+   * @param maxPriorityFeePerGas the max priority fee per gas
+   * @param maxFeePerGas the max fee per gas
+   * @param maxFeePerBlobGas the max fee per blob gas (may be null)
+   * @param versionedHashes the blob versioned hashes (may be null or empty)
+   * @return the preimage bytes
+   */
+  public static Bytes framePreimage(
+      final BigInteger chainId,
+      final long nonce,
+      final Address frameSender,
+      final List<Frame> frames,
+      final Wei maxPriorityFeePerGas,
+      final Wei maxFeePerGas,
+      final Wei maxFeePerBlobGas,
+      final List<VersionedHash> versionedHashes) {
+    final Bytes encoded =
+        RLP.encode(
+            rlpOutput -> {
+              rlpOutput.startList();
+              rlpOutput.writeBigIntegerScalar(chainId);
+              rlpOutput.writeLongScalar(nonce);
+              rlpOutput.writeBytes(frameSender);
+              rlpOutput.writeList(
+                  frames,
+                  (frame, out) -> {
+                    out.startList();
+                    out.writeIntScalar(Byte.toUnsignedInt(frame.getMode()));
+                    out.writeBytes(
+                        frame.getTarget().map(Bytes::copy).orElse(Bytes.EMPTY));
+                    out.writeLongScalar(frame.getGasLimit());
+                    // For VERIFY frames, replace data with empty bytes in the sig hash
+                    if (frame.getMode() == Frame.MODE_VERIFY) {
+                      out.writeBytes(Bytes.EMPTY);
+                    } else {
+                      out.writeBytes(frame.getData());
+                    }
+                    out.endList();
+                  });
+              rlpOutput.writeUInt256Scalar(maxPriorityFeePerGas);
+              rlpOutput.writeUInt256Scalar(maxFeePerGas);
+              rlpOutput.writeUInt256Scalar(maxFeePerBlobGas != null ? maxFeePerBlobGas : Wei.ZERO);
+              if (versionedHashes != null && !versionedHashes.isEmpty()) {
+                BlobTransactionEncoder.writeBlobVersionedHashes(rlpOutput, versionedHashes);
+              } else {
+                rlpOutput.writeEmptyList();
+              }
+              rlpOutput.endList();
+            });
+    return Bytes.concatenate(Bytes.of(TransactionType.FRAME.getSerializedType()), encoded);
   }
 
   @Override
@@ -1250,7 +1351,9 @@ public class Transaction
             Optional.empty(),
             Optional.ofNullable(hash),
             Optional.of(sizeForAnnouncement),
-            Optional.of(sizeForBlockInclusion));
+            Optional.of(sizeForBlockInclusion),
+            frames,
+            frameSender);
 
     // copy also the computed fields, to avoid to recompute them
     copiedTx.sender = this.sender;
@@ -1333,6 +1436,8 @@ public class Transaction
     private Optional<Hash> hash = Optional.empty();
     private Optional<Integer> sizeForAnnouncement = Optional.empty();
     private Optional<Integer> sizeForBlockInclusion = Optional.empty();
+    protected List<Frame> frames = null;
+    protected Address frameSender = null;
 
     public Builder copiedFrom(final Transaction toCopy) {
       this.transactionType = toCopy.transactionType;
@@ -1352,6 +1457,8 @@ public class Transaction
       this.versionedHashes = toCopy.versionedHashes.orElse(null);
       this.blobsWithCommitments = toCopy.blobsWithCommitments.orElse(null);
       this.codeDelegationAuthorizations = toCopy.maybeCodeDelegationList;
+      this.frames = toCopy.frames.orElse(null);
+      this.frameSender = toCopy.frameSender.orElse(null);
       return this;
     }
 
@@ -1459,7 +1566,9 @@ public class Transaction
     }
 
     public Builder guessType() {
-      if (codeDelegationAuthorizations.isPresent()) {
+      if (frames != null && !frames.isEmpty()) {
+        transactionType = TransactionType.FRAME;
+      } else if (codeDelegationAuthorizations.isPresent()) {
         transactionType = TransactionType.DELEGATE_CODE;
       } else if (versionedHashes != null && !versionedHashes.isEmpty()) {
         transactionType = TransactionType.BLOB;
@@ -1479,6 +1588,13 @@ public class Transaction
 
     public Transaction build() {
       if (transactionType == null) guessType();
+      final boolean isFrame = Objects.equals(transactionType, TransactionType.FRAME);
+      // FRAME transactions do not use a legacy payload field; default to empty bytes.
+      final Bytes effectivePayload = (payload == null && isFrame) ? Bytes.EMPTY : payload;
+      // FRAME transactions do not use a value field; default to Wei.ZERO.
+      final Wei effectiveValue = (value == null && isFrame) ? Wei.ZERO : value;
+      // FRAME transactions do not have a global gasLimit; default to 0.
+      final long effectiveGasLimit = (gasLimit == -1L && isFrame) ? 0L : gasLimit;
       return new Transaction(
           false,
           transactionType,
@@ -1487,11 +1603,11 @@ public class Transaction
           Optional.ofNullable(maxPriorityFeePerGas),
           Optional.ofNullable(maxFeePerGas),
           Optional.ofNullable(maxFeePerBlobGas),
-          gasLimit,
+          effectiveGasLimit,
           to,
-          value,
+          effectiveValue,
           signature,
-          payload,
+          effectivePayload,
           accessList,
           sender,
           chainId,
@@ -1501,7 +1617,9 @@ public class Transaction
           Optional.ofNullable(rawRlp),
           hash,
           sizeForAnnouncement,
-          sizeForBlockInclusion);
+          sizeForBlockInclusion,
+          Optional.ofNullable(frames),
+          Optional.ofNullable(frameSender));
     }
 
     public Transaction signAndBuild(final KeyPair keys) {
@@ -1558,6 +1676,16 @@ public class Transaction
 
     public Builder codeDelegations(final List<CodeDelegation> codeDelegations) {
       this.codeDelegationAuthorizations = Optional.ofNullable(codeDelegations);
+      return this;
+    }
+
+    public Builder frames(final List<Frame> frames) {
+      this.frames = frames;
+      return this;
+    }
+
+    public Builder frameSender(final Address frameSender) {
+      this.frameSender = frameSender;
       return this;
     }
   }
