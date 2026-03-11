@@ -27,12 +27,14 @@ import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.GasLimitCalculator;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.core.transaction.Frame;
 import org.hyperledger.besu.ethereum.mainnet.feemarket.FeeMarket;
 import org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
 import java.math.BigInteger;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -89,10 +91,18 @@ public class MainnetTransactionValidator implements TransactionValidator {
       final Optional<Wei> baseFee,
       final Optional<Wei> blobFee,
       final TransactionValidationParams transactionValidationParams) {
-    final ValidationResult<TransactionInvalidReason> signatureResult =
-        validateTransactionSignature(transaction);
-    if (!signatureResult.isValid()) {
-      return signatureResult;
+    if (!transaction.getType().equals(TransactionType.FRAME)) {
+      final ValidationResult<TransactionInvalidReason> signatureResult =
+          validateTransactionSignature(transaction);
+      if (!signatureResult.isValid()) {
+        return signatureResult;
+      }
+    } else {
+      final ValidationResult<TransactionInvalidReason> frameResult =
+          validateFrameTransaction(transaction);
+      if (!frameResult.isValid()) {
+        return frameResult;
+      }
     }
 
     final TransactionType transactionType = transaction.getType();
@@ -194,6 +204,38 @@ public class MainnetTransactionValidator implements TransactionValidator {
     return ValidationResult.valid();
   }
 
+  private ValidationResult<TransactionInvalidReason> validateFrameTransaction(
+      final Transaction transaction) {
+    if (chainId.isPresent()
+        && transaction.getChainId().isPresent()
+        && !transaction.getChainId().equals(chainId)) {
+      return ValidationResult.invalid(
+          TransactionInvalidReason.WRONG_CHAIN_ID,
+          String.format(
+              "transaction was meant for chain id %s and not this chain id %s",
+              transaction.getChainId().get(), chainId.get()));
+    }
+    final List<Frame> frames = transaction.getFrames().orElse(List.of());
+    if (frames.isEmpty()) {
+      return ValidationResult.invalid(
+          TransactionInvalidReason.INVALID_TRANSACTION_FORMAT,
+          "FRAME transaction must have at least 1 frame");
+    }
+    if (frames.size() > 1000) {
+      return ValidationResult.invalid(
+          TransactionInvalidReason.INVALID_TRANSACTION_FORMAT,
+          "FRAME transaction exceeds maximum of 1000 frames");
+    }
+    for (final Frame frame : frames) {
+      if (frame.getGasLimit() == 0) {
+        return ValidationResult.invalid(
+            TransactionInvalidReason.INVALID_TRANSACTION_FORMAT,
+            "each frame gas_limit must be > 0");
+      }
+    }
+    return ValidationResult.valid();
+  }
+
   private static boolean isDelegateCodeEmpty(final Transaction transaction) {
     return transaction.getCodeDelegationList().isEmpty()
         || transaction.getCodeDelegationList().get().isEmpty();
@@ -263,19 +305,32 @@ public class MainnetTransactionValidator implements TransactionValidator {
             gasCalculator.transactionFloorCost(
                 transaction.getPayload(), transaction.getPayloadZeroBytes()));
 
-    if (Long.compareUnsigned(intrinsicGasCostOrFloor, transaction.getGasLimit()) > 0) {
-      return ValidationResult.invalid(
-          TransactionInvalidReason.INTRINSIC_GAS_EXCEEDS_GAS_LIMIT,
-          String.format(
-              "intrinsic gas cost %s exceeds gas limit %s",
-              intrinsicGasCostOrFloor, transaction.getGasLimit()));
-    }
-
-    if (transaction.calculateUpfrontGasCost(transaction.getMaxGasPrice(), Wei.ZERO, 0).bitLength()
-        > 256) {
-      return ValidationResult.invalid(
-          TransactionInvalidReason.UPFRONT_COST_EXCEEDS_UINT256,
-          "Upfront gas cost cannot exceed 2^256 Wei");
+    if (!transaction.getType().equals(TransactionType.FRAME)) {
+      if (Long.compareUnsigned(intrinsicGasCostOrFloor, transaction.getGasLimit()) > 0) {
+        return ValidationResult.invalid(
+            TransactionInvalidReason.INTRINSIC_GAS_EXCEEDS_GAS_LIMIT,
+            String.format(
+                "intrinsic gas cost %s exceeds gas limit %s",
+                intrinsicGasCostOrFloor, transaction.getGasLimit()));
+      }
+      if (transaction.calculateUpfrontGasCost(transaction.getMaxGasPrice(), Wei.ZERO, 0).bitLength()
+          > 256) {
+        return ValidationResult.invalid(
+            TransactionInvalidReason.UPFRONT_COST_EXCEEDS_UINT256,
+            "Upfront gas cost cannot exceed 2^256 Wei");
+      }
+    } else {
+      final long totalFrameGas =
+          transaction.getFrames().orElse(List.of()).stream()
+              .mapToLong(Frame::getGasLimit)
+              .sum();
+      if (Long.compareUnsigned(intrinsicGasCostOrFloor, totalFrameGas) > 0) {
+        return ValidationResult.invalid(
+            TransactionInvalidReason.INTRINSIC_GAS_EXCEEDS_GAS_LIMIT,
+            String.format(
+                "intrinsic gas cost %s exceeds total frame gas limit %s",
+                intrinsicGasCostOrFloor, totalFrameGas));
+      }
     }
 
     return ValidationResult.valid();

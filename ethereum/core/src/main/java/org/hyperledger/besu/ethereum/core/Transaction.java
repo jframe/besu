@@ -721,6 +721,11 @@ public class Transaction
    * @return the up-front gas cost for the transaction
    */
   public Wei getUpfrontCost(final long totalBlobGas) {
+    if (getType().equals(TransactionType.FRAME)) {
+      final long totalFrameGas =
+          getFrames().orElse(List.of()).stream().mapToLong(Frame::getGasLimit).sum();
+      return getMaxGasPrice().multiply(totalFrameGas).add(Wei.of(totalBlobGas));
+    }
     Wei maxUpfrontGasCost = getMaxUpfrontGasCost(totalBlobGas);
     Wei result = maxUpfrontGasCost.add(getValue());
     return (maxUpfrontGasCost.compareTo(result) > 0) ? Wei.MAX_WEI : result;
