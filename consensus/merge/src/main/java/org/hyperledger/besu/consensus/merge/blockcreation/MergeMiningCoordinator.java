@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Withdrawal;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BlockImportListener;
 
 import java.util.List;
 import java.util.Optional;
@@ -59,6 +60,16 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
   @Override
   default boolean isCompatibleWithEngineApi() {
     return true;
+  }
+
+  /**
+   * Subscribes a listener to be notified when block import starts and ends.
+   *
+   * @param listener the block import listener
+   * @return the subscriber ID, which can be used to unsubscribe
+   */
+  default long subscribeBlockImportListener(final BlockImportListener listener) {
+    return 0L;
   }
 
   /**

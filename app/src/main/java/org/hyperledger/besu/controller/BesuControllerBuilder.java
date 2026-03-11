@@ -22,6 +22,7 @@ import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.config.GenesisConfigOptions;
 import org.hyperledger.besu.consensus.merge.MergeContext;
 import org.hyperledger.besu.consensus.merge.UnverifiedForkchoiceSupplier;
+import org.hyperledger.besu.consensus.merge.blockcreation.MergeMiningCoordinator;
 import org.hyperledger.besu.consensus.qbft.BFTPivotSelectorFromPeers;
 import org.hyperledger.besu.cryptoservices.NodeKey;
 import org.hyperledger.besu.datatypes.Hash;
@@ -908,6 +909,10 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         final BonsaiFlatDbToArchiveMigrator archiveMigrator =
             createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
         closeables.add(archiveMigrator);
+
+        if (miningCoordinator instanceof MergeMiningCoordinator mergeMc) {
+          mergeMc.subscribeBlockImportListener(archiveMigrator);
+        }
 
         final AtomicBoolean migrationStarted = new AtomicBoolean(false);
         synchronizer.subscribeInSync(

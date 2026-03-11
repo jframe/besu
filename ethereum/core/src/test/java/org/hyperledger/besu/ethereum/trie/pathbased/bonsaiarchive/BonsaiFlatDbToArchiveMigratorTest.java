@@ -304,6 +304,49 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   @Test
+  public void pausesMigrationDuringBlockImport() throws Exception {
+    appendBlocks(2);
+    final Hash hash1 = blockchain.getBlockHeader(1L).get().getHash();
+    final Hash hash2 = blockchain.getBlockHeader(2L).get().getHash();
+
+    final CountDownLatch block1StartedLatch = new CountDownLatch(1);
+    final CountDownLatch allowBlock1ToFinishLatch = new CountDownLatch(1);
+
+    when(trieLogManager.getTrieLogLayer(hash1))
+        .thenAnswer(
+            invocation -> {
+              block1StartedLatch.countDown();
+              allowBlock1ToFinishLatch.await(10, TimeUnit.SECONDS);
+              return Optional.of(createAccountTrieLog(Wei.fromHexString("0x100")));
+            });
+    when(trieLogManager.getTrieLogLayer(hash2))
+        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x200"))));
+
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
+    final CompletableFuture<Void> future = migrator.migrate();
+
+    assertThat(block1StartedLatch.await(5, TimeUnit.SECONDS)).isTrue();
+
+    // Simulate block import starting (from MergeCoordinator.rememberBlock)
+    migrator.onBlockImportStarted();
+
+    // Let block 1 finish processing
+    allowBlock1ToFinishLatch.countDown();
+
+    // Give migration thread time to finish block 1 and reach the wait loop
+    Thread.sleep(50);
+
+    // Block 2 must not have started — migration is paused
+    verify(trieLogManager, never()).getTrieLogLayer(hash2);
+
+    // Simulate block import ending
+    migrator.onBlockImportEnded();
+
+    future.get(10, TimeUnit.SECONDS);
+    verify(trieLogManager, times(1)).getTrieLogLayer(hash2);
+  }
+
+  @Test
   public void doesNotSwitchToArchiveModeOnFailure() {
     appendBlocks(1);
     when(trieLogManager.getTrieLogLayer(any())).thenThrow(new RuntimeException("Test failure"));

@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BlockImportListener;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
@@ -48,7 +49,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Migrates a Bonsai storage to Bonsai archive storage format. */
-public class BonsaiFlatDbToArchiveMigrator implements Closeable {
+public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockImportListener {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
   private static final int LOG_INTERVAL_SECONDS = 60;
@@ -64,6 +65,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final Counter migratedBlocksCounter;
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
   protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
+  protected final AtomicBoolean blockImportInProgress = new AtomicBoolean(false);
 
   /**
    * Creates a new BonsaiFlatDbToArchiveMigrator.
@@ -124,6 +126,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
+        while (blockImportInProgress.get()) {
+          try {
+            Thread.sleep(10); // 10ms poll interval
+          } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Migration interrupted while waiting for block import", e);
+          }
+        }
 
         final Optional<TrieLog> maybeTrieLog =
             blockchain
@@ -165,6 +175,16 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     } finally {
       migrationRunning.set(false);
     }
+  }
+
+  @Override
+  public void onBlockImportStarted() {
+    blockImportInProgress.set(true);
+  }
+
+  @Override
+  public void onBlockImportEnded() {
+    blockImportInProgress.set(false);
   }
 
   @Override

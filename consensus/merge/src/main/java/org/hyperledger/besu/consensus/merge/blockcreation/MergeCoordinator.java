@@ -49,7 +49,9 @@ import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.BlockImportListener;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
+import org.hyperledger.besu.util.Subscribers;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -108,6 +110,8 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
 
   private final Map<PayloadIdentifier, BlockCreationTask> blockCreationTasks =
       new ConcurrentHashMap<>();
+
+  private final Subscribers<BlockImportListener> blockImportListeners = Subscribers.create();
 
   /**
    * Instantiates a new Merge coordinator.
@@ -181,6 +185,11 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
     this.mergeBlockCreatorFactory = mergeBlockCreatorFactory;
 
     this.backwardSyncContext.subscribeBadChainListener(this);
+  }
+
+  @Override
+  public long subscribeBlockImportListener(final BlockImportListener listener) {
+    return blockImportListeners.subscribe(listener);
   }
 
   @Override
@@ -690,64 +699,74 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
   @Override
   public BlockProcessingResult rememberBlock(
       final Block block, final Optional<BlockAccessList> blockAccessList) {
-    LOG.atDebug().setMessage("Remember block {}").addArgument(block::toLogString).log();
-    final var chain = protocolContext.getBlockchain();
-    final var validationResult = validateBlock(block, blockAccessList);
-    validationResult
-        .getYield()
-        .ifPresentOrElse(
-            result ->
-                chain.storeBlock(
-                    block,
-                    result.getReceipts(),
-                    validationResult.getYield().flatMap(y -> y.getBlockAccessList())),
-            () -> LOG.debug("empty yield in blockProcessingResult"));
-    return validationResult;
+    blockImportListeners.forEach(BlockImportListener::onBlockImportStarted);
+    try {
+      LOG.atDebug().setMessage("Remember block {}").addArgument(block::toLogString).log();
+      final var chain = protocolContext.getBlockchain();
+      final var validationResult = validateBlock(block, blockAccessList);
+      validationResult
+          .getYield()
+          .ifPresentOrElse(
+              result ->
+                  chain.storeBlock(
+                      block,
+                      result.getReceipts(),
+                      validationResult.getYield().flatMap(y -> y.getBlockAccessList())),
+              () -> LOG.debug("empty yield in blockProcessingResult"));
+      return validationResult;
+    } finally {
+      blockImportListeners.forEach(BlockImportListener::onBlockImportEnded);
+    }
   }
 
   @Override
   public ForkchoiceResult updateForkChoice(
       final BlockHeader newHead, final Hash finalizedBlockHash, final Hash safeBlockHash) {
-    MutableBlockchain blockchain = protocolContext.getBlockchain();
-    final Optional<BlockHeader> newFinalized = blockchain.getBlockHeader(finalizedBlockHash);
+    blockImportListeners.forEach(BlockImportListener::onBlockImportStarted);
+    try {
+      MutableBlockchain blockchain = protocolContext.getBlockchain();
+      final Optional<BlockHeader> newFinalized = blockchain.getBlockHeader(finalizedBlockHash);
 
-    if (newHead.getNumber() < blockchain.getChainHeadBlockNumber()
-        && isDescendantOf(newHead, blockchain.getChainHeadHeader())) {
-      LOG.atDebug()
-          .setMessage("Ignoring update to old head {}")
-          .addArgument(newHead::toLogString)
-          .log();
-      return ForkchoiceResult.withIgnoreUpdateToOldHead(newHead);
+      if (newHead.getNumber() < blockchain.getChainHeadBlockNumber()
+          && isDescendantOf(newHead, blockchain.getChainHeadHeader())) {
+        LOG.atDebug()
+            .setMessage("Ignoring update to old head {}")
+            .addArgument(newHead::toLogString)
+            .log();
+        return ForkchoiceResult.withIgnoreUpdateToOldHead(newHead);
+      }
+
+      final Optional<Hash> latestValid = getLatestValidAncestor(newHead);
+
+      Optional<BlockHeader> parentOfNewHead = blockchain.getBlockHeader(newHead.getParentHash());
+      if (parentOfNewHead.isPresent()
+          && Long.compareUnsigned(newHead.getTimestamp(), parentOfNewHead.get().getTimestamp())
+              <= 0) {
+        return ForkchoiceResult.withFailure(
+            INVALID, "new head timestamp not greater than parent", latestValid);
+      }
+
+      setNewHead(blockchain, newHead);
+
+      // set and persist the new finalized block if it is present
+      newFinalized.ifPresent(
+          blockHeader -> {
+            blockchain.setFinalized(blockHeader.getHash());
+            mergeContext.setFinalized(blockHeader);
+          });
+
+      blockchain
+          .getBlockHeader(safeBlockHash)
+          .ifPresent(
+              newSafeBlock -> {
+                blockchain.setSafeBlock(safeBlockHash);
+                mergeContext.setSafeBlock(newSafeBlock);
+              });
+
+      return ForkchoiceResult.withResult(newFinalized, Optional.of(newHead));
+    } finally {
+      blockImportListeners.forEach(BlockImportListener::onBlockImportEnded);
     }
-
-    final Optional<Hash> latestValid = getLatestValidAncestor(newHead);
-
-    Optional<BlockHeader> parentOfNewHead = blockchain.getBlockHeader(newHead.getParentHash());
-    if (parentOfNewHead.isPresent()
-        && Long.compareUnsigned(newHead.getTimestamp(), parentOfNewHead.get().getTimestamp())
-            <= 0) {
-      return ForkchoiceResult.withFailure(
-          INVALID, "new head timestamp not greater than parent", latestValid);
-    }
-
-    setNewHead(blockchain, newHead);
-
-    // set and persist the new finalized block if it is present
-    newFinalized.ifPresent(
-        blockHeader -> {
-          blockchain.setFinalized(blockHeader.getHash());
-          mergeContext.setFinalized(blockHeader);
-        });
-
-    blockchain
-        .getBlockHeader(safeBlockHash)
-        .ifPresent(
-            newSafeBlock -> {
-              blockchain.setSafeBlock(safeBlockHash);
-              mergeContext.setSafeBlock(newSafeBlock);
-            });
-
-    return ForkchoiceResult.withResult(newFinalized, Optional.of(newHead));
   }
 
   private boolean setNewHead(final MutableBlockchain blockchain, final BlockHeader newHead) {
