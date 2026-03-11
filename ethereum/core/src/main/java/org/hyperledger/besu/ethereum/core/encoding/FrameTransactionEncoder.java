@@ -47,7 +47,7 @@ public class FrameTransactionEncoder {
     out.startList();
     out.writeBigIntegerScalar(transaction.getChainId().orElseThrow());
     out.writeLongScalar(transaction.getNonce());
-    out.writeBytes(transaction.getFrameSender().orElseThrow());
+    out.writeBytes(transaction.getFrameSender().orElseThrow().getBytes());
     out.writeList(
         transaction.getFrames().orElseThrow(),
         (frame, frameOut) -> writeFrame(frame, frameOut));
@@ -62,7 +62,7 @@ public class FrameTransactionEncoder {
   private static void writeFrame(final Frame frame, final RLPOutput out) {
     out.startList();
     out.writeIntScalar(Byte.toUnsignedInt(frame.getMode()));
-    out.writeBytes(frame.getTarget().map(Bytes::copy).orElse(Bytes.EMPTY));
+    out.writeBytes(frame.getTarget().map(a -> a.getBytes().copy()).orElse(Bytes.EMPTY));
     out.writeLongScalar(frame.getGasLimit());
     out.writeBytes(frame.getData());
     out.endList();

@@ -20,10 +20,13 @@ import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.transaction.Frame;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 
 import java.util.List;
 import java.util.Optional;
+
+import org.apache.tuweni.bytes.Bytes;
 
 /**
  * Decodes a FRAME transaction (EIP-8141).
@@ -37,6 +40,16 @@ public class FrameTransactionDecoder {
 
   private FrameTransactionDecoder() {
     // private constructor
+  }
+
+  /**
+   * Decodes a FRAME transaction from raw typed bytes (including the type prefix byte).
+   *
+   * @param input the raw bytes (0x06 || rlp(...))
+   * @return the decoded transaction
+   */
+  public static Transaction decode(final Bytes input) {
+    return decode(RLP.input(input.slice(1)));
   }
 
   /**

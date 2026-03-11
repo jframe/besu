@@ -34,15 +34,17 @@ public class TransactionDecoder {
     Transaction decode(Bytes input);
   }
 
-  private static final EnumMap<TransactionType, Decoder> TRANSACTION_DECODERS =
-      new EnumMap<>(
-          Map.of(
-              TransactionType.FRONTIER, FrontierTransactionDecoder::decode,
-              TransactionType.ACCESS_LIST, AccessListTransactionDecoder::decode,
-              TransactionType.EIP1559, EIP1559TransactionDecoder::decode,
-              TransactionType.BLOB, BlobTransactionDecoder::decode,
-              TransactionType.DELEGATE_CODE, CodeDelegationTransactionDecoder::decode,
-              TransactionType.FRAME, FrameTransactionDecoder::decode));
+  private static final EnumMap<TransactionType, Decoder> TRANSACTION_DECODERS;
+
+  static {
+    TRANSACTION_DECODERS = new EnumMap<>(TransactionType.class);
+    TRANSACTION_DECODERS.put(TransactionType.FRONTIER, FrontierTransactionDecoder::decode);
+    TRANSACTION_DECODERS.put(TransactionType.ACCESS_LIST, AccessListTransactionDecoder::decode);
+    TRANSACTION_DECODERS.put(TransactionType.EIP1559, EIP1559TransactionDecoder::decode);
+    TRANSACTION_DECODERS.put(TransactionType.BLOB, BlobTransactionDecoder::decode);
+    TRANSACTION_DECODERS.put(TransactionType.DELEGATE_CODE, CodeDelegationTransactionDecoder::decode);
+    TRANSACTION_DECODERS.put(TransactionType.FRAME, FrameTransactionDecoder::decode);
+  }
 
   private static final EnumMap<TransactionType, Decoder> POOLED_TRANSACTION_DECODERS =
       new EnumMap<>(Map.of(TransactionType.BLOB, BlobPooledTransactionDecoder::decode));

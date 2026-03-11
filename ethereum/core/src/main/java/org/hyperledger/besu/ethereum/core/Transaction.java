@@ -1142,14 +1142,14 @@ public class Transaction
               rlpOutput.startList();
               rlpOutput.writeBigIntegerScalar(chainId);
               rlpOutput.writeLongScalar(nonce);
-              rlpOutput.writeBytes(frameSender);
+              rlpOutput.writeBytes(frameSender.getBytes());
               rlpOutput.writeList(
                   frames,
                   (frame, out) -> {
                     out.startList();
                     out.writeIntScalar(Byte.toUnsignedInt(frame.getMode()));
                     out.writeBytes(
-                        frame.getTarget().map(Bytes::copy).orElse(Bytes.EMPTY));
+                        frame.getTarget().map(a -> a.getBytes().copy()).orElse(Bytes.EMPTY));
                     out.writeLongScalar(frame.getGasLimit());
                     // For VERIFY frames, replace data with empty bytes in the sig hash
                     if (frame.getMode() == Frame.MODE_VERIFY) {
@@ -1590,7 +1590,7 @@ public class Transaction
       if (transactionType == null) guessType();
       final boolean isFrame = Objects.equals(transactionType, TransactionType.FRAME);
       // FRAME transactions do not use a legacy payload field; default to empty bytes.
-      final Bytes effectivePayload = (payload == null && isFrame) ? Bytes.EMPTY : payload;
+      final Payload effectivePayload = (payload == null && isFrame) ? new Payload(Bytes.EMPTY) : payload;
       // FRAME transactions do not use a value field; default to Wei.ZERO.
       final Wei effectiveValue = (value == null && isFrame) ? Wei.ZERO : value;
       // FRAME transactions do not have a global gasLimit; default to 0.
