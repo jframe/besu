@@ -384,7 +384,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   private BonsaiFlatDbToArchiveMigrator createMigrator() {
-    return createMigrator(Integer.MAX_VALUE, 1_000, 5_000);
+    return createMigrator(1_000, 5_000);
   }
 
   private BonsaiFlatDbToArchiveMigrator createMigrator(
