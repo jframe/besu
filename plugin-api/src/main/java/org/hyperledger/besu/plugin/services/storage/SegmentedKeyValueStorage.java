@@ -165,6 +165,20 @@ public interface SegmentedKeyValueStorage extends Closeable {
       final SegmentIdentifier segmentIdentifier, Predicate<byte[]> returnCondition);
 
   /**
+   * Gets a storage-engine-specific numeric property for the given segment. Returns 0 if the
+   * property is not supported by the implementation.
+   *
+   * @param segmentIdentifier the segment to query
+   * @param property the RocksDB property name (e.g. "rocksdb.num-files-at-level0")
+   * @return the property value, or 0 if unsupported
+   * @throws StorageException if an error occurs during retrieval
+   */
+  default long getProperty(final SegmentIdentifier segmentIdentifier, final String property)
+      throws StorageException {
+    return 0L;
+  }
+
+  /**
    * Clear.
    *
    * @param segmentIdentifier the segment identifier
