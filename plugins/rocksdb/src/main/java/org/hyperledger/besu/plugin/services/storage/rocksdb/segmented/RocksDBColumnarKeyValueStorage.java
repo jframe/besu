@@ -543,6 +543,28 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
 
   abstract RocksDB getDB();
 
+  @Override
+  public long getProperty(final SegmentIdentifier segmentIdentifier, final String property)
+      throws StorageException {
+    try {
+      final ColumnFamilyHandle cfHandle = safeColumnHandle(segmentIdentifier);
+      if (cfHandle == null) {
+        return 0L;
+      }
+      final String value = getDB().getProperty(cfHandle, property);
+      if (value == null || value.isEmpty()) {
+        return 0L;
+      }
+      return Long.parseLong(value);
+    } catch (final NumberFormatException e) {
+      LOG.debug("Failed to parse RocksDB property {} as long", property, e);
+      return 0L;
+    } catch (final RocksDBException e) {
+      LOG.debug("Failed to retrieve RocksDB property {}", property, e);
+      return 0L;
+    }
+  }
+
   record SegmentRecord(String name, byte[] id) {
     public String forDisplay() {
       return String.format("'%s'(%s)", name, Bytes.of(id).toHexString());
