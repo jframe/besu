@@ -92,6 +92,21 @@ public interface SegmentedKeyValueStorage extends Closeable {
   SegmentedKeyValueStorageTransaction startTransaction() throws StorageException;
 
   /**
+   * Starts a write batch. Unlike {@link #startTransaction()}, the returned transaction is backed by
+   * a write batch that accumulates writes in memory and flushes them atomically on commit, with no
+   * conflict detection overhead. Suitable for bulk write operations such as data migration.
+   *
+   * <p>Defaults to {@link #startTransaction()} for backends that do not natively support write
+   * batches.
+   *
+   * @return a transaction backed by a write batch
+   * @throws StorageException the storage exception
+   */
+  default SegmentedKeyValueStorageTransaction startWriteBatch() throws StorageException {
+    return startTransaction();
+  }
+
+  /**
    * Returns a stream of all keys for the segment.
    *
    * @param segmentIdentifier The segment identifier whose keys we want to stream.
