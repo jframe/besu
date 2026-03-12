@@ -59,6 +59,7 @@ public class StubGenesisConfigOptions implements GenesisConfigOptions, Cloneable
 
   private OptionalLong futureEipsTime = OptionalLong.empty();
   private OptionalLong experimentalEipsTime = OptionalLong.empty();
+  private OptionalLong eip8141Time = OptionalLong.empty();
   private OptionalLong terminalBlockNumber = OptionalLong.empty();
   private Optional<Hash> terminalBlockHash = Optional.empty();
   private Optional<UInt256> terminalTotalDifficulty = Optional.empty();
@@ -295,6 +296,11 @@ public class StubGenesisConfigOptions implements GenesisConfigOptions, Cloneable
   }
 
   @Override
+  public OptionalLong getEip8141Time() {
+    return eip8141Time;
+  }
+
+  @Override
   public Optional<Wei> getBaseFeePerGas() {
     return baseFeePerGas;
   }
@@ -361,6 +367,7 @@ public class StubGenesisConfigOptions implements GenesisConfigOptions, Cloneable
     getAmsterdamTime().ifPresent(l -> builder.put("amsterdamTime", l));
     getFutureEipsTime().ifPresent(l -> builder.put("futureEipsTime", l));
     getExperimentalEipsTime().ifPresent(l -> builder.put("experimentalEipsTime", l));
+    getEip8141Time().ifPresent(l -> builder.put("eip8141Time", l));
     getTerminalBlockNumber().ifPresent(l -> builder.put("terminalBlockNumber", l));
     getTerminalBlockHash().ifPresent(h -> builder.put("terminalBlockHash", h));
 
@@ -720,6 +727,17 @@ public class StubGenesisConfigOptions implements GenesisConfigOptions, Cloneable
    */
   public StubGenesisConfigOptions experimentalEipsTime(final long timestamp) {
     experimentalEipsTime = OptionalLong.of(timestamp);
+    return this;
+  }
+
+  /**
+   * EIP-8141 activation Time block.
+   *
+   * @param timestamp the block timestamp
+   * @return the stub genesis config options
+   */
+  public StubGenesisConfigOptions eip8141Time(final long timestamp) {
+    eip8141Time = OptionalLong.of(timestamp);
     return this;
   }
 

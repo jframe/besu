@@ -25,6 +25,7 @@
     "bpo5Time": 23,
     "amsterdamTime": 24,
     "futureEipsTime": 98,
-    "experimentalEipsTime": 99
+    "experimentalEipsTime": 99,
+    "eip8141Time": 100
   }
 }

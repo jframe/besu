@@ -329,6 +329,13 @@ public interface GenesisConfigOptions {
   OptionalLong getExperimentalEipsTime();
 
   /**
+   * Gets EIP-8141 (FRAME transactions) activation timestamp.
+   *
+   * @return the EIP-8141 activation time
+   */
+  OptionalLong getEip8141Time();
+
+  /**
    * Gets base fee per gas.
    *
    * @return the base fee per gas

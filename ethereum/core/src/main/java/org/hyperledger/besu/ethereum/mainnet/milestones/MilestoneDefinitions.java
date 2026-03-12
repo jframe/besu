@@ -151,6 +151,10 @@ public class MilestoneDefinitions {
         createTimestampMilestone(
             MainnetHardforkId.EXPERIMENTAL_EIPS,
             config.getExperimentalEipsTime(),
-            specFactory::experimentalEipsDefinition));
+            specFactory::experimentalEipsDefinition),
+        createTimestampMilestone(
+            MainnetHardforkId.EIP_8141,
+            config.getEip8141Time(),
+            specFactory::eip8141Definition));
   }
 }

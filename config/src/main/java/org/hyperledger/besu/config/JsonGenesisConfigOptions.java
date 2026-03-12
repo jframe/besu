@@ -369,6 +369,11 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
   }
 
   @Override
+  public OptionalLong getEip8141Time() {
+    return getOptionalLong("eip8141time");
+  }
+
+  @Override
   public Optional<Wei> getBaseFeePerGas() {
     return Optional.ofNullable(configOverrides.get("baseFeePerGas")).map(Wei::fromHexString);
   }
@@ -478,6 +483,7 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
         .ifPresent(h -> builder.put("terminalBlockHash", h.getBytes().toHexString()));
     getFutureEipsTime().ifPresent(l -> builder.put("futureEipsTime", l));
     getExperimentalEipsTime().ifPresent(l -> builder.put("experimentalEipsTime", l));
+    getEip8141Time().ifPresent(l -> builder.put("eip8141Time", l));
 
     getContractSizeLimit().ifPresent(l -> builder.put("contractSizeLimit", l));
     getEvmStackSize().ifPresent(l -> builder.put("evmstacksize", l));
@@ -615,7 +621,8 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
             getBpo5Time(),
             getAmsterdamTime(),
             getFutureEipsTime(),
-            getExperimentalEipsTime());
+            getExperimentalEipsTime(),
+            getEip8141Time());
     // when adding forks add an entry to ${REPO_ROOT}/config/src/test/resources/all_forks.json
 
     return forkBlockTimestamps

@@ -104,7 +104,9 @@ public interface HardforkId {
     /** Development fork, for accepted and unscheduled EIPs. */
     FUTURE_EIPS(false, "FutureEips"),
     /** Developmental fork, for experimental EIPs. */
-    EXPERIMENTAL_EIPS(false, "ExperimentalEips");
+    EXPERIMENTAL_EIPS(false, "ExperimentalEips"),
+    /** EIP-8141: FRAME transactions (native account abstraction). */
+    EIP_8141(false, "Eip8141");
 
     final boolean finalized;
     final String description;

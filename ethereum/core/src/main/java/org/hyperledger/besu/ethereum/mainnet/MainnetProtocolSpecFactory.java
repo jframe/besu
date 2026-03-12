@@ -383,4 +383,24 @@ public class MainnetProtocolSpecFactory {
         balConfiguration,
         metricsSystem);
   }
+
+  /**
+   * The EIP-8141 fork introduces FRAME transactions (native account abstraction).
+   *
+   * <p>Enables type 0x06 FRAME transactions with VERIFY/DEFAULT/SENDER frames, the APPROVE opcode,
+   * and TXPARAMLOAD/SIZE/COPY opcodes.
+   *
+   * @return a protocol spec for the EIP-8141 fork.
+   */
+  public ProtocolSpecBuilder eip8141Definition() {
+    return MainnetProtocolSpecs.eip8141Definition(
+        chainId,
+        isRevertReasonEnabled,
+        genesisConfigOptions,
+        evmConfiguration,
+        miningConfiguration,
+        isParallelTxProcessingEnabled,
+        balConfiguration,
+        metricsSystem);
+  }
 }
