@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.api.jsonrpc.internal.results;
 import org.hyperledger.besu.datatypes.AccessListEntry;
 import org.hyperledger.besu.datatypes.BytesHolder;
 import org.hyperledger.besu.datatypes.CodeDelegation;
+import org.hyperledger.besu.datatypes.Frame;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.api.query.TransactionWithMetadata;
@@ -27,6 +28,7 @@ import java.util.Optional;
 
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import org.apache.tuweni.bytes.Bytes;
 
@@ -54,7 +56,8 @@ import org.apache.tuweni.bytes.Bytes;
   "v",
   "r",
   "s",
-  "blobVersionedHashes"
+  "blobVersionedHashes",
+  "frames"
 })
 public class TransactionCompleteResult implements TransactionResult {
 
@@ -101,6 +104,9 @@ public class TransactionCompleteResult implements TransactionResult {
   @JsonInclude(JsonInclude.Include.NON_NULL)
   private final List<CodeDelegationResult> authorizationList;
 
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  private final List<FrameResult> frames;
+
   public TransactionCompleteResult(final TransactionWithMetadata tx) {
     final Transaction transaction = tx.getTransaction();
     final TransactionType transactionType = transaction.getType();
@@ -134,18 +140,29 @@ public class TransactionCompleteResult implements TransactionResult {
       this.v = Quantity.create(transaction.getV());
     } else {
       this.type = Quantity.create(transactionType.getSerializedType());
-      this.yParity = Quantity.create(transaction.getYParity());
-      this.v =
-          (transactionType == TransactionType.ACCESS_LIST
-                  || transactionType == TransactionType.EIP1559
-                  || transactionType == TransactionType.DELEGATE_CODE
-                  || transactionType == TransactionType.BLOB)
-              ? Quantity.create(transaction.getYParity())
-              : null;
+      if (transactionType == TransactionType.FRAME) {
+        // FRAME transactions have no ECDSA signature
+        this.yParity = null;
+        this.v = null;
+      } else {
+        this.yParity = Quantity.create(transaction.getYParity());
+        this.v =
+            (transactionType == TransactionType.ACCESS_LIST
+                    || transactionType == TransactionType.EIP1559
+                    || transactionType == TransactionType.DELEGATE_CODE
+                    || transactionType == TransactionType.BLOB)
+                ? Quantity.create(transaction.getYParity())
+                : null;
+      }
     }
     this.value = Quantity.create(transaction.getValue());
-    this.r = Quantity.create(transaction.getR());
-    this.s = Quantity.create(transaction.getS());
+    if (transactionType == TransactionType.FRAME) {
+      this.r = null;
+      this.s = null;
+    } else {
+      this.r = Quantity.create(transaction.getR());
+      this.s = Quantity.create(transaction.getS());
+    }
     this.versionedHashes =
         transaction
             .getVersionedHashes()
@@ -157,6 +174,11 @@ public class TransactionCompleteResult implements TransactionResult {
     this.authorizationList =
         codeDelegationList
             .map(cds -> cds.stream().map(CodeDelegationResult::new).toList())
+            .orElse(null);
+    this.frames =
+        transaction
+            .getFrames()
+            .map(frs -> frs.stream().map(FrameResult::new).toList())
             .orElse(null);
   }
 
@@ -262,11 +284,13 @@ public class TransactionCompleteResult implements TransactionResult {
     return v;
   }
 
+  @JsonInclude(JsonInclude.Include.NON_NULL)
   @JsonGetter(value = "r")
   public String getR() {
     return r;
   }
 
+  @JsonInclude(JsonInclude.Include.NON_NULL)
   @JsonGetter(value = "s")
   public String getS() {
     return s;
@@ -280,5 +304,25 @@ public class TransactionCompleteResult implements TransactionResult {
   @JsonGetter(value = "authorizationList")
   public List<CodeDelegationResult> getAuthorizationList() {
     return authorizationList;
+  }
+
+  @JsonGetter(value = "frames")
+  public List<FrameResult> getFrames() {
+    return frames;
+  }
+
+  /** Per-frame summary for EIP-8141 FRAME transaction JSON-RPC results. */
+  public record FrameResult(
+      @JsonProperty("mode") String mode,
+      @JsonProperty("to") String to,
+      @JsonProperty("gas") String gas,
+      @JsonProperty("input") String input) {
+    public FrameResult(final Frame frame) {
+      this(
+          Quantity.create(frame.getMode()),
+          frame.getTarget().map(a -> a.getBytes().toHexString()).orElse(null),
+          Quantity.create(frame.getGasLimit()),
+          frame.getData().toString());
+    }
   }
 }

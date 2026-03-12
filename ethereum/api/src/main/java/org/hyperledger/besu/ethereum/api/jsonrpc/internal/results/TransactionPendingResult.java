@@ -112,18 +112,28 @@ public class TransactionPendingResult implements TransactionResult {
       this.v = Quantity.create(transaction.getV());
     } else {
       this.type = Quantity.create(transactionType.getSerializedType());
-      this.yParity = Quantity.create(transaction.getYParity());
-      this.v =
-          (transactionType == TransactionType.ACCESS_LIST
-                  || transactionType == TransactionType.EIP1559
-                  || transactionType == TransactionType.DELEGATE_CODE
-                  || transactionType == TransactionType.BLOB)
-              ? Quantity.create(transaction.getYParity())
-              : null;
+      if (transactionType == TransactionType.FRAME) {
+        this.yParity = null;
+        this.v = null;
+      } else {
+        this.yParity = Quantity.create(transaction.getYParity());
+        this.v =
+            (transactionType == TransactionType.ACCESS_LIST
+                    || transactionType == TransactionType.EIP1559
+                    || transactionType == TransactionType.DELEGATE_CODE
+                    || transactionType == TransactionType.BLOB)
+                ? Quantity.create(transaction.getYParity())
+                : null;
+      }
     }
     this.value = Quantity.create(transaction.getValue());
-    this.r = Quantity.create(transaction.getR());
-    this.s = Quantity.create(transaction.getS());
+    if (transactionType == TransactionType.FRAME) {
+      this.r = null;
+      this.s = null;
+    } else {
+      this.r = Quantity.create(transaction.getR());
+      this.s = Quantity.create(transaction.getS());
+    }
     this.versionedHashes =
         transaction
             .getVersionedHashes()
