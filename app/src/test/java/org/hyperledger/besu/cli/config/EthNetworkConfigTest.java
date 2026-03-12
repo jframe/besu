@@ -87,6 +87,14 @@ public class EthNetworkConfigTest {
   }
 
   @Test
+  public void testDefaultEip8141Config() {
+    EthNetworkConfig config = EthNetworkConfig.getNetworkConfig(NetworkDefinition.EIP_8141);
+    assertThat(config.dnsDiscoveryUrl()).isNull();
+    assertThat(config.enodeBootNodes()).isEmpty();
+    assertThat(config.networkId()).isEqualTo(BigInteger.valueOf(8141));
+  }
+
+  @Test
   public void testBuilderWithNetworkId() {
     EthNetworkConfig config =
         new EthNetworkConfig.Builder(EthNetworkConfig.getNetworkConfig(MAINNET))

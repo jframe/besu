@@ -115,6 +115,14 @@ public enum NetworkDefinition {
       2023, // network id
       false, // can snap sync
       false, // native required
+      60_000_000L), // target gas limit
+  /** EIP-8141 FRAME transactions devnet. */
+  EIP_8141(
+      "/eip8141.json",
+      8141, // chain id
+      8141, // network id
+      false, // can snap sync
+      false, // native required
       60_000_000L); // target gas limit
 
   private final String genesisFile;
