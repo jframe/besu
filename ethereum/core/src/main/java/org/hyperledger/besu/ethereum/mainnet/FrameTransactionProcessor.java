@@ -22,6 +22,7 @@ import static org.hyperledger.besu.evm.operation.FrameTxContextKeys.FRAME_TX_TRA
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Frame;
+import org.hyperledger.besu.datatypes.FrameReceipt;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
 import org.hyperledger.besu.ethereum.core.Transaction;
@@ -140,6 +141,7 @@ public class FrameTransactionProcessor {
     operationTracer.traceStartTransaction(mainUpdater, transaction);
 
     final List<Log> allLogs = new ArrayList<>();
+    final List<FrameReceipt> frameReceiptList = new ArrayList<>(frames.size());
     long totalGasUsed = 0L;
 
     // --- 1. Execute pre-VERIFY DEFAULT frames ---
@@ -182,6 +184,7 @@ public class FrameTransactionProcessor {
             operationTracer);
       }
       allLogs.addAll(msgFrame.getLogs());
+      frameReceiptList.add(new FrameReceipt(1, gasUsedByFrame, List.copyOf(msgFrame.getLogs())));
     }
 
     // --- 2. Execute VERIFY frames in read-only snapshots ---
@@ -231,6 +234,9 @@ public class FrameTransactionProcessor {
             operationTracer);
       }
 
+      // VERIFY frames emit no persistent logs (state was reverted)
+      frameReceiptList.add(new FrameReceipt(1, gasUsedByFrame, List.of()));
+
       // First APPROVE with scope ≥ 1 designates a paymaster as fee payer
       if (feePayerAddress.equals(senderAddress) && approvalScope >= 1) {
         feePayerAddress = frame.getTarget().orElse(ENTRY_POINT);
@@ -279,6 +285,7 @@ public class FrameTransactionProcessor {
             operationTracer);
       }
       allLogs.addAll(msgFrame.getLogs());
+      frameReceiptList.add(new FrameReceipt(1, gasUsedByFrame, List.copyOf(msgFrame.getLogs())));
     }
 
     // --- 4. Commit all state changes ---
@@ -312,13 +319,16 @@ public class FrameTransactionProcessor {
         java.util.Set.of(),
         0L);
 
-    return TransactionProcessingResult.successful(
-        allLogs,
-        totalGasUsed,
-        unusedGas + refundedGas,
-        Bytes.EMPTY,
-        Optional.empty(),
-        ValidationResult.valid());
+    final TransactionProcessingResult result =
+        TransactionProcessingResult.successful(
+            allLogs,
+            totalGasUsed,
+            unusedGas + refundedGas,
+            Bytes.EMPTY,
+            Optional.empty(),
+            ValidationResult.valid());
+    result.setFrameData(feePayerAddress, frameReceiptList);
+    return result;
   }
 
   private MessageFrame buildMessageFrame(

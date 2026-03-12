@@ -210,7 +210,7 @@ public class MainnetTransactionProcessor {
       final TransactionValidationParams transactionValidationParams,
       final Wei blobGasPrice,
       final Optional<AccessLocationTracker> accessLocationTracker) {
-    if (transaction.getType().equals(TransactionType.FRAME)) {
+    if (TransactionType.FRAME.equals(transaction.getType())) {
       return frameTransactionProcessor.process(
           worldState,
           blockHeader,

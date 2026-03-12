@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.core.encoding.receipt;
 
+import org.hyperledger.besu.datatypes.FrameReceipt;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.rlp.RLP;
@@ -117,6 +118,9 @@ public class TransactionReceiptEncoder {
     if (options.isWithRevertReason() && receipt.getRevertReason().isPresent()) {
       rlpOutput.writeBytes(receipt.getRevertReason().get());
     }
+    if (receipt.getTransactionType() == TransactionType.FRAME) {
+      writeFrameReceiptExtensions(receipt, rlpOutput, options);
+    }
     rlpOutput.endList();
   }
 
@@ -134,6 +138,38 @@ public class TransactionReceiptEncoder {
     rlpOutput.writeList(
         receipt.getLogsList(),
         (log, logOutput) -> log.writeTo(logOutput, options.isWithCompactedLogs()));
+  }
+
+  /**
+   * Writes EIP-8141 FRAME receipt extensions: fee_payer address and per-frame receipts.
+   *
+   * <p>Encoding: {@code fee_payer_address, [[status, gas_used, [logs...]], ...]}
+   *
+   * @param receipt the FRAME transaction receipt
+   * @param rlpOutput the RLP output
+   * @param options the encoding options
+   */
+  private static void writeFrameReceiptExtensions(
+      final TransactionReceipt receipt,
+      final RLPOutput rlpOutput,
+      final TransactionReceiptEncodingConfiguration options) {
+    // fee_payer: 20-byte address (zero address if absent)
+    receipt
+        .getFeePayerAddress()
+        .ifPresentOrElse(
+            addr -> rlpOutput.writeBytes(addr.getBytes()),
+            () -> rlpOutput.writeBytes(org.apache.tuweni.bytes.Bytes.repeat((byte) 0, 20)));
+    // per-frame receipts list
+    rlpOutput.writeList(
+        receipt.getFrameReceipts().orElse(List.of()),
+        (fr, out) -> {
+          out.startList();
+          out.writeLongScalar(fr.status());
+          out.writeLongScalar(fr.gasUsed());
+          out.writeList(
+              fr.logs(), (log, logOut) -> log.writeTo(logOut, options.isWithCompactedLogs()));
+          out.endList();
+        });
   }
 
   /**

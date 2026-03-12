@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.ethereum.core;
 
+import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.FrameReceipt;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.datatypes.LogsBloomFilter;
@@ -51,6 +53,9 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
   private final int status;
   private final TransactionReceiptType transactionReceiptType;
   private final Optional<Bytes> revertReason;
+  // EIP-8141 FRAME transaction receipt extensions
+  private final Optional<Address> feePayerAddress;
+  private final Optional<List<FrameReceipt>> frameReceipts;
 
   /**
    * Creates an instance of a state root-encoded transaction receipt.
@@ -140,6 +145,37 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
         maybeRevertReason);
   }
 
+  /**
+   * Creates a status-encoded FRAME transaction receipt with per-frame receipt data.
+   *
+   * @param transactionType must be {@link TransactionType#FRAME}
+   * @param status overall transaction status (1 for success, 0 for failure)
+   * @param cumulativeGasUsed cumulative gas used in the block after this transaction
+   * @param logs all logs emitted across all frames
+   * @param revertReason optional revert reason bytes
+   * @param feePayerAddress the address that paid the miner tip
+   * @param frameReceipts per-frame execution summaries
+   */
+  public TransactionReceipt(
+      final TransactionType transactionType,
+      final int status,
+      final long cumulativeGasUsed,
+      final List<Log> logs,
+      final Optional<Bytes> revertReason,
+      final Optional<Address> feePayerAddress,
+      final Optional<List<FrameReceipt>> frameReceipts) {
+    this(
+        transactionType,
+        null,
+        status,
+        cumulativeGasUsed,
+        logs,
+        LogsBloomFilter.builder().insertLogs(logs).build(),
+        revertReason,
+        feePayerAddress,
+        frameReceipts);
+  }
+
   /** Private constructor used by all public constructors. */
   private TransactionReceipt(
       final TransactionType transactionType,
@@ -149,6 +185,29 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
       final List<Log> logs,
       final LogsBloomFilter bloomFilter,
       final Optional<Bytes> revertReason) {
+    this(
+        transactionType,
+        stateRoot,
+        status,
+        cumulativeGasUsed,
+        logs,
+        bloomFilter,
+        revertReason,
+        Optional.empty(),
+        Optional.empty());
+  }
+
+  /** Canonical constructor. */
+  private TransactionReceipt(
+      final TransactionType transactionType,
+      final Hash stateRoot,
+      final int status,
+      final long cumulativeGasUsed,
+      final List<Log> logs,
+      final LogsBloomFilter bloomFilter,
+      final Optional<Bytes> revertReason,
+      final Optional<Address> feePayerAddress,
+      final Optional<List<FrameReceipt>> frameReceipts) {
     this.transactionType = transactionType;
     this.stateRoot = stateRoot;
     this.cumulativeGasUsed = cumulativeGasUsed;
@@ -158,6 +217,8 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
     this.transactionReceiptType =
         stateRoot == null ? TransactionReceiptType.STATUS : TransactionReceiptType.ROOT;
     this.revertReason = revertReason;
+    this.feePayerAddress = feePayerAddress;
+    this.frameReceipts = frameReceipts;
   }
 
   /**
@@ -234,6 +295,24 @@ public class TransactionReceipt implements org.hyperledger.besu.plugin.data.Tran
   @Override
   public Optional<Bytes> getRevertReason() {
     return revertReason;
+  }
+
+  /**
+   * Returns the fee payer address for EIP-8141 FRAME transactions.
+   *
+   * @return the fee payer address, or empty for non-FRAME transactions
+   */
+  public Optional<Address> getFeePayerAddress() {
+    return feePayerAddress;
+  }
+
+  /**
+   * Returns the per-frame execution receipts for EIP-8141 FRAME transactions.
+   *
+   * @return the list of frame receipts, or empty for non-FRAME transactions
+   */
+  public Optional<List<FrameReceipt>> getFrameReceipts() {
+    return frameReceipts;
   }
 
   @Override

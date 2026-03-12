@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.ethereum.core.encoding.receipt;
 
+import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.FrameReceipt;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.datatypes.LogsBloomFilter;
@@ -87,6 +89,13 @@ public class TransactionReceiptDecoder {
       final RLPInput rlpInput, final boolean revertReasonAllowed) {
     final ReceiptComponents components = decodeTypedReceiptComponents(rlpInput);
     Optional<Bytes> revertReason = readMaybeRevertReason(components.input(), revertReasonAllowed);
+    if (components.transactionType() == TransactionType.FRAME) {
+      final Optional<Address> feePayerAddress = readMaybeFrameFeePayerAddress(components.input());
+      final Optional<List<FrameReceipt>> frameReceipts =
+          readMaybeFrameReceipts(components.input());
+      components.input().leaveList();
+      return createFrameReceipt(components, revertReason, feePayerAddress, frameReceipts);
+    }
     components.input().leaveList();
     return createReceipt(components, revertReason);
   }
@@ -277,6 +286,64 @@ public class TransactionReceiptDecoder {
       return Optional.empty();
     }
     return Optional.of(input.readBytes());
+  }
+
+  /**
+   * Creates an EIP-8141 FRAME transaction receipt from decoded components and FRAME-specific
+   * extensions.
+   */
+  private static TransactionReceipt createFrameReceipt(
+      final ReceiptComponents components,
+      final Optional<Bytes> revertReason,
+      final Optional<Address> feePayerAddress,
+      final Optional<List<FrameReceipt>> frameReceipts) {
+    final int status = components.statusOrStateRoot().readIntScalar();
+    return new TransactionReceipt(
+        components.transactionType(),
+        status,
+        components.cumulativeGas(),
+        components.logs(),
+        revertReason,
+        feePayerAddress,
+        frameReceipts);
+  }
+
+  /**
+   * Reads the optional fee payer address from the RLP input (EIP-8141 extension). Returns empty if
+   * the field is absent or is the zero address.
+   */
+  private static Optional<Address> readMaybeFrameFeePayerAddress(final RLPInput input) {
+    if (input.isEndOfCurrentList()) {
+      return Optional.empty();
+    }
+    final Bytes addrBytes = input.readBytes();
+    if (addrBytes.size() != 20) {
+      return Optional.empty();
+    }
+    final Address addr = Address.wrap(addrBytes);
+    return Address.ZERO.equals(addr) ? Optional.empty() : Optional.of(addr);
+  }
+
+  /**
+   * Reads the optional per-frame receipts list from the RLP input (EIP-8141 extension). Returns
+   * empty if the field is absent.
+   */
+  private static Optional<List<FrameReceipt>> readMaybeFrameReceipts(final RLPInput input) {
+    if (input.isEndOfCurrentList()) {
+      return Optional.empty();
+    }
+    final List<FrameReceipt> frameReceipts =
+        input.readList(
+            frInput -> {
+              frInput.enterList();
+              final int status = frInput.readIntScalar();
+              final long gasUsed = frInput.readLongScalar();
+              final List<Log> logs =
+                  frInput.readList(logInput -> Log.readFrom(logInput, false));
+              frInput.leaveList();
+              return new FrameReceipt(status, gasUsed, logs);
+            });
+    return Optional.of(frameReceipts);
   }
 
   /**

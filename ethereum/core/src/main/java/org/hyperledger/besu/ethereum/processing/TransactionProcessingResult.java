@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.ethereum.processing;
 
+import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.FrameReceipt;
 import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.ethereum.mainnet.ValidationResult;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.PartialBlockAccessView;
@@ -404,6 +406,24 @@ public class TransactionProcessingResult
    */
   public Optional<Boolean> getIsProcessedInParallel() {
     return isProcessedInParallel;
+  }
+
+  // EIP-8141 FRAME transaction receipt data (empty for all other transaction types)
+  private Optional<Address> feePayerAddress = Optional.empty();
+  private Optional<List<FrameReceipt>> frameReceipts = Optional.empty();
+
+  public void setFrameData(
+      final Address feePayerAddress, final List<FrameReceipt> frameReceipts) {
+    this.feePayerAddress = Optional.of(feePayerAddress);
+    this.frameReceipts = Optional.of(frameReceipts);
+  }
+
+  public Optional<Address> getFeePayerAddress() {
+    return feePayerAddress;
+  }
+
+  public Optional<List<FrameReceipt>> getFrameReceipts() {
+    return frameReceipts;
   }
 
   /**

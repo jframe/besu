@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.api.jsonrpc.internal.results;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.BytesHolder;
+import org.hyperledger.besu.datatypes.FrameReceipt;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.datatypes.TransactionType;
@@ -25,9 +26,11 @@ import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import org.apache.tuweni.bytes.Bytes;
 
@@ -49,7 +52,9 @@ import org.apache.tuweni.bytes.Bytes;
   "revertReason",
   "type",
   "blobGasUsed",
-  "blobGasPrice"
+  "blobGasPrice",
+  "feePayer",
+  "frameReceipts"
 })
 public abstract class TransactionReceiptResult {
 
@@ -72,6 +77,9 @@ public abstract class TransactionReceiptResult {
 
   private final String blobGasUsed;
   private final String blobGasPrice;
+  // EIP-8141 FRAME transaction receipt extensions (null for non-FRAME transactions)
+  private final String feePayer;
+  private final List<FrameReceiptResult> frameReceipts;
 
   protected TransactionReceiptResult(final TransactionReceiptWithMetadata receiptWithMetadata) {
     final Transaction txn = receiptWithMetadata.getTransaction();
@@ -105,6 +113,17 @@ public abstract class TransactionReceiptResult {
         txn.getType().equals(TransactionType.FRONTIER)
             ? Quantity.create(0)
             : Quantity.create(txn.getType().getSerializedType());
+    this.feePayer =
+        receipt.getFeePayerAddress().map(Address::toString).orElse(null);
+    this.frameReceipts =
+        receipt
+            .getFrameReceipts()
+            .map(
+                frs ->
+                    frs.stream()
+                        .map(fr -> new FrameReceiptResult(fr.status(), fr.gasUsed()))
+                        .collect(Collectors.toList()))
+            .orElse(null);
   }
 
   @JsonGetter(value = "blockHash")
@@ -188,6 +207,26 @@ public abstract class TransactionReceiptResult {
   @JsonGetter(value = "revertReason")
   public String getRevertReason() {
     return revertReason;
+  }
+
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  @JsonGetter(value = "feePayer")
+  public String getFeePayer() {
+    return feePayer;
+  }
+
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  @JsonGetter(value = "frameReceipts")
+  public List<FrameReceiptResult> getFrameReceipts() {
+    return frameReceipts;
+  }
+
+  /** Per-frame execution summary for EIP-8141 FRAME transaction JSON-RPC receipts. */
+  public record FrameReceiptResult(
+      @JsonProperty("status") String status, @JsonProperty("gasUsed") String gasUsed) {
+    public FrameReceiptResult(final int status, final long gasUsed) {
+      this(Quantity.create(status), Quantity.create(gasUsed));
+    }
   }
 
   private List<TransactionReceiptLogResult> logReceipts(

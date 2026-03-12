@@ -1363,6 +1363,16 @@ public abstract class MainnetProtocolSpecs {
         final TransactionType transactionType,
         final TransactionProcessingResult result,
         final long gasUsed) {
+      if (transactionType == TransactionType.FRAME) {
+        return new TransactionReceipt(
+            transactionType,
+            result.isSuccessful() ? 1 : 0,
+            gasUsed,
+            result.getLogs(),
+            revertReasonEnabled ? result.getRevertReason() : Optional.empty(),
+            result.getFeePayerAddress(),
+            result.getFrameReceipts());
+      }
       return new TransactionReceipt(
           transactionType,
           result.isSuccessful() ? 1 : 0,
