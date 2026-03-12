@@ -22,12 +22,15 @@ import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetrics;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetricsFactory;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBWriteBatchTransaction;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDbIterator;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDbSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDbUtil;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfiguration;
+import org.hyperledger.besu.services.kvstore.SegmentedKeyValueStorageTransactionValidatorDecorator;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -65,6 +68,7 @@ import org.rocksdb.RocksIterator;
 import org.rocksdb.Statistics;
 import org.rocksdb.Status;
 import org.rocksdb.TransactionDBOptions;
+import org.rocksdb.WriteBatch;
 import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -539,6 +543,25 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
       LOG.error("Attempting to use a closed RocksDbKeyValueStorage");
       throw new IllegalStateException("Storage has been closed");
     }
+  }
+
+  /**
+   * Start a transaction without WAL for improved performance in scenarios where durability is not
+   * required (e.g., resumable migrations).
+   *
+   * @return the new transaction started without WAL
+   * @throws StorageException the storage exception
+   */
+  @Override
+  public SegmentedKeyValueStorageTransaction startNoWALTransaction() throws StorageException {
+    throwIfClosed();
+    final WriteOptions writeOptions = new WriteOptions();
+    writeOptions.setDisableWAL(true);
+    writeOptions.setIgnoreMissingColumnFamilies(true);
+    return new SegmentedKeyValueStorageTransactionValidatorDecorator(
+        new RocksDBWriteBatchTransaction(
+            this::safeColumnHandle, new WriteBatch(), writeOptions, getDB(), this.metrics),
+        this.closed::get);
   }
 
   abstract RocksDB getDB();

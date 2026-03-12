@@ -92,6 +92,18 @@ public interface SegmentedKeyValueStorage extends Closeable {
   SegmentedKeyValueStorageTransaction startTransaction() throws StorageException;
 
   /**
+   * Begins a transaction without WAL. Returns a transaction object that can be updated and
+   * committed. WAL is disabled for performance in scenarios where durability is not required (e.g.,
+   * resumable migrations).
+   *
+   * @return An object representing the transaction.
+   * @throws StorageException the storage exception
+   */
+  default SegmentedKeyValueStorageTransaction startNoWALTransaction() throws StorageException {
+    return startTransaction();
+  }
+
+  /**
    * Returns a stream of all keys for the segment.
    *
    * @param segmentIdentifier The segment identifier whose keys we want to stream.
