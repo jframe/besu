@@ -92,9 +92,10 @@ public interface SegmentedKeyValueStorage extends Closeable {
   SegmentedKeyValueStorageTransaction startTransaction() throws StorageException;
 
   /**
-   * Begins a transaction without WAL. Returns a transaction object that can be updated and
-   * committed. WAL is disabled for performance in scenarios where durability is not required (e.g.,
-   * resumable migrations).
+   * Begins a transaction optimized for performance in scenarios where durability is not strictly
+   * required (e.g., resumable migrations). For RocksDB implementations, this uses WriteBatch which
+   * batches multiple writes and commits atomically. Non-RocksDB implementations fall back to the
+   * standard transaction.
    *
    * @return An object representing the transaction.
    * @throws StorageException the storage exception

@@ -546,17 +546,19 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   }
 
   /**
-   * Start a transaction without WAL for improved performance in scenarios where durability is not
-   * required (e.g., resumable migrations).
+   * Start a transaction using WriteBatch for improved performance in scenarios where durability is
+   * not strictly required (e.g., resumable migrations). WriteBatch batches multiple writes together
+   * and commits atomically, reducing overhead compared to individual transactions. WAL is not
+   * disabled due to RocksDB configuration constraints (recycle_log_file_num > 0 is incompatible
+   * with disableWAL).
    *
-   * @return the new transaction started without WAL
+   * @return the new transaction started with WriteBatch
    * @throws StorageException the storage exception
    */
   @Override
   public SegmentedKeyValueStorageTransaction startNoWALTransaction() throws StorageException {
     throwIfClosed();
     final WriteOptions writeOptions = new WriteOptions();
-    writeOptions.setDisableWAL(true);
     writeOptions.setIgnoreMissingColumnFamilies(true);
     return new SegmentedKeyValueStorageTransactionValidatorDecorator(
         new RocksDBWriteBatchTransaction(
