@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.VARIABLES;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
@@ -303,9 +303,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   @VisibleForTesting
   protected long calculateBackpressureSleep(final SegmentedKeyValueStorage storage) {
     try {
-      final long l0Files = storage.getProperty(ACCOUNT_INFO_STATE, "rocksdb.num-files-at-level0");
+      final long l0Files =
+          storage.getProperty(ACCOUNT_INFO_STATE_ARCHIVE, "rocksdb.num-files-at-level0");
       final long pendingBytes =
-          storage.getProperty(ACCOUNT_INFO_STATE, "rocksdb.estimate-pending-compaction-bytes");
+          storage.getProperty(
+              ACCOUNT_INFO_STATE_ARCHIVE, "rocksdb.estimate-pending-compaction-bytes");
       final long pendingGb = pendingBytes / (1024 * 1024 * 1024);
 
       lastL0FileCount.set(l0Files);
