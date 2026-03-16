@@ -42,6 +42,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.RateLimiter;
@@ -70,6 +71,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private final RateLimiter rateLimiter;
   private final int maxBlocksPerBatch;
+
+  // Engine API pause/resume for migration
+  private volatile Thread migrationThread;
+  private final AtomicBoolean engineApiActive = new AtomicBoolean(false);
 
   // Metrics
   private final Counter writesCounter;
@@ -168,6 +173,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private void migrateBlocks(final AtomicLong target) {
     try {
+      migrationThread = Thread.currentThread();
       final Instant migrationStartTime = Instant.now();
 
       final long lastProcessedBlock = getMigrationProgress().orElse(-1L);
@@ -181,6 +187,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
 
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
+        // Pause migration while engine API calls are active to reduce write contention
+        while (engineApiActive.get()) {
+          LockSupport.park();
+        }
+
         currentBlock = blockNumber;
         final Optional<TrieLog> maybeTrieLog =
             blockchain
@@ -279,6 +290,23 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       }
     } catch (final InterruptedException e) {
       Thread.currentThread().interrupt();
+    }
+  }
+
+  /**
+   * Called when an engine API call (newPayload, forkchoiceUpdated, etc.) starts. Signals the
+   * migration thread to pause processing to reduce write contention.
+   */
+  public void onEngineApiCallStart() {
+    engineApiActive.set(true);
+  }
+
+  /** Called when an engine API call completes. Resumes the migration thread by unparking it. */
+  public void onEngineApiCallEnd() {
+    engineApiActive.set(false);
+    final Thread thread = migrationThread;
+    if (thread != null) {
+      LockSupport.unpark(thread);
     }
   }
 

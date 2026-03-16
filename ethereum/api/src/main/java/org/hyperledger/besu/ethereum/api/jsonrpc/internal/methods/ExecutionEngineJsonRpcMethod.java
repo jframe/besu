@@ -87,7 +87,12 @@ public abstract class ExecutionEngineJsonRpcMethod implements JsonRpcMethod {
               "execution engine JSON-RPC request {} {}",
               this.getName(),
               request.getRequest().getParams());
-          z.tryComplete(syncResponse(request));
+          engineCallListener.onEngineApiCallStart();
+          try {
+            z.tryComplete(syncResponse(request));
+          } finally {
+            engineCallListener.onEngineApiCallEnd();
+          }
         },
         true,
         resp ->

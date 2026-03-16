@@ -1378,7 +1378,8 @@ public class RunnerBuilder {
                 apiConfiguration,
                 enodeDnsConfiguration,
                 transactionSimulator,
-                ethScheduler);
+                ethScheduler,
+                besuController.getArchiveMigrator());
     methods.putAll(besuController.getAdditionalJsonRpcMethods(jsonRpcApis));
 
     final var pluginMethods =

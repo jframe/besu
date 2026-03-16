@@ -229,6 +229,7 @@ public class JsonRpcTestMethodsFactory {
             ImmutableApiConfiguration.builder().build(),
             Optional.empty(),
             transactionSimulator,
-            new DeterministicEthScheduler());
+            new DeterministicEthScheduler(),
+            Optional.empty());
   }
 }
