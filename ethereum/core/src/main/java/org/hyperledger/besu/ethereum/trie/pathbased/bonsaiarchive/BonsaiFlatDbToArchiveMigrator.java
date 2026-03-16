@@ -126,7 +126,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockAddedObser
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
-        migrateBlock(target, blockNumber, storage, startBlock);
+        migrateBlock(blockNumber, storage);
         logProgress(blockNumber, startBlock, target.get());
       }
 
@@ -141,8 +141,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockAddedObser
     }
   }
 
-  private void migrateBlock(
-      AtomicLong target, long blockNumber, SegmentedKeyValueStorage storage, long startBlock) {
+  private void migrateBlock(long blockNumber, SegmentedKeyValueStorage storage) {
     final Optional<TrieLog> maybeTrieLog =
         blockchain
             .getBlockHeader(blockNumber)
@@ -275,11 +274,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockAddedObser
             executorService.execute(
                 () -> {
                   try {
-                    migrateBlock(
-                        new AtomicLong(blockNum),
-                        blockNum,
-                        worldStateStorage.getComposedWorldStateStorage(),
-                        blockNum);
+                    migrateBlock(blockNum, worldStateStorage.getComposedWorldStateStorage());
                     LOG.info("Bonsai Archive migration progress: block {}", blockNumber);
                   } catch (final Exception e) {
                     LOG.error("Failed to migrate block {} after block added event", blockNum, e);
