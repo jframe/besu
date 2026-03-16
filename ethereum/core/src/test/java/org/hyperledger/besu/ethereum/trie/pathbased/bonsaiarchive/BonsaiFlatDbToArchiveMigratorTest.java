@@ -313,6 +313,89 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     verify(worldStateStorage, never()).upgradeToArchiveFlatDbMode();
   }
 
+  @Test
+  public void pausesMigrationDuringEngineApiCalls() throws Exception {
+    appendBlocks(2);
+    final Hash hash1 = blockchain.getBlockHeader(1L).get().getHash();
+    final Hash hash2 = blockchain.getBlockHeader(2L).get().getHash();
+
+    final CountDownLatch block1ProcessingLatch = new CountDownLatch(1);
+    final CountDownLatch allowBlock1ToFinishLatch = new CountDownLatch(1);
+
+    // Pause migration after block 1 starts processing
+    when(trieLogManager.getTrieLogLayer(hash1))
+        .thenAnswer(
+            invocation -> {
+              block1ProcessingLatch.countDown();
+              allowBlock1ToFinishLatch.await(10, TimeUnit.SECONDS);
+              return Optional.of(createAccountTrieLog(Wei.fromHexString("0x100")));
+            });
+    when(trieLogManager.getTrieLogLayer(hash2))
+        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x200"))));
+
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
+    final CompletableFuture<Void> future = migrator.migrate();
+
+    // Wait for migration to reach block 1
+    assertThat(block1ProcessingLatch.await(5, TimeUnit.SECONDS)).isTrue();
+
+    // Simulate engine API call: pause migration
+    migrator.onEngineApiCallStart();
+    // Wait a bit to ensure migration would proceed if not paused
+    Thread.sleep(100);
+
+    // Resume engine API call: unpause migration
+    migrator.onEngineApiCallEnd();
+
+    // Migration should complete
+    future.get(10, TimeUnit.SECONDS);
+    allowBlock1ToFinishLatch.countDown();
+
+    // Both blocks should have been migrated
+    assertThat(getArchivedAccountKey(1L)).isPresent();
+    assertThat(getArchivedAccountKey(2L)).isPresent();
+  }
+
+  @Test
+  public void resumesWhenEngineApiCallEnds() throws Exception {
+    appendBlocks(1);
+    final Hash hash1 = blockchain.getBlockHeader(1L).get().getHash();
+
+    final CountDownLatch migrationStartedLatch = new CountDownLatch(1);
+    final CountDownLatch allowMigrationLatch = new CountDownLatch(1);
+
+    when(trieLogManager.getTrieLogLayer(hash1))
+        .thenAnswer(
+            invocation -> {
+              migrationStartedLatch.countDown();
+              allowMigrationLatch.await(10, TimeUnit.SECONDS);
+              return Optional.of(createAccountTrieLog(Wei.ONE));
+            });
+
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
+
+    // Start migration
+    final CompletableFuture<Void> future = migrator.migrate();
+
+    // Wait for migration to start
+    assertThat(migrationStartedLatch.await(5, TimeUnit.SECONDS)).isTrue();
+
+    // Pause migration
+    migrator.onEngineApiCallStart();
+
+    // Let migration attempt to proceed (it should be blocked)
+    Thread.sleep(100);
+
+    // Resume migration
+    migrator.onEngineApiCallEnd();
+
+    // Migration should now be able to complete
+    allowMigrationLatch.countDown();
+    future.get(10, TimeUnit.SECONDS);
+
+    assertThat(getArchivedAccountKey(1L)).isPresent();
+  }
+
   private MutableBlockchain createInMemoryBlockchain(final Block genesisBlock) {
     return DefaultBlockchain.createMutable(
         genesisBlock,
