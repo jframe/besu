@@ -267,7 +267,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockAddedObser
   }
 
   @Override
-  public void onBlockAdded(BlockAddedEvent addedBlockEvent) {
+  public void onBlockAdded(final BlockAddedEvent addedBlockEvent) {
     final Optional<Long> blockNumber = Optional.of(addedBlockEvent.getHeader().getNumber());
     blockNumber.ifPresent(
         blockNum ->
