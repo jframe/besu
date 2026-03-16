@@ -141,7 +141,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockAddedObser
     }
   }
 
-  private void migrateBlock(long blockNumber, SegmentedKeyValueStorage storage) {
+  private void migrateBlock(final long blockNumber, final SegmentedKeyValueStorage storage) {
     final Optional<TrieLog> maybeTrieLog =
         blockchain
             .getBlockHeader(blockNumber)
