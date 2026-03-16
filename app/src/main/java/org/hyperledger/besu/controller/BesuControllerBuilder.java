@@ -126,7 +126,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -908,27 +907,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         final BonsaiFlatDbToArchiveMigrator archiveMigrator =
             createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
         closeables.add(archiveMigrator);
-
-        final AtomicBoolean migrationStarted = new AtomicBoolean(false);
-        synchronizer.subscribeInSync(
-            (inSync) -> {
-              if (inSync && migrationStarted.compareAndSet(false, true)) {
-                LOG.info("Node is in sync, starting Bonsai archive migration");
-                archiveMigrator
-                    .migrate()
-                    .thenRun(() -> blockchain.observeBlockAdded(archiver))
-                    .exceptionally(
-                        error -> {
-                          LOG.error(
-                              "Archive migration failed, archiver will remain disabled until restart",
-                              error);
-                          return null;
-                        });
-              }
-            },
-            0);
-      } else {
-        blockchain.observeBlockAdded(archiver);
+        //        blockchain.observeBlockAdded(archiver);
+        blockchain.observeBlockAdded(archiveMigrator);
       }
     }
 

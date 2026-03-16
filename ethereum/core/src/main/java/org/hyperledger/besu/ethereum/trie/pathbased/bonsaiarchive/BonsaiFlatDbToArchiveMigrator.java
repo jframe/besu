@@ -16,6 +16,8 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.VARIABLES;
 
+import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
+import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
@@ -48,7 +50,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Migrates a Bonsai storage to Bonsai archive storage format. */
-public class BonsaiFlatDbToArchiveMigrator implements Closeable {
+public class BonsaiFlatDbToArchiveMigrator implements Closeable, BlockAddedObserver {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
   private static final int LOG_INTERVAL_SECONDS = 60;
@@ -124,35 +126,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
-
-        final Optional<TrieLog> maybeTrieLog =
-            blockchain
-                .getBlockHeader(blockNumber)
-                .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
-
-        final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-        try {
-          if (maybeTrieLog.isPresent()) {
-            processBlock(maybeTrieLog.get(), blockNumber, tx);
-            migratedBlocksCounter.inc();
-          } else if (blockNumber > 0) {
-            throw new IllegalStateException("No trie log found for block " + blockNumber);
-          }
-          // Always save progress, even for blocks with no trie log
-          saveProgress(blockNumber, tx);
-          tx.commit();
-        } catch (final Exception e) {
-          LOG.error("Failed to process block {}, rolling back transaction", blockNumber, e);
-          try {
-            tx.rollback();
-          } catch (final Exception rollbackException) {
-            LOG.error(
-                "Failed to rollback transaction for block {}", blockNumber, rollbackException);
-          }
-          throw new IllegalStateException(
-              "Migration failed at block " + blockNumber + ": " + e.getMessage(), e);
-        }
-
+        migrateBlock(target, blockNumber, storage, startBlock);
         logProgress(blockNumber, startBlock, target.get());
       }
 
@@ -164,6 +138,36 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       throw new RuntimeException(e);
     } finally {
       migrationRunning.set(false);
+    }
+  }
+
+  private void migrateBlock(
+      AtomicLong target, long blockNumber, SegmentedKeyValueStorage storage, long startBlock) {
+    final Optional<TrieLog> maybeTrieLog =
+        blockchain
+            .getBlockHeader(blockNumber)
+            .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
+
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    try {
+      if (maybeTrieLog.isPresent()) {
+        processBlock(maybeTrieLog.get(), blockNumber, tx);
+        migratedBlocksCounter.inc();
+      } else if (blockNumber > 0) {
+        throw new IllegalStateException("No trie log found for block " + blockNumber);
+      }
+      // Always save progress, even for blocks with no trie log
+      saveProgress(blockNumber, tx);
+      tx.commit();
+    } catch (final Exception e) {
+      LOG.error("Failed to process block {}, rolling back transaction", blockNumber, e);
+      try {
+        tx.rollback();
+      } catch (final Exception rollbackException) {
+        LOG.error("Failed to rollback transaction for block {}", blockNumber, rollbackException);
+      }
+      throw new IllegalStateException(
+          "Migration failed at block " + blockNumber + ": " + e.getMessage(), e);
     }
   }
 
@@ -261,5 +265,25 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private void saveProgress(final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
     tx.put(VARIABLES, MIGRATION_PROGRESS_KEY, Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
+  }
+
+  @Override
+  public void onBlockAdded(BlockAddedEvent addedBlockEvent) {
+    final Optional<Long> blockNumber = Optional.of(addedBlockEvent.getHeader().getNumber());
+    blockNumber.ifPresent(
+        blockNum ->
+            executorService.execute(
+                () -> {
+                  try {
+                    migrateBlock(
+                        new AtomicLong(blockNum),
+                        blockNum,
+                        worldStateStorage.getComposedWorldStateStorage(),
+                        blockNum);
+                    LOG.info("Bonsai Archive migration progress: block {}", blockNumber);
+                  } catch (final Exception e) {
+                    LOG.error("Failed to migrate block {} after block added event", blockNum, e);
+                  }
+                }));
   }
 }
