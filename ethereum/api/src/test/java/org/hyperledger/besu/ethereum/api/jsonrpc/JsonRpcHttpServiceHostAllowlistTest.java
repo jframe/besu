@@ -152,7 +152,8 @@ public class JsonRpcHttpServiceHostAllowlistTest {
                 mock(ApiConfiguration.class),
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
     service = createJsonRpcHttpService();
     service.start().join();
 

@@ -152,7 +152,8 @@ class JsonRpcHttpServiceTlsMisconfigurationTest {
                 mock(ApiConfiguration.class),
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
   }
 
   @AfterEach

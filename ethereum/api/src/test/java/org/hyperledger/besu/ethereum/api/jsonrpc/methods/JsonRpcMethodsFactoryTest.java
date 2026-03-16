@@ -148,7 +148,8 @@ class JsonRpcMethodsFactoryTest {
                 mock(ApiConfiguration.class),
                 Optional.empty(),
                 mock(TransactionSimulator.class),
-                new DeterministicEthScheduler());
+                new DeterministicEthScheduler(),
+                Optional.empty());
 
     assertThat(rpcMethods).containsKey("engine_getPayloadV3");
     assertThat(rpcMethods).containsKey("engine_getPayloadV4");

@@ -36,6 +36,7 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.p2p.config.SubProtocolConfiguration;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.transaction.TransactionSimulator;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 
 import java.io.Closeable;
@@ -44,6 +45,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
@@ -77,6 +79,7 @@ public class BesuController implements java.io.Closeable {
   private final StorageProvider storageProvider;
   private final DataStorageConfiguration dataStorageConfiguration;
   private final TransactionSimulator transactionSimulator;
+  private final Optional<BonsaiFlatDbToArchiveMigrator> archiveMigrator;
 
   /**
    * Instantiates a new Besu controller.
@@ -99,6 +102,7 @@ public class BesuController implements java.io.Closeable {
    * @param storageProvider the storage provider
    * @param dataStorageConfiguration the data storage configuration
    * @param transactionSimulator the transaction simulator
+   * @param archiveMigrator the optional Bonsai archive migrator
    */
   BesuController(
       final ProtocolSchedule protocolSchedule,
@@ -118,7 +122,8 @@ public class BesuController implements java.io.Closeable {
       final EthPeers ethPeers,
       final StorageProvider storageProvider,
       final DataStorageConfiguration dataStorageConfiguration,
-      final TransactionSimulator transactionSimulator) {
+      final TransactionSimulator transactionSimulator,
+      final Optional<BonsaiFlatDbToArchiveMigrator> archiveMigrator) {
     this.protocolSchedule = protocolSchedule;
     this.protocolContext = protocolContext;
     this.ethProtocolManager = ethProtocolManager;
@@ -137,6 +142,7 @@ public class BesuController implements java.io.Closeable {
     this.storageProvider = storageProvider;
     this.dataStorageConfiguration = dataStorageConfiguration;
     this.transactionSimulator = transactionSimulator;
+    this.archiveMigrator = archiveMigrator;
   }
 
   /**
@@ -314,6 +320,15 @@ public class BesuController implements java.io.Closeable {
    */
   public EthScheduler getEthScheduler() {
     return ethProtocolManager.ethContext().getScheduler();
+  }
+
+  /**
+   * Gets the Bonsai archive migrator if configured.
+   *
+   * @return the optional archive migrator
+   */
+  public Optional<BonsaiFlatDbToArchiveMigrator> getArchiveMigrator() {
+    return archiveMigrator;
   }
 
   /** The type Builder. */
