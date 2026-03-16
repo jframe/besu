@@ -18,4 +18,8 @@ public interface EngineCallListener {
   void executionEngineCalled();
 
   default void stop() {}
+
+  default void onEngineApiCallStart() {}
+
+  default void onEngineApiCallEnd() {}
 }

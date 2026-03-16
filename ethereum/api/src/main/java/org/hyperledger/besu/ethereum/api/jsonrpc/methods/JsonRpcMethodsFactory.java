@@ -37,6 +37,7 @@ import org.hyperledger.besu.ethereum.p2p.rlpx.wire.Capability;
 import org.hyperledger.besu.ethereum.permissioning.AccountLocalConfigPermissioningController;
 import org.hyperledger.besu.ethereum.permissioning.NodeLocalConfigPermissioningController;
 import org.hyperledger.besu.ethereum.transaction.TransactionSimulator;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 import org.hyperledger.besu.metrics.prometheus.MetricsConfiguration;
 import org.hyperledger.besu.nat.NatService;
@@ -87,7 +88,8 @@ public class JsonRpcMethodsFactory {
       final ApiConfiguration apiConfiguration,
       final Optional<EnodeDnsConfiguration> enodeDnsConfiguration,
       final TransactionSimulator transactionSimulator,
-      final EthScheduler ethScheduler) {
+      final EthScheduler ethScheduler,
+      final Optional<BonsaiFlatDbToArchiveMigrator> archiveMigrator) {
     final Map<String, JsonRpcMethod> enabled = new HashMap<>();
     if (!rpcApis.isEmpty()) {
       final JsonRpcMethod modules = new RpcModules(rpcApis);
@@ -124,7 +126,8 @@ public class JsonRpcMethodsFactory {
                   clientVersion,
                   commit,
                   transactionPool,
-                  metricsSystem),
+                  metricsSystem,
+                  archiveMigrator),
               new EthJsonRpcMethods(
                   blockchainQueries,
                   synchronizer,

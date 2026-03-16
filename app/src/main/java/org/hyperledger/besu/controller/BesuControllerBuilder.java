@@ -892,6 +892,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
     closeables.add(protocolContext.getWorldStateArchive());
     closeables.add(storageProvider);
 
+    Optional<BonsaiFlatDbToArchiveMigrator> archiveMigratorOptional = Optional.empty();
+
     if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(
         dataStorageConfiguration.getDataStorageFormat())) {
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
@@ -907,6 +909,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
           || worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.PARTIAL)) {
         final BonsaiFlatDbToArchiveMigrator archiveMigrator =
             createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
+        archiveMigratorOptional = Optional.of(archiveMigrator);
         closeables.add(archiveMigrator);
 
         final AtomicBoolean migrationStarted = new AtomicBoolean(false);
@@ -950,7 +953,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         ethPeers,
         storageProvider,
         dataStorageConfiguration,
-        transactionSimulator);
+        transactionSimulator,
+        archiveMigratorOptional);
   }
 
   private void preloadBlockHeaderCache(
