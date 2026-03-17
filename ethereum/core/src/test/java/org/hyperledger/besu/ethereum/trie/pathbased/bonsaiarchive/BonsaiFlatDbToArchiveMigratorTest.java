@@ -351,7 +351,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x400"))));
 
     final BonsaiFlatDbToArchiveMigrator migrator =
-        createMigrator(Integer.MAX_VALUE, 2, Integer.MAX_VALUE);
+        createMigrator(Integer.MAX_VALUE, 2);
     migrator.migrate().get(10, TimeUnit.SECONDS);
 
     assertThat(getArchivedAccountKey(1L)).isPresent();
@@ -361,36 +361,12 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     assertThat(migrator.getMigrationProgress()).hasValue(4L);
   }
 
-  @Test
-  public void flushesWhenWriteCeilingExceeded() throws Exception {
-    // maxWritesPerBatch=1: each block (1 account change = 1 write) triggers its own flush
-    appendBlocks(3);
-    final Hash hash1 = blockchain.getBlockHeader(1L).get().getHash();
-    final Hash hash2 = blockchain.getBlockHeader(2L).get().getHash();
-    final Hash hash3 = blockchain.getBlockHeader(3L).get().getHash();
-    when(trieLogManager.getTrieLogLayer(hash1))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x100"))));
-    when(trieLogManager.getTrieLogLayer(hash2))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x200"))));
-    when(trieLogManager.getTrieLogLayer(hash3))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x300"))));
-
-    final BonsaiFlatDbToArchiveMigrator migrator =
-        createMigrator(Integer.MAX_VALUE, Integer.MAX_VALUE, 1);
-    migrator.migrate().get(10, TimeUnit.SECONDS);
-
-    assertThat(getArchivedAccountKey(1L)).isPresent();
-    assertThat(getArchivedAccountKey(2L)).isPresent();
-    assertThat(getArchivedAccountKey(3L)).isPresent();
-    assertThat(migrator.getMigrationProgress()).hasValue(3L);
-  }
-
   private BonsaiFlatDbToArchiveMigrator createMigrator() {
-    return createMigrator(Integer.MAX_VALUE, 1_000, 5_000);
+    return createMigrator(Integer.MAX_VALUE, 1_000);
   }
 
   private BonsaiFlatDbToArchiveMigrator createMigrator(
-      final int maxWritesPerSecond, final int maxBlocksPerBatch, final int maxWritesPerBatch) {
+      final int maxWritesPerSecond, final int maxBlocksPerBatch) {
     final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
@@ -402,8 +378,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         metricsSystem,
         archiveStrategy,
         maxWritesPerSecond,
-        maxBlocksPerBatch,
-        maxWritesPerBatch);
+        maxBlocksPerBatch);
   }
 
   private TrieLogLayer createAccountTrieLog(final Wei balance) {

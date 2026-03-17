@@ -70,12 +70,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private final RateLimiter rateLimiter;
   private final int maxBlocksPerBatch;
-  private final int maxWritesPerBatch;
 
   // Metrics
   private final Counter writesCounter;
   private final Counter batchesCounter;
-  private final Counter rateLimiterWaitMsCounter;
   private final LabelledMetric<Counter> batchFlushReasonCounter;
   private final AtomicLong lastBatchWrites = new AtomicLong(0);
   private final AtomicLong lastBatchBlocks = new AtomicLong(0);
@@ -92,7 +90,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    * @param archiveStrategy the archive flat DB strategy for writing archive keys
    * @param maxWritesPerSecond the maximum number of RocksDB writes per second (rate limiter)
    * @param maxBlocksPerBatch the maximum number of blocks to accumulate before committing a batch
-   * @param maxWritesPerBatch the maximum number of estimated writes before committing a batch
    */
   public BonsaiFlatDbToArchiveMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -102,8 +99,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final MetricsSystem metricsSystem,
       final BonsaiArchiveFlatDbStrategy archiveStrategy,
       final int maxWritesPerSecond,
-      final int maxBlocksPerBatch,
-      final int maxWritesPerBatch) {
+      final int maxBlocksPerBatch) {
     this.worldStateStorage = worldStateStorage;
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
@@ -111,7 +107,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     this.archiveStrategy = archiveStrategy;
     this.rateLimiter = RateLimiter.create(maxWritesPerSecond);
     this.maxBlocksPerBatch = maxBlocksPerBatch;
-    this.maxWritesPerBatch = maxWritesPerBatch;
     this.migratedBlocksCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.BLOCKCHAIN,
@@ -127,11 +122,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             BesuMetricCategory.BLOCKCHAIN,
             "bonsai_archive_migration_batches_total",
             "Total number of batch commits performed by the archive migrator");
-    this.rateLimiterWaitMsCounter =
-        metricsSystem.createCounter(
-            BesuMetricCategory.BLOCKCHAIN,
-            "bonsai_archive_migration_rate_limiter_wait_ms_total",
-            "Total milliseconds spent waiting in the archive migration rate limiter");
     this.batchFlushReasonCounter =
         metricsSystem.createLabelledCounter(
             BesuMetricCategory.BLOCKCHAIN,
@@ -198,37 +188,21 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
 
         try {
-          int blockWrites = 0;
           if (maybeTrieLog.isPresent()) {
-            blockWrites = estimateWrites(maybeTrieLog.get());
-            // Acquire permits BEFORE writing — smooth pacing per block
-            if (blockWrites > 0) {
-              final long waitStart = System.currentTimeMillis();
-              rateLimiter.acquire(blockWrites);
-              rateLimiterWaitMsCounter.inc(System.currentTimeMillis() - waitStart);
-            }
+            final int blockWrites = processBlock(maybeTrieLog.get(), blockNumber, tx);
             batchWrites += blockWrites;
-            processBlock(maybeTrieLog.get(), blockNumber, tx);
+            // Pace writes after processing — rate limiter smooths throughput to RocksDB
+            if (blockWrites > 0) {
+              rateLimiter.acquire(blockWrites);
+            }
             migratedBlocksCounter.inc();
           } else if (blockNumber > 0) {
             throw new IllegalStateException("No trie log found for block " + blockNumber);
           }
           batchBlockCount++;
 
-          if (batchBlockCount >= maxBlocksPerBatch || batchWrites >= maxWritesPerBatch) {
-            final String flushReason =
-                batchWrites >= maxWritesPerBatch ? "write_ceiling" : "block_ceiling";
-            saveProgress(blockNumber, tx);
-            final long commitStart = System.currentTimeMillis();
-            tx.commit();
-            lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
-
-            writesCounter.inc(batchWrites);
-            batchesCounter.inc();
-            batchFlushReasonCounter.labels(flushReason).inc();
-            lastBatchWrites.set(batchWrites);
-            lastBatchBlocks.set(batchBlockCount);
-
+          if (batchBlockCount >= maxBlocksPerBatch) {
+            flushBatch(tx, blockNumber, batchWrites, batchBlockCount, "block_ceiling");
             tx = storage.startTransaction();
             batchBlockCount = 0;
             batchWrites = 0;
@@ -251,14 +225,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       // Flush remaining batch
       if (batchBlockCount > 0) {
         try {
-          saveProgress(currentBlock, tx);
-          final long commitStart = System.currentTimeMillis();
-          tx.commit();
-          lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
-          writesCounter.inc(batchWrites);
-          batchesCounter.inc();
-          lastBatchWrites.set(batchWrites);
-          lastBatchBlocks.set(batchBlockCount);
+          flushBatch(tx, currentBlock, batchWrites, batchBlockCount, "end_of_migration");
         } catch (final Exception e) {
           LOG.error("Failed to commit final migration batch, rolling back", e);
           try {
@@ -283,9 +250,24 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
   }
 
-  private int estimateWrites(final TrieLog trieLog) {
-    return trieLog.getAccountChanges().size()
-        + trieLog.getStorageChanges().values().stream().mapToInt(Map::size).sum();
+  private void flushBatch(
+      final SegmentedKeyValueStorageTransaction tx,
+      final long blockNumber,
+      final int batchWrites,
+      final int batchBlockCount,
+      final String flushReason) {
+    saveProgress(blockNumber, tx);
+    final long commitStartNanos = System.nanoTime();
+    tx.commit();
+    final long commitDurationMs =
+        TimeUnit.MILLISECONDS.convert(System.nanoTime() - commitStartNanos, TimeUnit.NANOSECONDS);
+    lastCommitDurationMs.set(commitDurationMs);
+
+    writesCounter.inc(batchWrites);
+    batchesCounter.inc();
+    batchFlushReasonCounter.labels(flushReason).inc();
+    lastBatchWrites.set(batchWrites);
+    lastBatchBlocks.set(batchBlockCount);
   }
 
   @Override
@@ -334,50 +316,57 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         formattedDuration);
   }
 
-  private void processBlock(
+  private int processBlock(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    processAccountChanges(trieLog, blockNumber, tx);
-    processStorageChanges(trieLog, blockNumber, tx);
+    final int accountWrites = processAccountChanges(trieLog, blockNumber, tx);
+    final int storageWrites = processStorageChanges(trieLog, blockNumber, tx);
+    return accountWrites + storageWrites;
   }
 
-  private void processAccountChanges(
+  private int processAccountChanges(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
     final BonsaiContext context = new BonsaiContext(blockNumber);
-    trieLog
-        .getAccountChanges()
-        .forEach(
-            (address, accountChange) -> {
-              if (accountChange.getUpdated() != null) {
-                final BytesValueRLPOutput out = new BytesValueRLPOutput();
-                accountChange.getUpdated().writeTo(out);
-                archiveStrategy.putFlatAccount(context, tx, address.addressHash(), out.encoded());
-              } else {
-                archiveStrategy.removeFlatAccount(context, tx, address.addressHash());
-              }
-            });
+    int writeCount = 0;
+    for (final var entry : trieLog.getAccountChanges().entrySet()) {
+      final var address = entry.getKey();
+      final var accountChange = entry.getValue();
+      if (accountChange.getUpdated() != null) {
+        final BytesValueRLPOutput out = new BytesValueRLPOutput();
+        accountChange.getUpdated().writeTo(out);
+        archiveStrategy.putFlatAccount(context, tx, address.addressHash(), out.encoded());
+      } else {
+        archiveStrategy.removeFlatAccount(context, tx, address.addressHash());
+      }
+      writeCount++;
+    }
+    return writeCount;
   }
 
-  private void processStorageChanges(
+  private int processStorageChanges(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
     final BonsaiContext context = new BonsaiContext(blockNumber);
-    trieLog
-        .getStorageChanges()
-        .forEach(
-            (address, storageMap) ->
-                storageMap.forEach(
-                    (slotKey, storageChange) -> {
-                      if (storageChange.getUpdated() != null) {
-                        archiveStrategy.putFlatAccountStorageValueByStorageSlotHash(
-                            context,
-                            tx,
-                            address.addressHash(),
-                            slotKey.getSlotHash(),
-                            storageChange.getUpdated().toBytes());
-                      } else {
-                        archiveStrategy.removeFlatAccountStorageValueByStorageSlotHash(
-                            context, tx, address.addressHash(), slotKey.getSlotHash());
-                      }
-                    }));
+    int writeCount = 0;
+    for (final var addressEntry : trieLog.getStorageChanges().entrySet()) {
+      final var address = addressEntry.getKey();
+      final var storageMap = addressEntry.getValue();
+      for (final var storageEntry : storageMap.entrySet()) {
+        final var slotKey = storageEntry.getKey();
+        final var storageChange = storageEntry.getValue();
+        if (storageChange.getUpdated() != null) {
+          archiveStrategy.putFlatAccountStorageValueByStorageSlotHash(
+              context,
+              tx,
+              address.addressHash(),
+              slotKey.getSlotHash(),
+              storageChange.getUpdated().toBytes());
+        } else {
+          archiveStrategy.removeFlatAccountStorageValueByStorageSlotHash(
+              context, tx, address.addressHash(), slotKey.getSlotHash());
+        }
+        writeCount++;
+      }
+    }
+    return writeCount;
   }
 
   private void saveProgress(final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {

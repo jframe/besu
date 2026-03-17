@@ -1060,8 +1060,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         metricsSystem,
         archiveStrategy,
         unstable.getArchiveMigrationMaxWritesPerSecond(),
-        unstable.getArchiveMigrationMaxBlocksPerBatch(),
-        unstable.getArchiveMigrationMaxWritesPerBatch());
+        unstable.getArchiveMigrationMaxBlocksPerBatch());
   }
 
   /**
