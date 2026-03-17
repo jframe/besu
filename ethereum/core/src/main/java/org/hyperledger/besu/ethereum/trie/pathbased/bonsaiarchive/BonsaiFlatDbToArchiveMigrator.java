@@ -197,10 +197,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
 
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
-        // Pause migration while engine API calls are active to reduce write contention
-        while (engineApiActive.get()) {
-          LockSupport.park();
-        }
+        pauseDuringEngineApi();
 
         currentBlock = blockNumber;
         final Optional<TrieLog> maybeTrieLog =
@@ -227,6 +224,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           batchBlockCount++;
 
           if (batchBlockCount >= maxBlocksPerBatch || batchWrites >= maxWritesPerBatch) {
+            pauseDuringEngineApi();
             final String flushReason =
                 batchWrites >= maxWritesPerBatch ? "write_ceiling" : "block_ceiling";
             saveProgress(blockNumber, tx);
@@ -291,6 +289,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       throw new RuntimeException(e);
     } finally {
       migrationRunning.set(false);
+    }
+  }
+
+  private void pauseDuringEngineApi() {
+    while (engineApiActive.get()) {
+      LockSupport.park();
     }
   }
 
@@ -375,6 +379,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         .getAccountChanges()
         .forEach(
             (address, accountChange) -> {
+              pauseDuringEngineApi();
               if (accountChange.getUpdated() != null) {
                 final BytesValueRLPOutput out = new BytesValueRLPOutput();
                 accountChange.getUpdated().writeTo(out);
@@ -394,6 +399,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             (address, storageMap) ->
                 storageMap.forEach(
                     (slotKey, storageChange) -> {
+                      pauseDuringEngineApi();
                       if (storageChange.getUpdated() != null) {
                         archiveStrategy.putFlatAccountStorageValueByStorageSlotHash(
                             context,
