@@ -52,6 +52,7 @@ import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompressionType;
+import org.rocksdb.ConcurrentTaskLimiterImpl;
 import org.rocksdb.ConfigOptions;
 import org.rocksdb.DBOptions;
 import org.rocksdb.Env;
@@ -97,6 +98,8 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
 
   /** atomic boolean to track if the storage is closed */
   protected final AtomicBoolean closed = new AtomicBoolean(false);
+
+  private final List<ConcurrentTaskLimiterImpl> archiveCfLimiters = new ArrayList<>();
 
   private final WriteOptions tryDeleteOptions =
       new WriteOptions().setNoSlowdown(true).setIgnoreMissingColumnFamilies(true);
@@ -231,6 +234,9 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
             .setLevelCompactionDynamicLevelBytes(dynamicLevelBytes);
     if (segment.containsStaticData()) {
       configureBlobDBForSegment(segment, configuration, options);
+      var limiter = new ConcurrentTaskLimiterImpl("compaction-" + segment.getName(), 1);
+      archiveCfLimiters.add(limiter);
+      options.setCompactionThreadLimiter(limiter);
     }
 
     return new ColumnFamilyDescriptor(segment.getId(), options);
@@ -539,6 +545,16 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
       LOG.error("Attempting to use a closed RocksDbKeyValueStorage");
       throw new IllegalStateException("Storage has been closed");
     }
+  }
+
+  @Override
+  public void pauseArchiveCompaction() {
+    archiveCfLimiters.forEach(l -> l.setMaxOutstandingTask(0));
+  }
+
+  @Override
+  public void resumeArchiveCompaction() {
+    archiveCfLimiters.forEach(l -> l.setMaxOutstandingTask(1));
   }
 
   abstract RocksDB getDB();

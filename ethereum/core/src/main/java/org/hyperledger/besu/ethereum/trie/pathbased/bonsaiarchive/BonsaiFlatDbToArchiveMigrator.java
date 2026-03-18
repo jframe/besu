@@ -317,14 +317,20 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   /**
    * Called when an engine API call (newPayload, forkchoiceUpdated, etc.) starts. Signals the
-   * migration thread to pause processing to reduce write contention.
+   * migration thread to pause processing to reduce write contention, and pauses ARCHIVE CF
+   * background compaction to stop any in-progress compaction debt from consuming I/O.
    */
   public void onEngineApiCallStart() {
     engineApiActive.set(true);
+    worldStateStorage.pauseArchiveCompaction();
   }
 
-  /** Called when an engine API call completes. Resumes the migration thread by unparking it. */
+  /**
+   * Called when an engine API call completes. Resumes ARCHIVE CF background compaction and unparks
+   * the migration thread.
+   */
   public void onEngineApiCallEnd() {
+    worldStateStorage.resumeArchiveCompaction();
     engineApiActive.set(false);
     final Thread thread = migrationThread;
     if (thread != null) {

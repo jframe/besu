@@ -190,6 +190,14 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     flatDbStrategyProvider.downgradeToPartialFlatDbMode(composedWorldStateStorage);
   }
 
+  public void pauseArchiveCompaction() {
+    composedWorldStateStorage.pauseArchiveCompaction();
+  }
+
+  public void resumeArchiveCompaction() {
+    composedWorldStateStorage.resumeArchiveCompaction();
+  }
+
   @Override
   public void clear() {
     super.clear();

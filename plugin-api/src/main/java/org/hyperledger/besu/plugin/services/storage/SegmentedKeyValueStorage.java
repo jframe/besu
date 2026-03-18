@@ -178,6 +178,12 @@ public interface SegmentedKeyValueStorage extends Closeable {
    */
   boolean isClosed();
 
+  /** Pauses background compaction on archive (static-data) column families. No-op by default. */
+  default void pauseArchiveCompaction() {}
+
+  /** Resumes background compaction on archive (static-data) column families. No-op by default. */
+  default void resumeArchiveCompaction() {}
+
   /**
    * record type used to wrap responses from getNearestTo, includes the matched key and the value.
    *
