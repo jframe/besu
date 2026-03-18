@@ -211,6 +211,7 @@ public abstract class AbstractIsolationTests {
                     new RocksDBFactoryConfiguration(
                         1024 /* MAX_OPEN_FILES*/,
                         4 /*BACKGROUND_THREAD_COUNT*/,
+                        2 /*MAX_BACKGROUND_JOBS*/,
                         8388608 /*CACHE_CAPACITY*/,
                         false,
                         false,

@@ -24,6 +24,7 @@ public class RocksDBConfiguration {
   private final int maxOpenFiles;
   private final String label;
   private final int backgroundThreadCount;
+  private final int maxBackgroundJobs;
   private final long cacheCapacity;
   private final boolean isHighSpec;
   private final boolean enableReadCacheForSnapshots;
@@ -37,6 +38,7 @@ public class RocksDBConfiguration {
    * @param databaseDir the database dir
    * @param maxOpenFiles the max open files
    * @param backgroundThreadCount the background thread count
+   * @param maxBackgroundJobs the max background jobs
    * @param cacheCapacity the cache capacity
    * @param label the label
    * @param isHighSpec the is high spec
@@ -50,6 +52,7 @@ public class RocksDBConfiguration {
       final Path databaseDir,
       final int maxOpenFiles,
       final int backgroundThreadCount,
+      final int maxBackgroundJobs,
       final long cacheCapacity,
       final String label,
       final boolean isHighSpec,
@@ -58,6 +61,7 @@ public class RocksDBConfiguration {
       final Optional<Double> blobGarbageCollectionAgeCutoff,
       final Optional<Double> blobGarbageCollectionForceThreshold) {
     this.backgroundThreadCount = backgroundThreadCount;
+    this.maxBackgroundJobs = maxBackgroundJobs;
     this.databaseDir = databaseDir;
     this.maxOpenFiles = maxOpenFiles;
     this.cacheCapacity = cacheCapacity;
@@ -94,6 +98,15 @@ public class RocksDBConfiguration {
    */
   public int getBackgroundThreadCount() {
     return backgroundThreadCount;
+  }
+
+  /**
+   * Gets max background jobs.
+   *
+   * @return the max background jobs
+   */
+  public int getMaxBackgroundJobs() {
+    return maxBackgroundJobs;
   }
 
   /**
