@@ -35,6 +35,7 @@ import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
@@ -57,10 +58,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private static final String NEW_PAYLOAD_METHOD_PREFIX = "engine_newPayload";
 
-  // AIMD backpressure — target newPayload latency; sleep grows by overshoot, shrinks 10ms/block
+  // AIMD backpressure — target newPayload latency; sleep grows by overshoot, shrinks 50ms/batch
   private static final long TARGET_NEW_PAYLOAD_MS = 200;
   private static final long MAX_BACKPRESSURE_SLEEP_MS = 2_000;
-  private static final long SLEEP_DECREASE_STEP_MS = 10;
+  private static final long SLEEP_DECREASE_STEP_MS = 50;
+
+  // Batch sizing — commit when either ceiling is hit
+  private static final int MAX_WRITES_PER_BATCH = 2_000;
+  private static final int MAX_BLOCKS_PER_BATCH = 100;
 
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
@@ -182,7 +187,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
 
+      int batchWrites = 0;
+      int batchBlockCount = 0;
       long currentBlock = startBlock - 1;
+      SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
 
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
         pauseDuringEngineApi();
@@ -193,21 +201,30 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 .getBlockHeader(blockNumber)
                 .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
 
-        final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
         try {
           if (maybeTrieLog.isPresent()) {
-            processBlock(maybeTrieLog.get(), blockNumber, tx);
+            final TrieLog trieLog = maybeTrieLog.get();
+            batchWrites += estimateWrites(trieLog);
+            processBlock(trieLog, blockNumber, tx);
             migratedBlocksCounter.inc();
           } else if (blockNumber > 0) {
             throw new IllegalStateException("No trie log found for block " + blockNumber);
           }
-          saveProgress(blockNumber, tx);
-          final long commitStart = System.currentTimeMillis();
-          tx.commit();
-          lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
-          commitsCounter.inc();
-          updateRocksDbMetrics(storage);
-          applyBackpressure();
+          batchBlockCount++;
+
+          if (batchWrites >= MAX_WRITES_PER_BATCH || batchBlockCount >= MAX_BLOCKS_PER_BATCH) {
+            pauseDuringEngineApi();
+            saveProgress(blockNumber, tx);
+            final long commitStart = System.currentTimeMillis();
+            tx.commit();
+            lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
+            commitsCounter.inc();
+            updateRocksDbMetrics(storage);
+            applyBackpressure();
+            tx = storage.startTransaction();
+            batchWrites = 0;
+            batchBlockCount = 0;
+          }
         } catch (final Exception e) {
           LOG.error("Failed to process block {}, rolling back transaction", blockNumber, e);
           try {
@@ -221,6 +238,28 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         }
 
         logProgress(blockNumber, startBlock, target.get());
+      }
+
+      // Flush remaining partial batch
+      if (batchBlockCount > 0) {
+        try {
+          pauseDuringEngineApi();
+          saveProgress(currentBlock, tx);
+          final long commitStart = System.currentTimeMillis();
+          tx.commit();
+          lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
+          commitsCounter.inc();
+        } catch (final Exception e) {
+          LOG.error("Failed to commit final migration batch, rolling back", e);
+          try {
+            tx.rollback();
+          } catch (final Exception rollbackException) {
+            LOG.error("Failed to rollback final migration batch", rollbackException);
+          }
+          throw new IllegalStateException("Migration failed at final batch: " + e.getMessage(), e);
+        }
+      } else {
+        tx.rollback();
       }
 
       worldStateStorage.upgradeToArchiveFlatDbMode();
@@ -255,6 +294,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         Thread.currentThread().interrupt();
       }
     }
+  }
+
+  private int estimateWrites(final TrieLog trieLog) {
+    return trieLog.getAccountChanges().size()
+        + trieLog.getStorageChanges().values().stream().mapToInt(Map::size).sum();
   }
 
   private void updateRocksDbMetrics(final SegmentedKeyValueStorage storage) {

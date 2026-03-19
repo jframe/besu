@@ -417,8 +417,8 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   @Test
-  public void savesProgressPerBlock() throws Exception {
-    // Each block gets its own commit, so progress is updated after every block
+  public void savesProgressAfterMigration() throws Exception {
+    // Progress is saved inside each batch commit; after migration completes it equals last block
     appendBlocks(3);
 
     final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
