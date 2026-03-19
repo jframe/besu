@@ -109,6 +109,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final int maxWritesPerSecond,
       final int maxBlocksPerBatch,
       final int maxWritesPerBatch) {
+
     this.worldStateStorage = worldStateStorage;
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
@@ -209,12 +210,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           int blockWrites = 0;
           if (maybeTrieLog.isPresent()) {
             blockWrites = estimateWrites(maybeTrieLog.get());
-            // Acquire permits BEFORE writing — smooth pacing per block
-            if (blockWrites > 0) {
-              final long waitStart = System.currentTimeMillis();
-              rateLimiter.acquire(blockWrites);
-              rateLimiterWaitMsCounter.inc(System.currentTimeMillis() - waitStart);
-            }
             batchWrites += blockWrites;
             processBlock(maybeTrieLog.get(), blockNumber, tx);
             migratedBlocksCounter.inc();
@@ -231,6 +226,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             final long commitStart = System.currentTimeMillis();
             tx.commit();
             lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
+
+            if (batchWrites > 0) {
+              final long waitStart = System.currentTimeMillis();
+              rateLimiter.acquire(batchWrites);
+              rateLimiterWaitMsCounter.inc(System.currentTimeMillis() - waitStart);
+            }
 
             writesCounter.inc(batchWrites);
             batchesCounter.inc();
