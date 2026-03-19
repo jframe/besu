@@ -369,18 +369,19 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private void processBlock(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    processAccountChanges(trieLog, blockNumber, tx);
-    processStorageChanges(trieLog, blockNumber, tx);
+    final BonsaiContext context = new BonsaiContext(blockNumber);
+    processAccountChanges(context, trieLog, tx);
+    processStorageChanges(context, trieLog, tx);
   }
 
   private void processAccountChanges(
-      final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    final BonsaiContext context = new BonsaiContext(blockNumber);
+      final BonsaiContext context,
+      final TrieLog trieLog,
+      final SegmentedKeyValueStorageTransaction tx) {
     trieLog
         .getAccountChanges()
         .forEach(
             (address, accountChange) -> {
-              pauseDuringEngineApi();
               if (accountChange.getUpdated() != null) {
                 final BytesValueRLPOutput out = new BytesValueRLPOutput();
                 accountChange.getUpdated().writeTo(out);
@@ -392,15 +393,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   private void processStorageChanges(
-      final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    final BonsaiContext context = new BonsaiContext(blockNumber);
+      final BonsaiContext context,
+      final TrieLog trieLog,
+      final SegmentedKeyValueStorageTransaction tx) {
     trieLog
         .getStorageChanges()
         .forEach(
             (address, storageMap) ->
                 storageMap.forEach(
                     (slotKey, storageChange) -> {
-                      pauseDuringEngineApi();
                       if (storageChange.getUpdated() != null) {
                         archiveStrategy.putFlatAccountStorageValueByStorageSlotHash(
                             context,
