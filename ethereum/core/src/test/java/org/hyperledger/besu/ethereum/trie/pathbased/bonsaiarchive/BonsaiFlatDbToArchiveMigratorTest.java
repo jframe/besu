@@ -417,61 +417,17 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   @Test
-  public void batchesBlocksUpToMaxBlocksPerBatch() throws Exception {
-    // maxBlocksPerBatch=2 with 4 blocks: all archive data written correctly across 2 batches
-    appendBlocks(4);
-    final Hash hash1 = blockchain.getBlockHeader(1L).get().getHash();
-    final Hash hash2 = blockchain.getBlockHeader(2L).get().getHash();
-    final Hash hash3 = blockchain.getBlockHeader(3L).get().getHash();
-    final Hash hash4 = blockchain.getBlockHeader(4L).get().getHash();
-    when(trieLogManager.getTrieLogLayer(hash1))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x100"))));
-    when(trieLogManager.getTrieLogLayer(hash2))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x200"))));
-    when(trieLogManager.getTrieLogLayer(hash3))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x300"))));
-    when(trieLogManager.getTrieLogLayer(hash4))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x400"))));
-
-    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(2, Integer.MAX_VALUE);
-    migrator.migrate().get(10, TimeUnit.SECONDS);
-
-    assertThat(getArchivedAccountKey(1L)).isPresent();
-    assertThat(getArchivedAccountKey(2L)).isPresent();
-    assertThat(getArchivedAccountKey(3L)).isPresent();
-    assertThat(getArchivedAccountKey(4L)).isPresent();
-    assertThat(migrator.getMigrationProgress()).hasValue(4L);
-  }
-
-  @Test
-  public void flushesWhenWriteCeilingExceeded() throws Exception {
-    // maxWritesPerBatch=1: each block (1 account change = 1 write) triggers its own flush
+  public void savesProgressPerBlock() throws Exception {
+    // Each block gets its own commit, so progress is updated after every block
     appendBlocks(3);
-    final Hash hash1 = blockchain.getBlockHeader(1L).get().getHash();
-    final Hash hash2 = blockchain.getBlockHeader(2L).get().getHash();
-    final Hash hash3 = blockchain.getBlockHeader(3L).get().getHash();
-    when(trieLogManager.getTrieLogLayer(hash1))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x100"))));
-    when(trieLogManager.getTrieLogLayer(hash2))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x200"))));
-    when(trieLogManager.getTrieLogLayer(hash3))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x300"))));
 
-    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(Integer.MAX_VALUE, 1);
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
     migrator.migrate().get(10, TimeUnit.SECONDS);
 
-    assertThat(getArchivedAccountKey(1L)).isPresent();
-    assertThat(getArchivedAccountKey(2L)).isPresent();
-    assertThat(getArchivedAccountKey(3L)).isPresent();
     assertThat(migrator.getMigrationProgress()).hasValue(3L);
   }
 
   private BonsaiFlatDbToArchiveMigrator createMigrator() {
-    return createMigrator(1_000, 10_000);
-  }
-
-  private BonsaiFlatDbToArchiveMigrator createMigrator(
-      final int maxBlocksPerBatch, final int maxWritesPerBatch) {
     final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
@@ -481,9 +437,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         blockchain,
         executorService,
         metricsSystem,
-        archiveStrategy,
-        maxBlocksPerBatch,
-        maxWritesPerBatch);
+        archiveStrategy);
   }
 
   private TrieLogLayer createAccountTrieLog(final Wei balance) {

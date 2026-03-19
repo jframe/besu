@@ -20,8 +20,6 @@ import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConf
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.DEFAULT_PARALLEL_TX_PROCESSING;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.DEFAULT_TRIE_LOG_PRUNING_WINDOW_SIZE;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.MINIMUM_TRIE_LOG_RETENTION_LIMIT;
-import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ARCHIVE_MIGRATION_MAX_BLOCKS_PER_BATCH;
-import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ARCHIVE_MIGRATION_MAX_WRITES_PER_BATCH;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_FULL_FLAT_DB_ENABLED;
 
@@ -119,20 +117,6 @@ public class PathBasedExtraStorageOptions
             "Enables code storage using code hash instead of by account hash. (default: ${DEFAULT-VALUE})")
     private boolean codeUsingCodeHashEnabled = DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 
-    @Option(
-        hidden = true,
-        names = {"--Xbonsai-archive-migration-max-blocks-per-batch"},
-        description =
-            "Safety ceiling: max blocks to accumulate per migration transaction. (default: ${DEFAULT-VALUE})")
-    private int archiveMigrationMaxBlocksPerBatch = DEFAULT_ARCHIVE_MIGRATION_MAX_BLOCKS_PER_BATCH;
-
-    @Option(
-        hidden = true,
-        names = {"--Xbonsai-archive-migration-max-writes-per-batch"},
-        description =
-            "Max writes to accumulate per migration transaction before flushing. (default: ${DEFAULT-VALUE})")
-    private int archiveMigrationMaxWritesPerBatch = DEFAULT_ARCHIVE_MIGRATION_MAX_WRITES_PER_BATCH;
-
     /** Default Constructor. */
     Unstable() {}
   }
@@ -200,10 +184,6 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getFullFlatDbEnabled();
     dataStorageOptions.unstableOptions.codeUsingCodeHashEnabled =
         domainObject.getUnstable().getCodeStoredByCodeHashEnabled();
-    dataStorageOptions.unstableOptions.archiveMigrationMaxBlocksPerBatch =
-        domainObject.getUnstable().getArchiveMigrationMaxBlocksPerBatch();
-    dataStorageOptions.unstableOptions.archiveMigrationMaxWritesPerBatch =
-        domainObject.getUnstable().getArchiveMigrationMaxWritesPerBatch();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
     dataStorageOptions.isParallelStateRootComputationEnabled =
@@ -224,10 +204,6 @@ public class PathBasedExtraStorageOptions
             ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                 .fullFlatDbEnabled(unstableOptions.fullFlatDbEnabled)
                 .codeStoredByCodeHashEnabled(unstableOptions.codeUsingCodeHashEnabled)
-                .archiveMigrationMaxBlocksPerBatch(
-                    unstableOptions.archiveMigrationMaxBlocksPerBatch)
-                .archiveMigrationMaxWritesPerBatch(
-                    unstableOptions.archiveMigrationMaxWritesPerBatch)
                 .build())
         .build();
   }

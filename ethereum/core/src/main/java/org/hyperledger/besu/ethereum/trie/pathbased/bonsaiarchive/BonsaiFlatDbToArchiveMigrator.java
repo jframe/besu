@@ -26,7 +26,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManage
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
-import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
@@ -36,7 +35,6 @@ import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
@@ -57,11 +55,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
   private static final int LOG_INTERVAL_SECONDS = 60;
 
-  // AIMD backpressure — target newPayload latency; sleep grows by overshoot, shrinks 50ms/batch
   private static final String NEW_PAYLOAD_METHOD_PREFIX = "engine_newPayload";
-  private static final long TARGET_NEW_PAYLOAD_MS = 200;
-  private static final long MAX_BACKPRESSURE_SLEEP_MS = 10_000;
-  private static final long SLEEP_DECREASE_STEP_MS = 50;
 
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
@@ -72,11 +66,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final ScheduledExecutorService executorService;
   private final BonsaiArchiveFlatDbStrategy archiveStrategy;
   private final Counter migratedBlocksCounter;
+  private final Counter commitsCounter;
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
   protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
-
-  private final int maxBlocksPerBatch;
-  private final int maxWritesPerBatch;
 
   // Engine API pause/resume for migration
   private volatile Thread migrationThread;
@@ -86,16 +78,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private volatile long engineApiCallStartMs;
   private final AtomicLong lastNewPayloadDurationMs = new AtomicLong(0);
 
-  // AIMD backpressure state (only written/read from migration thread)
-  private volatile long currentSleepMs = 0;
-
   // Metrics
-  private final Counter writesCounter;
-  private final Counter batchesCounter;
-  private final Counter backpressureSleepMsCounter;
-  private final LabelledMetric<Counter> batchFlushReasonCounter;
-  private final AtomicLong lastBatchWrites = new AtomicLong(0);
-  private final AtomicLong lastBatchBlocks = new AtomicLong(0);
   private final AtomicLong lastCommitDurationMs = new AtomicLong(0);
   private final AtomicLong lastL0FileCount = new AtomicLong(0);
   private final AtomicLong lastPendingCompactionBytes = new AtomicLong(0);
@@ -109,8 +92,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    * @param executorService the executor service for running migration on a separate thread
    * @param metricsSystem the metrics system for tracking migration progress
    * @param archiveStrategy the archive flat DB strategy for writing archive keys
-   * @param maxBlocksPerBatch the maximum number of blocks to accumulate before committing a batch
-   * @param maxWritesPerBatch the maximum number of estimated writes before committing a batch
    */
   public BonsaiFlatDbToArchiveMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -118,57 +99,27 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final Blockchain blockchain,
       final ScheduledExecutorService executorService,
       final MetricsSystem metricsSystem,
-      final BonsaiArchiveFlatDbStrategy archiveStrategy,
-      final int maxBlocksPerBatch,
-      final int maxWritesPerBatch) {
+      final BonsaiArchiveFlatDbStrategy archiveStrategy) {
 
     this.worldStateStorage = worldStateStorage;
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.archiveStrategy = archiveStrategy;
-    this.maxBlocksPerBatch = maxBlocksPerBatch;
-    this.maxWritesPerBatch = maxWritesPerBatch;
     this.migratedBlocksCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.BLOCKCHAIN,
             "bonsai_archive_migration_blocks_total",
             "Total blocks processed by the archive migrator");
-    this.writesCounter =
+    this.commitsCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.BLOCKCHAIN,
-            "bonsai_archive_migration_writes_total",
-            "Total estimated RocksDB writes performed by the archive migrator");
-    this.batchesCounter =
-        metricsSystem.createCounter(
-            BesuMetricCategory.BLOCKCHAIN,
-            "bonsai_archive_migration_batches_total",
-            "Total number of batch commits performed by the archive migrator");
-    this.backpressureSleepMsCounter =
-        metricsSystem.createCounter(
-            BesuMetricCategory.BLOCKCHAIN,
-            "bonsai_archive_migration_backpressure_sleep_ms_total",
-            "Total milliseconds slept due to RocksDB L0 backpressure during archive migration");
-    this.batchFlushReasonCounter =
-        metricsSystem.createLabelledCounter(
-            BesuMetricCategory.BLOCKCHAIN,
-            "bonsai_archive_migration_batch_flush_total",
-            "Number of archive migration batch flushes by trigger reason",
-            "reason");
-    metricsSystem.createGauge(
-        BesuMetricCategory.BLOCKCHAIN,
-        "bonsai_archive_migration_last_batch_writes",
-        "Write count of the most recently committed archive migration batch",
-        () -> (double) lastBatchWrites.get());
-    metricsSystem.createGauge(
-        BesuMetricCategory.BLOCKCHAIN,
-        "bonsai_archive_migration_last_batch_blocks",
-        "Block count of the most recently committed archive migration batch",
-        () -> (double) lastBatchBlocks.get());
+            "bonsai_archive_migration_commits_total",
+            "Total number of per-block commits performed by the archive migrator");
     metricsSystem.createGauge(
         BesuMetricCategory.BLOCKCHAIN,
         "bonsai_archive_migration_last_commit_duration_ms",
-        "Duration in milliseconds of the most recent archive migration batch commit",
+        "Duration in milliseconds of the most recent archive migration block commit",
         () -> (double) lastCommitDurationMs.get());
     metricsSystem.createGauge(
         BesuMetricCategory.BLOCKCHAIN,
@@ -180,11 +131,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         "bonsai_archive_migration_last_new_payload_duration_ms",
         "Duration in milliseconds of the most recently observed engine_newPayload call",
         () -> (double) lastNewPayloadDurationMs.get());
-    metricsSystem.createGauge(
-        BesuMetricCategory.BLOCKCHAIN,
-        "bonsai_archive_migration_current_sleep_ms",
-        "Current inter-batch sleep in milliseconds applied by the AIMD backpressure controller",
-        () -> (double) currentSleepMs);
     metricsSystem.createGauge(
         BesuMetricCategory.BLOCKCHAIN,
         "bonsai_archive_migration_pending_compaction_bytes",
@@ -223,10 +169,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
 
-      int batchBlockCount = 0;
-      int batchWrites = 0;
       long currentBlock = startBlock - 1;
-      SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
 
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
         pauseDuringEngineApi();
@@ -237,54 +180,20 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 .getBlockHeader(blockNumber)
                 .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
 
+        final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
         try {
-          int blockWrites = 0;
           if (maybeTrieLog.isPresent()) {
-            blockWrites = estimateWrites(maybeTrieLog.get());
-            batchWrites += blockWrites;
             processBlock(maybeTrieLog.get(), blockNumber, tx);
             migratedBlocksCounter.inc();
           } else if (blockNumber > 0) {
             throw new IllegalStateException("No trie log found for block " + blockNumber);
           }
-          batchBlockCount++;
-
-          if (batchBlockCount >= maxBlocksPerBatch || batchWrites >= maxWritesPerBatch) {
-            pauseDuringEngineApi();
-            final String flushReason =
-                batchWrites >= maxWritesPerBatch ? "write_ceiling" : "block_ceiling";
-            saveProgress(blockNumber, tx);
-            final long commitStart = System.currentTimeMillis();
-            tx.commit();
-            lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
-
-            updateRocksDbMetrics(storage);
-            applyBackpressure();
-
-            writesCounter.inc(batchWrites);
-            batchesCounter.inc();
-            batchFlushReasonCounter.labels(flushReason).inc();
-            lastBatchWrites.set(batchWrites);
-            lastBatchBlocks.set(batchBlockCount);
-
-            LogUtil.throttledLog(
-                () ->
-                    LOG.info(
-                        "Archive migration batch: newPayloadDurationMs={}, currentSleepMs={},"
-                            + " l0Files={}, pendingCompactionBytes={}, batchWrites={}, batchBlocks={}",
-                        lastNewPayloadDurationMs.get(),
-                        currentSleepMs,
-                        lastL0FileCount.get(),
-                        lastPendingCompactionBytes.get(),
-                        lastBatchWrites.get(),
-                        lastBatchBlocks.get()),
-                shouldLogProgress,
-                LOG_INTERVAL_SECONDS);
-
-            tx = storage.startTransaction();
-            batchBlockCount = 0;
-            batchWrites = 0;
-          }
+          saveProgress(blockNumber, tx);
+          final long commitStart = System.currentTimeMillis();
+          tx.commit();
+          lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
+          commitsCounter.inc();
+          updateRocksDbMetrics(storage);
         } catch (final Exception e) {
           LOG.error("Failed to process block {}, rolling back transaction", blockNumber, e);
           try {
@@ -298,30 +207,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         }
 
         logProgress(blockNumber, startBlock, target.get());
-      }
-
-      // Flush remaining batch
-      if (batchBlockCount > 0) {
-        try {
-          saveProgress(currentBlock, tx);
-          final long commitStart = System.currentTimeMillis();
-          tx.commit();
-          lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
-          writesCounter.inc(batchWrites);
-          batchesCounter.inc();
-          lastBatchWrites.set(batchWrites);
-          lastBatchBlocks.set(batchBlockCount);
-        } catch (final Exception e) {
-          LOG.error("Failed to commit final migration batch, rolling back", e);
-          try {
-            tx.rollback();
-          } catch (final Exception rollbackException) {
-            LOG.error("Failed to rollback final migration batch", rollbackException);
-          }
-          throw new IllegalStateException("Migration failed at final batch: " + e.getMessage(), e);
-        }
-      } else {
-        tx.rollback();
       }
 
       worldStateStorage.upgradeToArchiveFlatDbMode();
@@ -349,29 +234,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             ACCOUNT_INFO_STATE_ARCHIVE, "rocksdb.estimate-pending-compaction-bytes"));
   }
 
-  private void applyBackpressure() {
-    final long duration = lastNewPayloadDurationMs.get();
-    if (duration > TARGET_NEW_PAYLOAD_MS) {
-      currentSleepMs =
-          Math.min(currentSleepMs + (duration - TARGET_NEW_PAYLOAD_MS), MAX_BACKPRESSURE_SLEEP_MS);
-    } else if (currentSleepMs > 0) {
-      currentSleepMs = Math.max(0, currentSleepMs - SLEEP_DECREASE_STEP_MS);
-    }
-    if (currentSleepMs > 0) {
-      backpressureSleepMsCounter.inc(currentSleepMs);
-      try {
-        Thread.sleep(currentSleepMs);
-      } catch (final InterruptedException e) {
-        Thread.currentThread().interrupt();
-      }
-    }
-  }
-
-  private int estimateWrites(final TrieLog trieLog) {
-    return trieLog.getAccountChanges().size()
-        + trieLog.getStorageChanges().values().stream().mapToInt(Map::size).sum();
-  }
-
   @Override
   public void close() {
     executorService.shutdownNow();
@@ -387,7 +249,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   /**
    * Called when an engine API call (newPayload, forkchoiceUpdated, etc.) starts. Signals the
    * migration thread to pause processing to reduce write contention. Records the start time for
-   * newPayload calls to enable duration-based backpressure.
+   * newPayload calls to enable duration tracking.
    *
    * @param methodName the JSON-RPC method name (e.g. "engine_newPayloadV3")
    */
@@ -400,7 +262,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   /**
    * Called when an engine API call completes. Resumes the migration thread by unparking it. Records
-   * the duration for newPayload calls to drive AIMD backpressure.
+   * the duration for newPayload calls for monitoring.
    *
    * @param methodName the JSON-RPC method name (e.g. "engine_newPayloadV3")
    */
