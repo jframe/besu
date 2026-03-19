@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.VARIABLES;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
@@ -173,7 +173,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     metricsSystem.createGauge(
         BesuMetricCategory.BLOCKCHAIN,
         "bonsai_archive_migration_l0_file_count",
-        "RocksDB L0 file count for ACCOUNT_INFO_STATE at last backpressure check",
+        "RocksDB L0 file count for ACCOUNT_INFO_STATE_ARCHIVE at last metrics update",
         () -> (double) lastL0FileCount.get());
     metricsSystem.createGauge(
         BesuMetricCategory.BLOCKCHAIN,
@@ -188,7 +188,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     metricsSystem.createGauge(
         BesuMetricCategory.BLOCKCHAIN,
         "bonsai_archive_migration_pending_compaction_bytes",
-        "RocksDB estimated pending compaction bytes for ACCOUNT_INFO_STATE",
+        "RocksDB estimated pending compaction bytes for ACCOUNT_INFO_STATE_ARCHIVE",
         () -> (double) lastPendingCompactionBytes.get());
   }
 
@@ -342,9 +342,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   private void updateRocksDbMetrics(final SegmentedKeyValueStorage storage) {
-    lastL0FileCount.set(storage.getLongProperty(ACCOUNT_INFO_STATE, "rocksdb.num-files-at-level0"));
+    lastL0FileCount.set(
+        storage.getLongProperty(ACCOUNT_INFO_STATE_ARCHIVE, "rocksdb.num-files-at-level0"));
     lastPendingCompactionBytes.set(
-        storage.getLongProperty(ACCOUNT_INFO_STATE, "rocksdb.estimate-pending-compaction-bytes"));
+        storage.getLongProperty(
+            ACCOUNT_INFO_STATE_ARCHIVE, "rocksdb.estimate-pending-compaction-bytes"));
   }
 
   private void applyBackpressure() {
