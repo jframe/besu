@@ -57,6 +57,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private static final String NEW_PAYLOAD_METHOD_PREFIX = "engine_newPayload";
 
+  // AIMD backpressure — target newPayload latency; sleep grows by overshoot, shrinks 10ms/block
+  private static final long TARGET_NEW_PAYLOAD_MS = 200;
+  private static final long MAX_BACKPRESSURE_SLEEP_MS = 2_000;
+  private static final long SLEEP_DECREASE_STEP_MS = 10;
+
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
 
@@ -77,6 +82,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   // newPayload duration tracking (written by engine API thread, read by migration thread)
   private volatile long engineApiCallStartMs;
   private final AtomicLong lastNewPayloadDurationMs = new AtomicLong(0);
+
+  // AIMD backpressure state (only written/read from migration thread)
+  private volatile long currentSleepMs = 0;
 
   // Metrics
   private final AtomicLong lastCommitDurationMs = new AtomicLong(0);
@@ -136,6 +144,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         "bonsai_archive_migration_pending_compaction_bytes",
         "RocksDB estimated pending compaction bytes for ACCOUNT_INFO_STATE_ARCHIVE",
         () -> (double) lastPendingCompactionBytes.get());
+    metricsSystem.createGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_archive_migration_current_sleep_ms",
+        "Current inter-block sleep in ms applied by the AIMD backpressure controller",
+        () -> (double) currentSleepMs);
   }
 
   /**
@@ -194,6 +207,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
           commitsCounter.inc();
           updateRocksDbMetrics(storage);
+          applyBackpressure();
         } catch (final Exception e) {
           LOG.error("Failed to process block {}, rolling back transaction", blockNumber, e);
           try {
@@ -223,6 +237,23 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private void pauseDuringEngineApi() {
     while (engineApiActive.get()) {
       LockSupport.park();
+    }
+  }
+
+  private void applyBackpressure() {
+    final long duration = lastNewPayloadDurationMs.get();
+    if (duration > TARGET_NEW_PAYLOAD_MS) {
+      currentSleepMs =
+          Math.min(currentSleepMs + (duration - TARGET_NEW_PAYLOAD_MS), MAX_BACKPRESSURE_SLEEP_MS);
+    } else if (currentSleepMs > 0) {
+      currentSleepMs = Math.max(0, currentSleepMs - SLEEP_DECREASE_STEP_MS);
+    }
+    if (currentSleepMs > 0) {
+      try {
+        Thread.sleep(currentSleepMs);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
     }
   }
 
@@ -293,8 +324,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           long progressPercent =
               totalBlocks > 0 ? ((blockNumber - startBlock) * 100) / totalBlocks : 100;
           LOG.info(
-              "Bonsai Archive migration progress: {}% (block {}/{})",
-              progressPercent, blockNumber, endBlock);
+              "Bonsai Archive migration progress: {}% (block {}/{}) newPayloadMs={} sleepMs={}",
+              progressPercent,
+              blockNumber,
+              endBlock,
+              lastNewPayloadDurationMs.get(),
+              currentSleepMs);
         },
         shouldLogProgress,
         LOG_INTERVAL_SECONDS);
