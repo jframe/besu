@@ -179,6 +179,18 @@ public interface SegmentedKeyValueStorage extends Closeable {
   boolean isClosed();
 
   /**
+   * Returns a storage-engine-specific numeric property for the given segment. Returns 0 if the
+   * property is not supported by this implementation.
+   *
+   * @param segment the segment to query
+   * @param property the property name (e.g. "rocksdb.num-files-at-level0")
+   * @return the property value, or 0 if unsupported
+   */
+  default long getLongProperty(final SegmentIdentifier segment, final String property) {
+    return 0L;
+  }
+
+  /**
    * record type used to wrap responses from getNearestTo, includes the matched key and the value.
    *
    * @param key the matched (nearest) key

@@ -87,7 +87,6 @@ public interface PathBasedExtraStorageConfiguration {
 
     boolean DEFAULT_FULL_FLAT_DB_ENABLED = true;
     boolean DEFAULT_CODE_USING_CODE_HASH_ENABLED = true;
-    int DEFAULT_ARCHIVE_MIGRATION_MAX_WRITES_PER_SECOND = 10_000;
     int DEFAULT_ARCHIVE_MIGRATION_MAX_BLOCKS_PER_BATCH = 500;
     int DEFAULT_ARCHIVE_MIGRATION_MAX_WRITES_PER_BATCH = 10_000;
 
@@ -99,11 +98,6 @@ public interface PathBasedExtraStorageConfiguration {
     @Value.Default
     default boolean getCodeStoredByCodeHashEnabled() {
       return DEFAULT_CODE_USING_CODE_HASH_ENABLED;
-    }
-
-    @Value.Default
-    default int getArchiveMigrationMaxWritesPerSecond() {
-      return DEFAULT_ARCHIVE_MIGRATION_MAX_WRITES_PER_SECOND;
     }
 
     @Value.Default

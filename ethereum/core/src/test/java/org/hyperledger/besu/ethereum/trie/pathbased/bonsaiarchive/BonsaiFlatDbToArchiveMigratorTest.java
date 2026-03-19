@@ -433,8 +433,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     when(trieLogManager.getTrieLogLayer(hash4))
         .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x400"))));
 
-    final BonsaiFlatDbToArchiveMigrator migrator =
-        createMigrator(Integer.MAX_VALUE, 2, Integer.MAX_VALUE);
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(2, Integer.MAX_VALUE);
     migrator.migrate().get(10, TimeUnit.SECONDS);
 
     assertThat(getArchivedAccountKey(1L)).isPresent();
@@ -458,8 +457,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     when(trieLogManager.getTrieLogLayer(hash3))
         .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x300"))));
 
-    final BonsaiFlatDbToArchiveMigrator migrator =
-        createMigrator(Integer.MAX_VALUE, Integer.MAX_VALUE, 1);
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(Integer.MAX_VALUE, 1);
     migrator.migrate().get(10, TimeUnit.SECONDS);
 
     assertThat(getArchivedAccountKey(1L)).isPresent();
@@ -469,11 +467,11 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   private BonsaiFlatDbToArchiveMigrator createMigrator() {
-    return createMigrator(Integer.MAX_VALUE, 1_000, 5_000);
+    return createMigrator(1_000, 10_000);
   }
 
   private BonsaiFlatDbToArchiveMigrator createMigrator(
-      final int maxWritesPerSecond, final int maxBlocksPerBatch, final int maxWritesPerBatch) {
+      final int maxBlocksPerBatch, final int maxWritesPerBatch) {
     final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
@@ -484,7 +482,6 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         executorService,
         metricsSystem,
         archiveStrategy,
-        maxWritesPerSecond,
         maxBlocksPerBatch,
         maxWritesPerBatch);
   }

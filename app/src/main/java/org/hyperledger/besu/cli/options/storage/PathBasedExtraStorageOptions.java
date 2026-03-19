@@ -22,7 +22,6 @@ import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConf
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.MINIMUM_TRIE_LOG_RETENTION_LIMIT;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ARCHIVE_MIGRATION_MAX_BLOCKS_PER_BATCH;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ARCHIVE_MIGRATION_MAX_WRITES_PER_BATCH;
-import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ARCHIVE_MIGRATION_MAX_WRITES_PER_SECOND;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_FULL_FLAT_DB_ENABLED;
 
@@ -122,14 +121,6 @@ public class PathBasedExtraStorageOptions
 
     @Option(
         hidden = true,
-        names = {"--Xbonsai-archive-migration-max-writes-per-second"},
-        description =
-            "Max RocksDB writes per second the archive migrator will sustain. (default: ${DEFAULT-VALUE})")
-    private int archiveMigrationMaxWritesPerSecond =
-        DEFAULT_ARCHIVE_MIGRATION_MAX_WRITES_PER_SECOND;
-
-    @Option(
-        hidden = true,
         names = {"--Xbonsai-archive-migration-max-blocks-per-batch"},
         description =
             "Safety ceiling: max blocks to accumulate per migration transaction. (default: ${DEFAULT-VALUE})")
@@ -209,8 +200,6 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getFullFlatDbEnabled();
     dataStorageOptions.unstableOptions.codeUsingCodeHashEnabled =
         domainObject.getUnstable().getCodeStoredByCodeHashEnabled();
-    dataStorageOptions.unstableOptions.archiveMigrationMaxWritesPerSecond =
-        domainObject.getUnstable().getArchiveMigrationMaxWritesPerSecond();
     dataStorageOptions.unstableOptions.archiveMigrationMaxBlocksPerBatch =
         domainObject.getUnstable().getArchiveMigrationMaxBlocksPerBatch();
     dataStorageOptions.unstableOptions.archiveMigrationMaxWritesPerBatch =
@@ -235,8 +224,6 @@ public class PathBasedExtraStorageOptions
             ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                 .fullFlatDbEnabled(unstableOptions.fullFlatDbEnabled)
                 .codeStoredByCodeHashEnabled(unstableOptions.codeUsingCodeHashEnabled)
-                .archiveMigrationMaxWritesPerSecond(
-                    unstableOptions.archiveMigrationMaxWritesPerSecond)
                 .archiveMigrationMaxBlocksPerBatch(
                     unstableOptions.archiveMigrationMaxBlocksPerBatch)
                 .archiveMigrationMaxWritesPerBatch(

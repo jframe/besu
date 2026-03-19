@@ -535,6 +535,16 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
     return closed.get();
   }
 
+  @Override
+  public long getLongProperty(final SegmentIdentifier segment, final String property) {
+    try {
+      return getDB().getLongProperty(safeColumnHandle(segment), property);
+    } catch (final RocksDBException e) {
+      LOG.trace("getLongProperty({}) failed: {}", property, e.getMessage());
+      return 0L;
+    }
+  }
+
   void throwIfClosed() {
     if (closed.get()) {
       LOG.error("Attempting to use a closed RocksDbKeyValueStorage");

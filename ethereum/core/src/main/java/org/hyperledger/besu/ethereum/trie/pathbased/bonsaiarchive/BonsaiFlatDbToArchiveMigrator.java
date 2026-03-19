@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.VARIABLES;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
@@ -45,7 +46,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.util.concurrent.RateLimiter;
 import org.apache.commons.lang3.time.DurationFormatUtils;
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -56,6 +56,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
   private static final int LOG_INTERVAL_SECONDS = 60;
+
+  // L0 backpressure — derived from RocksDB default level0_slowdown_writes_trigger=20,
+  // which Besu does not override. Back off at 50% of the stall trigger; sleep grows
+  // linearly at 500ms per file above the threshold, capped at 10s.
+  static final int L0_SLOWDOWN_TRIGGER = 20;
+  static final int L0_BACKPRESSURE_THRESHOLD = L0_SLOWDOWN_TRIGGER / 2; // 10 files
+  static final long L0_SLEEP_MS_PER_FILE = 500;
+  static final long MAX_BACKPRESSURE_SLEEP_MS = 10_000;
 
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
@@ -69,7 +77,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
   protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
 
-  private final RateLimiter rateLimiter;
   private final int maxBlocksPerBatch;
   private final int maxWritesPerBatch;
 
@@ -80,11 +87,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   // Metrics
   private final Counter writesCounter;
   private final Counter batchesCounter;
-  private final Counter rateLimiterWaitMsCounter;
+  private final Counter backpressureSleepMsCounter;
   private final LabelledMetric<Counter> batchFlushReasonCounter;
   private final AtomicLong lastBatchWrites = new AtomicLong(0);
   private final AtomicLong lastBatchBlocks = new AtomicLong(0);
   private final AtomicLong lastCommitDurationMs = new AtomicLong(0);
+  private final AtomicLong lastL0FileCount = new AtomicLong(0);
 
   /**
    * Creates a new BonsaiFlatDbToArchiveMigrator.
@@ -95,7 +103,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    * @param executorService the executor service for running migration on a separate thread
    * @param metricsSystem the metrics system for tracking migration progress
    * @param archiveStrategy the archive flat DB strategy for writing archive keys
-   * @param maxWritesPerSecond the maximum number of RocksDB writes per second (rate limiter)
    * @param maxBlocksPerBatch the maximum number of blocks to accumulate before committing a batch
    * @param maxWritesPerBatch the maximum number of estimated writes before committing a batch
    */
@@ -106,7 +113,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final ScheduledExecutorService executorService,
       final MetricsSystem metricsSystem,
       final BonsaiArchiveFlatDbStrategy archiveStrategy,
-      final int maxWritesPerSecond,
       final int maxBlocksPerBatch,
       final int maxWritesPerBatch) {
 
@@ -115,7 +121,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.archiveStrategy = archiveStrategy;
-    this.rateLimiter = RateLimiter.create(maxWritesPerSecond);
     this.maxBlocksPerBatch = maxBlocksPerBatch;
     this.maxWritesPerBatch = maxWritesPerBatch;
     this.migratedBlocksCounter =
@@ -133,11 +138,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             BesuMetricCategory.BLOCKCHAIN,
             "bonsai_archive_migration_batches_total",
             "Total number of batch commits performed by the archive migrator");
-    this.rateLimiterWaitMsCounter =
+    this.backpressureSleepMsCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.BLOCKCHAIN,
-            "bonsai_archive_migration_rate_limiter_wait_ms_total",
-            "Total milliseconds spent waiting in the archive migration rate limiter");
+            "bonsai_archive_migration_backpressure_sleep_ms_total",
+            "Total milliseconds slept due to RocksDB L0 backpressure during archive migration");
     this.batchFlushReasonCounter =
         metricsSystem.createLabelledCounter(
             BesuMetricCategory.BLOCKCHAIN,
@@ -159,6 +164,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         "bonsai_archive_migration_last_commit_duration_ms",
         "Duration in milliseconds of the most recent archive migration batch commit",
         () -> (double) lastCommitDurationMs.get());
+    metricsSystem.createGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_archive_migration_l0_file_count",
+        "RocksDB L0 file count for ACCOUNT_INFO_STATE at last backpressure check",
+        () -> (double) lastL0FileCount.get());
   }
 
   /**
@@ -227,11 +237,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             tx.commit();
             lastCommitDurationMs.set(System.currentTimeMillis() - commitStart);
 
-            if (batchWrites > 0) {
-              final long waitStart = System.currentTimeMillis();
-              rateLimiter.acquire(batchWrites);
-              rateLimiterWaitMsCounter.inc(System.currentTimeMillis() - waitStart);
-            }
+            applyBackpressure(storage);
 
             writesCounter.inc(batchWrites);
             batchesCounter.inc();
@@ -296,6 +302,22 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private void pauseDuringEngineApi() {
     while (engineApiActive.get()) {
       LockSupport.park();
+    }
+  }
+
+  private void applyBackpressure(final SegmentedKeyValueStorage storage) {
+    final long l0 = storage.getLongProperty(ACCOUNT_INFO_STATE, "rocksdb.num-files-at-level0");
+    lastL0FileCount.set(l0);
+    if (l0 > L0_BACKPRESSURE_THRESHOLD) {
+      final long sleepMs =
+          Math.min((l0 - L0_BACKPRESSURE_THRESHOLD) * L0_SLEEP_MS_PER_FILE, MAX_BACKPRESSURE_SLEEP_MS);
+      LOG.debug("Archive migration backpressure: L0={}, sleeping {}ms", l0, sleepMs);
+      backpressureSleepMsCounter.inc(sleepMs);
+      try {
+        Thread.sleep(sleepMs);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
     }
   }
 
