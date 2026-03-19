@@ -340,12 +340,12 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     assertThat(block1ProcessingLatch.await(5, TimeUnit.SECONDS)).isTrue();
 
     // Simulate engine API call: pause migration
-    migrator.onEngineApiCallStart();
+    migrator.onEngineApiCallStart("engine_newPayloadV3");
     // Wait a bit to ensure migration would proceed if not paused
     Thread.sleep(100);
 
     // Resume engine API call: unpause migration
-    migrator.onEngineApiCallEnd();
+    migrator.onEngineApiCallEnd("engine_newPayloadV3");
 
     // Migration should complete
     future.get(10, TimeUnit.SECONDS);
@@ -381,13 +381,13 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     assertThat(migrationStartedLatch.await(5, TimeUnit.SECONDS)).isTrue();
 
     // Pause migration
-    migrator.onEngineApiCallStart();
+    migrator.onEngineApiCallStart("engine_forkchoiceUpdatedV3");
 
     // Let migration attempt to proceed (it should be blocked)
     Thread.sleep(100);
 
     // Resume migration
-    migrator.onEngineApiCallEnd();
+    migrator.onEngineApiCallEnd("engine_forkchoiceUpdatedV3");
 
     // Migration should now be able to complete
     allowMigrationLatch.countDown();

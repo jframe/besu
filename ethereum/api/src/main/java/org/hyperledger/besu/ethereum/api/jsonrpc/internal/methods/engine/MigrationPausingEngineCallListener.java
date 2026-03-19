@@ -49,12 +49,12 @@ public class MigrationPausingEngineCallListener implements EngineCallListener {
   }
 
   @Override
-  public void onEngineApiCallStart() {
-    migrator.onEngineApiCallStart();
+  public void onEngineApiCallStart(final String methodName) {
+    migrator.onEngineApiCallStart(methodName);
   }
 
   @Override
-  public void onEngineApiCallEnd() {
-    migrator.onEngineApiCallEnd();
+  public void onEngineApiCallEnd(final String methodName) {
+    migrator.onEngineApiCallEnd(methodName);
   }
 }

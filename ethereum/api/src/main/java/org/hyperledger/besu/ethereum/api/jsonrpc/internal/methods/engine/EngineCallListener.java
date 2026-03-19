@@ -19,7 +19,7 @@ public interface EngineCallListener {
 
   default void stop() {}
 
-  default void onEngineApiCallStart() {}
+  default void onEngineApiCallStart(final String methodName) {}
 
-  default void onEngineApiCallEnd() {}
+  default void onEngineApiCallEnd(final String methodName) {}
 }

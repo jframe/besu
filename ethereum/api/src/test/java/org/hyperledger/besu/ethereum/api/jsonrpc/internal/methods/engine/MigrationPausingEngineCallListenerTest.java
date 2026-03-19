@@ -57,9 +57,9 @@ public class MigrationPausingEngineCallListenerTest {
     final MigrationPausingEngineCallListener listener =
         new MigrationPausingEngineCallListener(delegate, migrator);
 
-    listener.onEngineApiCallStart();
+    listener.onEngineApiCallStart("engine_newPayloadV3");
 
-    verify(migrator).onEngineApiCallStart();
+    verify(migrator).onEngineApiCallStart("engine_newPayloadV3");
     verifyNoMoreInteractions(delegate);
   }
 
@@ -68,9 +68,9 @@ public class MigrationPausingEngineCallListenerTest {
     final MigrationPausingEngineCallListener listener =
         new MigrationPausingEngineCallListener(delegate, migrator);
 
-    listener.onEngineApiCallEnd();
+    listener.onEngineApiCallEnd("engine_newPayloadV3");
 
-    verify(migrator).onEngineApiCallEnd();
+    verify(migrator).onEngineApiCallEnd("engine_newPayloadV3");
     verifyNoMoreInteractions(delegate);
   }
 }
