@@ -23,6 +23,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 
 import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
+import java.util.OptionalLong;
 
 public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   DEFAULT("default".getBytes(StandardCharsets.UTF_8)),
@@ -37,8 +38,20 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   ACCOUNT_INFO_STATE(new byte[] {6}, EnumSet.of(BONSAI, X_BONSAI_ARCHIVE), false, true, false),
   CODE_STORAGE(new byte[] {7}, EnumSet.of(BONSAI, X_BONSAI_ARCHIVE)),
   ACCOUNT_STORAGE_STORAGE(new byte[] {8}, EnumSet.of(BONSAI, X_BONSAI_ARCHIVE), false, true, false),
-  TRIE_BRANCH_STORAGE(new byte[] {9}, EnumSet.of(BONSAI, X_BONSAI_ARCHIVE), false, true, false),
-  TRIE_LOG_STORAGE(new byte[] {10}, EnumSet.of(BONSAI, X_BONSAI_ARCHIVE), true, false, true),
+  TRIE_BRANCH_STORAGE(
+      new byte[] {9},
+      EnumSet.of(BONSAI, X_BONSAI_ARCHIVE),
+      false,
+      true,
+      false,
+      OptionalLong.of(512 * 1024 * 1024L)),
+  TRIE_LOG_STORAGE(
+      new byte[] {10},
+      EnumSet.of(BONSAI, X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true,
+      OptionalLong.of(32 * 1024 * 1024L)),
   ACCOUNT_INFO_STATE_FREEZER(
       "ACCOUNT_INFO_STATE_FREEZER".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
@@ -81,6 +94,7 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   private final boolean containsStaticData;
   private final boolean eligibleToHighSpecFlag;
   private final boolean staticDataGarbageCollectionEnabled;
+  private final OptionalLong cacheCapacityBytes;
 
   KeyValueSegmentIdentifier(final byte[] id) {
     this(id, EnumSet.allOf(DataStorageFormat.class));
@@ -96,11 +110,28 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       final boolean containsStaticData,
       final boolean eligibleToHighSpecFlag,
       final boolean staticDataGarbageCollectionEnabled) {
+    this(
+        id,
+        formats,
+        containsStaticData,
+        eligibleToHighSpecFlag,
+        staticDataGarbageCollectionEnabled,
+        OptionalLong.empty());
+  }
+
+  KeyValueSegmentIdentifier(
+      final byte[] id,
+      final EnumSet<DataStorageFormat> formats,
+      final boolean containsStaticData,
+      final boolean eligibleToHighSpecFlag,
+      final boolean staticDataGarbageCollectionEnabled,
+      final OptionalLong cacheCapacityBytes) {
     this.id = id;
     this.formats = formats;
     this.containsStaticData = containsStaticData;
     this.eligibleToHighSpecFlag = eligibleToHighSpecFlag;
     this.staticDataGarbageCollectionEnabled = staticDataGarbageCollectionEnabled;
+    this.cacheCapacityBytes = cacheCapacityBytes;
   }
 
   @Override
@@ -131,5 +162,10 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   @Override
   public boolean includeInDatabaseFormat(final DataStorageFormat format) {
     return formats.contains(format);
+  }
+
+  @Override
+  public OptionalLong getCacheCapacityBytes() {
+    return cacheCapacityBytes;
   }
 }

@@ -16,6 +16,8 @@ package org.hyperledger.besu.plugin.services.storage;
 
 import org.hyperledger.besu.plugin.Unstable;
 
+import java.util.OptionalLong;
+
 /**
  * A namespace identifier for the storage instance segment, a grouping of data that should be kept
  * isolated from the data of other segments.
@@ -73,5 +75,15 @@ public interface SegmentIdentifier {
    */
   default boolean isStaticDataGarbageCollectionEnabled() {
     return false;
+  }
+
+  /**
+   * Returns the block cache capacity in bytes to use for this segment, overriding the global
+   * RocksDB cache configuration. When empty the global configuration value is used.
+   *
+   * @return an OptionalLong containing the cache size in bytes, or empty to use the global default.
+   */
+  default OptionalLong getCacheCapacityBytes() {
+    return OptionalLong.empty();
   }
 }
