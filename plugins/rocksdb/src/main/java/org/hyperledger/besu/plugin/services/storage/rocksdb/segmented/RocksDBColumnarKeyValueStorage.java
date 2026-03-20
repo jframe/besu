@@ -536,6 +536,24 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   }
 
   @Override
+  public void pauseBackgroundWork() {
+    try {
+      getDB().pauseBackgroundWork();
+    } catch (final RocksDBException e) {
+      LOG.warn("Failed to pause RocksDB background work", e);
+    }
+  }
+
+  @Override
+  public void continueBackgroundWork() {
+    try {
+      getDB().continueBackgroundWork();
+    } catch (final RocksDBException e) {
+      LOG.warn("Failed to continue RocksDB background work", e);
+    }
+  }
+
+  @Override
   public long getLongProperty(final SegmentIdentifier segment, final String property) {
     try {
       return getDB().getLongProperty(safeColumnHandle(segment), property);

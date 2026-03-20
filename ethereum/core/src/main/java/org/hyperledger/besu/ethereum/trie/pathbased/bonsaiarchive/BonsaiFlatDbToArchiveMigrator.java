@@ -331,8 +331,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   public void onEngineApiCallStart(final String methodName) {
     if (methodName.startsWith(NEW_PAYLOAD_METHOD_PREFIX)) {
       engineApiCallStartMs = System.currentTimeMillis();
+      engineApiActive.set(true);
+      worldStateStorage.getComposedWorldStateStorage().pauseBackgroundWork();
+    } else {
+      engineApiActive.set(true);
     }
-    engineApiActive.set(true);
   }
 
   /**
@@ -344,6 +347,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   public void onEngineApiCallEnd(final String methodName) {
     if (methodName.startsWith(NEW_PAYLOAD_METHOD_PREFIX)) {
       lastNewPayloadDurationMs.set(System.currentTimeMillis() - engineApiCallStartMs);
+      worldStateStorage.getComposedWorldStateStorage().continueBackgroundWork();
     }
     engineApiActive.set(false);
     final Thread thread = migrationThread;

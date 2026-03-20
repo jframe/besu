@@ -108,6 +108,22 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Pauses all background compaction and flush jobs. Blocks until any currently running background
+   * jobs complete. Must be paired with {@link #continueBackgroundWork()}. Non-RocksDB
+   * implementations may ignore this call.
+   *
+   * <p>Intended for use immediately before latency-sensitive operations (e.g. {@code newPayload})
+   * to prevent background flush SuperVersion updates from stalling foreground reads.
+   */
+  default void pauseBackgroundWork() {}
+
+  /**
+   * Resumes background compaction and flush jobs after a prior {@link #pauseBackgroundWork()} call.
+   * Non-RocksDB implementations may ignore this call.
+   */
+  default void continueBackgroundWork() {}
+
+  /**
    * Returns a stream of all keys for the segment.
    *
    * @param segmentIdentifier The segment identifier whose keys we want to stream.
