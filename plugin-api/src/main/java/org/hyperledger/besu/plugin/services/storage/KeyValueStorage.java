@@ -130,6 +130,20 @@ public interface KeyValueStorage extends Closeable {
   Set<byte[]> getAllValuesFromKeysThat(final Predicate<byte[]> returnCondition);
 
   /**
+   * Retrieves the value associated with a given key without populating the read cache. Use for bulk
+   * or background reads where caching the result would evict hot data needed for latency-sensitive
+   * operations. Non-RocksDB implementations fall back to {@link #get(byte[])}.
+   *
+   * @param key whose associated value is being retrieved.
+   * @return an {@link Optional} containing the value associated with the specified key, otherwise
+   *     empty.
+   * @throws StorageException problem encountered during the retrieval attempt.
+   */
+  default Optional<byte[]> getWithoutCachePollution(final byte[] key) throws StorageException {
+    return get(key);
+  }
+
+  /**
    * Begins a fresh transaction, for sequencing operations for later atomic execution.
    *
    * @return transaction to sequence key-value operations.

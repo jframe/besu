@@ -75,6 +75,12 @@ public class SegmentedKeyValueStorageAdapter implements KeyValueStorage {
   }
 
   @Override
+  public Optional<byte[]> getWithoutCachePollution(final byte[] key) throws StorageException {
+    throwIfClosed();
+    return storage.getWithoutCachePollution(segmentIdentifier, key);
+  }
+
+  @Override
   public Set<byte[]> getAllKeysThat(final Predicate<byte[]> returnCondition) {
     throwIfClosed();
     return storage.getAllKeysThat(segmentIdentifier, returnCondition);

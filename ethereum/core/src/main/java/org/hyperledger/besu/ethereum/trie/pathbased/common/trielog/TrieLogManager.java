@@ -131,6 +131,12 @@ public class TrieLogManager {
     return rootWorldStateStorage.getTrieLog(blockHash).map(trieLogFactory::deserialize);
   }
 
+  public Optional<TrieLog> getTrieLogLayerWithoutCachePollution(final Hash blockHash) {
+    return rootWorldStateStorage
+        .getTrieLogWithoutCachePollution(blockHash)
+        .map(trieLogFactory::deserialize);
+  }
+
   public synchronized long subscribe(final TrieLogEvent.TrieLogObserver sub) {
     return trieLogObservers.subscribe(sub);
   }

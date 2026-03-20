@@ -71,6 +71,22 @@ public interface SegmentedKeyValueStorage extends Closeable {
       throws StorageException;
 
   /**
+   * Retrieves the value associated with a given segment and key without populating the read cache.
+   * Use for bulk or background reads where caching the result would evict hot data needed for
+   * latency-sensitive operations. Non-RocksDB implementations fall back to {@link
+   * #get(SegmentIdentifier, byte[])}.
+   *
+   * @param segment the segment
+   * @param key Index into persistent data repository.
+   * @return The value persisted at the key index.
+   * @throws StorageException the storage exception
+   */
+  default Optional<byte[]> getWithoutCachePollution(
+      final SegmentIdentifier segment, final byte[] key) throws StorageException {
+    return get(segment, key);
+  }
+
+  /**
    * Contains key.
    *
    * @param segment the segment

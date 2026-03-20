@@ -101,6 +101,8 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   private final WriteOptions tryDeleteOptions =
       new WriteOptions().setNoSlowdown(true).setIgnoreMissingColumnFamilies(true);
   private final ReadOptions readOptions = new ReadOptions().setVerifyChecksums(false);
+  private final ReadOptions readOptionsNoCache =
+      new ReadOptions().setVerifyChecksums(false).setFillCache(false);
   private final MetricsSystem metricsSystem;
   private final RocksDBMetricsFactory rocksDBMetricsFactory;
 
@@ -415,6 +417,18 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
 
     try (final OperationTimer.TimingContext ignored = metrics.getReadLatency().startTimer()) {
       return Optional.ofNullable(getDB().get(safeColumnHandle(segment), readOptions, key));
+    } catch (final RocksDBException e) {
+      throw new StorageException(e);
+    }
+  }
+
+  @Override
+  public Optional<byte[]> getWithoutCachePollution(
+      final SegmentIdentifier segment, final byte[] key) throws StorageException {
+    throwIfClosed();
+
+    try (final OperationTimer.TimingContext ignored = metrics.getReadLatency().startTimer()) {
+      return Optional.ofNullable(getDB().get(safeColumnHandle(segment), readOptionsNoCache, key));
     } catch (final RocksDBException e) {
       throw new StorageException(e);
     }

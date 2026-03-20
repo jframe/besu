@@ -199,7 +199,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         final Optional<TrieLog> maybeTrieLog =
             blockchain
                 .getBlockHeader(blockNumber)
-                .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()));
+                .flatMap(
+                    header ->
+                        trieLogManager.getTrieLogLayerWithoutCachePollution(header.getHash()));
 
         try {
           if (maybeTrieLog.isPresent()) {

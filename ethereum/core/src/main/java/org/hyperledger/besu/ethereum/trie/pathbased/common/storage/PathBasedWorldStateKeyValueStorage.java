@@ -115,6 +115,10 @@ public abstract class PathBasedWorldStateKeyValueStorage
     return trieLogStorage.get(blockHash.getBytes().toArrayUnsafe());
   }
 
+  public Optional<byte[]> getTrieLogWithoutCachePollution(final Hash blockHash) {
+    return trieLogStorage.getWithoutCachePollution(blockHash.getBytes().toArrayUnsafe());
+  }
+
   public Stream<byte[]> streamTrieLogKeys(final long limit) {
     return trieLogStorage.streamKeys().limit(limit);
   }
