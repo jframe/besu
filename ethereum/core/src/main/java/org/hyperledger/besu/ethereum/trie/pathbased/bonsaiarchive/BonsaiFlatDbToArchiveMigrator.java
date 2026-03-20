@@ -190,7 +190,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       int batchWrites = 0;
       int batchBlockCount = 0;
       long currentBlock = startBlock - 1;
-      SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+      SegmentedKeyValueStorageTransaction tx = storage.startLowPriorityNoWalTransaction();
 
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
         pauseDuringEngineApi();
@@ -223,7 +223,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             commitsCounter.inc();
             updateRocksDbMetrics(storage);
             applyBackpressure();
-            tx = storage.startLowPriorityTransaction();
+            tx = storage.startLowPriorityNoWalTransaction();
             batchWrites = 0;
             batchBlockCount = 0;
           }

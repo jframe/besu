@@ -103,4 +103,18 @@ public class TransactionDBRocksDBColumnarKeyValueStorage extends RocksDBColumnar
             this::safeColumnHandle, db.beginTransaction(writeOptions), writeOptions, metrics),
         this.closed::get);
   }
+
+  @Override
+  public SegmentedKeyValueStorageTransaction startLowPriorityNoWalTransaction()
+      throws StorageException {
+    throwIfClosed();
+    final WriteOptions writeOptions = new WriteOptions();
+    writeOptions.setIgnoreMissingColumnFamilies(true);
+    writeOptions.setLowPri(true);
+    writeOptions.setDisableWAL(true);
+    return new SegmentedKeyValueStorageTransactionValidatorDecorator(
+        new RocksDBTransaction(
+            this::safeColumnHandle, db.beginTransaction(writeOptions), writeOptions, metrics),
+        this.closed::get);
+  }
 }

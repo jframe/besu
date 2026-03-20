@@ -101,6 +101,20 @@ public class OptimisticRocksDBColumnarKeyValueStorage extends RocksDBColumnarKey
         this.closed::get);
   }
 
+  @Override
+  public SegmentedKeyValueStorageTransaction startLowPriorityNoWalTransaction()
+      throws StorageException {
+    throwIfClosed();
+    final WriteOptions writeOptions = new WriteOptions();
+    writeOptions.setIgnoreMissingColumnFamilies(true);
+    writeOptions.setLowPri(true);
+    writeOptions.setDisableWAL(true);
+    return new SegmentedKeyValueStorageTransactionValidatorDecorator(
+        new RocksDBTransaction(
+            this::safeColumnHandle, db.beginTransaction(writeOptions), writeOptions, this.metrics),
+        this.closed::get);
+  }
+
   /**
    * Take snapshot RocksDb columnar key value snapshot.
    *

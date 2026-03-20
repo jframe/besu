@@ -124,6 +124,24 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Begins a transaction with low write priority and WAL disabled. On RocksDB-backed storage this
+   * combines {@code WriteOptions.low_pri = true} with {@code WriteOptions.disableWAL = true},
+   * removing fsync overhead for migration writes while still deprioritising them under compaction
+   * back-pressure. Writes are still applied atomically to the memtable; they will not survive a
+   * crash before the memtable is flushed, so this is only appropriate for idempotent background
+   * work (e.g. archive migration) where re-processing on restart is acceptable.
+   *
+   * <p>Non-RocksDB implementations fall back to {@link #startLowPriorityTransaction()}.
+   *
+   * @return An object representing the transaction.
+   * @throws StorageException the storage exception
+   */
+  default SegmentedKeyValueStorageTransaction startLowPriorityNoWalTransaction()
+      throws StorageException {
+    return startLowPriorityTransaction();
+  }
+
+  /**
    * Pauses all background compaction and flush jobs. Blocks until any currently running background
    * jobs complete. Must be paired with {@link #continueBackgroundWork()}. Non-RocksDB
    * implementations may ignore this call.
