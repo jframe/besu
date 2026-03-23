@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.util.concurrent.RateLimiter;
 import org.apache.commons.lang3.time.DurationFormatUtils;
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -52,6 +53,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
   private static final int LOG_INTERVAL_SECONDS = 60;
+  static final double DEFAULT_MAX_WRITES_PER_SECOND = 50_000.0;
 
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
@@ -66,6 +68,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
   protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
 
+  private final RateLimiter rateLimiter;
   private final Counter writesCounter;
 
   /**
@@ -90,6 +93,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.archiveStrategy = archiveStrategy;
+    this.rateLimiter = RateLimiter.create(DEFAULT_MAX_WRITES_PER_SECOND);
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
         "bonsai_archive_migration_block",
@@ -153,6 +157,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             lastBlockWrites.set(blockWrites);
             writesCounter.inc(blockWrites);
             migratedBlockNumber.incrementAndGet();
+            if (blockWrites > 0) {
+              rateLimiter.acquire((int) Math.min(blockWrites, Integer.MAX_VALUE));
+            }
           } else if (blockNumber > 0) {
             throw new IllegalStateException("No trie log found for block " + blockNumber);
           }
