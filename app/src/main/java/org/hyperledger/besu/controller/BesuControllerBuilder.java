@@ -928,6 +928,11 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             },
             0);
       } else {
+        // Already in ARCHIVE mode (restart after migration): register ongoing archiving
+        final BonsaiFlatDbToArchiveMigrator archiveMigrator =
+            createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
+        archiveMigrator.startOngoingArchiving();
+        closeables.add(archiveMigrator);
         blockchain.observeBlockAdded(archiver);
       }
     }
@@ -1056,7 +1061,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         blockchain,
         migrationExecutor,
         metricsSystem,
-        archiveStrategy);
+        archiveStrategy,
+        dataStorageConfiguration.getArchiveBoundary());
   }
 
   /**

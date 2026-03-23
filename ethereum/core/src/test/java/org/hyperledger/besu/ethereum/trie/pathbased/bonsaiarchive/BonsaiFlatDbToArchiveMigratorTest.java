@@ -15,8 +15,8 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy.calculateArchiveKeyWithMinSuffix;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey;
 import static org.mockito.ArgumentMatchers.any;
@@ -130,7 +130,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final byte[] naturalKey =
         calculateNaturalSlotKey(TEST_ADDRESS.addressHash(), slotKey.getSlotHash());
     final byte[] key = calculateArchiveKeyWithMinSuffix(new BonsaiContext(1L), naturalKey);
-    assertThat(storage.get(ACCOUNT_STORAGE_STORAGE, key)).isPresent();
+    assertThat(storage.get(ACCOUNT_STORAGE_ARCHIVE, key)).isPresent();
   }
 
   @Test
@@ -313,6 +313,63 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     verify(worldStateStorage, never()).upgradeToArchiveFlatDbMode();
   }
 
+  @Test
+  public void migrationStopsAtHeadMinusBoundary() throws Exception {
+    // Chain 0-5, boundary=3 → target = max(0, 5-3) = 2
+    appendBlocks(5);
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(3);
+    migrator.migrate().get(10, TimeUnit.SECONDS);
+
+    // Blocks 1 and 2 should be archived (within target=2)
+    assertThat(getArchivedAccountKey(1L)).isPresent();
+    assertThat(getArchivedAccountKey(2L)).isPresent();
+    // Block 3 is within the boundary, should NOT be archived
+    assertThat(getArchivedAccountKey(3L)).isEmpty();
+  }
+
+  @Test
+  public void blockObserverContinuesAfterMigrationComplete() throws Exception {
+    // Chain 0-3, boundary=3 → initial target = max(0, 3-3) = 0
+    appendBlocks(3);
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(3);
+    migrator.migrate().get(10, TimeUnit.SECONDS);
+
+    // Nothing archived initially (loop only ran for genesis)
+    assertThat(getArchivedAccountKey(1L)).isEmpty();
+
+    // Append block 4: observer fires, archives block 4-3=1
+    // trieLogManager returns a trie log for any hash (configured in @BeforeEach)
+    appendBlocks(1);
+
+    assertThat(getArchivedAccountKey(1L)).isPresent();
+  }
+
+  @Test
+  public void stopRemovesBlockObserver() throws Exception {
+    appendBlocks(1);
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(0);
+    migrator.migrate().get(10, TimeUnit.SECONDS);
+
+    assertThat(migrator.blockObserverId).isGreaterThanOrEqualTo(0);
+    migrator.stop();
+    assertThat(migrator.blockObserverId).isEqualTo(-1);
+  }
+
+  @Test
+  public void startOngoingArchivingRegistersObserverAndArchivesBlocks() throws Exception {
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(3);
+    assertThat(migrator.blockObserverId).isEqualTo(-1);
+
+    migrator.startOngoingArchiving();
+    assertThat(migrator.blockObserverId).isGreaterThanOrEqualTo(0);
+
+    // Append 4 blocks; block 4 triggers archiving of block 4-3=1
+    appendBlocks(4);
+    assertThat(getArchivedAccountKey(1L)).isPresent();
+
+    migrator.stop();
+  }
+
   private MutableBlockchain createInMemoryBlockchain(final Block genesisBlock) {
     return DefaultBlockchain.createMutable(
         genesisBlock,
@@ -334,6 +391,10 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   private BonsaiFlatDbToArchiveMigrator createMigrator() {
+    return createMigrator(0);
+  }
+
+  private BonsaiFlatDbToArchiveMigrator createMigrator(final int archiveBoundary) {
     final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
@@ -343,7 +404,8 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         blockchain,
         executorService,
         metricsSystem,
-        archiveStrategy);
+        archiveStrategy,
+        archiveBoundary);
   }
 
   private TrieLogLayer createAccountTrieLog(final Wei balance) {
@@ -358,6 +420,6 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final byte[] key =
         calculateArchiveKeyWithMinSuffix(
             new BonsaiContext(blockNumber), TEST_ADDRESS.addressHash().getBytes().toArrayUnsafe());
-    return storage.get(ACCOUNT_INFO_STATE, key);
+    return storage.get(ACCOUNT_INFO_STATE_ARCHIVE, key);
   }
 }

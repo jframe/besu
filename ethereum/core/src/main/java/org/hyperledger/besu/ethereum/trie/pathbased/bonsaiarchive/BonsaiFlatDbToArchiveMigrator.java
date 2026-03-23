@@ -61,9 +61,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final Blockchain blockchain;
   private final ScheduledExecutorService executorService;
   private final BonsaiArchiveFlatDbStrategy archiveStrategy;
+  private final int archiveBoundary;
   private final Counter migratedBlocksCounter;
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
   protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
+  @VisibleForTesting volatile long blockObserverId = -1;
+  private final AtomicBoolean initialMigrationComplete = new AtomicBoolean(false);
 
   /**
    * Creates a new BonsaiFlatDbToArchiveMigrator.
@@ -74,6 +77,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    * @param executorService the executor service for running migration on a separate thread
    * @param metricsSystem the metrics system for tracking migration progress
    * @param archiveStrategy the archive flat DB strategy for writing archive keys
+   * @param archiveBoundary the number of recent blocks to keep in Bonsai (not archived)
    */
   public BonsaiFlatDbToArchiveMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -81,12 +85,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final Blockchain blockchain,
       final ScheduledExecutorService executorService,
       final MetricsSystem metricsSystem,
-      final BonsaiArchiveFlatDbStrategy archiveStrategy) {
+      final BonsaiArchiveFlatDbStrategy archiveStrategy,
+      final int archiveBoundary) {
     this.worldStateStorage = worldStateStorage;
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.archiveStrategy = archiveStrategy;
+    this.archiveBoundary = archiveBoundary;
     this.migratedBlocksCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.BLOCKCHAIN,
@@ -96,11 +102,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   /**
    * Migrates Bonsai flat DB to Bonsai archive format by processing trie logs sequentially. Resumes
-   * from saved progress if available, otherwise starts from block 0. The target block is
-   * continuously updated as new blocks are imported, so the migrator chases the chain head until it
-   * converges.
+   * from saved progress if available, otherwise starts from block 0. The migration target is
+   * chainHead - archiveBoundary; blocks within the boundary remain as Bonsai [hash] keys. After the
+   * initial migration the block observer stays registered to archive new blocks as they cross the
+   * boundary.
    *
-   * @return a CompletableFuture that completes when migration finishes
+   * @return a CompletableFuture that completes when the initial migration finishes
    */
   public CompletableFuture<Void> migrate() {
     if (!migrationRunning.compareAndSet(false, true)) {
@@ -108,11 +115,75 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       return CompletableFuture.completedFuture(null);
     }
 
-    final AtomicLong target = new AtomicLong(blockchain.getChainHeadBlockNumber());
-    final long blockObserverId =
-        blockchain.observeBlockAdded(event -> target.set(event.getHeader().getNumber()));
-    return CompletableFuture.runAsync(() -> migrateBlocks(target), executorService)
-        .whenComplete((result, ex) -> blockchain.removeObserver(blockObserverId));
+    final AtomicLong target =
+        new AtomicLong(Math.max(0, blockchain.getChainHeadBlockNumber() - archiveBoundary));
+    blockObserverId =
+        blockchain.observeBlockAdded(
+            event -> {
+              final long n = event.getHeader().getNumber();
+              if (!initialMigrationComplete.get()) {
+                // During initial migration: chase the archive boundary
+                target.set(Math.max(0, n - archiveBoundary));
+              } else {
+                // After initial migration: archive the block that just crossed the boundary
+                final long archiveBlock = n - archiveBoundary;
+                if (archiveBlock > 0) {
+                  processBlockFromObserver(archiveBlock);
+                }
+              }
+            });
+    return CompletableFuture.runAsync(
+        () -> {
+          migrateBlocks(target);
+          initialMigrationComplete.set(true);
+        },
+        executorService);
+    // NOTE: no .whenComplete() — observer stays registered for ongoing archiving
+  }
+
+  /**
+   * Registers a block observer to write archive entries for ongoing blocks as they cross the
+   * archive boundary. Called on restart when the DB is already in ARCHIVE mode (migration already
+   * complete).
+   */
+  public void startOngoingArchiving() {
+    blockObserverId =
+        blockchain.observeBlockAdded(
+            event -> {
+              final long archiveBlock = event.getHeader().getNumber() - archiveBoundary;
+              if (archiveBlock > 0) {
+                processBlockFromObserver(archiveBlock);
+              }
+            });
+  }
+
+  /** Removes the block observer. Called during node shutdown to clean up. */
+  public void stop() {
+    if (blockObserverId >= 0) {
+      blockchain.removeObserver(blockObserverId);
+      blockObserverId = -1;
+    }
+  }
+
+  private void processBlockFromObserver(final long blockNumber) {
+    blockchain
+        .getBlockHeader(blockNumber)
+        .flatMap(header -> trieLogManager.getTrieLogLayer(header.getHash()))
+        .ifPresentOrElse(
+            trieLog -> {
+              final SegmentedKeyValueStorage storage =
+                  worldStateStorage.getComposedWorldStateStorage();
+              final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+              try {
+                processBlock(trieLog, blockNumber, tx);
+                saveProgress(blockNumber, tx);
+                tx.commit();
+              } catch (final Exception e) {
+                LOG.error("Failed to write ongoing archive entry for block {}", blockNumber, e);
+                tx.rollback();
+              }
+            },
+            () -> LOG.error("No trie log found for ongoing archive block {}", blockNumber));
   }
 
   private void migrateBlocks(final AtomicLong target) {
@@ -169,6 +240,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   @Override
   public void close() {
+    stop();
     executorService.shutdownNow();
     try {
       if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
