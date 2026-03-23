@@ -21,6 +21,7 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.B
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -219,7 +220,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         .withThrowableThat()
         .havingRootCause()
         .withMessage("No trie log found for block 1");
-    verify(worldStateStorage, never()).upgradeToFullFlatDbMode();
+    verify(worldStateStorage, never()).upgradeToArchiveFlatDbMode();
   }
 
   @Test
@@ -270,7 +271,36 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
     migrator.migrate().get(10, TimeUnit.SECONDS);
 
-    verify(worldStateStorage).upgradeToFullFlatDbMode();
+    verify(worldStateStorage).upgradeToArchiveFlatDbMode();
+  }
+
+  @Test
+  public void resumesFromNextBlockAfterSavedProgress() throws Exception {
+    appendBlocks(3);
+    final Hash hash1 = blockchain.getBlockHeader(1L).get().getHash();
+    final Hash hash2 = blockchain.getBlockHeader(2L).get().getHash();
+    final Hash hash3 = blockchain.getBlockHeader(3L).get().getHash();
+
+    // Run first migration over blocks 1-3
+    final BonsaiFlatDbToArchiveMigrator firstMigrator = createMigrator();
+    firstMigrator.migrate().get(10, TimeUnit.SECONDS);
+    assertThat(firstMigrator.getMigrationProgress()).hasValue(3L);
+
+    // Append a new block and run a second migrator (simulating a restart)
+    appendBlocks(1);
+    final Hash hash4 = blockchain.getBlockHeader(4L).get().getHash();
+    when(trieLogManager.getTrieLogLayer(hash4))
+        .thenReturn(Optional.of(createAccountTrieLog(Wei.fromHexString("0x400"))));
+
+    final BonsaiFlatDbToArchiveMigrator secondMigrator = createMigrator();
+    secondMigrator.migrate().get(10, TimeUnit.SECONDS);
+
+    // Blocks 1-3 must not be re-processed — each queried exactly once across both migrations
+    verify(trieLogManager, times(1)).getTrieLogLayer(hash1);
+    verify(trieLogManager, times(1)).getTrieLogLayer(hash2);
+    verify(trieLogManager, times(1)).getTrieLogLayer(hash3);
+    // Block 4 must be processed by the second migration
+    verify(trieLogManager, times(1)).getTrieLogLayer(hash4);
   }
 
   @Test
@@ -280,7 +310,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
 
     assertThat(migrator.migrate()).failsWithin(10, TimeUnit.SECONDS);
-    verify(worldStateStorage, never()).upgradeToFullFlatDbMode();
+    verify(worldStateStorage, never()).upgradeToArchiveFlatDbMode();
   }
 
   private MutableBlockchain createInMemoryBlockchain(final Block genesisBlock) {

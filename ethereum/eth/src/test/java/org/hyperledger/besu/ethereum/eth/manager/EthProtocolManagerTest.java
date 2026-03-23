@@ -46,6 +46,7 @@ import org.hyperledger.besu.ethereum.eth.EthProtocol;
 import org.hyperledger.besu.ethereum.eth.EthProtocolConfiguration;
 import org.hyperledger.besu.ethereum.eth.EthProtocolVersion;
 import org.hyperledger.besu.ethereum.eth.ImmutableEthProtocolConfiguration;
+import org.hyperledger.besu.ethereum.eth.core.Utils;
 import org.hyperledger.besu.ethereum.eth.manager.MockPeerConnection.PeerSendHandler;
 import org.hyperledger.besu.ethereum.eth.messages.BlockBodiesMessage;
 import org.hyperledger.besu.ethereum.eth.messages.BlockHeadersMessage;
@@ -402,6 +403,27 @@ public final class EthProtocolManagerTest {
           Awaitility.await().catchUncaughtExceptions().atMost(200, TimeUnit.MILLISECONDS);
       assertThatThrownBy(() -> waitDisconnect.until(peer::isDisconnected))
           .isInstanceOf(ConditionTimeoutException.class);
+    }
+  }
+
+  @Test
+  public void disconnectOnMalformedGetBlockAccessListsMessage() {
+    try (final EthProtocolManager ethManager =
+        EthProtocolManagerTestBuilder.builder()
+            .setProtocolSchedule(protocolSchedule)
+            .setBlockchain(blockchain)
+            .setEthScheduler(new DeterministicEthScheduler(() -> false))
+            .setWorldStateArchive(protocolContext.getWorldStateArchive())
+            .setTransactionPool(transactionPool)
+            .setEthereumWireProtocolConfiguration(EthProtocolConfiguration.DEFAULT)
+            .build()) {
+      final MessageData malformedMessageData =
+          new RawMessage(EthProtocolMessages.GET_BLOCK_ACCESS_LISTS, Bytes.fromHexString("0xc1ff"));
+      final MockPeerConnection peer = setupPeer(ethManager, (cap, msg, conn) -> {});
+
+      ethManager.processMessage(EthProtocol.LATEST, new DefaultMessage(peer, malformedMessageData));
+
+      assertThat(peer.isDisconnected()).isTrue();
     }
   }
 
@@ -934,7 +956,7 @@ public final class EthProtocolManagerTest {
             final ReceiptsMessage receiptsMessage =
                 ReceiptsMessage.readFrom(message.unwrapMessageData().getValue());
             final List<List<TransactionReceipt>> receipts =
-                Lists.newArrayList(receiptsMessage.receipts());
+                receiptsMessage.syncReceipts().stream().map(Utils::syncReceiptsToReceipts).toList();
             assertThat(receipts).hasSize(blockCount);
             for (int i = 0; i < blockCount; i++) {
               assertThat(expectedReceipts.get(i)).isEqualTo(receipts.get(i));
@@ -944,7 +966,7 @@ public final class EthProtocolManagerTest {
 
       // Run test
       final PeerConnection peer = setupPeer(ethManager, onSend);
-      ethManager.processMessage(EthProtocol.LATEST, new DefaultMessage(peer, messageData));
+      ethManager.processMessage(EthProtocol.ETH69, new DefaultMessage(peer, messageData));
       done.get();
     }
   }
@@ -988,7 +1010,7 @@ public final class EthProtocolManagerTest {
             final ReceiptsMessage receiptsMessage =
                 ReceiptsMessage.readFrom(message.unwrapMessageData().getValue());
             final List<List<TransactionReceipt>> receipts =
-                Lists.newArrayList(receiptsMessage.receipts());
+                receiptsMessage.syncReceipts().stream().map(Utils::syncReceiptsToReceipts).toList();
             assertThat(receipts).hasSize(limit);
             for (int i = 0; i < limit; i++) {
               assertThat(expectedReceipts.get(i)).isEqualTo(receipts.get(i));
@@ -998,7 +1020,7 @@ public final class EthProtocolManagerTest {
 
       // Run test
       final PeerConnection peer = setupPeer(ethManager, onSend);
-      ethManager.processMessage(EthProtocol.LATEST, new DefaultMessage(peer, messageData));
+      ethManager.processMessage(EthProtocol.ETH69, new DefaultMessage(peer, messageData));
       done.get();
     }
   }
@@ -1036,7 +1058,7 @@ public final class EthProtocolManagerTest {
             final ReceiptsMessage receiptsMessage =
                 ReceiptsMessage.readFrom(message.unwrapMessageData().getValue());
             final List<List<TransactionReceipt>> receipts =
-                Lists.newArrayList(receiptsMessage.receipts());
+                receiptsMessage.syncReceipts().stream().map(Utils::syncReceiptsToReceipts).toList();
             assertThat(receipts).hasSize(1);
             assertThat(expectedReceipts).isEqualTo(receipts.get(0));
             done.complete(null);
@@ -1044,7 +1066,7 @@ public final class EthProtocolManagerTest {
 
       // Run test
       final PeerConnection peer = setupPeer(ethManager, onSend);
-      ethManager.processMessage(EthProtocol.LATEST, new DefaultMessage(peer, messageData));
+      ethManager.processMessage(EthProtocol.ETH69, new DefaultMessage(peer, messageData));
       done.get();
     }
   }
@@ -1293,8 +1315,8 @@ public final class EthProtocolManagerTest {
 
   @Test
   public void shouldUseRightCapabilityDependingOnSyncMode() {
-    assertHighestCapability(SyncMode.SNAP, EthProtocol.ETH69);
-    assertHighestCapability(SyncMode.FULL, EthProtocol.ETH69);
+    assertHighestCapability(SyncMode.SNAP, EthProtocol.LATEST);
+    assertHighestCapability(SyncMode.FULL, EthProtocol.LATEST);
   }
 
   @Test

@@ -40,13 +40,29 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   TRIE_BRANCH_STORAGE(new byte[] {9}, EnumSet.of(BONSAI, X_BONSAI_ARCHIVE), false, true, false),
   TRIE_LOG_STORAGE(new byte[] {10}, EnumSet.of(BONSAI, X_BONSAI_ARCHIVE), true, false, true),
   ACCOUNT_INFO_STATE_ARCHIVE(
-      "ACCOUNT_INFO_STATE_ARCHIVE", EnumSet.of(BONSAI, X_BONSAI_ARCHIVE), true, false, true),
+      "ACCOUNT_INFO_STATE_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true),
   ACCOUNT_STORAGE_ARCHIVE(
-      "ACCOUNT_STORAGE_ARCHIVE", EnumSet.of(BONSAI, X_BONSAI_ARCHIVE), true, false, true),
-  ACCOUNT_INFO_STATE_ARCHIVE_FREEZER(
-      "ACCOUNT_INFO_STATE_ARCHIVE_FREEZER", EnumSet.of(X_BONSAI_ARCHIVE), true, false, true),
-  ACCOUNT_STORAGE_ARCHIVE_FREEZER(
-      "ACCOUNT_STORAGE_ARCHIVE_FREEZER", EnumSet.of(X_BONSAI_ARCHIVE), true, false, true),
+      "ACCOUNT_STORAGE_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true),
+  ACCOUNT_INFO_STATE_FREEZER(
+      "ACCOUNT_INFO_STATE_FREEZER".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true),
+  ACCOUNT_STORAGE_FREEZER(
+      "ACCOUNT_STORAGE_FREEZER".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true),
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE
 
   // previously supported GoQuorum private states
@@ -72,20 +88,6 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
 
   KeyValueSegmentIdentifier(final byte[] id, final EnumSet<DataStorageFormat> formats) {
     this(id, formats, false, false, false);
-  }
-
-  KeyValueSegmentIdentifier(
-      final String name,
-      final EnumSet<DataStorageFormat> formats,
-      final boolean containsStaticData,
-      final boolean eligibleToHighSpecFlag,
-      final boolean staticDataGarbageCollectionEnabled) {
-    this(
-        name.getBytes(StandardCharsets.UTF_8),
-        formats,
-        containsStaticData,
-        eligibleToHighSpecFlag,
-        staticDataGarbageCollectionEnabled);
   }
 
   KeyValueSegmentIdentifier(

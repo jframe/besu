@@ -37,6 +37,7 @@ import org.hyperledger.besu.evm.operation.ByteOperation;
 import org.hyperledger.besu.evm.operation.ChainIdOperation;
 import org.hyperledger.besu.evm.operation.CountLeadingZerosOperation;
 import org.hyperledger.besu.evm.operation.DivOperation;
+import org.hyperledger.besu.evm.operation.DivOperationOptimized;
 import org.hyperledger.besu.evm.operation.DupNOperation;
 import org.hyperledger.besu.evm.operation.DupOperation;
 import org.hyperledger.besu.evm.operation.ExchangeOperation;
@@ -64,6 +65,7 @@ import org.hyperledger.besu.evm.operation.PopOperation;
 import org.hyperledger.besu.evm.operation.Push0Operation;
 import org.hyperledger.besu.evm.operation.PushOperation;
 import org.hyperledger.besu.evm.operation.SDivOperation;
+import org.hyperledger.besu.evm.operation.SDivOperationOptimized;
 import org.hyperledger.besu.evm.operation.SGtOperation;
 import org.hyperledger.besu.evm.operation.SLtOperation;
 import org.hyperledger.besu.evm.operation.SModOperation;
@@ -85,6 +87,7 @@ import org.hyperledger.besu.evm.operation.XorOperationOptimized;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 
 import java.util.Optional;
+import java.util.function.Function;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -109,6 +112,7 @@ public class EVM {
   private final EvmSpecVersion evmSpecVersion;
 
   // Optimized operation flags
+  private final boolean enableConstantinople;
   private final boolean enableShanghai;
   private final boolean enableAmsterdam;
   private final boolean enableOsaka;
@@ -135,6 +139,7 @@ public class EVM {
     this.evmSpecVersion = evmSpecVersion;
     this.jumpDestOnlyCodeCache = new JumpDestOnlyCodeCache(evmConfiguration);
 
+    enableConstantinople = EvmSpecVersion.CONSTANTINOPLE.ordinal() <= evmSpecVersion.ordinal();
     enableShanghai = EvmSpecVersion.SHANGHAI.ordinal() <= evmSpecVersion.ordinal();
     enableAmsterdam = EvmSpecVersion.AMSTERDAM.ordinal() <= evmSpecVersion.ordinal();
     enableOsaka = EvmSpecVersion.OSAKA.ordinal() <= evmSpecVersion.ordinal();
@@ -243,8 +248,14 @@ public class EVM {
                       : AddOperation.staticOperation(frame);
               case 0x02 -> MulOperation.staticOperation(frame);
               case 0x03 -> SubOperation.staticOperation(frame);
-              case 0x04 -> DivOperation.staticOperation(frame);
-              case 0x05 -> SDivOperation.staticOperation(frame);
+              case 0x04 ->
+                  evmConfiguration.enableOptimizedOpcodes()
+                      ? DivOperationOptimized.staticOperation(frame)
+                      : DivOperation.staticOperation(frame);
+              case 0x05 ->
+                  evmConfiguration.enableOptimizedOpcodes()
+                      ? SDivOperationOptimized.staticOperation(frame)
+                      : SDivOperation.staticOperation(frame);
               case 0x06 ->
                   evmConfiguration.enableOptimizedOpcodes()
                       ? ModOperationOptimized.staticOperation(frame)
@@ -287,17 +298,26 @@ public class EVM {
                       : NotOperation.staticOperation(frame);
               case 0x1a -> ByteOperation.staticOperation(frame);
               case 0x1b ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? ShlOperationOptimized.staticOperation(frame)
-                      : ShlOperation.staticOperation(frame);
+                  enableConstantinople
+                      ? shiftOperation(
+                          frame,
+                          ShlOperation::staticOperation,
+                          ShlOperationOptimized::staticOperation)
+                      : InvalidOperation.invalidOperationResult(opcode);
               case 0x1c ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? ShrOperationOptimized.staticOperation(frame)
-                      : ShrOperation.staticOperation(frame);
+                  enableConstantinople
+                      ? shiftOperation(
+                          frame,
+                          ShrOperation::staticOperation,
+                          ShrOperationOptimized::staticOperation)
+                      : InvalidOperation.invalidOperationResult(opcode);
               case 0x1d ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? SarOperationOptimized.staticOperation(frame)
-                      : SarOperation.staticOperation(frame);
+                  enableConstantinople
+                      ? shiftOperation(
+                          frame,
+                          SarOperation::staticOperation,
+                          SarOperationOptimized::staticOperation)
+                      : InvalidOperation.invalidOperationResult(opcode);
               case 0x1e ->
                   enableOsaka
                       ? CountLeadingZerosOperation.staticOperation(frame)
@@ -426,6 +446,15 @@ public class EVM {
    */
   public Operation[] getOperationsUnsafe() {
     return operations.getOperations();
+  }
+
+  private OperationResult shiftOperation(
+      final MessageFrame frame,
+      final Function<MessageFrame, OperationResult> standard,
+      final Function<MessageFrame, OperationResult> optimized) {
+    return evmConfiguration.enableOptimizedOpcodes()
+        ? optimized.apply(frame)
+        : standard.apply(frame);
   }
 
   /**

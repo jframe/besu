@@ -66,11 +66,11 @@ import org.hyperledger.besu.ethereum.eth.sync.DefaultSynchronizer;
 import org.hyperledger.besu.ethereum.eth.sync.PivotBlockSelector;
 import org.hyperledger.besu.ethereum.eth.sync.SyncMode;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.PivotSelectorFromPeers;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.PivotSelectorFromSafeBlock;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.SingleBlockHeaderDownloader;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.checkpoint.Checkpoint;
-import org.hyperledger.besu.ethereum.eth.sync.fastsync.checkpoint.ImmutableCheckpoint;
+import org.hyperledger.besu.ethereum.eth.sync.common.PivotSelectorFromPeers;
+import org.hyperledger.besu.ethereum.eth.sync.common.PivotSelectorFromSafeBlock;
+import org.hyperledger.besu.ethereum.eth.sync.common.SingleBlockHeaderDownloader;
+import org.hyperledger.besu.ethereum.eth.sync.common.checkpoint.Checkpoint;
+import org.hyperledger.besu.ethereum.eth.sync.common.checkpoint.ImmutableCheckpoint;
 import org.hyperledger.besu.ethereum.eth.sync.fullsync.SyncTerminationCondition;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.transactions.BlobCache;
@@ -888,6 +888,10 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       }
     }
 
+    final List<Closeable> closeables = new ArrayList<>();
+    closeables.add(protocolContext.getWorldStateArchive());
+    closeables.add(storageProvider);
+
     if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(
         dataStorageConfiguration.getDataStorageFormat())) {
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
@@ -899,9 +903,11 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
               scheduler,
               ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager());
 
-      if (worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)) {
+      if (worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)
+          || worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.PARTIAL)) {
         final BonsaiFlatDbToArchiveMigrator archiveMigrator =
             createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
+        closeables.add(archiveMigrator);
 
         final AtomicBoolean migrationStarted = new AtomicBoolean(false);
         synchronizer.subscribeInSync(
@@ -925,10 +931,6 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         blockchain.observeBlockAdded(archiver);
       }
     }
-
-    final List<Closeable> closeables = new ArrayList<>();
-    closeables.add(protocolContext.getWorldStateArchive());
-    closeables.add(storageProvider);
 
     return new BesuController(
         protocolSchedule,

@@ -15,9 +15,9 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE_FREEZER;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_FREEZER;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE_FREEZER;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_FREEZER;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
@@ -143,7 +143,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     if (nearestAccount.isEmpty()) {
       accountFound =
           storage
-              .getNearestBefore(ACCOUNT_INFO_STATE_ARCHIVE_FREEZER, keyNearest)
+              .getNearestBefore(ACCOUNT_INFO_STATE_FREEZER, keyNearest)
               .filter(
                   found ->
                       accountHash.getBytes().commonPrefixLength(found.key())
@@ -356,7 +356,8 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
     if (nearestStorage.isEmpty()) {
       storageFound =
           storage
-              .getNearestBefore(ACCOUNT_STORAGE_ARCHIVE_FREEZER, keyNearest)
+              .getNearestBefore(ACCOUNT_STORAGE_FREEZER, keyNearest)
+              // don't return accounts that do not have a matching account hash
               .filter(
                   found ->
                       Bytes.of(naturalKey).commonPrefixLength(found.key()) >= naturalKey.length);
@@ -458,6 +459,27 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   public static Bytes calculateArchiveKeyWithMaxSuffix(
       final Optional<BonsaiContext> context, final byte[] naturalKey) {
     return Bytes.of(calculateArchiveKeyWithSuffix(context, naturalKey, MAX_BLOCK_SUFFIX));
+  }
+
+  @Override
+  public void clearAll(final SegmentedKeyValueStorage storage) {
+    clearArchiveSegments(storage);
+    // Then call parent to clear other segments
+    super.clearAll(storage);
+  }
+
+  @Override
+  public void resetOnResync(final SegmentedKeyValueStorage storage) {
+    clearArchiveSegments(storage);
+    // Then call parent to reset other segments
+    super.resetOnResync(storage);
+  }
+
+  private static void clearArchiveSegments(final SegmentedKeyValueStorage storage) {
+    storage.clear(ACCOUNT_INFO_STATE_ARCHIVE);
+    storage.clear(ACCOUNT_STORAGE_ARCHIVE);
+    storage.clear(ACCOUNT_INFO_STATE_FREEZER);
+    storage.clear(ACCOUNT_STORAGE_FREEZER);
   }
 
   // TODO JF: move this out of this class so can be used with ArchiveCodeStorageStrategy without

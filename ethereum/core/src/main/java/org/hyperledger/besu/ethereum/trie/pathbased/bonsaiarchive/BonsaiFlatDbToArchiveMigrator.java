@@ -30,12 +30,14 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.util.log.LogUtil;
 
+import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -46,7 +48,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Migrates a Bonsai storage to Bonsai archive storage format. */
-public class BonsaiFlatDbToArchiveMigrator {
+public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbToArchiveMigrator.class);
   private static final int LOG_INTERVAL_SECONDS = 60;
@@ -117,7 +119,8 @@ public class BonsaiFlatDbToArchiveMigrator {
     try {
       final Instant migrationStartTime = Instant.now();
 
-      final long startBlock = getMigrationProgress().orElse(0L);
+      final long lastProcessedBlock = getMigrationProgress().orElse(-1L);
+      final long startBlock = lastProcessedBlock + 1;
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
@@ -153,7 +156,7 @@ public class BonsaiFlatDbToArchiveMigrator {
         logProgress(blockNumber, startBlock, target.get());
       }
 
-      worldStateStorage.upgradeToFullFlatDbMode();
+      worldStateStorage.upgradeToArchiveFlatDbMode();
       logCompletion(startBlock, target.get(), migrationStartTime);
 
     } catch (final Exception e) {
@@ -161,6 +164,18 @@ public class BonsaiFlatDbToArchiveMigrator {
       throw new RuntimeException(e);
     } finally {
       migrationRunning.set(false);
+    }
+  }
+
+  @Override
+  public void close() {
+    executorService.shutdownNow();
+    try {
+      if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+        LOG.warn("Migration executor did not terminate within 10 seconds");
+      }
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
     }
   }
 
@@ -190,12 +205,12 @@ public class BonsaiFlatDbToArchiveMigrator {
   private void logCompletion(
       final long startBlock, final long endBlock, final Instant migrationStartTime) {
     final Duration migrationDuration = Duration.between(migrationStartTime, Instant.now());
-    final String formatedDuration =
+    final String formattedDuration =
         DurationFormatUtils.formatDurationWords(migrationDuration.toMillis(), true, true);
     LOG.info(
         "Bonsai Archive migration completed. Processed {} blocks in {}.",
         endBlock - startBlock + 1,
-        formatedDuration);
+        formattedDuration);
   }
 
   private void processBlock(
