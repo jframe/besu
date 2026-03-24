@@ -319,13 +319,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private void processBlock(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    processAccountChanges(trieLog, blockNumber, tx);
-    processStorageChanges(trieLog, blockNumber, tx);
+    final BonsaiContext context = new BonsaiContext(blockNumber);
+    processAccountChanges(trieLog, context, tx);
+    processStorageChanges(trieLog, context, tx);
   }
 
   private void processAccountChanges(
-      final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    final BonsaiContext context = new BonsaiContext(blockNumber);
+      final TrieLog trieLog,
+      final BonsaiContext context,
+      final SegmentedKeyValueStorageTransaction tx) {
     trieLog
         .getAccountChanges()
         .forEach(
@@ -341,8 +343,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   private void processStorageChanges(
-      final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    final BonsaiContext context = new BonsaiContext(blockNumber);
+      final TrieLog trieLog,
+      final BonsaiContext context,
+      final SegmentedKeyValueStorageTransaction tx) {
     trieLog
         .getStorageChanges()
         .forEach(
