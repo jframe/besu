@@ -133,7 +133,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                   try {
                     executorService.submit(() -> processBlockFromObserver(archiveBlock));
                   } catch (final RejectedExecutionException e) {
-                    LOG.debug("Archive executor shut down; skipping archive of block {}", archiveBlock);
+                    LOG.debug(
+                        "Archive executor shut down; skipping archive of block {}", archiveBlock);
                   }
                 }
               }
@@ -159,7 +160,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 try {
                   executorService.submit(() -> processBlockFromObserver(archiveBlock));
                 } catch (final RejectedExecutionException e) {
-                  LOG.debug("Archive executor shut down; skipping archive of block {}", archiveBlock);
+                  LOG.debug(
+                      "Archive executor shut down; skipping archive of block {}", archiveBlock);
                 }
               }
             }));
