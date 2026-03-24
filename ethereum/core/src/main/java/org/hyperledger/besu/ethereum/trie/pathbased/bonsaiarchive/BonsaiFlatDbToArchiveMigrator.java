@@ -65,7 +65,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final Counter migratedBlocksCounter;
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
   protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
-  @VisibleForTesting volatile long blockObserverId = -1;
+  @VisibleForTesting final AtomicLong blockObserverId = new AtomicLong(-1);
   private final AtomicBoolean initialMigrationComplete = new AtomicBoolean(false);
 
   /**
@@ -117,7 +117,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
     final AtomicLong target =
         new AtomicLong(Math.max(0, blockchain.getChainHeadBlockNumber() - archiveBoundary));
-    blockObserverId =
+    blockObserverId.set(
         blockchain.observeBlockAdded(
             event -> {
               final long n = event.getHeader().getNumber();
@@ -131,7 +131,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                   processBlockFromObserver(archiveBlock);
                 }
               }
-            });
+            }));
     return CompletableFuture.runAsync(() -> migrateBlocks(target), executorService);
     // NOTE: no .whenComplete() — observer stays registered for ongoing archiving
     // NOTE: initialMigrationComplete is set inside migrateBlocks() to close the race window
@@ -144,21 +144,21 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    * complete).
    */
   public void startOngoingArchiving() {
-    blockObserverId =
+    blockObserverId.set(
         blockchain.observeBlockAdded(
             event -> {
               final long archiveBlock = event.getHeader().getNumber() - archiveBoundary;
               if (archiveBlock > 0) {
                 processBlockFromObserver(archiveBlock);
               }
-            });
+            }));
   }
 
   /** Removes the block observer. Called during node shutdown to clean up. */
   public void stop() {
-    if (blockObserverId >= 0) {
-      blockchain.removeObserver(blockObserverId);
-      blockObserverId = -1;
+    final long id = blockObserverId.getAndSet(-1);
+    if (id >= 0) {
+      blockchain.removeObserver(id);
     }
   }
 

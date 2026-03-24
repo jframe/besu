@@ -350,18 +350,18 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(0);
     migrator.migrate().get(10, TimeUnit.SECONDS);
 
-    assertThat(migrator.blockObserverId).isGreaterThanOrEqualTo(0);
+    assertThat(migrator.blockObserverId.get()).isGreaterThanOrEqualTo(0);
     migrator.stop();
-    assertThat(migrator.blockObserverId).isEqualTo(-1);
+    assertThat(migrator.blockObserverId.get()).isEqualTo(-1);
   }
 
   @Test
   public void startOngoingArchivingRegistersObserverAndArchivesBlocks() throws Exception {
     final BonsaiFlatDbToArchiveMigrator migrator = createMigrator(3);
-    assertThat(migrator.blockObserverId).isEqualTo(-1);
+    assertThat(migrator.blockObserverId.get()).isEqualTo(-1);
 
     migrator.startOngoingArchiving();
-    assertThat(migrator.blockObserverId).isGreaterThanOrEqualTo(0);
+    assertThat(migrator.blockObserverId.get()).isGreaterThanOrEqualTo(0);
 
     // Append 4 blocks; block 4 triggers archiving of block 4-3=1
     appendBlocks(4);
