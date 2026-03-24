@@ -307,13 +307,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   private void logCompletion(
-      final long startBlock, final long endBlock, final Instant migrationStartTime) {
+      final long startBlock, final long lastProcessedBlock, final Instant migrationStartTime) {
     final Duration migrationDuration = Duration.between(migrationStartTime, Instant.now());
     final String formattedDuration =
         DurationFormatUtils.formatDurationWords(migrationDuration.toMillis(), true, true);
+    final long processedCount = Math.max(0, lastProcessedBlock - startBlock + 1);
     LOG.info(
         "Bonsai Archive migration completed. Processed {} blocks in {}.",
-        endBlock - startBlock + 1,
+        processedCount,
         formattedDuration);
   }
 
