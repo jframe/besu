@@ -36,6 +36,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -129,7 +130,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 // off the block-import critical path.
                 final long archiveBlock = n - archiveBoundary;
                 if (archiveBlock > 0) {
-                  executorService.submit(() -> processBlockFromObserver(archiveBlock));
+                  try {
+                    executorService.submit(() -> processBlockFromObserver(archiveBlock));
+                  } catch (final RejectedExecutionException e) {
+                    LOG.debug("Archive executor shut down; skipping archive of block {}", archiveBlock);
+                  }
                 }
               }
             }));
@@ -151,7 +156,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
               // Dispatch off the block-import critical path.
               final long archiveBlock = event.getHeader().getNumber() - archiveBoundary;
               if (archiveBlock > 0) {
-                executorService.submit(() -> processBlockFromObserver(archiveBlock));
+                try {
+                  executorService.submit(() -> processBlockFromObserver(archiveBlock));
+                } catch (final RejectedExecutionException e) {
+                  LOG.debug("Archive executor shut down; skipping archive of block {}", archiveBlock);
+                }
               }
             }));
   }
