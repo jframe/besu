@@ -132,13 +132,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 }
               }
             });
-    return CompletableFuture.runAsync(
-        () -> {
-          migrateBlocks(target);
-          initialMigrationComplete.set(true);
-        },
-        executorService);
+    return CompletableFuture.runAsync(() -> migrateBlocks(target), executorService);
     // NOTE: no .whenComplete() — observer stays registered for ongoing archiving
+    // NOTE: initialMigrationComplete is set inside migrateBlocks() to close the race window
+    // between loop exit and flag transition (see migrateBlocks for details)
   }
 
   /**
@@ -194,6 +191,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final long startBlock = lastProcessedBlock + 1;
       final SegmentedKeyValueStorage storage = worldStateStorage.getComposedWorldStateStorage();
       LOG.info("Starting Bonsai Archive migration from block {}", startBlock);
+      long processedUpTo = startBlock - 1;
       for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
 
         final Optional<TrieLog> maybeTrieLog =
@@ -224,11 +222,27 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
               "Migration failed at block " + blockNumber + ": " + e.getMessage(), e);
         }
 
+        processedUpTo = blockNumber;
         logProgress(blockNumber, startBlock, target.get());
       }
 
+      // Transition to ongoing-archiving mode. After this flag is set, the block observer
+      // will call processBlockFromObserver() for new blocks as they cross the boundary.
+      //
+      // Race window: the observer may have updated `target` between the loop's final
+      // condition evaluation and this set. Those blocks neither ran through the loop nor
+      // triggered processBlockFromObserver() (because the flag was still false). Drain
+      // them now. Any overlap with a concurrent observer call is safe — both paths write
+      // the same key with the same value (idempotent).
+      onBeforeInitialMigrationComplete(target);
+      initialMigrationComplete.set(true);
+      for (long b = processedUpTo + 1; b <= target.get(); b++) {
+        LOG.debug("Draining gap block {} missed at migration boundary", b);
+        processBlockFromObserver(b);
+      }
+
       worldStateStorage.upgradeToArchiveFlatDbMode();
-      logCompletion(startBlock, target.get(), migrationStartTime);
+      logCompletion(startBlock, processedUpTo, migrationStartTime);
 
     } catch (final Exception e) {
       LOG.error("Bonsai to Bonsai archive migration failed", e);
@@ -250,6 +264,13 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       Thread.currentThread().interrupt();
     }
   }
+
+  /**
+   * Called after the initial migration loop exits and before the completion flag is set. No-op in
+   * production; overridden in tests to simulate blocks arriving in the race window.
+   */
+  @VisibleForTesting
+  protected void onBeforeInitialMigrationComplete(final AtomicLong target) {}
 
   @VisibleForTesting
   protected Optional<Long> getMigrationProgress() {

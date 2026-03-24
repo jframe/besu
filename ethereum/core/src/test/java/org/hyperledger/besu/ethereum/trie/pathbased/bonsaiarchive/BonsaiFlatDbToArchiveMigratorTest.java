@@ -370,6 +370,137 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     migrator.stop();
   }
 
+  // ======================== Drain loop (gap block coverage) ========================
+
+  @Test
+  public void drainLoopArchivesBlockMissedInRaceWindow() throws Exception {
+    // Chain: 0-3, boundary=3, initial target = max(0, 3-3) = 0
+    // Loop processes genesis (no trie log) and exits with processedUpTo=0.
+    // The hook fires before initialMigrationComplete is set, simulating a block arriving in the
+    // race window: block 4 advances target to 1. The drain loop must archive block 1.
+    appendBlocks(3);
+
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        new BonsaiFlatDbToArchiveMigrator(
+            worldStateStorage,
+            trieLogManager,
+            blockchain,
+            executorService,
+            new NoOpMetricsSystem(),
+            new BonsaiArchiveFlatDbStrategy(
+                new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy()),
+            3) {
+          @Override
+          protected void onBeforeInitialMigrationComplete(
+              final java.util.concurrent.atomic.AtomicLong target) {
+            // Simulate block arriving in the race window between loop exit and flag set.
+            // Observer (registered in migrate()) fires synchronously and updates target to 1.
+            appendBlocks(1);
+          }
+        };
+
+    migrator.migrate().get(10, TimeUnit.SECONDS);
+
+    // Block 1 should have been archived via the drain loop, not the main migration loop
+    assertThat(getArchivedAccountKey(1L)).isPresent();
+    verify(worldStateStorage).upgradeToArchiveFlatDbMode();
+  }
+
+  @Test
+  public void drainLoopArchivesMultipleGapBlocks() throws Exception {
+    // Chain: 0-5, boundary=5, initial target = 0
+    // Hook appends 3 blocks during the race window → target advances to 3.
+    // Drain loop must archive blocks 1, 2, and 3.
+    appendBlocks(5);
+
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        new BonsaiFlatDbToArchiveMigrator(
+            worldStateStorage,
+            trieLogManager,
+            blockchain,
+            executorService,
+            new NoOpMetricsSystem(),
+            new BonsaiArchiveFlatDbStrategy(
+                new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy()),
+            5) {
+          @Override
+          protected void onBeforeInitialMigrationComplete(
+              final java.util.concurrent.atomic.AtomicLong target) {
+            appendBlocks(3); // 3 new blocks arrive in the gap
+          }
+        };
+
+    migrator.migrate().get(10, TimeUnit.SECONDS);
+
+    assertThat(getArchivedAccountKey(1L)).isPresent();
+    assertThat(getArchivedAccountKey(2L)).isPresent();
+    assertThat(getArchivedAccountKey(3L)).isPresent();
+  }
+
+  @Test
+  public void drainLoopDoesNotRunWhenNoGapBlocks() throws Exception {
+    // Chain: 0-3, boundary=3, initial target = 0.
+    // No blocks appended during hook → drain loop runs 0 iterations.
+    // This ensures the drain loop does not cause side effects when empty.
+    appendBlocks(3);
+
+    final boolean[] hookCalled = {false};
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        new BonsaiFlatDbToArchiveMigrator(
+            worldStateStorage,
+            trieLogManager,
+            blockchain,
+            executorService,
+            new NoOpMetricsSystem(),
+            new BonsaiArchiveFlatDbStrategy(
+                new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy()),
+            3) {
+          @Override
+          protected void onBeforeInitialMigrationComplete(
+              final java.util.concurrent.atomic.AtomicLong target) {
+            hookCalled[0] = true;
+            // No blocks appended — target stays at 0
+          }
+        };
+
+    migrator.migrate().get(10, TimeUnit.SECONDS);
+
+    assertThat(hookCalled[0]).isTrue();
+    // Nothing beyond genesis should be archived (boundary keeps blocks 1-3 out of scope)
+    assertThat(getArchivedAccountKey(1L)).isEmpty();
+    verify(worldStateStorage).upgradeToArchiveFlatDbMode();
+  }
+
+  @Test
+  public void drainLoopSavesProgressForGapBlocks() throws Exception {
+    // Gap block archived via drain should update the persistent progress key,
+    // so a restart correctly resumes from that block.
+    appendBlocks(3);
+
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        new BonsaiFlatDbToArchiveMigrator(
+            worldStateStorage,
+            trieLogManager,
+            blockchain,
+            executorService,
+            new NoOpMetricsSystem(),
+            new BonsaiArchiveFlatDbStrategy(
+                new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy()),
+            3) {
+          @Override
+          protected void onBeforeInitialMigrationComplete(
+              final java.util.concurrent.atomic.AtomicLong target) {
+            appendBlocks(1); // advances target to 1
+          }
+        };
+
+    migrator.migrate().get(10, TimeUnit.SECONDS);
+
+    // Progress key must reflect the drained block, not just processedUpTo=0
+    assertThat(migrator.getMigrationProgress()).isPresent();
+    assertThat(migrator.getMigrationProgress().get()).isGreaterThanOrEqualTo(1L);
+  }
+
   private MutableBlockchain createInMemoryBlockchain(final Block genesisBlock) {
     return DefaultBlockchain.createMutable(
         genesisBlock,
