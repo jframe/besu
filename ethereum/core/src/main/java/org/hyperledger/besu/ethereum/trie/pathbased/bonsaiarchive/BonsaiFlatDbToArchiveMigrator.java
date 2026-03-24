@@ -65,7 +65,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final long archiveBoundary;
   private final Counter migratedBlocksCounter;
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
-  protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
+  @VisibleForTesting protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
   @VisibleForTesting final AtomicLong blockObserverId = new AtomicLong(-1);
   private final AtomicBoolean initialMigrationComplete = new AtomicBoolean(false);
 
