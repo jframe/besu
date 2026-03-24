@@ -337,9 +337,10 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     // Nothing archived initially (loop only ran for genesis)
     assertThat(getArchivedAccountKey(1L)).isEmpty();
 
-    // Append block 4: observer fires, archives block 4-3=1
+    // Append block 4: observer fires, archives block 4-3=1 asynchronously.
     // trieLogManager returns a trie log for any hash (configured in @BeforeEach)
     appendBlocks(1);
+    drainExecutor();
 
     assertThat(getArchivedAccountKey(1L)).isPresent();
   }
@@ -363,8 +364,9 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     migrator.startOngoingArchiving();
     assertThat(migrator.blockObserverId.get()).isGreaterThanOrEqualTo(0);
 
-    // Append 4 blocks; block 4 triggers archiving of block 4-3=1
+    // Append 4 blocks; block 4 triggers archiving of block 4-3=1 asynchronously.
     appendBlocks(4);
+    drainExecutor();
     assertThat(getArchivedAccountKey(1L)).isPresent();
 
     migrator.stop();
@@ -511,6 +513,11 @@ public class BonsaiFlatDbToArchiveMigratorTest {
             false),
         new NoOpMetricsSystem(),
         0);
+  }
+
+  /** Waits for all tasks currently queued on the executor to complete. */
+  private void drainExecutor() throws Exception {
+    executorService.submit(() -> {}).get(10, TimeUnit.SECONDS);
   }
 
   private void appendBlocks(final int count) {

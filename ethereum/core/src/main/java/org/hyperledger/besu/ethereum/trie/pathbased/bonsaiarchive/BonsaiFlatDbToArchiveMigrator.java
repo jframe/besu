@@ -126,9 +126,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 target.set(Math.max(0, n - archiveBoundary));
               } else {
                 // After initial migration: archive the block that just crossed the boundary
+                // off the block-import critical path.
                 final long archiveBlock = n - archiveBoundary;
                 if (archiveBlock > 0) {
-                  processBlockFromObserver(archiveBlock);
+                  executorService.submit(() -> processBlockFromObserver(archiveBlock));
                 }
               }
             }));
@@ -147,9 +148,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     blockObserverId.set(
         blockchain.observeBlockAdded(
             event -> {
+              // Dispatch off the block-import critical path.
               final long archiveBlock = event.getHeader().getNumber() - archiveBoundary;
               if (archiveBlock > 0) {
-                processBlockFromObserver(archiveBlock);
+                executorService.submit(() -> processBlockFromObserver(archiveBlock));
               }
             }));
   }
