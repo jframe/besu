@@ -25,12 +25,22 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbStrategyProvider.class);
+
+  private final AtomicReference<LongSupplier> headBlockSupplierRef =
+      new AtomicReference<>(() -> Long.MAX_VALUE);
+
+  public void setHeadBlockSupplier(final LongSupplier supplier) {
+    headBlockSupplierRef.set(supplier);
+  }
 
   public BonsaiFlatDbStrategyProvider(
       final MetricsSystem metricsSystem, final DataStorageConfiguration dataStorageConfiguration) {
@@ -92,7 +102,17 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
     if (flatDbMode == FlatDbMode.FULL) {
       return new BonsaiFullFlatDbStrategy(metricsSystem, codeStorageStrategy);
     } else if (flatDbMode == FlatDbMode.ARCHIVE) {
-      return new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
+      final BonsaiFullFlatDbStrategy bonsaiStrategy =
+          new BonsaiFullFlatDbStrategy(metricsSystem, codeStorageStrategy);
+      final BonsaiArchiveFlatDbStrategy archiveStrategy =
+          new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
+      final LongSupplier supplierProxy = () -> headBlockSupplierRef.get().getAsLong();
+      return new BonsaiHybridFlatDbStrategy(
+          bonsaiStrategy,
+          archiveStrategy,
+          supplierProxy,
+          dataStorageConfiguration.getArchiveBoundary(),
+          codeStorageStrategy);
     } else {
       return new BonsaiPartialFlatDbStrategy(metricsSystem, codeStorageStrategy);
     }

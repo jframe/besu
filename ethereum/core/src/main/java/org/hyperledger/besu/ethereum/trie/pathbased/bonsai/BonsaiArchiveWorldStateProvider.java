@@ -57,6 +57,9 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         evmConfiguration,
         worldStateHealerSupplier,
         codeCache);
+    worldStateKeyValueStorage
+        .getFlatDbStrategyProvider()
+        .setHeadBlockSupplier(blockchain::getChainHeadBlockNumber);
   }
 
   @Override

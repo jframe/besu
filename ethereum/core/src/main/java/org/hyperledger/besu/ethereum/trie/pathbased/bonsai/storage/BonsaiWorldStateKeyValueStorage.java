@@ -206,6 +206,10 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
         composedWorldStateStorage); // force reload of flat db reader strategy
   }
 
+  public BonsaiFlatDbStrategyProvider getFlatDbStrategyProvider() {
+    return flatDbStrategyProvider;
+  }
+
   @Override
   public BonsaiFlatDbStrategy getFlatDbStrategy() {
     return (BonsaiFlatDbStrategy)
