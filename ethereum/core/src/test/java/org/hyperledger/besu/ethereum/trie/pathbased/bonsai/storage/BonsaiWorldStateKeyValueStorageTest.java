@@ -117,7 +117,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
       // strategy and route to the Bonsai layer (simple [hash] key, O(1) lookup)
       storage
           .getFlatDbStrategyProvider()
-          .setHeadBlockSupplier(() -> (long) DataStorageConfiguration.DEFAULT_ARCHIVE_BOUNDARY);
+          .setHeadBlockSupplier(() -> DataStorageConfiguration.DEFAULT_ARCHIVE_BOUNDARY);
     } else if (flatDbMode.equals(FlatDbMode.FULL)) {
       storage = emptyStorage(useCodeHashStorage);
       storage.upgradeToFullFlatDbMode();

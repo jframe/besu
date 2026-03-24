@@ -58,10 +58,10 @@ public class DataStorageOptions implements CLIOptions<DataStorageConfiguration> 
   @CommandLine.Option(
       names = {"--Xbonsai-archive-boundary"},
       hidden = true,
-      paramLabel = "<INTEGER>",
+      paramLabel = "<LONG>",
       description =
           "Number of blocks from HEAD before data moves to archive layer (default: ${DEFAULT-VALUE})")
-  private int archiveBoundary = DEFAULT_ARCHIVE_BOUNDARY;
+  private long archiveBoundary = DEFAULT_ARCHIVE_BOUNDARY;
 
   /**
    * Options specific to path-based storage modes. Holds the necessary parameters to configure

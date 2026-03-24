@@ -53,13 +53,13 @@ public class BonsaiHybridFlatDbStrategy extends BonsaiFlatDbStrategy {
   private final BonsaiFullFlatDbStrategy bonsaiStrategy;
   private final BonsaiArchiveFlatDbStrategy archiveStrategy;
   private final LongSupplier headBlockSupplier;
-  private final int archiveBoundary;
+  private final long archiveBoundary;
 
   public BonsaiHybridFlatDbStrategy(
       final BonsaiFullFlatDbStrategy bonsaiStrategy,
       final BonsaiArchiveFlatDbStrategy archiveStrategy,
       final LongSupplier headBlockSupplier,
-      final int archiveBoundary,
+      final long archiveBoundary,
       final CodeStorageStrategy codeStorageStrategy) {
     // Sub-strategies register and track their own metrics; use NoOp here to avoid duplicate
     // counter registration in the metrics system.
@@ -71,7 +71,7 @@ public class BonsaiHybridFlatDbStrategy extends BonsaiFlatDbStrategy {
   }
 
   @VisibleForTesting
-  boolean isRecentBlock(final long targetBlock, final long headBlock, final int boundary) {
+  boolean isRecentBlock(final long targetBlock, final long headBlock, final long boundary) {
     return targetBlock > headBlock - boundary;
   }
 

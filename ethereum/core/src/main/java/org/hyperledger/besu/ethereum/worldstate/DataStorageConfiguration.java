@@ -25,7 +25,7 @@ public interface DataStorageConfiguration {
 
   boolean DEFAULT_RECEIPT_COMPACTION_ENABLED = true;
   boolean DEFAULT_HISTORY_EXPIRY_PRUNE_ENABLED = false;
-  int DEFAULT_ARCHIVE_BOUNDARY = 512;
+  long DEFAULT_ARCHIVE_BOUNDARY = 512L;
 
   DataStorageConfiguration DEFAULT_CONFIG =
       ImmutableDataStorageConfiguration.builder()
@@ -73,7 +73,7 @@ public interface DataStorageConfiguration {
   }
 
   @Value.Default
-  default int getArchiveBoundary() {
+  default long getArchiveBoundary() {
     return DEFAULT_ARCHIVE_BOUNDARY;
   }
 }

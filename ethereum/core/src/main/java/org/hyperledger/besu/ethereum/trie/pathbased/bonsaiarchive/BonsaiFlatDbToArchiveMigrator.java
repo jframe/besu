@@ -61,7 +61,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final Blockchain blockchain;
   private final ScheduledExecutorService executorService;
   private final BonsaiArchiveFlatDbStrategy archiveStrategy;
-  private final int archiveBoundary;
+  private final long archiveBoundary;
   private final Counter migratedBlocksCounter;
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
   protected final AtomicBoolean migrationRunning = new AtomicBoolean(false);
@@ -86,7 +86,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final ScheduledExecutorService executorService,
       final MetricsSystem metricsSystem,
       final BonsaiArchiveFlatDbStrategy archiveStrategy,
-      final int archiveBoundary) {
+      final long archiveBoundary) {
     this.worldStateStorage = worldStateStorage;
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;

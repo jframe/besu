@@ -47,7 +47,7 @@ import org.junit.jupiter.api.Test;
 
 public class BonsaiHybridFlatDbStrategyTest {
 
-  private static final int ARCHIVE_BOUNDARY = 512;
+  private static final long ARCHIVE_BOUNDARY = 512L;
 
   private BonsaiHybridFlatDbStrategy hybridStrategy;
   private SegmentedKeyValueStorage storage;

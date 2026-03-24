@@ -525,7 +525,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     return createMigrator(0);
   }
 
-  private BonsaiFlatDbToArchiveMigrator createMigrator(final int archiveBoundary) {
+  private BonsaiFlatDbToArchiveMigrator createMigrator(final long archiveBoundary) {
     final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
