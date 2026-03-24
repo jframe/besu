@@ -15,9 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.bouncycastle.util.Arrays.concatenate;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_ROOT_HASH_KEY;
@@ -84,14 +82,12 @@ public class BonsaiWorldStateKeyValueStorageTest {
   public static Stream<Arguments> flatDbModeKeyMapperAndSegment() {
     Function<byte[], byte[]> flatDBKey = (key) -> key; // No-op
 
-    // For archive we want <32-byte-hex>000000000000000n where n is the current archive block number
-    Function<byte[], byte[]> flatDBArchiveKey =
-        (key) -> concatenate(key, Bytes.ofUnsignedLong(2).toArrayUnsafe());
-
     return Stream.of(
         Arguments.of(FlatDbMode.FULL, flatDBKey, ACCOUNT_INFO_STATE),
         Arguments.of(FlatDbMode.PARTIAL, flatDBKey, ACCOUNT_INFO_STATE),
-        Arguments.of(FlatDbMode.ARCHIVE, flatDBArchiveKey, ACCOUNT_INFO_STATE_ARCHIVE));
+        // In ARCHIVE mode the hybrid strategy routes new-block writes to the Bonsai layer with a
+        // simple [hash] key in ACCOUNT_INFO_STATE (same as FULL mode)
+        Arguments.of(FlatDbMode.ARCHIVE, flatDBKey, ACCOUNT_INFO_STATE));
   }
 
   public static Collection<Object[]> flatDbModeAndCodeStorageMode() {
@@ -117,6 +113,11 @@ public class BonsaiWorldStateKeyValueStorageTest {
     if (flatDbMode.equals(FlatDbMode.ARCHIVE)) {
       storage = emptyArchiveStorage(useCodeHashStorage);
       storage.upgradeToArchiveFlatDbMode();
+      // Set a small head block so test block numbers (1-4) are treated as "recent" by the hybrid
+      // strategy and route to the Bonsai layer (simple [hash] key, O(1) lookup)
+      storage
+          .getFlatDbStrategyProvider()
+          .setHeadBlockSupplier(() -> (long) DataStorageConfiguration.DEFAULT_ARCHIVE_BOUNDARY);
     } else if (flatDbMode.equals(FlatDbMode.FULL)) {
       storage = emptyStorage(useCodeHashStorage);
       storage.upgradeToFullFlatDbMode();

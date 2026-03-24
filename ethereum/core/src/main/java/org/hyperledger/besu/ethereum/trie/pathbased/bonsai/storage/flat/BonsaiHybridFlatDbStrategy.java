@@ -121,8 +121,7 @@ public class BonsaiHybridFlatDbStrategy extends BonsaiFlatDbStrategy {
     return archiveStrategy
         .getStateArchiveContextForRead(storage)
         .flatMap(BonsaiContext::getBlockNumber)
-        .orElseThrow(
-            () -> new IllegalStateException("No block number in read context for hybrid strategy"));
+        .orElse(Long.MAX_VALUE);
   }
 
   @Override
