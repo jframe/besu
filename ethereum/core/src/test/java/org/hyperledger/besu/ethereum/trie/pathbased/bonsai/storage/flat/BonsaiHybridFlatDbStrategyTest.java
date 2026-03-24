@@ -17,6 +17,11 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_FREEZER;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_FREEZER;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.CODE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
@@ -430,6 +435,69 @@ public class BonsaiHybridFlatDbStrategyTest {
             Long.MAX_VALUE);
 
     assertThat(slots).containsKey(Bytes32.wrap(slotKey.getSlotHash().getBytes()));
+  }
+
+  // ======================== Storage management ========================
+
+  @Test
+  public void clearAllRemovesBonsaiAndAllArchiveSegments() {
+    final byte[] key = new byte[] {(byte) 0x01};
+    final byte[] value = new byte[] {(byte) 0xAA};
+
+    // Populate every segment the hybrid strategy is responsible for
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(ACCOUNT_INFO_STATE, key, value);
+    tx.put(ACCOUNT_STORAGE_STORAGE, key, value);
+    tx.put(CODE_STORAGE, key, value);
+    tx.put(ACCOUNT_INFO_STATE_ARCHIVE, key, value);
+    tx.put(ACCOUNT_INFO_STATE_FREEZER, key, value);
+    tx.put(ACCOUNT_STORAGE_ARCHIVE, key, value);
+    tx.put(ACCOUNT_STORAGE_FREEZER, key, value);
+    tx.commit();
+
+    hybridStrategy.clearAll(storage);
+
+    // Bonsai segments must be cleared
+    assertThat(storage.get(ACCOUNT_INFO_STATE, key)).isEmpty();
+    assertThat(storage.get(ACCOUNT_STORAGE_STORAGE, key)).isEmpty();
+    assertThat(storage.get(CODE_STORAGE, key)).isEmpty();
+
+    // All four archive/freezer segments must also be cleared
+    assertThat(storage.get(ACCOUNT_INFO_STATE_ARCHIVE, key)).isEmpty();
+    assertThat(storage.get(ACCOUNT_INFO_STATE_FREEZER, key)).isEmpty();
+    assertThat(storage.get(ACCOUNT_STORAGE_ARCHIVE, key)).isEmpty();
+    assertThat(storage.get(ACCOUNT_STORAGE_FREEZER, key)).isEmpty();
+  }
+
+  @Test
+  public void resetOnResyncRemovesBonsaiAndAllArchiveSegments() {
+    final byte[] key = new byte[] {(byte) 0x02};
+    final byte[] value = new byte[] {(byte) 0xBB};
+
+    // Populate all relevant segments
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(ACCOUNT_INFO_STATE, key, value);
+    tx.put(ACCOUNT_STORAGE_STORAGE, key, value);
+    tx.put(CODE_STORAGE, key, value);
+    tx.put(ACCOUNT_INFO_STATE_ARCHIVE, key, value);
+    tx.put(ACCOUNT_INFO_STATE_FREEZER, key, value);
+    tx.put(ACCOUNT_STORAGE_ARCHIVE, key, value);
+    tx.put(ACCOUNT_STORAGE_FREEZER, key, value);
+    tx.commit();
+
+    hybridStrategy.resetOnResync(storage);
+
+    // BonsaiFullFlatDbStrategy.resetOnResync() is intentionally a no-op ("not need to reset
+    // anything in full mode"), so bonsai-layer segments are preserved.
+    assertThat(storage.get(ACCOUNT_INFO_STATE, key)).isPresent();
+    assertThat(storage.get(ACCOUNT_STORAGE_STORAGE, key)).isPresent();
+
+    // All four archive/freezer segments must be cleared — stale historical data must not
+    // survive a resync because it would be keyed to the old chain.
+    assertThat(storage.get(ACCOUNT_INFO_STATE_ARCHIVE, key)).isEmpty();
+    assertThat(storage.get(ACCOUNT_INFO_STATE_FREEZER, key)).isEmpty();
+    assertThat(storage.get(ACCOUNT_STORAGE_ARCHIVE, key)).isEmpty();
+    assertThat(storage.get(ACCOUNT_STORAGE_FREEZER, key)).isEmpty();
   }
 
   // ======================== Helpers ========================

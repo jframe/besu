@@ -202,12 +202,16 @@ public class BonsaiHybridFlatDbStrategy extends BonsaiFlatDbStrategy {
 
   @Override
   public void clearAll(final SegmentedKeyValueStorage storage) {
-    bonsaiStrategy.clearAll(storage);
+    // Delegate to archiveStrategy which clears both the archive/freezer segments and the
+    // underlying bonsai segments (ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE, CODE_STORAGE).
+    // Delegating to bonsaiStrategy alone would leave archive data intact after a full resync,
+    // producing a node with bonsai state rebuilt from scratch but stale archive keys.
+    archiveStrategy.clearAll(storage);
   }
 
   @Override
   public void resetOnResync(final SegmentedKeyValueStorage storage) {
-    bonsaiStrategy.resetOnResync(storage);
+    archiveStrategy.resetOnResync(storage);
   }
 
   // ======================== Streaming (routes by block age, same as reads)
