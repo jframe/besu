@@ -15,10 +15,12 @@
 package org.hyperledger.besu.ethereum.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.datatypes.LogTopic;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.rlp.RLPException;
 
 import java.util.List;
 
@@ -53,6 +55,60 @@ public class LogTest {
     final Log log = new Log(gen.address(), logData, logTopics);
     final Log copy = Log.readFrom(RLP.input(RLP.encode(rlpOut -> log.writeTo(rlpOut, true))), true);
     assertThat(copy).isEqualTo(log);
+  }
+
+  @Test
+  public void readFromCompacted_throwsOnTopicWithWrongTotalSize() {
+    // Craft a compacted log where a topic's [zeroLeadDataSize, shortData] sums to 33 bytes instead
+    // of the required 32. Without validation this would silently produce a malformed LogTopic;
+    // with validation it must throw RLPException.
+    final Bytes malformedLog =
+        RLP.encode(
+            out -> {
+              out.startList();
+              out.writeBytes(gen.address().getBytes());
+              out.startList(); // topics
+              out.startList(); // topic [1, <32 bytes>] → total 33 ≠ 32
+              out.writeIntScalar(1);
+              out.writeBytes(Bytes.repeat((byte) 0xAB, 32));
+              out.endList();
+              out.endList();
+              out.startList(); // data [0, ""]
+              out.writeIntScalar(0);
+              out.writeBytes(Bytes.EMPTY);
+              out.endList();
+              out.endList();
+            });
+    assertThatThrownBy(() -> Log.readFrom(RLP.input(malformedLog), true))
+        .isInstanceOf(RLPException.class)
+        .hasMessageContaining("33");
+  }
+
+  @Test
+  public void readFromCompacted_throwsOnTopicWithOversizedLeadingZeroCount() {
+    // zeroLeadDataSize=1000 with shortData=1 byte gives total 1001 ≠ 32.
+    // This guards against memory-amplification attacks on peer-provided data: without the
+    // 32-byte constraint the allocation would be proportional to zeroLeadDataSize.
+    final Bytes malformedLog =
+        RLP.encode(
+            out -> {
+              out.startList();
+              out.writeBytes(gen.address().getBytes());
+              out.startList(); // topics
+              out.startList(); // topic [1000, <1 byte>] → total 1001 ≠ 32
+              out.writeIntScalar(1000);
+              out.writeBytes(Bytes.of((byte) 0x01));
+              out.endList();
+              out.endList();
+              out.startList(); // data [0, ""]
+              out.writeIntScalar(0);
+              out.writeBytes(Bytes.EMPTY);
+              out.endList();
+              out.endList();
+            });
+    assertThatThrownBy(() -> Log.readFrom(RLP.input(malformedLog), true))
+        .isInstanceOf(RLPException.class)
+        .hasMessageContaining("1001");
   }
 
   private Bytes bytesWithLeadingZeros(final int noLeadingZeros, final int totalSize) {

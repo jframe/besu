@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.datatypes;
 
+import org.hyperledger.besu.ethereum.rlp.RLPException;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
@@ -118,8 +119,9 @@ public class Log {
     final List<LogTopic> topics;
     final Bytes data;
     if (compacted) {
-      topics = in.readList(listIn -> LogTopic.wrap(Bytes32.wrap(readTrimmedData(in))));
-      data = Bytes.wrap(readTrimmedData(in));
+      topics =
+          in.readList(listIn -> LogTopic.wrap(Bytes32.wrap(readTrimmedData(in, Bytes32.SIZE))));
+      data = readTrimmedData(in, -1);
     } else {
       topics = in.readList(listIn -> LogTopic.wrap(listIn.readBytes32()));
       data = in.readBytes();
@@ -129,13 +131,37 @@ public class Log {
     return new Log(logger, data, topics);
   }
 
-  private static Bytes readTrimmedData(final RLPInput in) {
+  /**
+   * Reads compacted [leadingZeros, shortData] from the RLP input and reconstructs the full bytes.
+   *
+   * @param in the RLP input
+   * @param expectedTotalSize the expected total byte length after reconstruction, or -1 for no
+   *     constraint (e.g. log data). For topics this should be {@link Bytes32#SIZE}.
+   * @throws RLPException if leadingZeros is negative or the reconstructed size does not match
+   *     expectedTotalSize
+   */
+  private static Bytes readTrimmedData(final RLPInput in, final int expectedTotalSize) {
     in.enterList();
     final int zeroLeadDataSize = in.readIntScalar();
+    if (zeroLeadDataSize < 0) {
+      throw new RLPException(
+          "Invalid compacted data: negative leading zero count " + zeroLeadDataSize);
+    }
     final Bytes shortData = in.readBytes();
-    final MutableBytes data = MutableBytes.create(zeroLeadDataSize + shortData.size());
-    data.set(zeroLeadDataSize, shortData);
+    final int totalSize = zeroLeadDataSize + shortData.size();
+    if (expectedTotalSize >= 0 && totalSize != expectedTotalSize) {
+      throw new RLPException(
+          "Invalid compacted data: expected "
+              + expectedTotalSize
+              + " bytes total but got "
+              + totalSize);
+    }
     in.leaveList();
+    if (zeroLeadDataSize == 0) {
+      return shortData;
+    }
+    final MutableBytes data = MutableBytes.create(totalSize);
+    data.set(zeroLeadDataSize, shortData);
     return data;
   }
 
