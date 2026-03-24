@@ -131,6 +131,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -1053,8 +1054,11 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
     final ScheduledExecutorService migrationExecutor =
         MonitoredExecutors.newScheduledThreadPool("archive-migrator", 1, metricsSystem);
+    // The migrator only calls write methods; it never reads via getFlatAccount/getFlatStorage
+    // and therefore never increments any read counter. Use NoOp to avoid registering the same
+    // counter names that BonsaiFlatDbStrategyProvider already registers for the live strategy.
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
-        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
+        new BonsaiArchiveFlatDbStrategy(new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy());
     return new BonsaiFlatDbToArchiveMigrator(
         worldStateKeyValueStorage,
         trieLogManager,
