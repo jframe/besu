@@ -35,6 +35,9 @@ public class BonsaiFlatDbStrategyProvider extends FlatDbStrategyProvider {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiFlatDbStrategyProvider.class);
 
+  // Default to Long.MAX_VALUE so that isRecentBlock(target, headBlock, boundary) returns false
+  // for any real block number before setHeadBlockSupplier() is called. This routes all reads
+  // through the archive seekForPrev path, which is safe and correct before the supplier is wired.
   private final AtomicReference<LongSupplier> headBlockSupplierRef =
       new AtomicReference<>(() -> Long.MAX_VALUE);
 
