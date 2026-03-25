@@ -207,6 +207,10 @@ public class BackwardChain {
     updateLastStoredPivot(Optional.of(newPivot.getHeader()));
   }
 
+  public synchronized void setFirstAncestorHeader(final BlockHeader header) {
+    updateFirstStoredAncestor(Optional.of(header));
+  }
+
   public synchronized boolean isTrusted(final Hash hash) {
     return blocks.get(hash).isPresent();
   }

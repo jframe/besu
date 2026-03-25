@@ -50,11 +50,25 @@ public class BackwardSyncStep {
   protected Hash possibleRestoreOldNodes(final BlockHeader firstAncestor) {
     Hash lastHash = firstAncestor.getParentHash();
     Optional<BlockHeader> iterator = backwardChain.getHeader(lastHash);
+    if (iterator.isEmpty()) {
+      return lastHash;
+    }
+    // Connect the first stale header to the new batch (one chainStorage write).
+    // All chain links below it are already correct from the previous session.
+    backwardChain.prependAncestorsHeader(iterator.get(), true);
+    // Traverse remaining stale headers to find the actual chain bottom.
+    // Each getHeader() call acquires/releases the BackwardChain lock individually so Engine API
+    // threads are never blocked for more than one RocksDB read at a time.
+    BlockHeader bottom = iterator.get();
+    lastHash = iterator.get().getParentHash();
+    iterator = backwardChain.getHeader(lastHash);
     while (iterator.isPresent()) {
-      backwardChain.prependAncestorsHeader(iterator.get(), true);
+      bottom = iterator.get();
       lastHash = iterator.get().getParentHash();
       iterator = backwardChain.getHeader(lastHash);
     }
+    // Update firstStoredAncestor to the actual bottom (one write instead of one per header).
+    backwardChain.setFirstAncestorHeader(bottom);
     return lastHash;
   }
 

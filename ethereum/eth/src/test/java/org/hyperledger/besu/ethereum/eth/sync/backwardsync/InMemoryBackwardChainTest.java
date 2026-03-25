@@ -26,6 +26,9 @@ import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
+import org.mockito.Answers;
+import org.mockito.Mock;
+
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -42,6 +45,9 @@ public class InMemoryBackwardChainTest {
   public static final int HEIGHT = 20_000;
   public static final int ELEMENTS = 20;
   private List<Block> blocks;
+
+  @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+  BackwardSyncContext context;
 
   GenericKeyValueStorageFacade<Hash, BlockHeader> headersStorage;
   GenericKeyValueStorageFacade<Hash, Block> blocksStorage;
@@ -179,5 +185,37 @@ public class InMemoryBackwardChainTest {
     pivot = backwardChain.getPivot();
     assertThat(pivot).isPresent();
     assertThat(pivot.orElseThrow()).isEqualTo(blocks.get(7));
+  }
+
+  @Test
+  public void shouldRestoreOldNodesPreservingHeadersAndMinimizingWrites() {
+    // Previous incomplete session: pivot at block 10, headers downloaded down to block 5.
+    // chainStorage has: 5→6, 6→7, 7→8, 8→9, 9→10. firstStoredAncestor = 5.
+    BackwardChain backwardChain = createChainFromBlock(blocks.get(10));
+    for (int i = 9; i >= 5; i--) {
+      backwardChain.prependAncestorsHeader(blocks.get(i).getHeader());
+    }
+    assertThat(backwardChain.getFirstAncestorHeader().orElseThrow())
+        .isEqualTo(blocks.get(5).getHeader());
+
+    // New session: CL sends pivot at block 12 (doesn't extend pivot 10, since 12's parent is 11).
+    backwardChain.appendTrustedBlock(blocks.get(12));
+    // Phase 1 step 1 downloads block 11 (bridge between new pivot 12 and stale chain at 10).
+    backwardChain.prependAncestorsHeader(blocks.get(11).getHeader());
+
+    // Phase 1 step 2 calls possibleRestoreOldNodes(11): 11's parent (block 10) is in the stale
+    // store. Should connect 10→11 in chainStorage and update firstStoredAncestor to 5 — O(1).
+    BackwardSyncStep step = new BackwardSyncStep(context, backwardChain);
+    Hash nextToFetch = step.possibleRestoreOldNodes(blocks.get(11).getHeader());
+
+    // All stale headers must still be present — no re-download needed
+    for (int i = 5; i <= 10; i++) {
+      assertThat(backwardChain.getHeader(blocks.get(i).getHash())).isPresent();
+    }
+    // firstStoredAncestor points to the actual chain bottom (block 5), not just the new batch
+    assertThat(backwardChain.getFirstAncestorHeader().orElseThrow())
+        .isEqualTo(blocks.get(5).getHeader());
+    // Returned hash is block 4's hash — the next header to request from peers
+    assertThat(nextToFetch).isEqualTo(blocks.get(4).getHash());
   }
 }
