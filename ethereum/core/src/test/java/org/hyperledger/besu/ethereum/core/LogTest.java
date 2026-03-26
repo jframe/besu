@@ -59,9 +59,6 @@ public class LogTest {
 
   @Test
   public void readFromCompacted_throwsOnTopicWithWrongTotalSize() {
-    // Craft a compacted log where a topic's [zeroLeadDataSize, shortData] sums to 33 bytes instead
-    // of the required 32. Without validation this would silently produce a malformed LogTopic;
-    // with validation it must throw RLPException.
     final Bytes malformedLog =
         RLP.encode(
             out -> {
@@ -86,9 +83,6 @@ public class LogTest {
 
   @Test
   public void readFromCompacted_throwsOnTopicWithOversizedLeadingZeroCount() {
-    // zeroLeadDataSize=1000 with shortData=1 byte gives total 1001 ≠ 32.
-    // This guards against memory-amplification attacks on peer-provided data: without the
-    // 32-byte constraint the allocation would be proportional to zeroLeadDataSize.
     final Bytes malformedLog =
         RLP.encode(
             out -> {

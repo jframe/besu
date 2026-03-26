@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -126,9 +127,9 @@ public class Log {
               listIn ->
                   LogTopic.wrap(
                       listIn.nextIsList()
-                          ? Bytes32.wrap(readTrimmedData(listIn, Bytes32.SIZE))
+                          ? Bytes32.wrap(readTrimmedData(listIn, OptionalInt.of(Bytes32.SIZE)))
                           : listIn.readBytes32()));
-      data = in.nextIsList() ? readTrimmedData(in, -1) : in.readBytes();
+      data = in.nextIsList() ? readTrimmedData(in, OptionalInt.empty()) : in.readBytes();
     } else {
       topics = in.readList(listIn -> LogTopic.wrap(listIn.readBytes32()));
       data = in.readBytes();
@@ -138,16 +139,7 @@ public class Log {
     return new Log(logger, data, topics);
   }
 
-  /**
-   * Reads compacted [leadingZeros, shortData] from the RLP input and reconstructs the full bytes.
-   *
-   * @param in the RLP input
-   * @param expectedTotalSize the expected total byte length after reconstruction, or -1 for no
-   *     constraint (e.g. log data). For topics this should be {@link Bytes32#SIZE}.
-   * @throws RLPException if leadingZeros is negative or the reconstructed size does not match
-   *     expectedTotalSize
-   */
-  private static Bytes readTrimmedData(final RLPInput in, final int expectedTotalSize) {
+  private static Bytes readTrimmedData(final RLPInput in, final OptionalInt expectedTotalSize) {
     in.enterList();
     final int zeroLeadDataSize = in.readIntScalar();
     if (zeroLeadDataSize < 0) {
@@ -156,10 +148,10 @@ public class Log {
     }
     final Bytes shortData = in.readBytes();
     final int totalSize = zeroLeadDataSize + shortData.size();
-    if (expectedTotalSize >= 0 && totalSize != expectedTotalSize) {
+    if (expectedTotalSize.isPresent() && totalSize != expectedTotalSize.getAsInt()) {
       throw new RLPException(
           "Invalid compacted data: expected "
-              + expectedTotalSize
+              + expectedTotalSize.getAsInt()
               + " bytes total but got "
               + totalSize);
     }
