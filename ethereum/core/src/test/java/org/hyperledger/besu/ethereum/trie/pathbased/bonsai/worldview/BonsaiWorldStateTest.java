@@ -194,20 +194,20 @@ class BonsaiWorldStateTest {
   @Test
   void incrementKeyAddsOneToLastByte() {
     final Bytes32 key = Bytes32.fromHexString("0x" + "00".repeat(31) + "01");
-    assertThat(BonsaiWorldState.incrementKey(key))
+    assertThat(worldState.incrementKey(key))
         .isEqualTo(Bytes32.fromHexString("0x" + "00".repeat(31) + "02"));
   }
 
   @Test
   void incrementKeyPropagatesCarry() {
     final Bytes32 key = Bytes32.fromHexString("0x" + "00".repeat(31) + "ff");
-    assertThat(BonsaiWorldState.incrementKey(key))
+    assertThat(worldState.incrementKey(key))
         .isEqualTo(Bytes32.fromHexString("0x" + "00".repeat(30) + "0100"));
   }
 
   @Test
   void incrementKeyOverflowsToZero() {
     final Bytes32 key = Bytes32.fromHexString("0x" + "ff".repeat(32));
-    assertThat(BonsaiWorldState.incrementKey(key)).isEqualTo(Bytes32.ZERO);
+    assertThat(worldState.incrementKey(key)).isEqualTo(Bytes32.ZERO);
   }
 }

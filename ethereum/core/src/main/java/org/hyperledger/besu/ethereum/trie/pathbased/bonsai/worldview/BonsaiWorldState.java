@@ -386,14 +386,8 @@ public class BonsaiWorldState extends PathBasedWorldState {
    * pagination start key that is strictly greater than the last key seen in the previous batch.
    */
   @VisibleForTesting
-  static Bytes32 incrementKey(final Bytes32 key) {
-    final byte[] bytes = key.toArrayUnsafe().clone();
-    for (int i = bytes.length - 1; i >= 0; i--) {
-      if (++bytes[i] != 0) {
-        break;
-      }
-    }
-    return Bytes32.wrap(bytes);
+  Bytes32 incrementKey(final Bytes32 key) {
+    return Bytes32.wrap(UInt256.fromBytes(key).add(1).toBytes());
   }
 
   @Override
