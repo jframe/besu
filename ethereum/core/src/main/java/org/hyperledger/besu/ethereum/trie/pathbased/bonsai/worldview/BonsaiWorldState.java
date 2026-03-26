@@ -58,9 +58,13 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.rlp.RLP;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @SuppressWarnings("rawtypes")
 public class BonsaiWorldState extends PathBasedWorldState {
+
+  private static final Logger LOG = LoggerFactory.getLogger(BonsaiWorldState.class);
 
   protected BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader;
   private final CodeCache codeCache;
@@ -334,10 +338,18 @@ public class BonsaiWorldState extends PathBasedWorldState {
           createTrie(
               (location, key) -> getStorageTrieNode(addressHash, location, key),
               Bytes32.wrap(oldAccount.getStorageRoot().getBytes()));
+      LOG.info(
+          "clearStorage start for {} storageRoot={} trieType={}",
+          address,
+          oldAccount.getStorageRoot(),
+          storageTrie.getClass().getSimpleName());
       try {
         StorageConsumingMap<StorageSlotKey, PathBasedValue<UInt256>> storageToDelete = null;
         Map<Bytes32, Bytes> entriesToDelete = storageTrie.entriesFrom(Bytes32.ZERO, 256);
+        int totalCleared = 0;
+        int iteration = 0;
         while (!entriesToDelete.isEmpty()) {
+          iteration++;
           if (storageToDelete == null) {
             storageToDelete =
                 worldStateUpdater
@@ -363,6 +375,13 @@ public class BonsaiWorldState extends PathBasedWorldState {
                 .computeIfAbsent(storageSlotKey, key -> new PathBasedValue<>(slotValue, null, true))
                 .setPrior(slotValue);
           }
+          totalCleared += entriesToDelete.size();
+          LOG.info(
+              "clearStorage {} iteration={} batchSize={} totalCleared={}",
+              address,
+              iteration,
+              entriesToDelete.size(),
+              totalCleared);
           entriesToDelete.keySet().forEach(storageTrie::remove);
           if (entriesToDelete.size() == 256) {
             entriesToDelete = storageTrie.entriesFrom(Bytes32.ZERO, 256);
@@ -370,6 +389,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
             break;
           }
         }
+        LOG.info("clearStorage complete for {} total slots cleared={}", address, totalCleared);
       } catch (MerkleTrieException e) {
         // need to throw to trigger the heal
         throw new MerkleTrieException(

@@ -148,7 +148,9 @@ public class ForwardSyncStep {
             .log();
         return null;
       } else {
+        LOG.info("BWS importing block {}", block.toLogString());
         context.saveBlock(block);
+        LOG.info("BWS imported block {}", block.toLogString());
       }
     }
 
