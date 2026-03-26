@@ -44,6 +44,7 @@ import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -365,7 +366,9 @@ public class BonsaiWorldState extends PathBasedWorldState {
           }
           entriesToDelete.keySet().forEach(storageTrie::remove);
           if (entriesToDelete.size() == 256) {
-            entriesToDelete = storageTrie.entriesFrom(Bytes32.ZERO, 256);
+            final Bytes32 nextStartKey =
+                incrementKey(Collections.max(entriesToDelete.keySet()));
+            entriesToDelete = storageTrie.entriesFrom(nextStartKey, 256);
           } else {
             break;
           }
@@ -376,6 +379,21 @@ public class BonsaiWorldState extends PathBasedWorldState {
             e.getMessage(), Optional.of(address), e.getHash(), e.getLocation());
       }
     }
+  }
+
+  /**
+   * Increments a Bytes32 value treated as a big-endian unsigned integer. Used to produce a
+   * pagination start key that is strictly greater than the last key seen in the previous batch.
+   */
+  @VisibleForTesting
+  static Bytes32 incrementKey(final Bytes32 key) {
+    final byte[] bytes = key.toArrayUnsafe().clone();
+    for (int i = bytes.length - 1; i >= 0; i--) {
+      if (++bytes[i] != 0) {
+        break;
+      }
+    }
+    return Bytes32.wrap(bytes);
   }
 
   @Override

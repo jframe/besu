@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig.createStatefulConfigWithTrie;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -21,21 +22,30 @@ import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.PathBasedValue;
+import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
+import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
+import org.hyperledger.besu.evm.worldstate.WorldUpdater;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -142,5 +152,62 @@ class BonsaiWorldStateTest {
         Arguments.of(Bytes.EMPTY, null),
         Arguments.of(null, null),
         Arguments.of(Bytes.EMPTY, Bytes.EMPTY));
+  }
+
+  @Test
+  @Timeout(value = 30, unit = TimeUnit.SECONDS)
+  void clearStorageTerminatesWithParallelTrieAndMoreThan256Slots() {
+    // ParallelStoredMerklePatriciaTrie defers remove() calls to pendingUpdates, so the original
+    // clearStorage() loop — which always restarted entriesFrom(Bytes32.ZERO, 256) — would see
+    // the same 256 entries every iteration and loop forever. This test fails via timeout without
+    // the fix (forward pagination past the last key seen) and passes with it.
+    final BonsaiWorldState state =
+        new BonsaiWorldState(
+            InMemoryKeyValueStorageProvider.createBonsaiInMemoryWorldStateArchive(blockchain),
+            new BonsaiWorldStateKeyValueStorage(
+                new InMemoryKeyValueStorageProvider(),
+                new NoOpMetricsSystem(),
+                DataStorageConfiguration.DEFAULT_BONSAI_CONFIG),
+            EvmConfiguration.DEFAULT,
+            createStatefulConfigWithTrie(), // enables ParallelStoredMerklePatriciaTrie by default
+            new CodeCache());
+
+    // Block 1: create an account with 300 storage slots (> 256 batch size)
+    final Address address = Address.fromHexString("0x1111111111111111111111111111111111111111");
+    final WorldUpdater updater = state.updater();
+    final MutableAccount account = updater.createAccount(address, 0, Wei.ONE);
+    for (int i = 1; i <= 300; i++) {
+      account.setStorageValue(UInt256.valueOf(i), UInt256.ONE);
+    }
+    updater.commit();
+    state.persist(null);
+
+    // Block 2: delete the account — triggers clearStorage() over the 300-slot trie
+    final WorldUpdater updater2 = state.updater();
+    updater2.deleteAccount(address);
+    updater2.commit();
+    state.persist(null); // hangs forever without the fix; completes instantly with it
+
+    assertThat(state.get(address)).isNull();
+  }
+
+  @Test
+  void incrementKeyAddsOneToLastByte() {
+    final Bytes32 key = Bytes32.fromHexString("0x" + "00".repeat(31) + "01");
+    assertThat(BonsaiWorldState.incrementKey(key))
+        .isEqualTo(Bytes32.fromHexString("0x" + "00".repeat(31) + "02"));
+  }
+
+  @Test
+  void incrementKeyPropagatesCarry() {
+    final Bytes32 key = Bytes32.fromHexString("0x" + "00".repeat(31) + "ff");
+    assertThat(BonsaiWorldState.incrementKey(key))
+        .isEqualTo(Bytes32.fromHexString("0x" + "00".repeat(30) + "0100"));
+  }
+
+  @Test
+  void incrementKeyOverflowsToZero() {
+    final Bytes32 key = Bytes32.fromHexString("0x" + "ff".repeat(32));
+    assertThat(BonsaiWorldState.incrementKey(key)).isEqualTo(Bytes32.ZERO);
   }
 }
