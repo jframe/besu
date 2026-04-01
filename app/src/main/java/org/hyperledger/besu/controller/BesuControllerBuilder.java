@@ -939,7 +939,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             createArchiveMigrator(worldStateStorageCoordinator, worldStateArchive, blockchain);
         archiveMigrator.startOngoingMigration();
         closeables.add(archiveMigrator);
-        blockchain.observeBlockAdded(archiver);
+        // blockchain.observeBlockAdded(archiver);
       }
     }
 
