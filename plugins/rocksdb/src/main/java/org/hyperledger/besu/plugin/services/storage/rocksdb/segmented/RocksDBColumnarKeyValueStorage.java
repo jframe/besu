@@ -17,6 +17,7 @@ package org.hyperledger.besu.plugin.services.storage.rocksdb.segmented;
 import static java.util.stream.Collectors.toUnmodifiableSet;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.BLOCKCHAIN;
 
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
@@ -231,6 +232,11 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
             .setLevelCompactionDynamicLevelBytes(dynamicLevelBytes);
     if (segment.containsStaticData()) {
       configureBlobDBForSegment(segment, configuration, options);
+    }
+    if (segment instanceof KeyValueSegmentIdentifier kvSeg && kvSeg.isArchiveSegment()) {
+      options
+          .setTargetFileSizeBase(256 * 1024 * 1024L)
+          .setMaxBytesForLevelBase(1024 * 1024 * 1024L);
     }
 
     return new ColumnFamilyDescriptor(segment.getId(), options);

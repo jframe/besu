@@ -132,4 +132,11 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   public boolean includeInDatabaseFormat(final DataStorageFormat format) {
     return formats.contains(format);
   }
+
+  public boolean isArchiveSegment() {
+    return this == ACCOUNT_INFO_STATE_ARCHIVE
+        || this == ACCOUNT_STORAGE_ARCHIVE
+        || this == ACCOUNT_INFO_STATE_FREEZER
+        || this == ACCOUNT_STORAGE_FREEZER;
+  }
 }
