@@ -18,7 +18,6 @@ import org.hyperledger.besu.cli.subcommands.storage.StorageSubCommand;
 import org.hyperledger.besu.cli.util.VersionProvider;
 
 import java.io.PrintWriter;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -48,8 +47,6 @@ public class ArchiveStatsSubCommand implements Runnable {
   @SuppressWarnings("unused")
   @Spec
   private CommandSpec spec;
-
-  private final PrintWriter out;
 
   @Option(
       names = {"--output"},
@@ -113,22 +110,9 @@ public class ArchiveStatsSubCommand implements Runnable {
       defaultValue = "1024")
   long memoryBudgetMb;
 
-  /** Default constructor for PicoCLI. */
-  public ArchiveStatsSubCommand() {
-    this(new PrintWriter(System.out, true, StandardCharsets.UTF_8));
-  }
-
-  /**
-   * Construct an instance with a custom writer (used by tests).
-   *
-   * @param out The writer to receive usage output.
-   */
-  ArchiveStatsSubCommand(final PrintWriter out) {
-    this.out = out;
-  }
-
   @Override
   public void run() {
+    final PrintWriter out = spec.commandLine().getOut();
     spec.commandLine().usage(out);
     out.println("(implementation pending — see plan)");
   }
