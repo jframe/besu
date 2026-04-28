@@ -23,6 +23,7 @@ import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.SAFE_BLO
 import static org.hyperledger.besu.ethereum.chain.VariablesStorage.Keys.SEQ_NO_STORE;
 
 import org.hyperledger.besu.cli.BesuCommand;
+import org.hyperledger.besu.cli.subcommands.storage.archivestats.ArchiveStatsSubCommand;
 import org.hyperledger.besu.cli.util.VersionProvider;
 import org.hyperledger.besu.controller.BesuController;
 import org.hyperledger.besu.ethereum.rlp.RLP;
@@ -51,7 +52,8 @@ import picocli.CommandLine.Spec;
       RocksDbSubCommand.class,
       TrieLogSubCommand.class,
       RevertMetadataSubCommand.class,
-      PrunePreMergeBlockDataSubCommand.class
+      PrunePreMergeBlockDataSubCommand.class,
+      ArchiveStatsSubCommand.class
     })
 public class StorageSubCommand implements Runnable {
 
