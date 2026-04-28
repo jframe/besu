@@ -137,6 +137,35 @@ public final class ArchiveScanner implements AutoCloseable {
     }
   }
 
+  /**
+   * Estimated total file size for a CF.
+   *
+   * @param cf archive CF
+   * @return estimated total file size (SST + blob) in bytes; 0 if unavailable
+   */
+  public long estimateCfSizeBytes(final ArchiveCf cf) {
+    try {
+      final long sst =
+          parseLongOrZero(db.getProperty(cfByArchive.get(cf), "rocksdb.total-sst-files-size"));
+      final long blob =
+          parseLongOrZero(db.getProperty(cfByArchive.get(cf), "rocksdb.total-blob-file-size"));
+      return sst + blob;
+    } catch (final RocksDBException e) {
+      return 0L;
+    }
+  }
+
+  private static long parseLongOrZero(final String s) {
+    if (s == null || s.isBlank()) {
+      return 0L;
+    }
+    try {
+      return Long.parseLong(s);
+    } catch (final NumberFormatException e) {
+      return 0L;
+    }
+  }
+
   @Override
   public void close() {
     for (final ColumnFamilyHandle h : allHandles) {

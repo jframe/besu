@@ -156,8 +156,20 @@ public final class ArchiveStatsRunner {
                 boundariesFor(cf),
                 rangeStats,
                 fp));
-        cfSizes.put(cf, 0L); // CF size lookup added in Task 16
+        cfSizes.put(cf, scanner.estimateCfSizeBytes(cf));
       }
+    }
+
+    final long projectedHllBytes =
+        ((chainHead / config.rangeSize()) + 1) * 2L * 16_384L; // 2 CFs * lgK=14 (~16KB)
+    final long budgetBytes = config.memoryBudgetMb() * 1024L * 1024L;
+    if (projectedHllBytes > budgetBytes) {
+      throw new IllegalStateException(
+          "Projected HLL footprint "
+              + projectedHllBytes
+              + " bytes exceeds budget "
+              + budgetBytes
+              + " bytes; raise --memory-budget-mb");
     }
 
     final long totalRanges = (chainHead / config.rangeSize()) + 1;
