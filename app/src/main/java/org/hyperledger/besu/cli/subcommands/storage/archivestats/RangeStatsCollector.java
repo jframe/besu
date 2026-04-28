@@ -24,6 +24,9 @@ import org.apache.datasketches.hll.HllSketch;
 /** Per-range entry counts plus DataSketches HyperLogLog cardinality estimates. */
 public final class RangeStatsCollector {
 
+  /** Construct an empty collector. */
+  public RangeStatsCollector() {}
+
   /** Log-base-2 of HLL register count. lgK=14 produces 16384 registers, ~0.8% standard error. */
   static final int LG_K = 14;
 

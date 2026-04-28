@@ -53,6 +53,9 @@ public class ArchiveStatsSubCommand implements Runnable {
   @Spec
   private CommandSpec spec;
 
+  /** Default constructor used by PicoCLI to instantiate the subcommand. */
+  public ArchiveStatsSubCommand() {}
+
   @Option(
       names = {"--output"},
       description = "Directory to write reports into (default: ${DEFAULT-VALUE})",
