@@ -20,7 +20,8 @@ import java.util.List;
  * Aggregated post-scan stats for one CF.
  *
  * @param totalEntries total archive entries observed
- * @param totalUniqueKeys total unique-key cardinality (sum of per-range HLLs)
+ * @param totalUniqueKeys exact count of distinct prefixes observed in this CF (one per KeyRecord
+ *     emitted by the StreamingAggregator)
  * @param totalRows total (key, range) rows emitted
  * @param rowsPerKey histogram of distinct ranges per key
  * @param entriesPerRow histogram of entries per (key, range) row
