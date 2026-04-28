@@ -64,6 +64,16 @@ public class StorageSubCommand implements Runnable {
   @ParentCommand
   BesuCommand besuCommand;
 
+  /**
+   * Expose the parent BesuCommand for child subcommands that need access to data directory or other
+   * top-level state.
+   *
+   * @return the parent BesuCommand
+   */
+  public org.hyperledger.besu.cli.BesuCommand parentCommand() {
+    return besuCommand;
+  }
+
   @SuppressWarnings("unused")
   @Spec
   private CommandSpec spec;

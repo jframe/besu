@@ -16,10 +16,15 @@ package org.hyperledger.besu.cli.subcommands.storage.archivestats;
 
 import org.hyperledger.besu.cli.subcommands.storage.StorageSubCommand;
 import org.hyperledger.besu.cli.util.VersionProvider;
+import org.hyperledger.besu.controller.BesuController;
 
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -113,7 +118,52 @@ public class ArchiveStatsSubCommand implements Runnable {
   @Override
   public void run() {
     final PrintWriter out = spec.commandLine().getOut();
-    spec.commandLine().usage(out);
-    out.println("(implementation pending — see plan)");
+    final List<ArchiveCf> selected = parseCfSelector(cfSelector);
+    final List<FpRateProjector.GridPoint> grid = FpRateProjector.parseSweep(fpSweep);
+    final ArchiveStatsRunner.Config cfg =
+        new ArchiveStatsRunner.Config(
+            parentCommand
+                .parentCommand()
+                .dataDir()
+                .resolve(BesuController.DATABASE_PATH)
+                .toString(),
+            output,
+            rangeSize,
+            grid,
+            accountClassBoundaries,
+            storageClassBoundaries,
+            selected,
+            maxKeys == null ? Long.MAX_VALUE : maxKeys,
+            Duration.ofSeconds(progressIntervalSeconds),
+            memoryBudgetMb);
+
+    final ArchiveStatsRunner runner = new ArchiveStatsRunner(cfg, out);
+
+    try {
+      final ScanResult result = runner.run();
+      new ReportWriter(output).write(result);
+      out.println("Reports written to " + output.toAbsolutePath());
+    } catch (final IOException ioe) {
+      out.println("Output write error: " + ioe.getMessage());
+      throw new picocli.CommandLine.ExecutionException(spec.commandLine(), ioe.getMessage(), ioe);
+    } catch (final Exception e) {
+      out.println("Scan error: " + e.getMessage());
+      throw new picocli.CommandLine.ExecutionException(spec.commandLine(), e.getMessage(), e);
+    }
+  }
+
+  private static List<ArchiveCf> parseCfSelector(final String selector) {
+    final List<ArchiveCf> out = new ArrayList<>();
+    switch (selector.toLowerCase(Locale.ROOT)) {
+      case "account" -> out.add(ArchiveCf.ACCOUNT);
+      case "storage" -> out.add(ArchiveCf.STORAGE);
+      case "both" -> {
+        out.add(ArchiveCf.ACCOUNT);
+        out.add(ArchiveCf.STORAGE);
+      }
+      default ->
+          throw new IllegalArgumentException("--cf must be account|storage|both, got: " + selector);
+    }
+    return out;
   }
 }
