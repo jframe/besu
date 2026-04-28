@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.cli.subcommands.storage.archivestats;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -65,10 +66,14 @@ public final class RangeStatsCollector {
   /**
    * All range IDs we have stats for.
    *
-   * @return the set of observed range IDs
+   * <p>The returned set is an unmodifiable live view: it reflects subsequent {@code observe(...)}
+   * calls but cannot be mutated by callers. Iteration concurrent with {@code observe} is
+   * unsupported.
+   *
+   * @return unmodifiable view of observed range IDs
    */
   public Set<Long> rangeIds() {
-    return byRange.keySet();
+    return Collections.unmodifiableSet(byRange.keySet());
   }
 
   private static final class PerRange {

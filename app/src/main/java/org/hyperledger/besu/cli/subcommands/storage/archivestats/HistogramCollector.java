@@ -20,14 +20,23 @@ package org.hyperledger.besu.cli.subcommands.storage.archivestats;
  * <p>Use {@link #log(int)} for skewed distributions where most values are small (entries-per-row,
  * modifications-per-key). Use {@link #linear(int)} for bounded enumerations (rows-per-key, where
  * the value cannot exceed the number of ranges).
+ *
+ * <p><b>Special bucket-0 behavior for log histograms:</b> in log mode, bucket 0 initially
+ * advertises a lower bound of {@code 1} (so it covers {@code [1, 2)}). The first call to {@code
+ * record(0L)} dynamically rewrites {@code bucketLowerBounds()[0]} to {@code 0} to reflect that
+ * bucket 0 has absorbed a value below its initial lower bound. As a result, the value returned by
+ * {@link #bucketLowerBounds()} for index 0 is path-dependent on input order: callers that have
+ * already retrieved the array before the first {@code record(0L)} will see {@code 1}; callers
+ * retrieving it afterwards will see {@code 0}.
  */
 public final class HistogramCollector {
 
   /**
    * Construct a log-bucketed collector.
    *
-   * <p>Bucket {@code i} (for {@code i >= 0}) covers {@code [2^i, 2^(i+1))}. Recording a value of 0
-   * collapses into bucket 0 and updates that bucket's documented lower bound to 0.
+   * <p>Bucket {@code i} covers {@code [2^i, 2^(i+1))} for {@code i >= 1}. Bucket 0 covers {@code
+   * [1, 2)} until {@code record(0L)} is called, after which {@code bucketLowerBounds()[0]} is
+   * reported as 0 to reflect that bucket 0 has absorbed values below its initial lower bound.
    *
    * @param numBuckets number of buckets.
    * @return the new collector
@@ -94,6 +103,9 @@ public final class HistogramCollector {
 
   /**
    * Bucket lower bounds.
+   *
+   * <p>For log histograms, the lower bound at index 0 is dynamically updated by {@code record(0L)}
+   * &mdash; see {@link #log(int)}.
    *
    * @return parallel array of inclusive lower bounds, same length as {@link #bucketCounts()}.
    */
