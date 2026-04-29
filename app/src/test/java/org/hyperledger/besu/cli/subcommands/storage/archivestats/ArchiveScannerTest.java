@@ -82,7 +82,7 @@ class ArchiveScannerTest {
       scanner.forEach(
           ArchiveCf.ACCOUNT,
           Long.MAX_VALUE,
-          (cf, rawKey, valueLen) -> {
+          (cf, rawKey, value) -> {
             final KeyDecoder.Decoded d = KeyDecoder.decode(cf, rawKey);
             seen.add(new long[] {d.prefix()[0] & 0xff, d.blockNumber()});
           });
@@ -108,7 +108,7 @@ class ArchiveScannerTest {
 
     final int[] count = {0};
     try (final ArchiveScanner scanner = ArchiveScanner.openReadOnly(dbPath.toString())) {
-      scanner.forEach(ArchiveCf.ACCOUNT, 4L, (cf, rawKey, valueLen) -> count[0]++);
+      scanner.forEach(ArchiveCf.ACCOUNT, 4L, (cf, rawKey, value) -> count[0]++);
     }
     assertThat(count[0]).isEqualTo(4);
   }

@@ -102,6 +102,7 @@ public final class ArchiveStatsRunner {
         final long[] totalRows = {0L};
         final long[] totalKeys = {0L};
         final long[] totalEntries = {0L};
+        final long[] skippedKeys = {0L};
         final StreamingAggregator agg =
             new StreamingAggregator(
                 config.rangeSize(),
@@ -119,8 +120,23 @@ public final class ArchiveStatsRunner {
         scanner.forEach(
             cf,
             config.maxKeysPerCf(),
-            (visitedCf, rawKey, valueLen) -> {
-              final KeyDecoder.Decoded d = KeyDecoder.decode(visitedCf, rawKey);
+            (visitedCf, rawKey, value) -> {
+              final KeyDecoder.Decoded d;
+              try {
+                d = KeyDecoder.decode(visitedCf, rawKey);
+              } catch (final IllegalArgumentException e) {
+                skippedKeys[0]++;
+                if (skippedKeys[0] <= 10) {
+                  log.printf(
+                      "[%s] WARN: skipping unrecognised key (%s); rawKey=%s value=%s%n",
+                      visitedCf.name(),
+                      e.getMessage(),
+                      toHex(rawKey, rawKey.length),
+                      toHex(value, Math.min(value.length, 256)));
+                  log.flush();
+                }
+                return;
+              }
               if (d.blockNumber() > cfChainHead[0]) {
                 cfChainHead[0] = d.blockNumber();
               }
@@ -131,6 +147,11 @@ public final class ArchiveStatsRunner {
             });
         agg.flush();
         progress.endCf(totalEntries[0]);
+        if (skippedKeys[0] > 0) {
+          log.printf(
+              "[%s] skipped %d unrecognised key(s) during scan%n", cf.name(), skippedKeys[0]);
+          log.flush();
+        }
 
         if (cfChainHead[0] > chainHead) {
           chainHead = cfChainHead[0];
@@ -189,5 +210,17 @@ public final class ArchiveStatsRunner {
     return cf == ArchiveCf.ACCOUNT
         ? config.accountClassBoundaries()
         : config.storageClassBoundaries();
+  }
+
+  private static String toHex(final byte[] bytes, final int length) {
+    final StringBuilder sb = new StringBuilder(length * 2 + 4);
+    sb.append("0x");
+    for (int i = 0; i < length; i++) {
+      sb.append(String.format(java.util.Locale.ROOT, "%02x", bytes[i] & 0xff));
+    }
+    if (length < bytes.length) {
+      sb.append("...(").append(bytes.length).append(" bytes)");
+    }
+    return sb.toString();
   }
 }

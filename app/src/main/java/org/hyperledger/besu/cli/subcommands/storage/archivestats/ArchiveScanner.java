@@ -36,7 +36,7 @@ import org.rocksdb.RocksIterator;
  */
 public final class ArchiveScanner implements AutoCloseable {
 
-  /** Per-key callback. {@code valueLen} is the value byte length (we don't read the value). */
+  /** Per-key callback. */
   @FunctionalInterface
   public interface KeyVisitor {
     /**
@@ -44,9 +44,9 @@ public final class ArchiveScanner implements AutoCloseable {
      *
      * @param cf which CF the key came from
      * @param rawKey the raw key bytes (caller must not retain across calls)
-     * @param valueLen the value byte length
+     * @param value the raw value bytes (caller must not retain across calls)
      */
-    void visit(ArchiveCf cf, byte[] rawKey, int valueLen);
+    void visit(ArchiveCf cf, byte[] rawKey, byte[] value);
   }
 
   private final RocksDB db;
@@ -114,8 +114,8 @@ public final class ArchiveScanner implements AutoCloseable {
       it.seekToFirst();
       while (it.isValid() && visited < maxKeys) {
         final byte[] key = it.key();
-        final int valueLen = it.value().length;
-        visitor.visit(cf, key, valueLen);
+        final byte[] value = it.value();
+        visitor.visit(cf, key, value);
         visited++;
         it.next();
       }

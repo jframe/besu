@@ -72,6 +72,29 @@ class ArchiveStatsRunnerEndToEndTest {
     }
   }
 
+  private void appendMalformedKey() throws RocksDBException {
+    final List<ColumnFamilyDescriptor> cfDescriptors =
+        List.of(
+            new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, new ColumnFamilyOptions()),
+            new ColumnFamilyDescriptor(
+                "ACCOUNT_INFO_STATE_ARCHIVE".getBytes(UTF_8), new ColumnFamilyOptions()),
+            new ColumnFamilyDescriptor(
+                "ACCOUNT_STORAGE_ARCHIVE".getBytes(UTF_8), new ColumnFamilyOptions()));
+    final List<ColumnFamilyHandle> handles = new ArrayList<>();
+    try (final RocksDB db =
+        RocksDB.open(new DBOptions(), dbPath.toString(), cfDescriptors, handles)) {
+      final ColumnFamilyHandle accountCf = handles.get(1);
+      // Mirrors the BonsaiFlatDbToArchiveMigrator's metadata sentinel.
+      db.put(
+          accountCf,
+          "ARCHIVE_MIGRATION_PROGRESS".getBytes(UTF_8),
+          new byte[] {(byte) 0xde, (byte) 0xad});
+      db.flush(new org.rocksdb.FlushOptions());
+    } finally {
+      handles.forEach(ColumnFamilyHandle::close);
+    }
+  }
+
   @Test
   void runProducesExpectedHistogramTotals() throws IOException, RocksDBException {
     final ArchiveStatsRunner.Config cfg =
@@ -100,6 +123,42 @@ class ArchiveStatsRunnerEndToEndTest {
 
     new ReportWriter(outputPath).write(result);
     assertThat(Files.exists(outputPath.resolve("stats.json"))).isTrue();
+  }
+
+  @Test
+  void skipsMalformedKeysAndContinues() throws IOException, RocksDBException {
+    appendMalformedKey();
+
+    final ArchiveStatsRunner.Config cfg =
+        new ArchiveStatsRunner.Config(
+            dbPath.toString(),
+            outputPath,
+            1_000_000L,
+            List.of(new FpRateProjector.GridPoint(7, 1_048_576L)),
+            List.of(3L, 50L, 10_000L, 1_000_000L),
+            List.of(1L, 10L, 1_000L, 100_000L),
+            List.of(ArchiveCf.ACCOUNT),
+            Long.MAX_VALUE,
+            Duration.ofSeconds(60),
+            1024L);
+    final StringWriter logSink = new StringWriter();
+    final ArchiveStatsRunner runner = new ArchiveStatsRunner(cfg, new PrintWriter(logSink));
+
+    final ScanResult result = runner.run();
+
+    final CfResult acc = result.cfResults().get(ArchiveCf.ACCOUNT);
+    // The 6 valid keys are still counted; the malformed sentinel is skipped.
+    assertThat(acc.totalEntries()).isEqualTo(6L);
+    assertThat(acc.totalUniqueKeys()).isEqualTo(2L);
+
+    final String logged = logSink.toString();
+    assertThat(logged).contains("WARN: skipping unrecognised key");
+    assertThat(logged).contains("expected 40 bytes, got 26");
+    // Hex of "ARCHIVE_MIGRATION_PROGRESS"
+    assertThat(logged).contains("0x415243484956455f4d4947524154494f4e5f50524f4752455353");
+    // First two value bytes (truncated representation includes them in hex)
+    assertThat(logged).contains("0xdead");
+    assertThat(logged).contains("skipped 1 unrecognised key(s)");
   }
 
   private static byte[] accountKey(final int firstByte, final long blockNumber) {
