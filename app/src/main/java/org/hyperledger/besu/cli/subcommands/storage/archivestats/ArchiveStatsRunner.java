@@ -82,6 +82,7 @@ public final class ArchiveStatsRunner {
   public ScanResult run() throws IOException, RocksDBException {
     final Instant scanStart = Instant.now();
     final EnumMap<ArchiveCf, CfResult> cfResults = new EnumMap<>(ArchiveCf.class);
+    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults = new EnumMap<>(ArchiveCf.class);
     final Map<ArchiveCf, Long> cfSizes = new HashMap<>();
     long chainHead = 0L;
 
@@ -117,12 +118,17 @@ public final class ArchiveStatsRunner {
         final long[] totalKeys = {0L};
         final long[] totalEntries = {0L};
         final long[] skippedKeys = {0L};
+        final SlotFanOutCollector slotFanOut =
+            cf == ArchiveCf.STORAGE ? new SlotFanOutCollector() : null;
         final StreamingAggregator agg =
             new StreamingAggregator(
                 config.rangeSize(),
                 row -> {
                   entriesPerRow.record(row.count());
                   totalRows[0]++;
+                  if (slotFanOut != null) {
+                    slotFanOut.accept(row);
+                  }
                 },
                 key -> {
                   rowsPerKey.record(key.distinctRanges());
@@ -160,6 +166,10 @@ public final class ArchiveStatsRunner {
               progress.tick(totalEntries[0], estimatedTotal);
             });
         agg.flush();
+        if (slotFanOut != null) {
+          slotFanOut.flush();
+          slotFanOutResults.put(cf, slotFanOut.result());
+        }
         progress.endCf(totalEntries[0]);
         if (skippedKeys[0] > 0) {
           log.printf(
@@ -217,7 +227,8 @@ public final class ArchiveStatsRunner {
         Instant.now(),
         cfSizes,
         config.fpSweepGrid(),
-        cfResults);
+        cfResults,
+        slotFanOutResults);
   }
 
   private List<Long> boundariesFor(final ArchiveCf cf) {

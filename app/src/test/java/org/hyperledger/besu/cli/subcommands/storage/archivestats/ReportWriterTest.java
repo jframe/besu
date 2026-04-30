@@ -115,6 +115,7 @@ class ReportWriterTest {
         Instant.parse("2026-04-25T10:05:00Z"),
         Map.of(ArchiveCf.ACCOUNT, 1024L),
         grid,
-        map);
+        map,
+        new EnumMap<>(ArchiveCf.class));
   }
 }

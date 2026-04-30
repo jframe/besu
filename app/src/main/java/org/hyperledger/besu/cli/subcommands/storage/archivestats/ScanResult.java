@@ -31,6 +31,8 @@ import java.util.Map;
  * @param rocksDbCfSizeBytes per-CF disk-size estimate
  * @param fpSweepGrid grid of (k, m) bloom sizing points evaluated
  * @param cfResults per-CF aggregated stats
+ * @param slotFanOutResults per-CF slot-fan-out stats; only the storage CF gets an entry. Empty when
+ *     storage CF was not selected.
  */
 public record ScanResult(
     String dataDir,
@@ -41,4 +43,5 @@ public record ScanResult(
     Instant scanEnd,
     Map<ArchiveCf, Long> rocksDbCfSizeBytes,
     List<FpRateProjector.GridPoint> fpSweepGrid,
-    EnumMap<ArchiveCf, CfResult> cfResults) {}
+    EnumMap<ArchiveCf, CfResult> cfResults,
+    EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults) {}
