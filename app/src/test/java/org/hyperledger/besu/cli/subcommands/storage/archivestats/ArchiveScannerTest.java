@@ -113,10 +113,68 @@ class ArchiveScannerTest {
     assertThat(count[0]).isEqualTo(4);
   }
 
+  @Test
+  void readChainHeadReturnsZeroWhenBlockchainCfAbsent() throws IOException, RocksDBException {
+    try (final ArchiveScanner scanner = ArchiveScanner.openReadOnly(dbPath.toString())) {
+      assertThat(scanner.readChainHead()).isZero();
+    }
+  }
+
+  @Test
+  void readChainHeadReturnsHighestCanonicalBlockNumber() throws RocksDBException, IOException {
+    // Recreate the fixture with the BLOCKCHAIN CF added.
+    handles.forEach(ColumnFamilyHandle::close);
+    handles.clear();
+    db.close();
+    db = null;
+
+    final List<ColumnFamilyDescriptor> cfDescriptors =
+        List.of(
+            new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, new ColumnFamilyOptions()),
+            new ColumnFamilyDescriptor(
+                "ACCOUNT_INFO_STATE_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+                new ColumnFamilyOptions()),
+            new ColumnFamilyDescriptor(
+                "ACCOUNT_STORAGE_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+                new ColumnFamilyOptions()),
+            new ColumnFamilyDescriptor(new byte[] {1}, new ColumnFamilyOptions()));
+    final DBOptions opts =
+        new DBOptions().setCreateIfMissing(true).setCreateMissingColumnFamilies(true);
+    final List<ColumnFamilyHandle> localHandles = new ArrayList<>();
+    try (final RocksDB db2 = RocksDB.open(opts, dbPath.toString(), cfDescriptors, localHandles)) {
+      final ColumnFamilyHandle blockchainCf = localHandles.get(3);
+      db2.put(blockchainCf, blockHashKey(100L), filledHash(0xaa));
+      db2.put(blockchainCf, blockHashKey(12_345_678L), filledHash(0xbb));
+      db2.put(blockchainCf, blockHashKey(7_777L), filledHash(0xcc));
+      db2.flush(new org.rocksdb.FlushOptions());
+    } finally {
+      localHandles.forEach(ColumnFamilyHandle::close);
+    }
+
+    try (final ArchiveScanner scanner = ArchiveScanner.openReadOnly(dbPath.toString())) {
+      assertThat(scanner.readChainHead()).isEqualTo(12_345_678L);
+    }
+  }
+
   private static byte[] accountKey(final int firstByte, final long blockNumber) {
     final byte[] key = new byte[40];
     Arrays.fill(key, 0, 32, (byte) firstByte);
     ByteBuffer.wrap(key, 32, 8).putLong(blockNumber);
     return key;
+  }
+
+  // Mirrors KeyValueStoragePrefixedKeyBlockchainStorage's BLOCK_HASH_PREFIX (0x05) +
+  // UInt256 big-endian block number.
+  private static byte[] blockHashKey(final long blockNumber) {
+    final byte[] key = new byte[33];
+    key[0] = 0x05;
+    ByteBuffer.wrap(key, 25, 8).putLong(blockNumber);
+    return key;
+  }
+
+  private static byte[] filledHash(final int firstByte) {
+    final byte[] hash = new byte[32];
+    Arrays.fill(hash, (byte) firstByte);
+    return hash;
   }
 }

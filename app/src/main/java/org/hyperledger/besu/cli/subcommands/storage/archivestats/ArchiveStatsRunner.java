@@ -86,6 +86,20 @@ public final class ArchiveStatsRunner {
     long chainHead = 0L;
 
     try (final ArchiveScanner scanner = ArchiveScanner.openReadOnly(config.dbPath())) {
+      // Size the linear rowsPerKey histogram exactly using the canonical chain head if known.
+      // Falls back to a generous fixed cap if BLOCKCHAIN CF is absent or empty.
+      final long advertisedChainHead = scanner.readChainHead();
+      final int rowsPerKeyBuckets =
+          advertisedChainHead > 0
+              ? Math.toIntExact((advertisedChainHead / config.rangeSize()) + 2L)
+              : 100_000;
+      if (advertisedChainHead > 0) {
+        log.printf(
+            "Canonical chain head from BLOCKCHAIN CF: %d (rowsPerKey buckets: %d)%n",
+            advertisedChainHead, rowsPerKeyBuckets);
+        log.flush();
+      }
+
       for (final ArchiveCf cf : config.selectedCfs()) {
         final ProgressReporter progress =
             ProgressReporter.wallClock(log, config.progressInterval());
@@ -93,9 +107,7 @@ public final class ArchiveStatsRunner {
         progress.beginCf(cf.name(), estimatedTotal);
 
         final HistogramCollector entriesPerRow = HistogramCollector.log(28);
-        // Sized generously so fine resolutions (e.g. --range-size=10000) don't saturate.
-        // Cost: ~800 KB per histogram; covers chains with up to 100K distinct ranges.
-        final HistogramCollector rowsPerKey = HistogramCollector.linear(100_000);
+        final HistogramCollector rowsPerKey = HistogramCollector.linear(rowsPerKeyBuckets);
         final HistogramCollector modsPerKey = HistogramCollector.log(34);
         final RangeStatsCollector rangeStats = new RangeStatsCollector();
         final ClassBinner classBinner = new ClassBinner(boundariesFor(cf), CLASS_LABELS);
