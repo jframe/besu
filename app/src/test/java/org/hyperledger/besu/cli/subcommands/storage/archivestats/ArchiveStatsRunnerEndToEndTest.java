@@ -198,6 +198,40 @@ class ArchiveStatsRunnerEndToEndTest {
     assertThat(sfo.histogram().total()).isEqualTo(3L);
   }
 
+  @Test
+  void fullPipelineWritesAllSlotFanOutOutputs() throws IOException, RocksDBException {
+    final ArchiveStatsRunner.Config cfg =
+        new ArchiveStatsRunner.Config(
+            dbPath.toString(),
+            outputPath,
+            1_000_000L,
+            List.of(new FpRateProjector.GridPoint(7, 1_048_576L)),
+            List.of(3L, 50L, 10_000L, 1_000_000L),
+            List.of(1L, 10L, 1_000L, 100_000L),
+            List.of(ArchiveCf.STORAGE),
+            Long.MAX_VALUE,
+            Duration.ofSeconds(60),
+            1024L);
+    final StringWriter logSink = new StringWriter();
+    final ArchiveStatsRunner runner = new ArchiveStatsRunner(cfg, new PrintWriter(logSink));
+
+    final ScanResult result = runner.run();
+    new ReportWriter(outputPath).write(result);
+
+    assertThat(Files.exists(outputPath.resolve("storage-slots-per-account-range.csv")))
+        .isTrue();
+    final String csv =
+        Files.readString(outputPath.resolve("storage-slots-per-account-range.csv"));
+    assertThat(csv).startsWith("bucketLowerBound,count\n");
+
+    final String json = Files.readString(outputPath.resolve("stats.json"));
+    assertThat(json).contains("\"slotsPerAccountRange\"");
+    assertThat(json).contains("\"totalAccountRangePairs\" : 3");
+
+    final String summary = Files.readString(outputPath.resolve("summary.md"));
+    assertThat(summary).contains("**Slots per (account, range):**");
+  }
+
   private static byte[] accountKey(final int firstByte, final long blockNumber) {
     final byte[] key = new byte[40];
     Arrays.fill(key, 0, 32, (byte) firstByte);
