@@ -93,7 +93,9 @@ public final class ArchiveStatsRunner {
         progress.beginCf(cf.name(), estimatedTotal);
 
         final HistogramCollector entriesPerRow = HistogramCollector.log(28);
-        final HistogramCollector rowsPerKey = HistogramCollector.linear(1024);
+        // Sized generously so fine resolutions (e.g. --range-size=10000) don't saturate.
+        // Cost: ~800 KB per histogram; covers chains with up to 100K distinct ranges.
+        final HistogramCollector rowsPerKey = HistogramCollector.linear(100_000);
         final HistogramCollector modsPerKey = HistogramCollector.log(34);
         final RangeStatsCollector rangeStats = new RangeStatsCollector();
         final ClassBinner classBinner = new ClassBinner(boundariesFor(cf), CLASS_LABELS);
