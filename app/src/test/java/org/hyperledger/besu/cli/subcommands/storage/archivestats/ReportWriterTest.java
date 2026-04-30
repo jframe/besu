@@ -62,6 +62,56 @@ class ReportWriterTest {
   }
 
   @Test
+  void writesStorageSlotFanOutJsonSection(@TempDir final Path output) throws IOException {
+    final HistogramCollector histogram = HistogramCollector.log(28);
+    histogram.record(2L);
+    histogram.record(1L);
+    histogram.record(1L);
+    final SlotFanOutResult sfo = new SlotFanOutResult(histogram, 3L);
+
+    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults =
+        new EnumMap<>(ArchiveCf.class);
+    slotFanOutResults.put(ArchiveCf.STORAGE, sfo);
+
+    final EnumMap<ArchiveCf, CfResult> cfResults = new EnumMap<>(ArchiveCf.class);
+    cfResults.put(ArchiveCf.STORAGE, fixtureCfResult());
+
+    final ScanResult result =
+        new ScanResult(
+            "/tmp/db",
+            1_000_000L,
+            1_000_000L,
+            2L,
+            Instant.parse("2026-04-29T00:00:00Z"),
+            Instant.parse("2026-04-29T01:00:00Z"),
+            Map.of(),
+            List.of(),
+            cfResults,
+            slotFanOutResults);
+
+    new ReportWriter(output).write(result);
+
+    final String json = Files.readString(output.resolve("stats.json"));
+    assertThat(json).contains("\"slotsPerAccountRange\"");
+    assertThat(json).contains("\"totalAccountRangePairs\" : 3");
+  }
+
+  private static CfResult fixtureCfResult() {
+    final HistogramCollector empty = HistogramCollector.log(4);
+    return new CfResult(
+        0L,
+        0L,
+        0L,
+        empty,
+        empty,
+        empty,
+        List.of(),
+        List.of(1L, 10L, 1_000L, 100_000L),
+        new RangeStatsCollector(),
+        new FpRateProjector.Result(Map.of(), Map.of()));
+  }
+
+  @Test
   void writesStorageSlotFanOutCsv(@TempDir final Path output) throws IOException {
     final HistogramCollector histogram = HistogramCollector.log(28);
     histogram.record(2L);

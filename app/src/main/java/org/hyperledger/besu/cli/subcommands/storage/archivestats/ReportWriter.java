@@ -78,7 +78,12 @@ public final class ReportWriter {
     root.put("scanInfo", scanInfo);
 
     for (final var entry : result.cfResults().entrySet()) {
-      root.put(entry.getKey().cliLabel(), serializeCf(entry.getValue()));
+      final Map<String, Object> cfNode = serializeCf(entry.getValue());
+      final SlotFanOutResult sfo = result.slotFanOutResults().get(entry.getKey());
+      if (sfo != null) {
+        cfNode.put("slotsPerAccountRange", serializeSlotFanOut(sfo));
+      }
+      root.put(entry.getKey().cliLabel(), cfNode);
     }
 
     json.writerWithDefaultPrettyPrinter()
@@ -146,6 +151,13 @@ public final class ReportWriter {
               "worstRangeId", e.getValue().worstRangeId()));
     }
     m.put("fpSummary", fpSummary);
+    return m;
+  }
+
+  private Map<String, Object> serializeSlotFanOut(final SlotFanOutResult sfo) {
+    final Map<String, Object> m = new LinkedHashMap<>();
+    m.put("totalAccountRangePairs", sfo.totalAccountRangePairs());
+    m.putAll(serializeHist(sfo.histogram()));
     return m;
   }
 
