@@ -61,4 +61,24 @@ class SlotFanOutCollectorTest {
     assertThat(r.histogram().total()).isEqualTo(2L);
     assertThat(r.histogram().max()).isEqualTo(2L);
   }
+
+  @Test
+  void twoAccountsBackToBackEachInDistinctRanges() {
+    final SlotFanOutCollector c = new SlotFanOutCollector();
+    // Account 0xaa: 3 slots in range 0.
+    c.accept(new RowRecord(storagePrefix(0xaa, 0x01), 0L, 1));
+    c.accept(new RowRecord(storagePrefix(0xaa, 0x02), 0L, 1));
+    c.accept(new RowRecord(storagePrefix(0xaa, 0x03), 0L, 1));
+    // Account 0xbb: 1 slot in range 1, 2 slots in range 2.
+    c.accept(new RowRecord(storagePrefix(0xbb, 0x10), 1L, 1));
+    c.accept(new RowRecord(storagePrefix(0xbb, 0x20), 2L, 1));
+    c.accept(new RowRecord(storagePrefix(0xbb, 0x21), 2L, 1));
+    c.flush();
+
+    final SlotFanOutResult r = c.result();
+    // Observations: {3 (aa,0), 1 (bb,1), 2 (bb,2)} -> 3 pairs, max 3.
+    assertThat(r.totalAccountRangePairs()).isEqualTo(3L);
+    assertThat(r.histogram().total()).isEqualTo(3L);
+    assertThat(r.histogram().max()).isEqualTo(3L);
+  }
 }
