@@ -218,10 +218,8 @@ class ArchiveStatsRunnerEndToEndTest {
     final ScanResult result = runner.run();
     new ReportWriter(outputPath).write(result);
 
-    assertThat(Files.exists(outputPath.resolve("storage-slots-per-account-range.csv")))
-        .isTrue();
-    final String csv =
-        Files.readString(outputPath.resolve("storage-slots-per-account-range.csv"));
+    assertThat(Files.exists(outputPath.resolve("storage-slots-per-account-range.csv"))).isTrue();
+    final String csv = Files.readString(outputPath.resolve("storage-slots-per-account-range.csv"));
     assertThat(csv).startsWith("bucketLowerBound,count\n");
 
     final String json = Files.readString(outputPath.resolve("stats.json"));

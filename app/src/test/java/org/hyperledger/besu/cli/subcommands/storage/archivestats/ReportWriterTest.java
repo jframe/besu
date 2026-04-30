@@ -69,8 +69,7 @@ class ReportWriterTest {
     histogram.record(1L);
     final SlotFanOutResult sfo = new SlotFanOutResult(histogram, 3L);
 
-    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults =
-        new EnumMap<>(ArchiveCf.class);
+    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults = new EnumMap<>(ArchiveCf.class);
     slotFanOutResults.put(ArchiveCf.STORAGE, sfo);
 
     final EnumMap<ArchiveCf, CfResult> cfResults = new EnumMap<>(ArchiveCf.class);
@@ -104,8 +103,7 @@ class ReportWriterTest {
     histogram.record(1L);
     final SlotFanOutResult sfo = new SlotFanOutResult(histogram, 3L);
 
-    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults =
-        new EnumMap<>(ArchiveCf.class);
+    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults = new EnumMap<>(ArchiveCf.class);
     slotFanOutResults.put(ArchiveCf.STORAGE, sfo);
 
     final EnumMap<ArchiveCf, CfResult> cfResults = new EnumMap<>(ArchiveCf.class);
@@ -154,8 +152,7 @@ class ReportWriterTest {
     histogram.record(1L);
     final SlotFanOutResult sfo = new SlotFanOutResult(histogram, 3L);
 
-    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults =
-        new EnumMap<>(ArchiveCf.class);
+    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults = new EnumMap<>(ArchiveCf.class);
     slotFanOutResults.put(ArchiveCf.STORAGE, sfo);
 
     final ScanResult result =
