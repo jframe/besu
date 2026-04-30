@@ -34,7 +34,10 @@ import java.util.Map;
  */
 public final class SlotFanOutCollector {
 
-  /** Accounts touched per row are bounded; pick a generous cap for the histogram. */
+  /**
+   * Distinct slots per (account, range) is bounded by total slots in an account; 2^27 ≈ 128M covers
+   * any realistic case.
+   */
   private static final int HISTOGRAM_BUCKETS = 28;
 
   private final HistogramCollector histogram = HistogramCollector.log(HISTOGRAM_BUCKETS);

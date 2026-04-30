@@ -237,17 +237,7 @@ public final class ReportWriter {
 
   private void writeSlotFanOutCsv(final ArchiveCf cf, final SlotFanOutResult sfo)
       throws IOException {
-    final String filename = cf.cliLabel() + "-slots-per-account-range.csv";
-    try (BufferedWriter w = Files.newBufferedWriter(outputDir.resolve(filename))) {
-      w.write("bucketLowerBound,count");
-      w.newLine();
-      final long[] lb = sfo.histogram().bucketLowerBounds();
-      final long[] cnt = sfo.histogram().bucketCounts();
-      for (int i = 0; i < lb.length; i++) {
-        w.write(lb[i] + "," + cnt[i]);
-        w.newLine();
-      }
-    }
+    writeBucketCsv(cf.cliLabel() + "-slots-per-account-range.csv", sfo.histogram());
   }
 
   private void writeSummary(final ScanResult result) throws IOException {
