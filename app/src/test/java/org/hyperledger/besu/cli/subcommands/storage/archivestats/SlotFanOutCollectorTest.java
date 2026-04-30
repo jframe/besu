@@ -43,4 +43,22 @@ class SlotFanOutCollectorTest {
     assertThat(r.histogram().total()).isEqualTo(1L);
     assertThat(r.histogram().max()).isEqualTo(3L);
   }
+
+  @Test
+  void singleAccountSlotSpansTwoRangesProducesTwoObservations() {
+    final SlotFanOutCollector c = new SlotFanOutCollector();
+    // Slot 0x01 in range 0 and range 5 (different rangeIds for same slot under same account).
+    c.accept(new RowRecord(storagePrefix(0xaa, 0x01), 0L, 3));
+    c.accept(new RowRecord(storagePrefix(0xaa, 0x01), 5L, 2));
+    // Slot 0x02 in range 0 only.
+    c.accept(new RowRecord(storagePrefix(0xaa, 0x02), 0L, 1));
+    c.flush();
+
+    final SlotFanOutResult r = c.result();
+    // Range 0 saw 2 distinct slots; range 5 saw 1 distinct slot.
+    // -> histogram observations are {2, 1}, total pairs = 2.
+    assertThat(r.totalAccountRangePairs()).isEqualTo(2L);
+    assertThat(r.histogram().total()).isEqualTo(2L);
+    assertThat(r.histogram().max()).isEqualTo(2L);
+  }
 }
