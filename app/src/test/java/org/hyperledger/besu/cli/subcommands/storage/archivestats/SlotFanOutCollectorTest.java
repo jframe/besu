@@ -81,4 +81,27 @@ class SlotFanOutCollectorTest {
     assertThat(r.histogram().total()).isEqualTo(3L);
     assertThat(r.histogram().max()).isEqualTo(3L);
   }
+
+  @Test
+  void flushWithNoRowsProducesEmptyResult() {
+    final SlotFanOutCollector c = new SlotFanOutCollector();
+    c.flush();
+
+    final SlotFanOutResult r = c.result();
+    assertThat(r.totalAccountRangePairs()).isZero();
+    assertThat(r.histogram().total()).isZero();
+    assertThat(r.histogram().max()).isZero();
+  }
+
+  @Test
+  void singleRowProducesOneObservationOfOne() {
+    final SlotFanOutCollector c = new SlotFanOutCollector();
+    c.accept(new RowRecord(storagePrefix(0xaa, 0x01), 0L, 1));
+    c.flush();
+
+    final SlotFanOutResult r = c.result();
+    assertThat(r.totalAccountRangePairs()).isEqualTo(1L);
+    assertThat(r.histogram().total()).isEqualTo(1L);
+    assertThat(r.histogram().max()).isEqualTo(1L);
+  }
 }

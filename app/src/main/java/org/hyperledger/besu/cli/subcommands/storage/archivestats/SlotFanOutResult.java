@@ -17,8 +17,8 @@ package org.hyperledger.besu.cli.subcommands.storage.archivestats;
 /**
  * Aggregated slot-fan-out stats for the storage CF.
  *
- * <p>Each observation is the count of distinct slot hashes touched for one {@code
- * (accountHash, rangeId)} pair. The histogram is over those observations.
+ * <p>Each observation is the count of distinct slot hashes touched for one {@code (accountHash,
+ * rangeId)} pair. The histogram is over those observations.
  *
  * @param histogram log-bucketed histogram of distinct-slots per (account, range)
  * @param totalAccountRangePairs total number of (account, range) pairs observed (== sum of

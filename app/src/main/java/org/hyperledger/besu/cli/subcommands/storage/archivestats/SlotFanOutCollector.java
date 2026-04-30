@@ -25,8 +25,8 @@ import java.util.Map;
  * <p>Storage prefixes are {@code accountHash(32) || slotHash(32)}. Within the lex-ordered stream
  * the aggregator emits one {@code RowRecord} per {@code (prefix, rangeId)} pair, so each call to
  * {@link #accept(RowRecord)} represents a distinct {@code (account, slot, range)} triple. The
- * collector groups by current account (first 32 bytes of the prefix), counts slots per rangeId,
- * and on account transitions flushes one observation per range to an internal histogram.
+ * collector groups by current account (first 32 bytes of the prefix), counts slots per rangeId, and
+ * on account transitions flushes one observation per range to an internal histogram.
  *
  * <p>Use only with the storage CF. Behaviour is undefined for prefixes shorter than 32 bytes.
  *
