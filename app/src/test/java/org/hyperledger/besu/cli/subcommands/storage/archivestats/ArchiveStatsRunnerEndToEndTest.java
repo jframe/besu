@@ -66,6 +66,17 @@ class ArchiveStatsRunnerEndToEndTest {
       db.put(accountCf, accountKey(0xaa, 1_500_000L), new byte[] {1});
       db.put(accountCf, accountKey(0xaa, 1_500_001L), new byte[] {1});
       db.put(accountCf, accountKey(0xbb, 5L), new byte[] {1});
+
+      final ColumnFamilyHandle storageCf = handles.get(2);
+      // Storage layout used by the slot-fan-out test:
+      // account 0xaa: slots 0x01, 0x02 in range 0 (slot 0x01 also in range 1).
+      // account 0xbb: slot 0x10 in range 0.
+      // -> expected slot-fan-out observations: {2 (aa,0), 1 (aa,1), 1 (bb,0)} -> 3 pairs.
+      db.put(storageCf, storageKey(0xaa, 0x01, 100L), new byte[] {1});
+      db.put(storageCf, storageKey(0xaa, 0x01, 1_000_500L), new byte[] {1});
+      db.put(storageCf, storageKey(0xaa, 0x02, 200L), new byte[] {1});
+      db.put(storageCf, storageKey(0xbb, 0x10, 5L), new byte[] {1});
+
       db.flush(new org.rocksdb.FlushOptions());
     } finally {
       handles.forEach(ColumnFamilyHandle::close);
@@ -161,10 +172,45 @@ class ArchiveStatsRunnerEndToEndTest {
     assertThat(logged).contains("skipped 1 unrecognised key(s)");
   }
 
+  @Test
+  void runnerEmitsStorageSlotFanOutResult() throws IOException, RocksDBException {
+    final ArchiveStatsRunner.Config cfg =
+        new ArchiveStatsRunner.Config(
+            dbPath.toString(),
+            outputPath,
+            1_000_000L,
+            List.of(new FpRateProjector.GridPoint(7, 1_048_576L)),
+            List.of(3L, 50L, 10_000L, 1_000_000L),
+            List.of(1L, 10L, 1_000L, 100_000L),
+            List.of(ArchiveCf.STORAGE),
+            Long.MAX_VALUE,
+            Duration.ofSeconds(60),
+            1024L);
+    final StringWriter logSink = new StringWriter();
+    final ArchiveStatsRunner runner = new ArchiveStatsRunner(cfg, new PrintWriter(logSink));
+
+    final ScanResult result = runner.run();
+
+    final SlotFanOutResult sfo = result.slotFanOutResults().get(ArchiveCf.STORAGE);
+    assertThat(sfo).as("storage slot-fan-out result").isNotNull();
+    assertThat(sfo.totalAccountRangePairs()).isEqualTo(3L);
+    assertThat(sfo.histogram().max()).isEqualTo(2L);
+    assertThat(sfo.histogram().total()).isEqualTo(3L);
+  }
+
   private static byte[] accountKey(final int firstByte, final long blockNumber) {
     final byte[] key = new byte[40];
     Arrays.fill(key, 0, 32, (byte) firstByte);
     ByteBuffer.wrap(key, 32, 8).putLong(blockNumber);
+    return key;
+  }
+
+  private static byte[] storageKey(
+      final int accountByte, final int slotByte, final long blockNumber) {
+    final byte[] key = new byte[72];
+    Arrays.fill(key, 0, 32, (byte) accountByte);
+    Arrays.fill(key, 32, 64, (byte) slotByte);
+    ByteBuffer.wrap(key, 64, 8).putLong(blockNumber);
     return key;
   }
 }
