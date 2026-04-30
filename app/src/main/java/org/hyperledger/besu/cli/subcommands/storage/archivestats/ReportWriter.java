@@ -302,6 +302,24 @@ public final class ReportWriter {
           w.newLine();
         }
         w.newLine();
+
+        final SlotFanOutResult sfo = result.slotFanOutResults().get(cf);
+        if (sfo != null) {
+          w.write(
+              "**Slots per (account, range):** p50 = "
+                  + sfo.histogram().percentile(0.5)
+                  + ", p90 = "
+                  + sfo.histogram().percentile(0.9)
+                  + ", p99 = "
+                  + sfo.histogram().percentile(0.99)
+                  + ", max = "
+                  + sfo.histogram().max()
+                  + " (over "
+                  + sfo.totalAccountRangePairs()
+                  + " account–range pairs).");
+          w.newLine();
+          w.newLine();
+        }
       }
       w.newLine();
       w.write("## RANGE_SIZE projection (account-CF rows)");

@@ -96,6 +96,41 @@ class ReportWriterTest {
     assertThat(json).contains("\"totalAccountRangePairs\" : 3");
   }
 
+  @Test
+  void writesSlotFanOutLineInSummaryMd(@TempDir final Path output) throws IOException {
+    final HistogramCollector histogram = HistogramCollector.log(28);
+    histogram.record(2L);
+    histogram.record(1L);
+    histogram.record(1L);
+    final SlotFanOutResult sfo = new SlotFanOutResult(histogram, 3L);
+
+    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults =
+        new EnumMap<>(ArchiveCf.class);
+    slotFanOutResults.put(ArchiveCf.STORAGE, sfo);
+
+    final EnumMap<ArchiveCf, CfResult> cfResults = new EnumMap<>(ArchiveCf.class);
+    cfResults.put(ArchiveCf.STORAGE, fixtureCfResult());
+
+    final ScanResult result =
+        new ScanResult(
+            "/tmp/db",
+            1_000_000L,
+            1_000_000L,
+            2L,
+            Instant.parse("2026-04-29T00:00:00Z"),
+            Instant.parse("2026-04-29T01:00:00Z"),
+            Map.of(),
+            List.of(),
+            cfResults,
+            slotFanOutResults);
+
+    new ReportWriter(output).write(result);
+
+    final String summary = Files.readString(output.resolve("summary.md"));
+    assertThat(summary).contains("**Slots per (account, range):**");
+    assertThat(summary).contains("over 3 account–range pairs");
+  }
+
   private static CfResult fixtureCfResult() {
     final HistogramCollector empty = HistogramCollector.log(4);
     return new CfResult(
