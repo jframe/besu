@@ -61,6 +61,42 @@ class ReportWriterTest {
     assertThat(summary).contains("RANGE_SIZE");
   }
 
+  @Test
+  void writesStorageSlotFanOutCsv(@TempDir final Path output) throws IOException {
+    final HistogramCollector histogram = HistogramCollector.log(28);
+    histogram.record(2L);
+    histogram.record(1L);
+    histogram.record(1L);
+    final SlotFanOutResult sfo = new SlotFanOutResult(histogram, 3L);
+
+    final EnumMap<ArchiveCf, SlotFanOutResult> slotFanOutResults =
+        new EnumMap<>(ArchiveCf.class);
+    slotFanOutResults.put(ArchiveCf.STORAGE, sfo);
+
+    final ScanResult result =
+        new ScanResult(
+            "/tmp/db",
+            1_000_000L,
+            1_000_000L,
+            2L,
+            Instant.parse("2026-04-29T00:00:00Z"),
+            Instant.parse("2026-04-29T01:00:00Z"),
+            Map.of(),
+            List.of(),
+            new EnumMap<>(ArchiveCf.class),
+            slotFanOutResults);
+
+    new ReportWriter(output).write(result);
+
+    final Path csv = output.resolve("storage-slots-per-account-range.csv");
+    assertThat(Files.exists(csv)).isTrue();
+    final String content = Files.readString(csv);
+    assertThat(content).startsWith("bucketLowerBound,count\n");
+    // bucket [1, 2) absorbed two observations of "1"; bucket [2, 4) absorbed one of "2".
+    assertThat(content).contains("1,2");
+    assertThat(content).contains("2,1");
+  }
+
   private static ScanResult newSyntheticScanResult() {
     final HistogramCollector rowsPerKey = HistogramCollector.linear(5);
     rowsPerKey.record(1L);
