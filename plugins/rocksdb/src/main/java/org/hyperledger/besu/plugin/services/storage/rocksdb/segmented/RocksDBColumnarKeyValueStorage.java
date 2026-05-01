@@ -35,6 +35,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
@@ -232,6 +233,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
     if (segment.containsStaticData()) {
       configureBlobDBForSegment(segment, configuration, options);
     }
+    applyPrefixExtractor(segment, options);
 
     return new ColumnFamilyDescriptor(segment.getId(), options);
   }
@@ -260,6 +262,26 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
       options.setBlobGarbageCollectionForceThreshold(
           configuration.getBlobGarbageCollectionForceThreshold().get());
     }
+  }
+
+  /**
+   * Configure a fixed-length RocksDB prefix extractor on the supplied ColumnFamilyOptions when the
+   * segment declares a {@link SegmentIdentifier#prefixLength()}. Together with whole-key filtering
+   * on the block-based table config, this enables per-SST prefix bloom filtering which lets {@code
+   * seekForPrev} reject SSTs that contain no entry with the target prefix.
+   *
+   * <p>Returns the prefix length that was applied to {@code options}, or empty if the segment had
+   * no prefix length declared and no extractor was applied.
+   *
+   * @param segment the segment identifier
+   * @param options the column family options to mutate
+   * @return the applied prefix length, or empty if none was applied
+   */
+  static OptionalInt applyPrefixExtractor(
+      final SegmentIdentifier segment, final ColumnFamilyOptions options) {
+    final OptionalInt length = segment.prefixLength();
+    length.ifPresent(options::useFixedLengthPrefixExtractor);
+    return length;
   }
 
   private static boolean isStaticDataGarbageCollectionEnabled(
@@ -291,6 +313,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setFormatVersion(ROCKSDB_FORMAT_VERSION)
         .setBlockCache(cache)
         .setFilterPolicy(new BloomFilter(10, false))
+        .setWholeKeyFiltering(true)
         .setPartitionFilters(true)
         .setCacheIndexAndFilterBlocks(segment.isCacheIndexAndFilterBlocks())
         .setBlockSize(ROCKSDB_BLOCK_SIZE);
