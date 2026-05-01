@@ -88,12 +88,13 @@ public interface SegmentIdentifier {
   }
 
   /**
-   * Length, in bytes, of a fixed-length key prefix to register a RocksDB <code>prefix_extractor
-   * </code> for this segment. When present, the storage layer will configure a fixed-length prefix
+   * Length, in bytes, of a fixed-length key prefix to register a RocksDB {@code prefix_extractor}
+   * for this segment. When present, the storage layer will configure a fixed-length prefix
    * extractor of this length on the column family, which enables per-SST prefix bloom filtering.
    * Empty (the default) means no prefix extractor is configured.
    *
-   * @return the prefix length in bytes, or empty if the segment has no fixed prefix structure
+   * @return the prefix length in bytes, or empty if no prefix extractor should be configured for
+   *     this segment
    */
   default OptionalInt prefixLength() {
     return OptionalInt.empty();
