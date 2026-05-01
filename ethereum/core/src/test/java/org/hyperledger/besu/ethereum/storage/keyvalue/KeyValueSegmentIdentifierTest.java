@@ -15,39 +15,40 @@
 package org.hyperledger.besu.ethereum.storage.keyvalue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_FREEZER;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_FREEZER;
 
+import java.util.EnumSet;
 import java.util.OptionalInt;
 
 import org.junit.jupiter.api.Test;
 
 class KeyValueSegmentIdentifierTest {
 
+  private static final EnumSet<KeyValueSegmentIdentifier> ARCHIVE_SEGMENTS =
+      EnumSet.of(
+          ACCOUNT_INFO_STATE_ARCHIVE,
+          ACCOUNT_STORAGE_ARCHIVE,
+          ACCOUNT_INFO_STATE_FREEZER,
+          ACCOUNT_STORAGE_FREEZER);
+
   @Test
   void accountArchiveSegmentsHave32BytePrefix() {
-    assertThat(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE.prefixLength())
-        .isEqualTo(OptionalInt.of(32));
-    assertThat(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_FREEZER.prefixLength())
-        .isEqualTo(OptionalInt.of(32));
+    assertThat(ACCOUNT_INFO_STATE_ARCHIVE.prefixLength()).isEqualTo(OptionalInt.of(32));
+    assertThat(ACCOUNT_INFO_STATE_FREEZER.prefixLength()).isEqualTo(OptionalInt.of(32));
   }
 
   @Test
   void storageArchiveSegmentsHave64BytePrefix() {
-    assertThat(KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE.prefixLength())
-        .isEqualTo(OptionalInt.of(64));
-    assertThat(KeyValueSegmentIdentifier.ACCOUNT_STORAGE_FREEZER.prefixLength())
-        .isEqualTo(OptionalInt.of(64));
+    assertThat(ACCOUNT_STORAGE_ARCHIVE.prefixLength()).isEqualTo(OptionalInt.of(64));
+    assertThat(ACCOUNT_STORAGE_FREEZER.prefixLength()).isEqualTo(OptionalInt.of(64));
   }
 
   @Test
-  void nonArchiveSegmentsHaveNoPrefixLength() {
-    assertThat(KeyValueSegmentIdentifier.DEFAULT.prefixLength()).isEmpty();
-    assertThat(KeyValueSegmentIdentifier.BLOCKCHAIN.prefixLength()).isEmpty();
-    assertThat(KeyValueSegmentIdentifier.WORLD_STATE.prefixLength()).isEmpty();
-    assertThat(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE.prefixLength()).isEmpty();
-    assertThat(KeyValueSegmentIdentifier.CODE_STORAGE.prefixLength()).isEmpty();
-    assertThat(KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE.prefixLength()).isEmpty();
-    assertThat(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE.prefixLength()).isEmpty();
-    assertThat(KeyValueSegmentIdentifier.TRIE_LOG_STORAGE.prefixLength()).isEmpty();
-    assertThat(KeyValueSegmentIdentifier.VARIABLES.prefixLength()).isEmpty();
+  void allNonArchiveSegmentsHaveNoPrefixLength() {
+    EnumSet.complementOf(ARCHIVE_SEGMENTS)
+        .forEach(segment -> assertThat(segment.prefixLength()).as(segment.name()).isEmpty());
   }
 }
