@@ -54,14 +54,14 @@ class RocksDBColumnarPrefixExtractorTest {
   }
 
   private static SegmentIdentifier segmentWithPrefix(final int length) {
-    return new TestSegment(OptionalInt.of(length));
+    return new StubSegment(OptionalInt.of(length));
   }
 
   private static SegmentIdentifier segmentWithoutPrefix() {
-    return new TestSegment(OptionalInt.empty());
+    return new StubSegment(OptionalInt.empty());
   }
 
-  private record TestSegment(OptionalInt prefix) implements SegmentIdentifier {
+  private record StubSegment(OptionalInt prefix) implements SegmentIdentifier {
     @Override
     public String getName() {
       return "TEST";
