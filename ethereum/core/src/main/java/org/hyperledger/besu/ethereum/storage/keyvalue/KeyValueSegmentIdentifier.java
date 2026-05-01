@@ -23,6 +23,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 
 import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
+import java.util.OptionalInt;
 
 public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   DEFAULT("default".getBytes(StandardCharsets.UTF_8)),
@@ -45,28 +46,48 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       true,
       false,
       true,
-      true),
+      true) {
+    @Override
+    public OptionalInt prefixLength() {
+      return OptionalInt.of(32);
+    }
+  },
   ACCOUNT_STORAGE_ARCHIVE(
       "ACCOUNT_STORAGE_ARCHIVE".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
       true,
       false,
       true,
-      true),
+      true) {
+    @Override
+    public OptionalInt prefixLength() {
+      return OptionalInt.of(64);
+    }
+  },
   ACCOUNT_INFO_STATE_FREEZER(
       "ACCOUNT_INFO_STATE_FREEZER".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
       true,
       false,
       true,
-      true),
+      true) {
+    @Override
+    public OptionalInt prefixLength() {
+      return OptionalInt.of(32);
+    }
+  },
   ACCOUNT_STORAGE_FREEZER(
       "ACCOUNT_STORAGE_FREEZER".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
       true,
       false,
       true,
-      true),
+      true) {
+    @Override
+    public OptionalInt prefixLength() {
+      return OptionalInt.of(64);
+    }
+  },
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE
 
   // previously supported GoQuorum private states
