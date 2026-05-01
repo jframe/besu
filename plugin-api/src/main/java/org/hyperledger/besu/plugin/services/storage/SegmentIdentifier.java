@@ -16,6 +16,8 @@ package org.hyperledger.besu.plugin.services.storage;
 
 import org.hyperledger.besu.plugin.Unstable;
 
+import java.util.OptionalInt;
+
 /**
  * A namespace identifier for the storage instance segment, a grouping of data that should be kept
  * isolated from the data of other segments.
@@ -83,5 +85,17 @@ public interface SegmentIdentifier {
    */
   default boolean isCacheIndexAndFilterBlocks() {
     return false;
+  }
+
+  /**
+   * Length, in bytes, of a fixed-length key prefix to register a RocksDB <code>prefix_extractor
+   * </code> for this segment. When present, the storage layer will configure a fixed-length prefix
+   * extractor of this length on the column family, which enables per-SST prefix bloom filtering.
+   * Empty (the default) means no prefix extractor is configured.
+   *
+   * @return the prefix length in bytes, or empty if the segment has no fixed prefix structure
+   */
+  default OptionalInt prefixLength() {
+    return OptionalInt.empty();
   }
 }
