@@ -16,7 +16,9 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.plugin.services.metrics.LabelledSuppliedMetric;
+import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +42,7 @@ public class SnapPipelineMetrics {
           "storage_flat_heal");
 
   private final Map<String, AtomicInteger> inflightByPipeline;
+  private final LabelledMetric<OperationTimer> dequeueWaitTimer;
 
   public SnapPipelineMetrics(final MetricsSystem metricsSystem) {
     this.inflightByPipeline = new LinkedHashMap<>();
@@ -54,12 +57,23 @@ public class SnapPipelineMetrics {
       inflightByPipeline.put(label, counter);
       inflightGauge.labels(counter::doubleValue, label);
     }
+    this.dequeueWaitTimer =
+        metricsSystem.createLabelledTimer(
+            BesuMetricCategory.SYNCHRONIZER,
+            "snap_pipeline_dequeue_wait_seconds",
+            "Time spent blocked waiting to dequeue the next request, per snap sync pipeline",
+            "pipeline");
   }
 
   /** A handle that decrements the inflight counter when closed. Never throws. */
   @FunctionalInterface
   public interface InflightHandle {
     void close();
+  }
+
+  public OperationTimer.TimingContext startDequeueTimer(final String pipeline) {
+    requireKnownPipeline(pipeline);
+    return dequeueWaitTimer.labels(pipeline).startTimer();
   }
 
   public InflightHandle trackInflight(final String pipeline) {

@@ -73,4 +73,21 @@ class SnapPipelineMetricsTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("nonexistent");
   }
+
+  @Test
+  void startDequeueTimerReturnsTimingContextForKnownPipeline() {
+    final SnapPipelineMetrics metrics = new SnapPipelineMetrics(new StubMetricsSystem());
+
+    try (var ignored = metrics.startDequeueTimer("account")) {
+      // smoke: starting and closing must not throw
+    }
+  }
+
+  @Test
+  void startDequeueTimerRejectsUnknownPipeline() {
+    final SnapPipelineMetrics metrics = new SnapPipelineMetrics(new StubMetricsSystem());
+
+    assertThatThrownBy(() -> metrics.startDequeueTimer("nonexistent"))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
 }
