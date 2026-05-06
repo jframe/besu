@@ -27,6 +27,7 @@ import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
+import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 import org.hyperledger.besu.services.pipeline.Pipe;
 import org.hyperledger.besu.services.pipeline.Pipeline;
 import org.hyperledger.besu.services.pipeline.PipelineBuilder;
@@ -218,6 +219,33 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
       return this;
     }
 
+    private java.util.function.Supplier<Task<SnapDataRequest>> timedDequeue(
+        final String label, final java.util.function.Supplier<Task<SnapDataRequest>> raw) {
+      return () -> {
+        try (var ignored = pipelineMetrics.startDequeueTimer(label)) {
+          return raw.get();
+        }
+      };
+    }
+
+    private <I, O>
+        java.util.function.Function<I, java.util.concurrent.CompletableFuture<O>> trackedRequest(
+            final String label,
+            final java.util.function.Function<I, java.util.concurrent.CompletableFuture<O>>
+                delegate) {
+      return input -> {
+        final SnapPipelineMetrics.InflightHandle inflight = pipelineMetrics.trackInflight(label);
+        final OperationTimer.TimingContext requestTimer = pipelineMetrics.startRequestTimer(label);
+        return delegate
+            .apply(input)
+            .whenComplete(
+                (r, t) -> {
+                  requestTimer.close();
+                  inflight.close();
+                });
+      };
+    }
+
     public SnapWorldStateDownloadProcess build() {
       checkNotNull(loadLocalDataStep);
       checkNotNull(requestDataStep);
@@ -267,7 +295,8 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
           createPipelineFrom(
                   "dequeueAccountRequestBlocking",
                   new TaskQueueIterator<>(
-                      downloadState, () -> downloadState.dequeueAccountRequestBlocking()),
+                      downloadState,
+                      timedDequeue("account", downloadState::dequeueAccountRequestBlocking)),
                   bufferCapacity,
                   outputCounter,
                   true,
@@ -280,7 +309,7 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                   })
               .thenProcessAsync(
                   "batchDownloadAccountData",
-                  requestTask -> requestDataStep.requestAccount(requestTask),
+                  trackedRequest("account", requestDataStep::requestAccount),
                   maxOutstandingRequests)
               .thenProcess("batchPersistAccountData", task -> persistDataStep.persist(task))
               .andFinishWith("batchAccountDataDownloaded", requestsToComplete::put);
@@ -289,7 +318,8 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
           createPipelineFrom(
                   "dequeueStorageRequestBlocking",
                   new TaskQueueIterator<>(
-                      downloadState, () -> downloadState.dequeueStorageRequestBlocking()),
+                      downloadState,
+                      timedDequeue("storage", downloadState::dequeueStorageRequestBlocking)),
                   bufferCapacity,
                   outputCounter,
                   true,
@@ -303,20 +333,19 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                   })
               .thenProcessAsyncOrdered(
                   "batchDownloadStorageData",
-                  requestTask -> requestDataStep.requestStorage(requestTask),
+                  trackedRequest("storage", requestDataStep::requestStorage),
                   maxOutstandingRequests)
               .thenProcess("batchPersistStorageData", task -> persistDataStep.persist(task))
               .andFinishWith(
-                  "batchStorageDataDownloaded",
-                  tasks -> {
-                    tasks.forEach(requestsToComplete::put);
-                  });
+                  "batchStorageDataDownloaded", tasks -> tasks.forEach(requestsToComplete::put));
 
       final Pipeline<Task<SnapDataRequest>> fetchLargeStorageDataPipeline =
           createPipelineFrom(
                   "dequeueLargeStorageRequestBlocking",
                   new TaskQueueIterator<>(
-                      downloadState, () -> downloadState.dequeueLargeStorageRequestBlocking()),
+                      downloadState,
+                      timedDequeue(
+                          "large_storage", downloadState::dequeueLargeStorageRequestBlocking)),
                   bufferCapacity,
                   outputCounter,
                   true,
@@ -329,7 +358,9 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                   })
               .thenProcessAsyncOrdered(
                   "batchDownloadLargeStorageData",
-                  requestTask -> requestDataStep.requestStorage(List.of(requestTask)),
+                  trackedRequest(
+                      "large_storage",
+                      requestTask -> requestDataStep.requestStorage(List.of(requestTask))),
                   maxOutstandingRequests)
               .thenProcess(
                   "batchPersistLargeStorageData",
@@ -345,7 +376,8 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
           createPipelineFrom(
                   "dequeueCodeRequestBlocking",
                   new TaskQueueIterator<>(
-                      downloadState, () -> downloadState.dequeueCodeRequestBlocking()),
+                      downloadState,
+                      timedDequeue("code", downloadState::dequeueCodeRequestBlocking)),
                   bufferCapacity,
                   outputCounter,
                   true,
@@ -371,7 +403,7 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                   })
               .thenProcessAsyncOrdered(
                   "batchDownloadCodeData",
-                  tasks -> requestDataStep.requestCode(tasks),
+                  trackedRequest("code", requestDataStep::requestCode),
                   maxOutstandingRequests)
               .thenProcess(
                   "batchPersistCodeData",
@@ -386,7 +418,8 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
           createPipelineFrom(
                   "requestTrieNodeDequeued",
                   new TaskQueueIterator<>(
-                      downloadState, () -> downloadState.dequeueTrieNodeRequestBlocking()),
+                      downloadState,
+                      timedDequeue("trie_heal", downloadState::dequeueTrieNodeRequestBlocking)),
                   bufferCapacity,
                   outputCounter,
                   true,
@@ -407,7 +440,7 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                   })
               .thenProcessAsync(
                   "batchDownloadTrieNodeData",
-                  tasks -> requestDataStep.requestTrieNodeByPath(tasks),
+                  trackedRequest("trie_heal", requestDataStep::requestTrieNodeByPath),
                   maxOutstandingRequests)
               .thenProcess(
                   "batchPersistTrieNodeData",
@@ -423,14 +456,16 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                   "dequeueFlatAccountRequestBlocking",
                   new TaskQueueIterator<>(
                       downloadState,
-                      () -> downloadState.dequeueAccountFlatDatabaseHealingRequestBlocking()),
+                      timedDequeue(
+                          "account_flat_heal",
+                          downloadState::dequeueAccountFlatDatabaseHealingRequestBlocking)),
                   bufferCapacity,
                   outputCounter,
                   true,
                   "world_state_heal")
               .thenProcessAsync(
                   "batchDownloadFlatAccountData",
-                  requestTask -> requestDataStep.requestLocalFlatAccounts(requestTask),
+                  trackedRequest("account_flat_heal", requestDataStep::requestLocalFlatAccounts),
                   maxOutstandingRequests)
               .thenProcess(
                   "batchHealAndPersistFlatAccountData",
@@ -442,14 +477,16 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                   "dequeueFlatStorageRequestBlocking",
                   new TaskQueueIterator<>(
                       downloadState,
-                      () -> downloadState.dequeueStorageFlatDatabaseHealingRequestBlocking()),
+                      timedDequeue(
+                          "storage_flat_heal",
+                          downloadState::dequeueStorageFlatDatabaseHealingRequestBlocking)),
                   bufferCapacity,
                   outputCounter,
                   true,
                   "world_state_heal")
               .thenProcessAsyncOrdered(
                   "batchDownloadFlatStorageData",
-                  requestTask -> requestDataStep.requestLocalFlatStorages(requestTask),
+                  trackedRequest("storage_flat_heal", requestDataStep::requestLocalFlatStorages),
                   maxOutstandingRequests)
               .thenProcess(
                   "batchHealAndPersistFlatStorageData",
