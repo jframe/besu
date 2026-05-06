@@ -38,6 +38,8 @@ import org.hyperledger.besu.util.ExceptionUtils;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -219,8 +221,8 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
       return this;
     }
 
-    private java.util.function.Supplier<Task<SnapDataRequest>> timedDequeue(
-        final String label, final java.util.function.Supplier<Task<SnapDataRequest>> raw) {
+    private Supplier<Task<SnapDataRequest>> timedDequeue(
+        final String label, final Supplier<Task<SnapDataRequest>> raw) {
       return () -> {
         try (var ignored = pipelineMetrics.startDequeueTimer(label)) {
           return raw.get();
@@ -228,11 +230,8 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
       };
     }
 
-    private <I, O>
-        java.util.function.Function<I, java.util.concurrent.CompletableFuture<O>> trackedRequest(
-            final String label,
-            final java.util.function.Function<I, java.util.concurrent.CompletableFuture<O>>
-                delegate) {
+    private <I, O> Function<I, CompletableFuture<O>> trackedRequest(
+        final String label, final Function<I, CompletableFuture<O>> delegate) {
       return input -> {
         final SnapPipelineMetrics.InflightHandle inflight = pipelineMetrics.trackInflight(label);
         final OperationTimer.TimingContext requestTimer = pipelineMetrics.startRequestTimer(label);
@@ -240,8 +239,11 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
             .apply(input)
             .whenComplete(
                 (r, t) -> {
-                  requestTimer.close();
-                  inflight.close();
+                  try {
+                    requestTimer.close();
+                  } finally {
+                    inflight.close();
+                  }
                 });
       };
     }
