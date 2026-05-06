@@ -90,4 +90,22 @@ class SnapPipelineMetricsTest {
     assertThatThrownBy(() -> metrics.startDequeueTimer("nonexistent"))
         .isInstanceOf(IllegalArgumentException.class);
   }
+
+  @Test
+  void startRequestTimerReturnsTimingContextForKnownPipeline() {
+    final SnapPipelineMetrics metrics = new SnapPipelineMetrics(new StubMetricsSystem());
+
+    try (var ignored = metrics.startRequestTimer("storage")) {
+      // smoke: starting and closing must not throw
+    }
+  }
+
+  @Test
+  void startRequestTimerRejectsUnknownPipeline() {
+    final SnapPipelineMetrics metrics = new SnapPipelineMetrics(new StubMetricsSystem());
+
+    assertThatThrownBy(() -> metrics.startRequestTimer("nonexistent"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("nonexistent");
+  }
 }
