@@ -108,4 +108,13 @@ class SnapPipelineMetricsTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("nonexistent");
   }
+
+  @Test
+  void startCheckCompletionTimerReturnsTimingContext() {
+    final SnapPipelineMetrics metrics = new SnapPipelineMetrics(new StubMetricsSystem());
+
+    try (var ignored = metrics.startCheckCompletionTimer()) {
+      // smoke: starting and closing must not throw
+    }
+  }
 }

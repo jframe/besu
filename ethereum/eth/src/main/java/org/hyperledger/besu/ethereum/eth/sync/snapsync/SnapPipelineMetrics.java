@@ -44,6 +44,7 @@ public class SnapPipelineMetrics {
   private final Map<String, AtomicInteger> inflightByPipeline;
   private final LabelledMetric<OperationTimer> dequeueWaitTimer;
   private final LabelledMetric<OperationTimer> requestDurationTimer;
+  private final OperationTimer checkCompletionTimer;
 
   public SnapPipelineMetrics(final MetricsSystem metricsSystem) {
     this.inflightByPipeline = new LinkedHashMap<>();
@@ -70,6 +71,11 @@ public class SnapPipelineMetrics {
             "snap_pipeline_request_duration_seconds",
             "Time spent waiting for the peer-side response, per snap sync pipeline",
             "pipeline");
+    this.checkCompletionTimer =
+        metricsSystem.createTimer(
+            BesuMetricCategory.SYNCHRONIZER,
+            "snap_check_completion_duration_seconds",
+            "Duration of SnapWorldDownloadState.checkCompletion() invocations");
   }
 
   /** A handle that decrements the inflight counter when closed. Never throws. */
@@ -86,6 +92,10 @@ public class SnapPipelineMetrics {
   public OperationTimer.TimingContext startRequestTimer(final String pipeline) {
     requireKnownPipeline(pipeline);
     return requestDurationTimer.labels(pipeline).startTimer();
+  }
+
+  public OperationTimer.TimingContext startCheckCompletionTimer() {
+    return checkCompletionTimer.startTimer();
   }
 
   public InflightHandle trackInflight(final String pipeline) {
