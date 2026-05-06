@@ -158,6 +158,8 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
       final SnapSyncMetricsManager snapsyncMetricsManager =
           new SnapSyncMetricsManager(metricsSystem, ethContext);
 
+      final SnapPipelineMetrics pipelineMetrics = new SnapPipelineMetrics(metricsSystem);
+
       final SnapWorldDownloadState newDownloadState =
           new SnapWorldDownloadState(
               worldStateStorageCoordinator,
@@ -169,6 +171,7 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
               maxNodeRequestsWithoutProgress,
               minMillisBeforeStalling,
               snapsyncMetricsManager,
+              pipelineMetrics,
               clock,
               ethContext,
               syncDurationMetrics);
@@ -229,6 +232,7 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
           SnapWorldStateDownloadProcess.builder()
               .configuration(snapSyncConfiguration)
               .maxOutstandingRequests(maxOutstandingRequests)
+              .pipelineMetrics(pipelineMetrics)
               .dynamicPivotBlockSelector(dynamicPivotBlockManager)
               .loadLocalDataStep(
                   new LoadLocalDataStep(

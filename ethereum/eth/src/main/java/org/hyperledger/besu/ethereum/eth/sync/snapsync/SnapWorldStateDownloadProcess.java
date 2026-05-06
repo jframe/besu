@@ -160,6 +160,7 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
     private PersistDataStep persistDataStep;
     private CompleteTaskStep completeTaskStep;
     private DynamicPivotBlockSelector pivotBlockManager;
+    private SnapPipelineMetrics pipelineMetrics;
 
     public Builder configuration(final SnapSyncConfiguration snapSyncConfiguration) {
       this.snapSyncConfiguration = snapSyncConfiguration;
@@ -174,6 +175,11 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
 
     public Builder maxOutstandingRequests(final int maxOutstandingRequests) {
       this.maxOutstandingRequests = maxOutstandingRequests;
+      return this;
+    }
+
+    public Builder pipelineMetrics(final SnapPipelineMetrics pipelineMetrics) {
+      this.pipelineMetrics = pipelineMetrics;
       return this;
     }
 
@@ -220,6 +226,7 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
       checkNotNull(downloadState);
       checkNotNull(snapSyncState);
       checkNotNull(metricsSystem);
+      checkNotNull(pipelineMetrics);
 
       // Room for the requests we expect to do in parallel plus some buffer but not unlimited.
       final int bufferCapacity = snapSyncConfiguration.getTrienodeCountPerRequest() * 2;

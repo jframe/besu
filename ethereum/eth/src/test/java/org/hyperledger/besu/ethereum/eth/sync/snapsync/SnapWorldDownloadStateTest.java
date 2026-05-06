@@ -143,6 +143,7 @@ public class SnapWorldDownloadStateTest {
             MAX_REQUESTS_WITHOUT_PROGRESS,
             MIN_MILLIS_BEFORE_STALLING,
             metricsManager,
+            new SnapPipelineMetrics(new NoOpMetricsSystem()),
             clock,
             ethContext,
             SyncDurationMetrics.NO_OP_SYNC_DURATION_METRICS);

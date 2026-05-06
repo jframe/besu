@@ -99,6 +99,9 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
   // metrics around the snapsync
   private final SnapSyncMetricsManager metricsManager;
 
+  @SuppressWarnings("UnusedVariable") // used by Task 8 (checkCompletion timing)
+  private final SnapPipelineMetrics pipelineMetrics;
+
   private final AtomicBoolean trieHealStartedBefore = new AtomicBoolean(false);
   private final AtomicBoolean worldStateHealFinishedNotified = new AtomicBoolean(false);
   private final AtomicBoolean blockAccessListHealEnqueued = new AtomicBoolean(false);
@@ -113,6 +116,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
       final int maxRequestsWithoutProgress,
       final long minMillisBeforeStalling,
       final SnapSyncMetricsManager metricsManager,
+      final SnapPipelineMetrics pipelineMetrics,
       final Clock clock,
       final EthContext ethContext,
       final SyncDurationMetrics syncDurationMetrics) {
@@ -128,6 +132,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest> 
     this.snapSyncState = snapSyncState;
     this.protocolSchedule = protocolSchedule;
     this.metricsManager = metricsManager;
+    this.pipelineMetrics = pipelineMetrics;
     this.blockObserverId = blockchain.observeBlockAdded(createBlockchainObserver());
     this.ethContext = ethContext;
 
