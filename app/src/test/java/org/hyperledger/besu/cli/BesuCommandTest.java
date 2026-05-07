@@ -303,7 +303,7 @@ public class BesuCommandTest extends CommandTestAbstract {
   public void callingBesuCommandWithoutOptionsMustSyncWithDefaultValues() {
     parseCommand();
 
-    final int maxPeers = 25;
+    final int maxPeers = 50;
 
     final ArgumentCaptor<EthNetworkConfig> ethNetworkArg =
         ArgumentCaptor.forClass(EthNetworkConfig.class);
