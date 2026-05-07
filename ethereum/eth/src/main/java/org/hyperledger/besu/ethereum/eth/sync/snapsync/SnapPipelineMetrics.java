@@ -51,7 +51,7 @@ public class SnapPipelineMetrics {
     final LabelledSuppliedMetric inflightGauge =
         metricsSystem.createLabelledSuppliedGauge(
             BesuMetricCategory.SYNCHRONIZER,
-            "snap_pipeline_inflight_requests",
+            "snap_world_state_pipeline_inflight_requests",
             "Number of in-flight requests for each snap sync pipeline",
             "pipeline");
     for (final String label : PIPELINE_LABELS) {
@@ -62,19 +62,19 @@ public class SnapPipelineMetrics {
     this.dequeueWaitTimer =
         metricsSystem.createLabelledTimer(
             BesuMetricCategory.SYNCHRONIZER,
-            "snap_pipeline_dequeue_wait_seconds",
+            "snap_world_state_pipeline_dequeue_wait_seconds",
             "Time spent blocked waiting to dequeue the next request, per snap sync pipeline",
             "pipeline");
     this.requestDurationTimer =
         metricsSystem.createLabelledTimer(
             BesuMetricCategory.SYNCHRONIZER,
-            "snap_pipeline_request_duration_seconds",
+            "snap_world_state_pipeline_request_duration_seconds",
             "Time spent executing each snap sync request, per pipeline",
             "pipeline");
     this.checkCompletionTimer =
         metricsSystem.createTimer(
             BesuMetricCategory.SYNCHRONIZER,
-            "snap_check_completion_duration_seconds",
+            "snap_world_state_check_completion_duration_seconds",
             "Duration of each snap sync completion check invocation");
   }
 
