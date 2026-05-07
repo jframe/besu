@@ -15,7 +15,7 @@
 package org.hyperledger.besu.ethereum.eth.transactions;
 
 import static java.util.Collections.emptyList;
-import static java.util.Objects.requireNonNullElse;
+import static java.util.Objects.requireNonNullElseGet;
 import static org.hyperledger.besu.ethereum.core.Transaction.toHashList;
 
 import org.hyperledger.besu.datatypes.Hash;
@@ -116,8 +116,8 @@ public class PeerTransactionTracker
                   hash,
                   (unused, peersSeenState) -> {
                     final PeersSeenState computed =
-                        requireNonNullElse(
-                            peersSeenState, new PeersSeenState(ethPeers.getMaxPeers()));
+                        requireNonNullElseGet(
+                            peersSeenState, () -> new PeersSeenState(ethPeers.getMaxPeers()));
                     computed.transactionSeen(peerToSlotIndexMap.get(peer));
                     return computed;
                   }));
@@ -137,8 +137,8 @@ public class PeerTransactionTracker
                       hash,
                       (unused, peersSeenState) -> {
                         final PeersSeenState computed =
-                            requireNonNullElse(
-                                peersSeenState, new PeersSeenState(ethPeers.getMaxPeers()));
+                            requireNonNullElseGet(
+                                peersSeenState, () -> new PeersSeenState(ethPeers.getMaxPeers()));
                         computed.announcementSeen(peerToSlotIndexMap.get(peer));
                         return computed;
                       }));
@@ -157,8 +157,8 @@ public class PeerTransactionTracker
                       hash,
                       (unused, peersSeenState) -> {
                         final PeersSeenState computed =
-                            requireNonNullElse(
-                                peersSeenState, new PeersSeenState(ethPeers.getMaxPeers()));
+                            requireNonNullElseGet(
+                                peersSeenState, () -> new PeersSeenState(ethPeers.getMaxPeers()));
                         computed.announcementSeen(peerToSlotIndexMap.get(peer));
                         return computed;
                       }));
@@ -446,8 +446,9 @@ public class PeerTransactionTracker
                           hash,
                           (unused, peersSeenState) -> {
                             final PeersSeenState computed =
-                                requireNonNullElse(
-                                    peersSeenState, new PeersSeenState(ethPeers.getMaxPeers()));
+                                requireNonNullElseGet(
+                                    peersSeenState,
+                                    () -> new PeersSeenState(ethPeers.getMaxPeers()));
                             computed.transactionSeenAll();
                             return computed;
                           }));
