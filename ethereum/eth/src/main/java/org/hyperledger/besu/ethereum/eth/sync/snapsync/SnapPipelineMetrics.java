@@ -69,13 +69,13 @@ public class SnapPipelineMetrics {
         metricsSystem.createLabelledTimer(
             BesuMetricCategory.SYNCHRONIZER,
             "snap_pipeline_request_duration_seconds",
-            "Time spent waiting for the peer-side response, per snap sync pipeline",
+            "Time spent executing each snap sync request, per pipeline",
             "pipeline");
     this.checkCompletionTimer =
         metricsSystem.createTimer(
             BesuMetricCategory.SYNCHRONIZER,
             "snap_check_completion_duration_seconds",
-            "Duration of SnapWorldDownloadState.checkCompletion() invocations");
+            "Duration of each snap sync completion check invocation");
   }
 
   /** A handle that decrements the inflight counter when closed. Never throws. */
