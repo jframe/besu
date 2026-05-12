@@ -53,6 +53,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.spi.LoggingEventBuilder;
 
+// TODO: once we are confident in AbstractEngineForkchoiceUpdatedV4, replace this implementation
+// with the V4 logic (narrowed no-reorg skip + MAX_REORG_DEPTH check) and drop the duplicated
+// class. See https://github.com/ethereum/execution-apis/pull/786.
 public abstract class AbstractEngineForkchoiceUpdated extends ExecutionEngineJsonRpcMethod {
   private static final Logger LOG = LoggerFactory.getLogger(AbstractEngineForkchoiceUpdated.class);
   private final MergeMiningCoordinator mergeCoordinator;
@@ -184,7 +187,7 @@ public abstract class AbstractEngineForkchoiceUpdated extends ExecutionEngineJso
       if (!getWithdrawalsValidator(
               protocolSchedule.get(), newHead, maybePayloadAttributes.get().getTimestamp())
           .validateWithdrawals(withdrawals)) {
-        return new JsonRpcErrorResponse(requestId, getInvalidPayloadAttributesError());
+        return new JsonRpcErrorResponse(requestId, getInvalidWithdrawalsError());
       }
     }
 
@@ -379,6 +382,10 @@ public abstract class AbstractEngineForkchoiceUpdated extends ExecutionEngineJso
   }
 
   protected RpcErrorType getInvalidPayloadAttributesError() {
+    return RpcErrorType.INVALID_PAYLOAD_ATTRIBUTES;
+  }
+
+  protected RpcErrorType getInvalidWithdrawalsError() {
     return RpcErrorType.INVALID_PAYLOAD_ATTRIBUTES;
   }
 

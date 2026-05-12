@@ -64,30 +64,6 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       return OptionalInt.of(64);
     }
   },
-  ACCOUNT_INFO_STATE_FREEZER(
-      "ACCOUNT_INFO_STATE_FREEZER".getBytes(StandardCharsets.UTF_8),
-      EnumSet.of(X_BONSAI_ARCHIVE),
-      true,
-      false,
-      true,
-      true) {
-    @Override
-    public OptionalInt prefixLength() {
-      return OptionalInt.of(32);
-    }
-  },
-  ACCOUNT_STORAGE_FREEZER(
-      "ACCOUNT_STORAGE_FREEZER".getBytes(StandardCharsets.UTF_8),
-      EnumSet.of(X_BONSAI_ARCHIVE),
-      true,
-      false,
-      true,
-      true) {
-    @Override
-    public OptionalInt prefixLength() {
-      return OptionalInt.of(64);
-    }
-  },
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE
 
   // previously supported GoQuorum private states

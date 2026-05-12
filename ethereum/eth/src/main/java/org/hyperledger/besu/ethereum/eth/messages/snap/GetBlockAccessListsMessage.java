@@ -43,18 +43,8 @@ public final class GetBlockAccessListsMessage extends AbstractSnapMessageData {
   }
 
   public static GetBlockAccessListsMessage create(final Iterable<Hash> blockHashes) {
-    return create(Optional.empty(), blockHashes);
-  }
-
-  public static GetBlockAccessListsMessage create(
-      final Optional<BigInteger> requestId, final Iterable<Hash> blockHashes) {
     return new GetBlockAccessListsMessage(
-        GetBlockAccessListsMessageData.encode(requestId, blockHashes));
-  }
-
-  @Override
-  protected Bytes wrap(final BigInteger requestId) {
-    return create(Optional.of(requestId), blockHashes(false)).getData();
+        GetBlockAccessListsMessageData.encode(blockHashes, Optional.of(SIZE_REQUEST)));
   }
 
   @Override
@@ -63,6 +53,10 @@ public final class GetBlockAccessListsMessage extends AbstractSnapMessageData {
   }
 
   public Iterable<Hash> blockHashes(final boolean withRequestId) {
-    return GetBlockAccessListsMessageData.decode(data, withRequestId);
+    return GetBlockAccessListsMessageData.decode(data, withRequestId, true);
+  }
+
+  public BigInteger responseBytes(final boolean withRequestId) {
+    return GetBlockAccessListsMessageData.decodeResponseBytes(data, withRequestId);
   }
 }
