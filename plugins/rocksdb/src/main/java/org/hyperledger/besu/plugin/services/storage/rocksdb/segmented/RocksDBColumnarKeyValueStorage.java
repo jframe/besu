@@ -310,10 +310,9 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
             config.isHighSpec() && segment.isEligibleToHighSpecFlag()
                 ? ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC
                 : config.getCacheCapacity());
+    final boolean isArchiveCf = segment.prefixLength().isPresent();
     final IndexType indexType =
-        segment.prefixLength().isPresent()
-            ? IndexType.kTwoLevelIndexSearch
-            : IndexType.kBinarySearch;
+        isArchiveCf ? IndexType.kTwoLevelIndexSearch : IndexType.kBinarySearch;
     return new BlockBasedTableConfig()
         .setFormatVersion(ROCKSDB_FORMAT_VERSION)
         .setBlockCache(cache)
@@ -323,6 +322,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setIndexType(indexType)
         .setCacheIndexAndFilterBlocks(segment.isCacheIndexAndFilterBlocks())
         .setCacheIndexAndFilterBlocksWithHighPriority(true)
+        .setPinTopLevelIndexAndFilter(isArchiveCf)
         .setBlockSize(ROCKSDB_BLOCK_SIZE);
   }
 
