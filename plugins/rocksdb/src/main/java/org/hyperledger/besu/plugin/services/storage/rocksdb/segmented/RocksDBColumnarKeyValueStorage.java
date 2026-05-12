@@ -240,7 +240,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
     if (segment.containsStaticData()) {
       configureBlobDBForSegment(segment, configuration, cfOptions);
     }
-    applyPrefixExtractor(segment, options);
+    applyPrefixExtractor(segment, cfOptions);
 
     return new ColumnFamilyDescriptor(segment.getId(), cfOptions);
   }
