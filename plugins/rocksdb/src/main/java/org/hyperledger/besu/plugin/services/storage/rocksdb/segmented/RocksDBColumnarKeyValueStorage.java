@@ -81,6 +81,14 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   /** RocksDb blockcache size when using the high spec option */
   protected static final long ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC = 1_073_741_824L;
 
+  /**
+   * High-priority pool ratio for the per-CF LRU cache on archive column families. Defaults to 0.5
+   * in RocksDB; we raise it for archive CFs so that pinned and high-priority filter/index blocks
+   * have more room within the existing cache budget, leaving the partitioned leaf filter/index
+   * blocks less likely to be evicted by data blocks.
+   */
+  private static final double ARCHIVE_HIGH_PRI_POOL_RATIO = 0.75;
+
   /** Max total size of all WAL file, after which a flush is triggered */
   protected static final long WAL_MAX_TOTAL_SIZE = 1_073_741_824L;
 
@@ -311,13 +319,16 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
    */
   private BlockBasedTableConfig createBlockBasedTableConfig(
       final SegmentIdentifier segment, final RocksDBConfiguration config) {
-    final LRUCache cache =
-        new LRUCache(
-            config.isHighSpec() && segment.isEligibleToHighSpecFlag()
-                ? ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC
-                : config.getCacheCapacity());
-    blockCaches.add(cache);
     final boolean isArchiveCf = segment.prefixLength().isPresent();
+    final long cacheCapacity =
+        config.isHighSpec() && segment.isEligibleToHighSpecFlag()
+            ? ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC
+            : config.getCacheCapacity();
+    final LRUCache cache =
+        isArchiveCf
+            ? new LRUCache(cacheCapacity, -1, false, ARCHIVE_HIGH_PRI_POOL_RATIO)
+            : new LRUCache(cacheCapacity);
+    blockCaches.add(cache);
     final IndexType indexType =
         isArchiveCf ? IndexType.kTwoLevelIndexSearch : IndexType.kBinarySearch;
     return new BlockBasedTableConfig()
