@@ -88,6 +88,14 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
    */
   private static final long ARCHIVE_CACHE_BONUS = 64L * 1024L * 1024L;
 
+  /**
+   * Metadata block size for the partitioned filter and index blocks on Bonsai archive column
+   * families. Raised from the RocksDB default of 4 KiB so that fewer, larger partitions are
+   * produced — this lowers the leaf partition count and shrinks the top-level filter/index blocks
+   * pinned by setPinTopLevelIndexAndFilter, at the cost of slightly larger per-miss reads.
+   */
+  private static final long ARCHIVE_METADATA_BLOCK_SIZE = 16L * 1024L;
+
   /** Max total size of all WAL file, after which a flush is triggered */
   protected static final long WAL_MAX_TOTAL_SIZE = 1_073_741_824L;
 
@@ -342,6 +350,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setCacheIndexAndFilterBlocksWithHighPriority(true)
         .setPinTopLevelIndexAndFilter(isArchiveCf)
         .setPinL0FilterAndIndexBlocksInCache(isArchiveCf)
+        .setMetadataBlockSize(isArchiveCf ? ARCHIVE_METADATA_BLOCK_SIZE : 4096L)
         .setBlockSize(ROCKSDB_BLOCK_SIZE);
   }
 
