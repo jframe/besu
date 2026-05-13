@@ -330,6 +330,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setCacheIndexAndFilterBlocks(segment.isCacheIndexAndFilterBlocks())
         .setCacheIndexAndFilterBlocksWithHighPriority(true)
         .setPinTopLevelIndexAndFilter(isArchiveCf)
+        .setPinL0FilterAndIndexBlocksInCache(isArchiveCf)
         .setBlockSize(ROCKSDB_BLOCK_SIZE);
   }
 
