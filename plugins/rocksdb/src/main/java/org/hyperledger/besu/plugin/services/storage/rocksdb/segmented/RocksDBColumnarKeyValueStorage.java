@@ -81,6 +81,13 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   /** RocksDb blockcache size when using the high spec option */
   protected static final long ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC = 1_073_741_824L;
 
+  /**
+   * Additional per-CF block cache capacity granted to Bonsai archive column families on top of the
+   * configured base capacity. Sized to hold the partitioned leaf filter and index working set that
+   * is too large to fit comfortably in the default cache budget.
+   */
+  private static final long ARCHIVE_CACHE_BONUS = 64L * 1024L * 1024L;
+
   /** Max total size of all WAL file, after which a flush is triggered */
   protected static final long WAL_MAX_TOTAL_SIZE = 1_073_741_824L;
 
@@ -312,11 +319,15 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   private BlockBasedTableConfig createBlockBasedTableConfig(
       final SegmentIdentifier segment, final RocksDBConfiguration config) {
     final boolean isArchiveCf = segment.prefixLength().isPresent();
-    final LRUCache cache =
-        new LRUCache(
-            config.isHighSpec() && segment.isEligibleToHighSpecFlag()
-                ? ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC
-                : config.getCacheCapacity());
+    final long cacheCapacity;
+    if (config.isHighSpec() && segment.isEligibleToHighSpecFlag()) {
+      cacheCapacity = ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC;
+    } else if (isArchiveCf) {
+      cacheCapacity = config.getCacheCapacity() + ARCHIVE_CACHE_BONUS;
+    } else {
+      cacheCapacity = config.getCacheCapacity();
+    }
+    final LRUCache cache = new LRUCache(cacheCapacity);
     blockCaches.add(cache);
     final IndexType indexType =
         isArchiveCf ? IndexType.kTwoLevelIndexSearch : IndexType.kBinarySearch;
