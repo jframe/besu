@@ -96,6 +96,21 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
    */
   private static final long ARCHIVE_METADATA_BLOCK_SIZE = 16L * 1024L;
 
+  /**
+   * Target SST size on Bonsai archive column families. Raised from RocksDB's default (~64 MiB) so
+   * that each level holds ~4x fewer, larger SSTs. Warm-key {@code seekForPrev} probes descend every
+   * level, so reducing the SST count per level cuts per-probe consultations proportionally — the
+   * dominant residual cost on trace methods that replay full blocks.
+   */
+  private static final long ARCHIVE_TARGET_FILE_SIZE_BASE = 256L * 1024L * 1024L;
+
+  /**
+   * Base level size on Bonsai archive column families. Kept in 4x ratio with {@link
+   * #ARCHIVE_TARGET_FILE_SIZE_BASE} so dynamic-level-bytes sizes intermediate levels correctly
+   * given the new file size target.
+   */
+  private static final long ARCHIVE_MAX_BYTES_FOR_LEVEL_BASE = 1024L * 1024L * 1024L;
+
   /** Max total size of all WAL file, after which a flush is triggered */
   protected static final long WAL_MAX_TOTAL_SIZE = 1_073_741_824L;
 
@@ -256,6 +271,11 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
       configureBlobDBForSegment(segment, configuration, cfOptions);
     }
     applyPrefixExtractor(segment, cfOptions);
+    if (segment.prefixLength().isPresent()) {
+      cfOptions
+          .setTargetFileSizeBase(ARCHIVE_TARGET_FILE_SIZE_BASE)
+          .setMaxBytesForLevelBase(ARCHIVE_MAX_BYTES_FOR_LEVEL_BASE);
+    }
 
     return new ColumnFamilyDescriptor(segment.getId(), cfOptions);
   }
