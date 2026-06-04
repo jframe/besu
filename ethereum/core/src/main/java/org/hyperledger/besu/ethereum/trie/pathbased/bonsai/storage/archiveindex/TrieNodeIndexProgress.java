@@ -29,16 +29,13 @@ import java.util.BitSet;
  * <p>The completeness bitmap is keyed by {@code rangeId = block / rangeSize}. Range 0 covers blocks
  * [0, rangeSize), range 1 covers blocks [rangeSize, 2*rangeSize), etc.
  *
- * <p>Persistence wiring is deferred to Stage 3/5. Use {@link #toBytes()} / {@link #fromBytes(long,
- * byte[])} for serialisation stubs.
+ * <p>Persistence is wired to {@code TRIE_BRANCH_STORAGE} via {@link #load(SegmentedKeyValueStorage,
+ * long)} and {@link #save(SegmentedKeyValueStorageTransaction)}. The serialisation format does not
+ * yet include a version byte; the format may change before Stage 5 production wiring is complete.
  *
  * <p><strong>Thread-safety:</strong> This class is <em>not</em> thread-safe. Callers sharing an
  * instance between a writer thread (block import, Stage 3) and reader threads (proof path, Stage 4)
- * must provide external synchronisation or swap in thread-safe fields before Stage 3 integration.
- *
- * <p>TODO(Stage 3/5): wire {@link #toBytes()} / {@link #fromBytes(long, byte[])} to the
- * TRIE_BRANCH_STORAGE metadata CF (the same column family used by
- * PathBasedWorldStateKeyValueStorage for WORLD_BLOCK_NUMBER_KEY / WORLD_ROOT_HASH_KEY).
+ * must provide external synchronisation or swap in thread-safe fields before Stage 4 integration.
  */
 public class TrieNodeIndexProgress {
 
@@ -51,9 +48,7 @@ public class TrieNodeIndexProgress {
   /**
    * Key used to persist this record in {@code TRIE_BRANCH_STORAGE}. Co-located with {@code
    * WORLD_BLOCK_NUMBER_KEY} so that all metadata for the world-state live in the same column
-   * family.
-   *
-   * <p>The hex value {@code 0x74726965496e646578} encodes the ASCII string {@code "trieIndex"}.
+   * family. The raw value is the UTF-8 encoding of {@code "trieNodeIndexProgress"}.
    */
   static final byte[] TRIE_NODE_INDEX_PROGRESS_KEY =
       "trieNodeIndexProgress".getBytes(java.nio.charset.StandardCharsets.UTF_8);
