@@ -27,6 +27,7 @@ import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConf
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_FULL_FLAT_DB_ENABLED;
+import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_TRIE_NODE_INDEX_ENABLED;
 
 import org.hyperledger.besu.cli.options.CLIOptions;
 import org.hyperledger.besu.cli.util.CommandLineUtils;
@@ -80,6 +81,9 @@ public class PathBasedExtraStorageOptions
   /** The bonsai archive trie-node checkpoint interval option name. */
   public static final String ARCHIVE_TRIE_NODE_CHECKPOINT_INTERVAL =
       "--Xbonsai-archive-trie-node-checkpoint-interval";
+
+  /** The bonsai archive trie-node index enabled option name. */
+  public static final String TRIE_NODE_INDEX_ENABLED = "--Xbonsai-archive-trie-node-index-enabled";
 
   @Option(
       names = {LIMIT_TRIE_LOGS_ENABLED},
@@ -172,6 +176,14 @@ public class PathBasedExtraStorageOptions
             "Maximum storage-segment entries when the cross-block cache is enabled (default: ${DEFAULT-VALUE}).")
     private Long bonsaiCrossBlockCacheStorageSize = DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE;
 
+    @Option(
+        hidden = true,
+        names = {TRIE_NODE_INDEX_ENABLED},
+        arity = "1",
+        description =
+            "Enables the trie-node differential index for Bonsai archive mode, allowing efficient historic proof generation without full trie replay. Requires --data-storage-format=X_BONSAI_ARCHIVE. (default: ${DEFAULT-VALUE})")
+    private Boolean trieNodeIndexEnabled = DEFAULT_TRIE_NODE_INDEX_ENABLED;
+
     /** Default Constructor. */
     Unstable() {}
   }
@@ -228,6 +240,13 @@ public class PathBasedExtraStorageOptions
           commandLine, STATE_PROOFS_ENABLED + " requires --data-storage-format=X_BONSAI_ARCHIVE");
     }
 
+    if (unstableOptions.trieNodeIndexEnabled
+        && DataStorageFormat.X_BONSAI_ARCHIVE != dataStorageFormat) {
+      throw new CommandLine.ParameterException(
+          commandLine,
+          TRIE_NODE_INDEX_ENABLED + " requires --data-storage-format=X_BONSAI_ARCHIVE");
+    }
+
     if (unstableOptions.archiveTrieNodeCheckpointInterval <= 0) {
       throw new CommandLine.ParameterException(
           commandLine,
@@ -277,6 +296,8 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getStateProofsEnabled();
     dataStorageOptions.unstableOptions.archiveTrieNodeCheckpointInterval =
         domainObject.getUnstable().getArchiveTrieNodeCheckpointInterval();
+    dataStorageOptions.unstableOptions.trieNodeIndexEnabled =
+        domainObject.getUnstable().getTrieNodeIndexEnabled();
 
     return dataStorageOptions;
   }
@@ -296,6 +317,7 @@ public class PathBasedExtraStorageOptions
                 .stateProofsEnabled(unstableOptions.stateProofsEnabled)
                 .archiveTrieNodeCheckpointInterval(
                     unstableOptions.archiveTrieNodeCheckpointInterval)
+                .trieNodeIndexEnabled(unstableOptions.trieNodeIndexEnabled)
                 .bonsaiCrossBlockCacheEnabled(unstableOptions.bonsaiCrossBlockCacheEnabled)
                 .bonsaiCrossBlockCacheAccountSize(unstableOptions.bonsaiCrossBlockCacheAccountSize)
                 .bonsaiCrossBlockCacheStorageSize(unstableOptions.bonsaiCrossBlockCacheStorageSize)

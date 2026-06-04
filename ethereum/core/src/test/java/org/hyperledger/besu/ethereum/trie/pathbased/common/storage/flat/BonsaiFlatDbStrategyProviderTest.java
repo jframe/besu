@@ -352,6 +352,19 @@ class FlatDbStrategyProviderTest {
         .isInstanceOf(BonsaiPartialFlatDbStrategy.class);
   }
 
+  @Test
+  void trieNodeIndexFlagDefaultsFalseAndRoundTrips() {
+    final PathBasedExtraStorageConfiguration.PathBasedUnstable defaultUnstable =
+        ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder().build();
+    assertThat(defaultUnstable.getTrieNodeIndexEnabled()).isFalse();
+
+    final PathBasedExtraStorageConfiguration.PathBasedUnstable withFlagEnabled =
+        ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
+            .trieNodeIndexEnabled(true)
+            .build();
+    assertThat(withFlagEnabled.getTrieNodeIndexEnabled()).isTrue();
+  }
+
   private void updateFlatDbMode(final FlatDbMode flatDbMode) {
     final SegmentedKeyValueStorageTransaction transaction =
         composedWorldStateStorage.startTransaction();

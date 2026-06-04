@@ -92,6 +92,7 @@ public interface PathBasedExtraStorageConfiguration {
     boolean DEFAULT_BONSAI_CROSS_BLOCK_CACHE_ENABLED = false;
     long DEFAULT_BONSAI_CROSS_BLOCK_CACHE_ACCOUNT_SIZE = 100_000L;
     long DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE = 500_000L;
+    boolean DEFAULT_TRIE_NODE_INDEX_ENABLED = false;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -126,6 +127,11 @@ public interface PathBasedExtraStorageConfiguration {
     @Value.Default
     default long getBonsaiCrossBlockCacheStorageSize() {
       return DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE;
+    }
+
+    @Value.Default
+    default boolean getTrieNodeIndexEnabled() {
+      return DEFAULT_TRIE_NODE_INDEX_ENABLED;
     }
   }
 }
