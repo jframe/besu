@@ -22,10 +22,16 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBa
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeDiffCodec;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -37,10 +43,34 @@ import org.slf4j.LoggerFactory;
  * Archive trie node strategy. Reads from {@code TRIE_BRANCH_STORAGE_ARCHIVE} using suffix-based
  * nearest-before lookup; writes to both {@code TRIE_BRANCH_STORAGE} (via delegate) and {@code
  * TRIE_BRANCH_STORAGE_ARCHIVE}.
+ *
+ * <p>When the trie-node differential index is enabled ({@link #trieNodeIndexEnabled}), each write
+ * also captures a diff-codec entry in {@code TRIE_NODE_HISTORY_ARCHIVE} and appends a change-block
+ * record to the per-node index in {@code TRIE_NODE_INDEX_ARCHIVE}. The bloom accumulator for the
+ * current block is held in-memory and must be flushed by calling {@link
+ * #flushPendingBlooms(SegmentedKeyValueStorageTransaction)} before committing the transaction.
  */
 public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiArchiveTrieNodeStrategy.class);
+
+  /**
+   * Every {@code CHECKPOINT_INTERVAL}-th mutation for a node emits a FULL entry instead of a DIFF.
+   * This bounds the backward walk in {@link
+   * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader}
+   * to at most {@code CHECKPOINT_INTERVAL - 1} steps.
+   */
+  static final int CHECKPOINT_INTERVAL = 16;
+
+  /**
+   * Trie nodes at locations with at most this many nibble bytes (i.e. near the trie root) always
+   * store a FULL entry rather than a DIFF. Root-adjacent nodes change frequently and are small, so
+   * storing them as FULL is cheaper than computing and applying diffs.
+   *
+   * <p>A location of 0 bytes is the root; 1 byte = depth 2 (two nibbles). {@code FULL_ABOVE_DEPTH =
+   * 2} means locations with 0, 1, or 2 bytes are stored as FULL.
+   */
+  static final int FULL_ABOVE_DEPTH = 2;
 
   /**
    * Plain point-lookup strategy used for the "current trie" reads/writes. Defaults to {@link
@@ -52,6 +82,22 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   private final Long trieNodeCheckpointInterval;
   private final BonsaiCachedMerkleTrieLoader trieLoader;
   private volatile boolean intervalSeeded = false;
+
+  // --- Differential-index fields (flag-gated) ---
+
+  private final boolean trieNodeIndexEnabled;
+  private final TrieNodeHistoryStore historyStore;
+  private final TrieNodeChangeIndex changeIndex;
+
+  /**
+   * Pending per-range bloom accumulator for the current block. Populated by {@link
+   * #captureTrieNodeDiff} and flushed by {@link
+   * #flushPendingBlooms(SegmentedKeyValueStorageTransaction)}.
+   *
+   * <p>Keyed by {@code rangeId}; values are raw bloom bytes (128 KiB each). Access is not
+   * synchronised — this class is used single-threaded per block import.
+   */
+  private final Map<Long, byte[]> pendingBlooms = new HashMap<>();
 
   public BonsaiArchiveTrieNodeStrategy(final Long trieNodeCheckpointInterval) {
     this(trieNodeCheckpointInterval, null);
@@ -66,9 +112,39 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Long trieNodeCheckpointInterval,
       final BonsaiCachedMerkleTrieLoader trieLoader,
       final TrieNodeStrategy baseStrategy) {
+    this(trieNodeCheckpointInterval, trieLoader, baseStrategy, false, null, null);
+  }
+
+  /**
+   * Full constructor used when the trie-node differential index is enabled.
+   *
+   * @param trieNodeCheckpointInterval suffix-archive checkpoint interval (null = proofs disabled)
+   * @param trieLoader optional trie loader for cache warming
+   * @param baseStrategy underlying strategy for live-trie reads/writes
+   * @param trieNodeIndexEnabled whether to capture diffs to the differential index
+   * @param historyStore the diff-entry store; must not be null if {@code trieNodeIndexEnabled}
+   * @param changeIndex the change-block index; must not be null if {@code trieNodeIndexEnabled}
+   * @throws IllegalArgumentException if {@code trieNodeIndexEnabled} is {@code true} but {@code
+   *     trieNodeCheckpointInterval} is {@code null} — the index writes are triggered inside the
+   *     suffix-archive write path and cannot function without a valid interval
+   */
+  public BonsaiArchiveTrieNodeStrategy(
+      final Long trieNodeCheckpointInterval,
+      final BonsaiCachedMerkleTrieLoader trieLoader,
+      final TrieNodeStrategy baseStrategy,
+      final boolean trieNodeIndexEnabled,
+      final TrieNodeHistoryStore historyStore,
+      final TrieNodeChangeIndex changeIndex) {
+    if (trieNodeIndexEnabled && trieNodeCheckpointInterval == null) {
+      throw new IllegalArgumentException(
+          "trieNodeCheckpointInterval must not be null when trieNodeIndexEnabled=true");
+    }
     this.trieNodeCheckpointInterval = trieNodeCheckpointInterval;
     this.trieLoader = trieLoader;
     this.baseStrategy = baseStrategy;
+    this.trieNodeIndexEnabled = trieNodeIndexEnabled;
+    this.historyStore = historyStore;
+    this.changeIndex = changeIndex;
   }
 
   @Override
@@ -119,7 +195,14 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final Bytes node) {
+    // Capture prior node BEFORE the base write overwrites TRIE_BRANCH_STORAGE.
+    final Optional<Bytes> priorNode =
+        trieNodeIndexEnabled
+            ? storage.get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe()).map(Bytes::wrap)
+            : Optional.empty();
+
     baseStrategy.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
+
     if (trieNodeCheckpointInterval != null) {
       ensureIntervalSeeded(storage);
       final BonsaiContext ctx = getStateTrieArchiveContextForWrite(storage);
@@ -133,6 +216,13 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
           "Archive account trie node written: location={} suffix={}",
           location,
           ctx.getBlockNumber().orElse(-1L));
+
+      if (trieNodeIndexEnabled) {
+        final long block = getCurrentBlockNumber(storage);
+        final Bytes naturalKey = ArchiveNodeKey.account(location);
+        captureTrieNodeDiff(
+            transaction, naturalKey, location, block, priorNode.orElse(null), node, storage);
+      }
     }
   }
 
@@ -144,14 +234,23 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final Bytes node) {
+    final Bytes accountHashLocation = Bytes.concatenate(accountHash.getBytes(), location);
+
+    // Capture prior node BEFORE the base write overwrites TRIE_BRANCH_STORAGE.
+    final Optional<Bytes> priorNode =
+        trieNodeIndexEnabled
+            ? storage.get(TRIE_BRANCH_STORAGE, accountHashLocation.toArrayUnsafe()).map(Bytes::wrap)
+            : Optional.empty();
+
     baseStrategy.putFlatStorageTrieNode(
         storage, transaction, accountHash, location, nodeHash, node);
+
     if (trieNodeCheckpointInterval != null) {
       ensureIntervalSeeded(storage);
       final BonsaiContext ctx = getStateTrieArchiveContextForWrite(storage);
       byte[] keySuffixed =
           BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix(
-              ctx, Bytes.concatenate(accountHash.getBytes(), location).toArrayUnsafe());
+              ctx, accountHashLocation.toArrayUnsafe());
       transaction.put(TRIE_BRANCH_STORAGE_ARCHIVE, keySuffixed, node.toArrayUnsafe());
       if (trieLoader != null) {
         trieLoader.putStorageNode(nodeHash, node);
@@ -161,6 +260,13 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
           accountHash,
           location,
           ctx.getBlockNumber().orElse(-1L));
+
+      if (trieNodeIndexEnabled) {
+        final long block = getCurrentBlockNumber(storage);
+        final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
+        captureTrieNodeDiff(
+            transaction, naturalKey, location, block, priorNode.orElse(null), node, storage);
+      }
     }
   }
 
@@ -217,6 +323,121 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
                 tx.commit();
               });
       intervalSeeded = true;
+    }
+  }
+
+  /**
+   * Returns the actual block number currently being written (not the window-start used for suffix
+   * keying). If {@code ARCHIVE_PROOF_BLOCK_NUMBER_KEY} is set it is used directly; otherwise it is
+   * {@code WORLD_BLOCK_NUMBER_KEY + 1} (the next block whose trie nodes are being committed).
+   */
+  private long getCurrentBlockNumber(final SegmentedKeyValueStorage storage) {
+    final Optional<byte[]> proofBlock =
+        storage.get(TRIE_BRANCH_STORAGE, ARCHIVE_PROOF_BLOCK_NUMBER_KEY);
+    if (proofBlock.isPresent()) {
+      return Bytes.wrap(proofBlock.get()).toLong();
+    }
+    return storage
+        .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
+        .map(b -> Bytes.wrap(b).toLong() + 1L)
+        .orElse(0L);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Differential-index helpers (flag-gated)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Captures a diff-codec entry for {@code (naturalKey, block)} in the given transaction.
+   *
+   * <p>The entry type is chosen as follows (in priority order):
+   *
+   * <ol>
+   *   <li>Creation ({@code priorNode == null}): {@link TrieNodeDiffCodec#encodeDiff(Bytes, Bytes)}
+   *       with old=null → {@code FULL | CREATION}.
+   *   <li>Deletion ({@code newNode == null}): tombstone. Not currently wired in (deletions are
+   *       handled via {@link TrieNodeStrategy#removeFlatAccountStateTrieNode} which is not yet
+   *       hooked); included for completeness.
+   *   <li>Upper-trie FULL ({@code location.size() <= FULL_ABOVE_DEPTH}): always FULL for
+   *       root-adjacent nodes. The comparison uses the nibble-path {@code location} (not {@code
+   *       naturalKey}) so that account and storage trie nodes are treated symmetrically: for
+   *       account nodes {@code location == naturalKey}; for storage nodes {@code naturalKey =
+   *       accountHash ‖ location} (32+ bytes), so {@code naturalKey.size()} would never be ≤ 2.
+   *   <li>Checkpoint FULL ({@code currentMutationCount % CHECKPOINT_INTERVAL == 0}): every {@code
+   *       CHECKPOINT_INTERVAL}-th mutation is stored as FULL.
+   *   <li>DIFF: structural delta versus the prior node.
+   * </ol>
+   *
+   * <p>The bloom accumulator ({@link #pendingBlooms}) is updated but not flushed; callers must
+   * invoke {@link #flushPendingBlooms(SegmentedKeyValueStorageTransaction)} before committing the
+   * transaction.
+   *
+   * @param tx the transaction on which to write the history and index entries
+   * @param naturalKey the account or storage natural key from {@link ArchiveNodeKey}
+   * @param location the nibble-path {@code location} bytes for this trie node (used for the
+   *     FULL_ABOVE_DEPTH depth check; equal to {@code naturalKey} for account nodes)
+   * @param block the block number at which the node is being written
+   * @param priorNode the prior node RLP from committed storage, or {@code null} if this is a
+   *     creation
+   * @param newNode the new node RLP being written; must not be {@code null}
+   * @param storage the committed storage (used to read the current mutation count from the index)
+   */
+  // Package-private for reuse by Task 5.1 (migrator replay).
+  void captureTrieNodeDiff(
+      final SegmentedKeyValueStorageTransaction tx,
+      final Bytes naturalKey,
+      final Bytes location,
+      final long block,
+      final Bytes priorNode,
+      final Bytes newNode,
+      final SegmentedKeyValueStorage storage) {
+
+    // Compute the current mutation count for this key to determine whether this mutation is a
+    // checkpoint. Delegated to TrieNodeChangeIndex so the packed-format parsing uses the canonical
+    // SUBCOUNT_BYTES and ENTRY_BYTES constants from the archiveindex package.
+    final long currentMutationCount = changeIndex.countMutationsUpTo(naturalKey, block - 1);
+
+    final Bytes entry;
+    if (priorNode == null) {
+      // Creation: no prior node → always FULL | CREATION.
+      entry = TrieNodeDiffCodec.encodeDiff(null, newNode);
+    } else if (location.size() <= FULL_ABOVE_DEPTH) {
+      // Upper-trie node: always FULL to keep proof lookups cheap. Uses the nibble-path location
+      // so that both account nodes (naturalKey == location) and storage nodes (naturalKey =
+      // accountHash ‖ location) are evaluated against the same depth threshold.
+      entry = TrieNodeDiffCodec.encodeFull(newNode);
+    } else if (currentMutationCount % CHECKPOINT_INTERVAL == 0) {
+      // Checkpoint mutation: store FULL so backward walk terminates within CHECKPOINT_INTERVAL
+      // steps.
+      entry = TrieNodeDiffCodec.encodeFull(newNode);
+    } else {
+      // Normal mutation: store the structural delta.
+      entry = TrieNodeDiffCodec.encodeDiff(priorNode, newNode);
+    }
+
+    historyStore.put(tx, naturalKey, block, entry);
+    changeIndex.appendListAndMarkerOnly(tx, naturalKey, block);
+    changeIndex.accumulateBloom(pendingBlooms, naturalKey, block);
+
+    LOG.trace(
+        "Diff-index entry captured: key={} block={} entryType=0x{}",
+        naturalKey,
+        block,
+        String.format("%02x", entry.get(0)));
+  }
+
+  /**
+   * Writes all accumulated per-range bloom bits from the current block to the given transaction.
+   *
+   * <p>Must be called before committing the block's transaction to ensure bloom correctness. After
+   * this call, the accumulator is cleared and ready for the next block.
+   *
+   * @param tx the transaction on which to write bloom entries
+   */
+  public void flushPendingBlooms(final SegmentedKeyValueStorageTransaction tx) {
+    if (!pendingBlooms.isEmpty()) {
+      changeIndex.flushBloomAccumulator(tx, pendingBlooms);
+      pendingBlooms.clear();
     }
   }
 }

@@ -19,6 +19,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -57,12 +58,12 @@ import org.apache.tuweni.bytes.MutableBytes;
  * storage. Therefore, if multiple {@link #append} calls for different nodes share one transaction
  * (as they will during block import), each reads the same pre-transaction bloom from storage, adds
  * its own node, and writes back. Only the <em>last</em> write wins; earlier nodes' bits are lost.
- * <!-- TODO(Task 3.3): the per-range bloom is shared across all nodes in a block; the Stage-3 write
- *   hook must accumulate bloom bits per range in-memory within a block and write each range's bloom
- *   once at tx end (the write-only tx has no read-your-writes), otherwise concurrent appends in one
- *   tx lose bits. Doing so also eliminates the 128 KB bloom read-modify-write that every append
- *   currently performs. The index list and range marker writes are safe in one tx because their
- *   keys are per-node (no collision). Only the bloom has this hazard. -->
+ *
+ * <p>Task 3.3 resolved this hazard for block-import writes: {@link BonsaiArchiveTrieNodeStrategy}
+ * uses {@link #appendListAndMarkerOnly}, {@link #accumulateBloom}, and {@link
+ * #flushBloomAccumulator} so that all bloom bits for a block are OR-ed together in memory and
+ * written once at transaction end. The {@link #append} method retains the single-call bloom write
+ * for unit-test convenience (where one node per transaction is the norm).
  */
 public final class TrieNodeChangeIndex {
 
@@ -76,8 +77,12 @@ public final class TrieNodeChangeIndex {
   /**
    * Default number of entries moved into a new sub-block on each split. Must be less than {@link
    * #DEFAULT_SUBBLOCK_THRESHOLD}.
+   *
+   * <p>Exposed as {@code public} so that external callers (e.g. the write hook in {@link
+   * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy})
+   * can reconstruct the total mutation count from the stored {@code [subCount][tail]} format.
    */
-  static final int DEFAULT_SUBBLOCK_SPLIT_AT = 2048;
+  public static final int DEFAULT_SUBBLOCK_SPLIT_AT = 2048;
 
   /** Number of bytes used to store the sub-block count at the head of each index value. */
   private static final int SUBCOUNT_BYTES = 4;
@@ -162,8 +167,9 @@ public final class TrieNodeChangeIndex {
    * </ol>
    *
    * <p><strong>Bloom hazard:</strong> see class-level Javadoc. For single-node appends per
-   * transaction (e.g. unit tests) this is safe. For multi-node block-import transactions see {@code
-   * TODO(Task 3.3)}.
+   * transaction (e.g. unit tests) this is safe. For multi-node block-import transactions, use the
+   * three-method pattern: {@link #appendListAndMarkerOnly}, {@link #accumulateBloom}, {@link
+   * #flushBloomAccumulator}.
    *
    * @param tx the transaction on which to issue all writes
    * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})
@@ -226,13 +232,6 @@ public final class TrieNodeChangeIndex {
 
     // 3. Update per-range bloom
     // NOTE: reads from committed storage — see bloom same-tx hazard in class Javadoc.
-    // TODO(Task 3.3): the per-range bloom is shared across all nodes in a block; the Stage-3
-    //   write hook must accumulate bloom bits per range in-memory within a block and write each
-    //   range's bloom once at tx end (the write-only tx has no read-your-writes), otherwise
-    //   concurrent appends in one tx lose bits. Doing so also eliminates the 128 KB bloom
-    //   read-modify-write performed on every append below. The index list and range marker writes
-    //   are safe in one tx because their keys are per-node (no collision). Only the bloom has this
-    //   hazard.
     final Bytes bloomKey = ArchiveNodeKey.bloomKey(rangeId);
     final byte[] bloomKeyBytes = bloomKey.toArrayUnsafe();
     final RangeBloom bloom =
@@ -245,6 +244,185 @@ public final class TrieNodeChangeIndex {
         KeyValueSegmentIdentifier.TRIE_NODE_BLOOM_ARCHIVE,
         bloomKeyBytes,
         bloom.toBytes().toArrayUnsafe());
+  }
+
+  /**
+   * Appends the index-list and range-marker entries for {@code (naturalKey, block)} to {@code tx},
+   * but skips the per-range bloom write.
+   *
+   * <p>Callers that process multiple nodes in a single transaction MUST use this method together
+   * with {@link #accumulateBloom} and {@link #flushBloomAccumulator} to avoid the bloom same-tx
+   * hazard described in the class Javadoc. The bloom accumulator pattern:
+   *
+   * <pre>{@code
+   * Map<Long, byte[]> blooms = new HashMap<>();
+   * for (each node) {
+   *     index.appendListAndMarkerOnly(tx, naturalKey, block);
+   *     index.accumulateBloom(blooms, naturalKey, block);
+   * }
+   * index.flushBloomAccumulator(tx, blooms);
+   * }</pre>
+   *
+   * @param tx the transaction on which to issue writes
+   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})
+   * @param block the block number at which the node changed
+   */
+  public void appendListAndMarkerOnly(
+      final SegmentedKeyValueStorageTransaction tx, final Bytes naturalKey, final long block) {
+    if (block < 0) {
+      throw new IllegalArgumentException("block must be >= 0, got " + block);
+    }
+    final long rangeId = block / rangeSize;
+    final int offset = (int) (block - rangeId * rangeSize);
+
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
+    final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
+
+    final int[] subCountHolder = new int[1];
+    final RangeRelativeOffsetList list =
+        storage
+            .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
+            .map(
+                b -> {
+                  final IndexValue iv = readIndexValue(b);
+                  subCountHolder[0] = iv.subCount;
+                  return iv.list;
+                })
+            .orElse(RangeRelativeOffsetList.empty());
+
+    int subCount = subCountHolder[0];
+    RangeRelativeOffsetList updated = list.append(offset);
+
+    if (updated.size() > subBlockThreshold) {
+      final RangeRelativeOffsetList head = sliceHead(updated, subBlockSplitAt);
+      final RangeRelativeOffsetList tail = sliceTail(updated, subBlockSplitAt);
+
+      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subCount);
+      tx.put(
+          KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE,
+          subKey.toArrayUnsafe(),
+          head.toBytes().toArrayUnsafe());
+
+      subCount++;
+      updated = tail;
+    }
+
+    tx.put(
+        KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
+        indexKeyBytes,
+        writeIndexValue(subCount, updated));
+
+    tx.put(KeyValueSegmentIdentifier.TRIE_NODE_RANGE_MARKER_ARCHIVE, indexKeyBytes, new byte[0]);
+  }
+
+  /**
+   * Accumulates the bloom-filter bits for {@code naturalKey} at {@code block} into {@code
+   * accumulator} WITHOUT writing to storage.
+   *
+   * <p>The accumulator maps {@code rangeId → raw bloom bytes (128 KiB)}. On first access for a
+   * given rangeId the committed bloom is read from storage and merged; subsequent accesses to the
+   * same rangeId use the already-loaded in-memory copy, so only one storage read per range per
+   * block is performed.
+   *
+   * <p>After all nodes for a block have been accumulated, call {@link #flushBloomAccumulator} to
+   * write the accumulated blooms atomically in the same transaction.
+   *
+   * @param accumulator mutable map from rangeId to raw bloom bytes; must not be {@code null}
+   * @param naturalKey the account or storage natural key
+   * @param block the block number at which the node changed
+   */
+  public void accumulateBloom(
+      final Map<Long, byte[]> accumulator, final Bytes naturalKey, final long block) {
+    if (block < 0) {
+      throw new IllegalArgumentException("block must be >= 0, got " + block);
+    }
+    final long rangeId = block / rangeSize;
+    final Bytes bloomKey = ArchiveNodeKey.bloomKey(rangeId);
+
+    // Load from committed storage on first access for this rangeId; subsequent accesses reuse the
+    // in-memory accumulated state (no further storage reads).
+    final byte[] bloomBytes =
+        accumulator.computeIfAbsent(
+            rangeId,
+            rid ->
+                storage
+                    .get(
+                        KeyValueSegmentIdentifier.TRIE_NODE_BLOOM_ARCHIVE, bloomKey.toArrayUnsafe())
+                    .map(b -> RangeBloom.fromBytes(Bytes.wrap(b)).toBytes().toArrayUnsafe())
+                    .orElse(new byte[RangeBloom.BYTE_SIZE]));
+
+    // OR-in the new key's bits directly into the accumulator's backing array.
+    final RangeBloom bloom = RangeBloom.fromBytes(Bytes.wrap(bloomBytes));
+    bloom.add(naturalKey);
+    // Copy back the updated bits so the accumulator entry reflects the mutation.
+    final byte[] updated = bloom.toBytes().toArrayUnsafe();
+    System.arraycopy(updated, 0, bloomBytes, 0, updated.length);
+  }
+
+  /**
+   * Writes the accumulated bloom bits from {@code accumulator} to {@code tx}.
+   *
+   * <p>Each entry in {@code accumulator} (rangeId → raw bloom bytes) is written to {@code
+   * TRIE_NODE_BLOOM_ARCHIVE[rangeId]}. After this call the accumulator may be cleared for reuse.
+   *
+   * @param tx the transaction on which to write blooms
+   * @param accumulator mutable map from rangeId to raw bloom bytes produced by {@link
+   *     #accumulateBloom}; must not be {@code null}
+   */
+  public void flushBloomAccumulator(
+      final SegmentedKeyValueStorageTransaction tx, final Map<Long, byte[]> accumulator) {
+    for (final Map.Entry<Long, byte[]> entry : accumulator.entrySet()) {
+      final Bytes bloomKey = ArchiveNodeKey.bloomKey(entry.getKey());
+      tx.put(
+          KeyValueSegmentIdentifier.TRIE_NODE_BLOOM_ARCHIVE,
+          bloomKey.toArrayUnsafe(),
+          entry.getValue());
+    }
+  }
+
+  /**
+   * Returns the total number of diff-index mutations recorded for {@code naturalKey} at or before
+   * {@code block}, summing across all index ranges from 0 to {@code rangeId(block)}.
+   *
+   * <p>For each range the count is {@code subCount * DEFAULT_SUBBLOCK_SPLIT_AT + tailEntries},
+   * derived from the packed {@code [4B subCount][3N offsets]} index value format. Ranges with no
+   * range-marker for this key are skipped in O(1) via {@link #rangeMarkerPresent}.
+   *
+   * <p>This method reads from committed storage and is intended to be called with {@code block =
+   * currentBlock - 1} to obtain the number of mutations <em>before</em> the block being written.
+   *
+   * @param naturalKey the node's natural key (from {@link ArchiveNodeKey})
+   * @param block the inclusive upper bound; pass a negative value to get 0 immediately
+   * @return the total mutation count at or before {@code block}, or 0 if none
+   */
+  public long countMutationsUpTo(final Bytes naturalKey, final long block) {
+    if (block < 0) {
+      return 0L;
+    }
+    final long maxRangeId = block / rangeSize;
+    long total = 0L;
+
+    for (long r = 0; r <= maxRangeId; r++) {
+      if (!rangeMarkerPresent(naturalKey, r)) {
+        continue;
+      }
+      final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, r);
+      final Optional<byte[]> raw =
+          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe());
+      if (raw.isEmpty()) {
+        continue;
+      }
+      final byte[] b = raw.get();
+      if (b.length < SUBCOUNT_BYTES) {
+        continue;
+      }
+      final int subCount =
+          ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
+      final int tailEntries = (b.length - SUBCOUNT_BYTES) / RangeRelativeOffsetList.ENTRY_BYTES;
+      total += (long) subCount * DEFAULT_SUBBLOCK_SPLIT_AT + tailEntries;
+    }
+
+    return total;
   }
 
   // ---------------------------------------------------------------------------
