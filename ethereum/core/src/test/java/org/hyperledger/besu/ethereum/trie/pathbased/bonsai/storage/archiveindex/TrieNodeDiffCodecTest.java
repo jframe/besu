@@ -17,7 +17,10 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+
+import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -568,5 +571,182 @@ class TrieNodeDiffCodecTest {
     assertThat(d.isFull()).isFalse();
     assertThat(d.isBranchNode()).isFalse();
     assertThat(d.changedShortNodeValue()).hasValue(bigValueRlp);
+  }
+
+  // -------------------------------------------------------------------------
+  // Task 1.4: reconstruct(fullEntry, diffs)
+  // -------------------------------------------------------------------------
+
+  // --- identity: empty diff list returns original node bytes (keccak-exactness) ---
+
+  @Test
+  void reconstructIdentityBranchWithNoDiffs() {
+    Bytes[] children = new Bytes[16];
+    children[3] = childHash(3);
+    children[7] = childHash(7);
+    Bytes branchNode = branchWith(children, Bytes.fromHexString("0xaabb"));
+
+    Bytes full = TrieNodeDiffCodec.encodeFull(branchNode);
+    Bytes result = TrieNodeDiffCodec.reconstruct(full, List.of());
+
+    assertThat(result).isEqualTo(branchNode);
+    assertThat(Hash.hash(result)).isEqualTo(Hash.hash(branchNode));
+  }
+
+  @Test
+  void reconstructIdentityShortNodeWithNoDiffs() {
+    Bytes shortNode = leafNode(LEAF_PATH, LEAF_VALUE);
+
+    Bytes full = TrieNodeDiffCodec.encodeFull(shortNode);
+    Bytes result = TrieNodeDiffCodec.reconstruct(full, List.of());
+
+    assertThat(result).isEqualTo(shortNode);
+    assertThat(Hash.hash(result)).isEqualTo(Hash.hash(shortNode));
+  }
+
+  // --- branch reconstruct chain (children only) ---
+
+  @Test
+  void reconstructAppliesDiffsInOrder() {
+    // v0 → v1: change child 3; v1 → v2: change child 7 and 9
+    Bytes[] c0 = new Bytes[16];
+    c0[3] = childHash(3);
+    c0[7] = childHash(7);
+    Bytes v0 = branchWith(c0);
+
+    Bytes[] c1 = new Bytes[16];
+    c1[3] = childHash(30); // changed
+    c1[7] = childHash(7); // same
+    Bytes v1 = branchWith(c1);
+
+    Bytes[] c2 = new Bytes[16];
+    c2[3] = childHash(30); // same
+    c2[7] = childHash(70); // changed
+    c2[9] = childHash(9); // added
+    Bytes v2 = branchWith(c2);
+
+    Bytes full = TrieNodeDiffCodec.encodeFull(v0);
+    Bytes d1 = TrieNodeDiffCodec.encodeDiff(v0, v1);
+    Bytes d2 = TrieNodeDiffCodec.encodeDiff(v1, v2);
+
+    Bytes out = TrieNodeDiffCodec.reconstruct(full, List.of(d1, d2));
+    assertThat(out).isEqualTo(v2);
+    assertThat(Hash.hash(out)).isEqualTo(Hash.hash(v2));
+  }
+
+  // --- branch reconstruct: two diffs patch the SAME slot → last write wins ---
+
+  @Test
+  void reconstructBranchTwoDiffsOnSameSlotLastWriteWins() {
+    Bytes[] c0 = new Bytes[16];
+    c0[5] = childHash(5);
+    Bytes v0 = branchWith(c0);
+    Bytes[] c1 = new Bytes[16];
+    c1[5] = childHash(50);
+    Bytes v1 = branchWith(c1);
+    Bytes[] c2 = new Bytes[16];
+    c2[5] = childHash(99);
+    Bytes v2 = branchWith(c2);
+
+    Bytes out =
+        TrieNodeDiffCodec.reconstruct(
+            TrieNodeDiffCodec.encodeFull(v0),
+            List.of(TrieNodeDiffCodec.encodeDiff(v0, v1), TrieNodeDiffCodec.encodeDiff(v1, v2)));
+    assertThat(out).isEqualTo(v2);
+    assertThat(Hash.hash(out)).isEqualTo(Hash.hash(v2));
+  }
+
+  // --- branch reconstruct also changes VALUE_CHANGED ---
+
+  @Test
+  void reconstructBranchValueChange() {
+    Bytes[] children = new Bytes[16];
+    children[5] = childHash(5);
+    Bytes v0 = branchWith(children, Bytes.EMPTY);
+    Bytes v1 = branchWith(children, Bytes.fromHexString("0xdeadbeef"));
+
+    Bytes full = TrieNodeDiffCodec.encodeFull(v0);
+    Bytes d1 = TrieNodeDiffCodec.encodeDiff(v0, v1);
+
+    Bytes out = TrieNodeDiffCodec.reconstruct(full, List.of(d1));
+    assertThat(out).isEqualTo(v1);
+    assertThat(Hash.hash(out)).isEqualTo(Hash.hash(v1));
+  }
+
+  // --- short-node reconstruct chain: key then value ---
+
+  @Test
+  void reconstructShortNodeChain() {
+    Bytes path2 = Bytes.fromHexString("0x20ef");
+    Bytes v0 = leafNode(LEAF_PATH, LEAF_VALUE);
+    Bytes v1 = leafNode(path2, LEAF_VALUE); // key changed
+    Bytes v2 = leafNode(path2, LEAF_VALUE_2); // value changed
+
+    Bytes full = TrieNodeDiffCodec.encodeFull(v0);
+    Bytes d1 = TrieNodeDiffCodec.encodeDiff(v0, v1);
+    Bytes d2 = TrieNodeDiffCodec.encodeDiff(v1, v2);
+
+    Bytes out = TrieNodeDiffCodec.reconstruct(full, List.of(d1, d2));
+    assertThat(out).isEqualTo(v2);
+    assertThat(Hash.hash(out)).isEqualTo(Hash.hash(v2));
+  }
+
+  // --- reconstruct throws when fullEntry is not a FULL entry ---
+
+  @Test
+  void reconstructThrowsWhenFullEntryIsNotFull() {
+    // A diff entry (not FULL)
+    Bytes[] c0 = new Bytes[16];
+    Bytes[] c1 = new Bytes[16];
+    c1[2] = childHash(2);
+    Bytes diffEntry = TrieNodeDiffCodec.encodeDiff(branchWith(c0), branchWith(c1));
+
+    assertThatThrownBy(() -> TrieNodeDiffCodec.reconstruct(diffEntry, List.of()))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  // --- reconstruct throws when a diff entry is a FULL entry ---
+
+  @Test
+  void reconstructThrowsWhenDiffEntryIsFull() {
+    Bytes[] c0 = new Bytes[16];
+    c0[1] = childHash(1);
+    Bytes branchNode = branchWith(c0);
+    Bytes full = TrieNodeDiffCodec.encodeFull(branchNode);
+    Bytes anotherFull = TrieNodeDiffCodec.encodeFull(branchNode);
+
+    assertThatThrownBy(() -> TrieNodeDiffCodec.reconstruct(full, List.of(anotherFull)))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  // --- reconstruct throws when a diff entry is a deletion tombstone ---
+
+  @Test
+  void reconstructThrowsWhenDiffEntryIsDeletion() {
+    Bytes[] c0 = new Bytes[16];
+    c0[1] = childHash(1);
+    Bytes branchNode = branchWith(c0);
+    Bytes full = TrieNodeDiffCodec.encodeFull(branchNode);
+    Bytes tombstone = TrieNodeDiffCodec.encodeDiff(branchNode, null);
+
+    assertThatThrownBy(() -> TrieNodeDiffCodec.reconstruct(full, List.of(tombstone)))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  // --- reconstruct throws on type mismatch (branch base, short-node diff) ---
+
+  @Test
+  void reconstructThrowsOnTypeMismatch() {
+    Bytes[] c0 = new Bytes[16];
+    c0[1] = childHash(1);
+    Bytes branchFull = TrieNodeDiffCodec.encodeFull(branchWith(c0));
+
+    // Produce a short-node diff
+    Bytes oldLeaf = leafNode(LEAF_PATH, LEAF_VALUE);
+    Bytes newLeaf = leafNode(LEAF_PATH, LEAF_VALUE_2);
+    Bytes shortDiff = TrieNodeDiffCodec.encodeDiff(oldLeaf, newLeaf);
+
+    assertThatThrownBy(() -> TrieNodeDiffCodec.reconstruct(branchFull, List.of(shortDiff)))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 }

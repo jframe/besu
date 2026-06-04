@@ -18,6 +18,7 @@ import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -210,6 +211,181 @@ public final class TrieNodeDiffCodec {
 
     // Case 6: BOTH SHORT (2-item).
     return encodeShortDiff(oldNodeRlp, newNodeRlp);
+  }
+
+  /**
+   * Reconstructs a trie node by applying a sequence of DIFF entries to a FULL checkpoint.
+   *
+   * <p>Starting from the base node embedded in {@code fullEntry}, each diff in {@code diffEntries}
+   * is applied in order, patching the mutable working fields (child slots for branch nodes; path
+   * and value for short nodes). The final working state is re-encoded to produce the reconstructed
+   * node RLP.
+   *
+   * <p>The parse→re-encode round-trip is byte-exact: calling {@code reconstruct(encodeFull(node),
+   * List.of())} returns bytes equal to {@code node} for both branch and short nodes. This is
+   * because each field is captured and re-encoded with matching read/write units:
+   *
+   * <ul>
+   *   <li>Branch child slots (items 0–15): read via {@code readAsRlp().raw()} (raw RLP), written
+   *       via {@code writeRaw(childRawRlp)}.
+   *   <li>Branch value (item 16): read via {@code readBytes()} (decoded payload), written via
+   *       {@code writeBytes(value)}.
+   *   <li>Short-node path (item 0): read via {@code readBytes()} (decoded payload), written via
+   *       {@code writeBytes(path)}.
+   *   <li>Short-node value (item 1): read via {@code readAsRlp().raw()} (raw RLP), written via
+   *       {@code writeRaw(valueRlp)}.
+   * </ul>
+   *
+   * <p><b>Caller contract</b>: each entry in {@code diffEntries} MUST be a DIFF entry of the same
+   * node type as the base, in ascending block order. If a FULL entry or deletion tombstone appears
+   * in {@code diffEntries}, the caller (e.g. the Task 3.2 history reader) is responsible for
+   * slicing the chain at that checkpoint or tombstone before calling this method. Passing a FULL or
+   * deletion entry as a diff, or a diff whose node type mismatches the base, throws {@link
+   * IllegalArgumentException}.
+   *
+   * @param fullEntry a FULL codec entry ({@link #ENTRY_FULL} set); must not be {@code null}
+   * @param diffEntries ordered list of DIFF entries to apply; must not be {@code null} and must not
+   *     contain {@code null} elements; each must be a branch DIFF or short-node DIFF matching the
+   *     base node type
+   * @return the reconstructed node RLP (raw node bytes, not a codec entry)
+   * @throws NullPointerException if {@code fullEntry}, {@code diffEntries}, or any element of
+   *     {@code diffEntries} is {@code null} (a null element trips the null check in {@link
+   *     #decode(Bytes)})
+   * @throws IllegalArgumentException if {@code fullEntry} is not a FULL entry, if any diff entry is
+   *     a FULL entry or deletion tombstone, or if any diff entry's node type mismatches the base
+   */
+  public static Bytes reconstruct(final Bytes fullEntry, final List<Bytes> diffEntries) {
+    Objects.requireNonNull(fullEntry, "fullEntry must not be null");
+    Objects.requireNonNull(diffEntries, "diffEntries must not be null");
+
+    final Decoded base = decode(fullEntry);
+    if (!base.isFull()) {
+      throw new IllegalArgumentException(
+          "reconstruct: fullEntry must be a FULL entry (ENTRY_FULL bit set); got metadata 0x"
+              + Integer.toHexString(Byte.toUnsignedInt(base.metadata())));
+    }
+
+    final Bytes baseNode = base.fullNode();
+    final int arity = nodeArity(baseNode);
+
+    if (arity == 17) {
+      return reconstructBranch(baseNode, diffEntries);
+    } else {
+      return reconstructShort(baseNode, diffEntries);
+    }
+  }
+
+  /**
+   * Applies branch DIFF entries to a branch base node and re-encodes to node RLP.
+   *
+   * <p>Working fields: {@code children[]} (raw RLP per slot, as captured by {@code
+   * readAsRlp().raw()}) and {@code value} (decoded payload, as captured by {@code readBytes()}).
+   * Re-encoded with {@code writeRaw(children[i])} and {@code writeBytes(value)}.
+   */
+  private static Bytes reconstructBranch(final Bytes baseNode, final List<Bytes> diffEntries) {
+    final BranchFields base = parseBranchFields(baseNode);
+    final Bytes[] children = Arrays.copyOf(base.children, BRANCH_CHILDREN);
+    Bytes value = base.value;
+
+    for (final Bytes diffEntry : diffEntries) {
+      final Decoded d = decode(diffEntry);
+      requireDiffEntry(d);
+      if (!d.isBranchNode()) {
+        throw new IllegalArgumentException(
+            "reconstruct type mismatch: base is a branch node but diff entry is a short-node diff"
+                + " (metadata 0x"
+                + Integer.toHexString(Byte.toUnsignedInt(d.metadata()))
+                + ")");
+      }
+      // Patch child slots (last-write-wins for slots touched by multiple diffs).
+      for (final Map.Entry<Integer, Bytes> entry : d.changedChildRefs().entrySet()) {
+        children[entry.getKey()] = entry.getValue();
+      }
+      // Patch value if VALUE_CHANGED.
+      final Optional<Bytes> newVal = d.changedValue();
+      if (newVal.isPresent()) {
+        value = newVal.get();
+      }
+    }
+
+    // Re-encode: branch RLP list with 16 raw-RLP children + decoded-payload value.
+    // writeBytes(Bytes.EMPTY) and writeNull() are byte-identical (both emit 0x80), so an empty
+    // branch value round-trips exactly through writeBytes — no special-casing needed.
+    final Bytes[] finalChildren = children;
+    final Bytes finalValue = value;
+    return RLP.encode(
+        out -> {
+          out.startList();
+          for (int i = 0; i < BRANCH_CHILDREN; i++) {
+            out.writeRaw(finalChildren[i]);
+          }
+          out.writeBytes(finalValue);
+          out.endList();
+        });
+  }
+
+  /**
+   * Applies short-node DIFF entries to a short base node and re-encodes to node RLP.
+   *
+   * <p>Working fields: {@code path} (decoded payload, as captured by {@code readBytes()}) and
+   * {@code valueRlp} (raw RLP, as captured by {@code readAsRlp().raw()}). Re-encoded with {@code
+   * writeBytes(path)} and {@code writeRaw(valueRlp)}.
+   */
+  private static Bytes reconstructShort(final Bytes baseNode, final List<Bytes> diffEntries) {
+    final ShortFields base = parseShortFields(baseNode);
+    Bytes path = base.path;
+    Bytes valueRlp = base.valueRlp;
+
+    for (final Bytes diffEntry : diffEntries) {
+      final Decoded d = decode(diffEntry);
+      requireDiffEntry(d);
+      if (d.isBranchNode()) {
+        throw new IllegalArgumentException(
+            "reconstruct type mismatch: base is a short node but diff entry is a branch-node diff"
+                + " (metadata 0x"
+                + Integer.toHexString(Byte.toUnsignedInt(d.metadata()))
+                + ")");
+      }
+      // Patch path if KEY_CHANGED.
+      final Optional<Bytes> newPath = d.changedKey();
+      if (newPath.isPresent()) {
+        path = newPath.get();
+      }
+      // Patch value if VALUE_CHANGED.
+      final Optional<Bytes> newVal = d.changedShortNodeValue();
+      if (newVal.isPresent()) {
+        valueRlp = newVal.get();
+      }
+    }
+
+    // Re-encode: short-node RLP list with decoded-payload path + raw-RLP value.
+    final Bytes finalPath = path;
+    final Bytes finalValueRlp = valueRlp;
+    return RLP.encode(
+        out -> {
+          out.startList();
+          out.writeBytes(finalPath);
+          out.writeRaw(finalValueRlp);
+          out.endList();
+        });
+  }
+
+  /**
+   * Validates that a decoded entry encountered during {@link #reconstruct} is an applicable DIFF
+   * entry — i.e. neither a FULL checkpoint nor a deletion tombstone. The caller is responsible for
+   * slicing the entry chain at checkpoints/tombstones before invoking {@code reconstruct}.
+   *
+   * @param d the decoded diff entry
+   * @throws IllegalArgumentException if {@code d} is a FULL entry or a deletion tombstone
+   */
+  private static void requireDiffEntry(final Decoded d) {
+    if (d.isFull() || d.isDeletion()) {
+      throw new IllegalArgumentException(
+          "reconstruct expects DIFF entries only; got FULL or deletion tombstone entry"
+              + " (metadata 0x"
+              + Integer.toHexString(Byte.toUnsignedInt(d.metadata()))
+              + ")");
+    }
   }
 
   /**
