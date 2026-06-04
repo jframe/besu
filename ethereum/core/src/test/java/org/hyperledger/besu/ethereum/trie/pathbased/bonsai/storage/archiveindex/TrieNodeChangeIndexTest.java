@@ -602,4 +602,179 @@ class TrieNodeChangeIndexTest {
     // T=0, headBlock=1_999_999 → only ranges 0 and 1 are checked; range 2 not reached.
     assertThat(idx.modifiedAfter(KEY, 0, 1_999_999)).isFalse();
   }
+
+  // ===========================================================================
+  // Task 2.6: Sub-block split for hot keys
+  // ===========================================================================
+
+  // Use a small rangeSize that fits offsets in 3 bytes (max 0xFFFFFF = 16,777,215).
+  // threshold=10, splitAt=5: after appending 11 entries, a split should occur.
+  private static final long SMALL_RANGE = 100_000L;
+  private static final int TEST_THRESHOLD = 10;
+  private static final int TEST_SPLIT_AT = 5;
+
+  /**
+   * Helper: build an index with small threshold/splitAt and a rangeSize small enough for
+   * single-range testing (all block numbers < SMALL_RANGE → rangeId 0).
+   */
+  private TrieNodeChangeIndex smallThresholdIndex(
+      final org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage kv) {
+    return new TrieNodeChangeIndex(kv, SMALL_RANGE, TEST_THRESHOLD, TEST_SPLIT_AT);
+  }
+
+  // -------------------------------------------------------------------------
+  // Split triggers at threshold+1 appends
+  // -------------------------------------------------------------------------
+
+  @Test
+  void subBlockSplitOccursAfterThresholdExceeded() {
+    // With threshold=10 and splitAt=5: after 11 distinct appends (each in its own tx),
+    // a split should occur. The first 5 entries (lowest offsets) move to sub-block 0.
+    // The remaining 6 entries stay in the main list (tail).
+    var kv = new org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage();
+    var idx = smallThresholdIndex(kv);
+
+    // Append 11 distinct offsets in separate transactions so each append reads committed state.
+    for (int i = 0; i < 11; i++) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, i * 100); // blocks 0, 100, 200, ..., 1000
+      tx.commit();
+    }
+
+    // After 11 appends: sub-block 0 holds offsets {0, 100, 200, 300, 400} (the first 5);
+    // tail holds offsets {500, 600, 700, 800, 900, 1000} (the remaining 6).
+
+    // latestChangeBlock for an offset in the sub-block: T=250 → latest ≤ 250 is 200.
+    assertThat(idx.latestChangeBlock(KEY, 250)).hasValue(200L);
+
+    // latestChangeBlock for an offset in the tail: T=750 → latest ≤ 750 is 700.
+    assertThat(idx.latestChangeBlock(KEY, 750)).hasValue(700L);
+
+    // latestChangeBlock at the exact boundary between sub-block and tail: T=500 → 500.
+    assertThat(idx.latestChangeBlock(KEY, 500)).hasValue(500L);
+
+    // latestChangeBlock before any entry: T < 0 would be illegal; use T=50 which is between 0 and
+    // 100.
+    assertThat(idx.latestChangeBlock(KEY, 50)).hasValue(0L);
+
+    // latestChangeBlock at the very last entry: T=1000 → 1000.
+    assertThat(idx.latestChangeBlock(KEY, 1000)).hasValue(1000L);
+  }
+
+  // -------------------------------------------------------------------------
+  // No split below threshold
+  // -------------------------------------------------------------------------
+
+  @Test
+  void noSplitBelowThreshold() {
+    // Append exactly threshold (10) entries; no split should occur.
+    var kv = new org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage();
+    var idx = smallThresholdIndex(kv);
+
+    for (int i = 0; i < TEST_THRESHOLD; i++) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, i * 10);
+      tx.commit();
+    }
+
+    // All 10 entries are in the tail; latestChangeBlock should resolve correctly.
+    assertThat(idx.latestChangeBlock(KEY, 50)).hasValue(50L);
+    assertThat(idx.latestChangeBlock(KEY, 90)).hasValue(90L);
+    assertThat(idx.latestChangeBlock(KEY, 5)).hasValue(0L);
+  }
+
+  // -------------------------------------------------------------------------
+  // modifiedAfter still correct after split (tail check sufficient)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterStillCorrectAfterSplit() {
+    // After a split, the tail holds the newest entries. modifiedAfter uses hasChangeAboveFloor
+    // which only needs the tail (tail has the largest offsets).
+    var kv = new org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage();
+    var idx = smallThresholdIndex(kv);
+
+    // Append 11 entries to trigger split: blocks 0, 100, ..., 1000.
+    for (int i = 0; i < 11; i++) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, i * 100);
+      tx.commit();
+    }
+
+    // T=400, headBlock=50000: change at 500 is after T → true.
+    assertThat(idx.modifiedAfter(KEY, 400, 50_000)).isTrue();
+
+    // T=1000, headBlock=50000: no change after 1000 → false.
+    assertThat(idx.modifiedAfter(KEY, 1000, 50_000)).isFalse();
+
+    // T=0, headBlock=50000: changes at 100, 200, ..., 1000 are all after T → true.
+    assertThat(idx.modifiedAfter(KEY, 0, 50_000)).isTrue();
+  }
+
+  // -------------------------------------------------------------------------
+  // Multiple splits: second split creates sub-block 1
+  // -------------------------------------------------------------------------
+
+  @Test
+  void multipleSubBlockSplits() {
+    // threshold=10, splitAt=5: first split at entry 11 creates sub-block 0 (entries 0–4).
+    // After split, tail has entries 5–10 (6 entries). The second split occurs when tail
+    // exceeds threshold again: after appending entries 11–15 (tail reaches 11 entries:
+    // entries 5–15), a second split creates sub-block 1 (entries 5–9, the oldest 5 in tail).
+    // Tail then has entries 10–15.
+    var kv = new org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage();
+    var idx = smallThresholdIndex(kv);
+
+    // Append 16 distinct offsets: blocks 0, 10, 20, ..., 150.
+    for (int i = 0; i < 16; i++) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, i * 10);
+      tx.commit();
+    }
+
+    // Sub-block 0: entries {0, 10, 20, 30, 40} (first split, first 5 entries).
+    // Sub-block 1: entries {50, 60, 70, 80, 90} (second split, next 5 entries).
+    // Tail: entries {100, 110, 120, 130, 140, 150}.
+
+    // Query in sub-block 0 range: T=25 → 20.
+    assertThat(idx.latestChangeBlock(KEY, 25)).hasValue(20L);
+
+    // Query in sub-block 1 range: T=75 → 70.
+    assertThat(idx.latestChangeBlock(KEY, 75)).hasValue(70L);
+
+    // Query in tail range: T=135 → 130.
+    assertThat(idx.latestChangeBlock(KEY, 135)).hasValue(130L);
+
+    // Query at the very end: T=150 → 150.
+    assertThat(idx.latestChangeBlock(KEY, 150)).hasValue(150L);
+
+    // Query before all entries: T=5 → 0.
+    assertThat(idx.latestChangeBlock(KEY, 5)).hasValue(0L);
+  }
+
+  // -------------------------------------------------------------------------
+  // Other keys are not affected by split of KEY
+  // -------------------------------------------------------------------------
+
+  @Test
+  void otherKeyUnaffectedBySplit() {
+    var kv = new org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage();
+    var idx = smallThresholdIndex(kv);
+
+    // Trigger a split on KEY.
+    for (int i = 0; i < 11; i++) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, i * 100);
+      tx.commit();
+    }
+
+    // Also append one entry for OTHER_KEY (no split).
+    var otherTx = kv.startTransaction();
+    idx.append(otherTx, OTHER_KEY, 500);
+    otherTx.commit();
+
+    // OTHER_KEY resolves correctly with no sub-blocks.
+    assertThat(idx.latestChangeBlock(OTHER_KEY, 600)).hasValue(500L);
+    assertThat(idx.latestChangeBlock(OTHER_KEY, 400)).isEmpty();
+  }
 }

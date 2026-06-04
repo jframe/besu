@@ -142,4 +142,20 @@ public final class ArchiveNodeKey {
   public static Bytes bloomKey(final long rangeId) {
     return Bytes.ofUnsignedLong(rangeId);
   }
+
+  /**
+   * Constructs a sub-block CF key: {@code naturalKey ‖ rangeId(8 bytes BE) ‖ subId(8 bytes BE)}.
+   *
+   * <p>Sub-blocks hold the oldest entries evicted from the main index list when it grows beyond the
+   * split threshold (Design 5 §5.2 L3). The {@code subId} is sequential starting at 0; lower subIds
+   * hold older entries.
+   *
+   * @param naturalKey the account or storage natural key
+   * @param rangeId the range identifier
+   * @param subId the sub-block sequence number (0 = oldest)
+   * @return the sub-block key
+   */
+  public static Bytes subBlockKey(final Bytes naturalKey, final long rangeId, final long subId) {
+    return Bytes.concatenate(rangeKey(naturalKey, rangeId), Bytes.ofUnsignedLong(subId));
+  }
 }

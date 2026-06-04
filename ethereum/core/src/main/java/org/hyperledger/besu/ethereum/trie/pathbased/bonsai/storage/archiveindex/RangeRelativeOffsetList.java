@@ -40,7 +40,8 @@ public final class RangeRelativeOffsetList {
   /** Maximum value that fits in 3 bytes (= 2^24 − 1 = 16,777,215). */
   private static final int MAX_OFFSET = 0xFFFFFF;
 
-  private static final int ENTRY_BYTES = 3;
+  /** Bytes per packed entry (3-byte big-endian). Package-private for use by sibling classes. */
+  static final int ENTRY_BYTES = 3;
 
   private static final RangeRelativeOffsetList EMPTY =
       new RangeRelativeOffsetList(Bytes.EMPTY, Integer.MIN_VALUE);

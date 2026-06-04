@@ -20,6 +20,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -65,17 +66,55 @@ import org.apache.tuweni.bytes.MutableBytes;
  */
 public final class TrieNodeChangeIndex {
 
-  private final SegmentedKeyValueStorage storage;
-  private final long rangeSize;
+  /**
+   * Default sub-block split threshold: when the main list exceeds this many entries, a split is
+   * triggered. After the split the first {@link #DEFAULT_SUBBLOCK_SPLIT_AT} entries move to a new
+   * sub-block in {@code TRIE_NODE_SUBBLOCK_ARCHIVE}.
+   */
+  static final int DEFAULT_SUBBLOCK_THRESHOLD = 4096;
 
   /**
-   * Constructs a new index backed by the given segmented KV store.
+   * Default number of entries moved into a new sub-block on each split. Must be less than {@link
+   * #DEFAULT_SUBBLOCK_THRESHOLD}.
+   */
+  static final int DEFAULT_SUBBLOCK_SPLIT_AT = 2048;
+
+  /** Number of bytes used to store the sub-block count at the head of each index value. */
+  private static final int SUBCOUNT_BYTES = 4;
+
+  private final SegmentedKeyValueStorage storage;
+  private final long rangeSize;
+  private final int subBlockThreshold;
+  private final int subBlockSplitAt;
+
+  /**
+   * Constructs a new index backed by the given segmented KV store using the default sub-block
+   * thresholds.
    *
    * @param storage the underlying key-value storage (must contain the required column families)
    * @param rangeSize blocks per range; must equal {@link ArchiveNodeKey#RANGE_SIZE} for
    *     key-compatibility with the rest of Design 5
    */
   public TrieNodeChangeIndex(final SegmentedKeyValueStorage storage, final long rangeSize) {
+    this(storage, rangeSize, DEFAULT_SUBBLOCK_THRESHOLD, DEFAULT_SUBBLOCK_SPLIT_AT);
+  }
+
+  /**
+   * Package-private constructor for testing with custom sub-block thresholds.
+   *
+   * <p>Allows unit tests to exercise the split logic with small threshold/splitAt values without
+   * performing thousands of appends.
+   *
+   * @param storage the underlying key-value storage
+   * @param rangeSize blocks per range
+   * @param subBlockThreshold split is triggered when list size exceeds this value
+   * @param subBlockSplitAt number of entries (the oldest) moved to a new sub-block on split
+   */
+  TrieNodeChangeIndex(
+      final SegmentedKeyValueStorage storage,
+      final long rangeSize,
+      final int subBlockThreshold,
+      final int subBlockSplitAt) {
     if (rangeSize <= 0) {
       throw new IllegalArgumentException("rangeSize must be > 0, got " + rangeSize);
     }
@@ -86,8 +125,20 @@ public final class TrieNodeChangeIndex {
       throw new IllegalArgumentException(
           "rangeSize must be <= Integer.MAX_VALUE + 1, got " + rangeSize);
     }
+    if (subBlockThreshold <= 0) {
+      throw new IllegalArgumentException("subBlockThreshold must be > 0, got " + subBlockThreshold);
+    }
+    if (subBlockSplitAt <= 0 || subBlockSplitAt >= subBlockThreshold) {
+      throw new IllegalArgumentException(
+          "subBlockSplitAt must be in (0, subBlockThreshold), got "
+              + subBlockSplitAt
+              + ", threshold="
+              + subBlockThreshold);
+    }
     this.storage = storage;
     this.rangeSize = rangeSize;
+    this.subBlockThreshold = subBlockThreshold;
+    this.subBlockSplitAt = subBlockSplitAt;
   }
 
   // ---------------------------------------------------------------------------
@@ -101,7 +152,9 @@ public final class TrieNodeChangeIndex {
    *
    * <ol>
    *   <li>Appends {@code offset(block)} to the packed offset list for {@code
-   *       TRIE_NODE_INDEX_ARCHIVE[naturalKey‖rangeId]}.
+   *       TRIE_NODE_INDEX_ARCHIVE[naturalKey‖rangeId]}. If the list exceeds {@link
+   *       #subBlockThreshold}, the first {@link #subBlockSplitAt} entries (the oldest) are moved to
+   *       a new sub-block in {@code TRIE_NODE_SUBBLOCK_ARCHIVE[naturalKey‖rangeId‖subId(8B BE)]}.
    *   <li>Sets {@code TRIE_NODE_RANGE_MARKER_ARCHIVE[naturalKey‖rangeId]} (presence-only, empty
    *       value).
    *   <li>OR-in {@code naturalKey} to the {@link RangeBloom} for {@code
@@ -127,16 +180,43 @@ public final class TrieNodeChangeIndex {
     // 1. Update per-node offset list
     final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
     final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
+
+    // Read current index value: [4B subCount][packed offsets]
+    final int[] subCountHolder = new int[1];
     final RangeRelativeOffsetList list =
         storage
             .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
-            .map(b -> RangeRelativeOffsetList.fromBytes(Bytes.wrap(b)))
+            .map(
+                b -> {
+                  final IndexValue iv = readIndexValue(b);
+                  subCountHolder[0] = iv.subCount;
+                  return iv.list;
+                })
             .orElse(RangeRelativeOffsetList.empty());
-    final RangeRelativeOffsetList updated = list.append(offset);
+
+    int subCount = subCountHolder[0];
+    RangeRelativeOffsetList updated = list.append(offset);
+
+    // Split when list size exceeds the threshold.
+    if (updated.size() > subBlockThreshold) {
+      // Move the first subBlockSplitAt entries (the oldest) into a new sub-block.
+      final RangeRelativeOffsetList head = sliceHead(updated, subBlockSplitAt);
+      final RangeRelativeOffsetList tail = sliceTail(updated, subBlockSplitAt);
+
+      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subCount);
+      tx.put(
+          KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE,
+          subKey.toArrayUnsafe(),
+          head.toBytes().toArrayUnsafe());
+
+      subCount++;
+      updated = tail;
+    }
+
     tx.put(
         KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
         indexKeyBytes,
-        updated.toBytes().toArrayUnsafe());
+        writeIndexValue(subCount, updated));
 
     // 2. Set presence-only range marker (same composite key, different CF)
     tx.put(
@@ -165,6 +245,92 @@ public final class TrieNodeChangeIndex {
         KeyValueSegmentIdentifier.TRIE_NODE_BLOOM_ARCHIVE,
         bloomKeyBytes,
         bloom.toBytes().toArrayUnsafe());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Index value helpers (format: [4B subCount BE][packed 3-byte offsets])
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Parsed representation of a value stored in {@code TRIE_NODE_INDEX_ARCHIVE}.
+   *
+   * <p>Format: {@code [4B subCount (big-endian int)][3N bytes: packed offset list]}. The subCount
+   * is the number of sub-blocks already stored in {@code TRIE_NODE_SUBBLOCK_ARCHIVE} for this
+   * {@code (naturalKey, rangeId)} pair. The packed offsets are the current <em>tail</em> (the
+   * newest entries).
+   */
+  private record IndexValue(int subCount, RangeRelativeOffsetList list) {}
+
+  /**
+   * Parses the {@code [4B subCount][packed offsets]} index value from raw storage bytes.
+   *
+   * @param raw the raw bytes from {@code TRIE_NODE_INDEX_ARCHIVE}
+   * @return the parsed sub-block count and tail offset list
+   */
+  private static IndexValue readIndexValue(final byte[] raw) {
+    if (raw.length < SUBCOUNT_BYTES) {
+      // Only reachable if storage is corrupt: the 4-byte subCount prefix is written on every
+      // append since Task 2.6, and no pre-2.6 production data exists. Returning subCount=0 with
+      // an empty list is safe — the caller will treat the entry as having no changes.
+      return new IndexValue(0, RangeRelativeOffsetList.empty());
+    }
+    final int subCount =
+        ((raw[0] & 0xFF) << 24)
+            | ((raw[1] & 0xFF) << 16)
+            | ((raw[2] & 0xFF) << 8)
+            | (raw[3] & 0xFF);
+    final Bytes packedOffsets = Bytes.wrap(raw, SUBCOUNT_BYTES, raw.length - SUBCOUNT_BYTES);
+    final RangeRelativeOffsetList list =
+        packedOffsets.isEmpty()
+            ? RangeRelativeOffsetList.empty()
+            : RangeRelativeOffsetList.fromBytes(packedOffsets);
+    return new IndexValue(subCount, list);
+  }
+
+  /**
+   * Serialises a sub-block count and offset list into the {@code [4B subCount][packed offsets]}
+   * format used by {@code TRIE_NODE_INDEX_ARCHIVE}.
+   *
+   * @param subCount the number of existing sub-blocks
+   * @param list the tail offset list
+   * @return the serialised bytes
+   */
+  private static byte[] writeIndexValue(final int subCount, final RangeRelativeOffsetList list) {
+    final Bytes packed = list.toBytes();
+    final byte[] result = new byte[SUBCOUNT_BYTES + packed.size()];
+    result[0] = (byte) ((subCount >>> 24) & 0xFF);
+    result[1] = (byte) ((subCount >>> 16) & 0xFF);
+    result[2] = (byte) ((subCount >>> 8) & 0xFF);
+    result[3] = (byte) (subCount & 0xFF);
+    packed.copyTo(MutableBytes.wrap(result, SUBCOUNT_BYTES, packed.size()));
+    return result;
+  }
+
+  /**
+   * Returns the first {@code n} entries of {@code list} as a new {@link RangeRelativeOffsetList}.
+   *
+   * @param list the source list
+   * @param n the number of entries to include (must be &lt;= list.size())
+   * @return a new list containing the first {@code n} entries
+   */
+  private static RangeRelativeOffsetList sliceHead(
+      final RangeRelativeOffsetList list, final int n) {
+    final Bytes buf = list.toBytes();
+    return RangeRelativeOffsetList.fromBytes(buf.slice(0, n * RangeRelativeOffsetList.ENTRY_BYTES));
+  }
+
+  /**
+   * Returns entries starting at index {@code from} of {@code list} as a new {@link
+   * RangeRelativeOffsetList}.
+   *
+   * @param list the source list
+   * @param from the starting index (entries [from, size) are included)
+   * @return a new list containing entries from index {@code from} onward
+   */
+  private static RangeRelativeOffsetList sliceTail(
+      final RangeRelativeOffsetList list, final int from) {
+    final Bytes buf = list.toBytes();
+    return RangeRelativeOffsetList.fromBytes(buf.slice(from * RangeRelativeOffsetList.ENTRY_BYTES));
   }
 
   // ---------------------------------------------------------------------------
@@ -294,19 +460,23 @@ public final class TrieNodeChangeIndex {
       return false;
     }
 
-    // 3. Offset list: get the last (largest) entry using latestLeq(maxOffset).
-    //    If the largest entry > floor, a qualifying change exists.
+    // 3. Offset list: get the last (largest) entry from the TAIL using latestLeq(maxOffset).
+    //    The tail (main list in TRIE_NODE_INDEX_ARCHIVE) holds the NEWEST (largest) entries.
+    //    Sub-blocks hold older entries, so any entry in a sub-block is ≤ any entry in the tail.
+    //    Therefore: if the tail's largest entry > floor → a qualifying change exists. If the
+    //    tail's largest entry ≤ floor, no sub-block entry can exceed floor either (all sub-block
+    //    entries are smaller than the tail's smallest entry). No sub-block reads are needed.
     final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
     return storage
         .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe())
         .map(
             bytes -> {
-              final RangeRelativeOffsetList list =
-                  RangeRelativeOffsetList.fromBytes(Bytes.wrap(bytes));
+              // Parse the [4B subCount][packed offsets] format; only the tail (offsets) matters.
+              final RangeRelativeOffsetList tail = readIndexValue(bytes).list;
               // The last entry is the largest. latestLeq(maxOffset) returns the largest entry
               // that is <= maxOffset — which is simply the last entry, since all offsets are
               // in [0, maxOffset]. If that value > floor, a change strictly after T exists.
-              return list.latestLeq(maxOffset).stream().anyMatch(last -> last > floor);
+              return tail.latestLeq(maxOffset).stream().anyMatch(last -> last > floor);
             })
         .orElse(false);
   }
@@ -433,18 +603,49 @@ public final class TrieNodeChangeIndex {
       return Optional.empty();
     }
 
-    // 3. Read the packed offset list for this node / range.
+    // 3. Read the TAIL (main list in TRIE_NODE_INDEX_ARCHIVE) and, if needed, walk sub-blocks.
+    //
+    // Index value format: [4B subCount (BE int)][packed 3-byte offsets = tail].
+    // The tail holds the NEWEST (largest) entries for this key/range. Sub-blocks hold older
+    // entries: subId=0 is the oldest, subId=subCount-1 is the most-recently-split (but still
+    // older than the current tail). Walk: tail first, then sub-blocks from highest subId down.
     final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
-    return storage
-        .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe())
-        .flatMap(
-            bytes -> {
-              final RangeRelativeOffsetList list =
-                  RangeRelativeOffsetList.fromBytes(Bytes.wrap(bytes));
-              return list.latestLeq(withinRangeCeil).stream()
-                  .mapToObj(offset -> rangeId * rangeSize + offset)
-                  .findFirst();
-            });
+    final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
+    final Optional<byte[]> rawOpt =
+        storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes);
+    if (rawOpt.isEmpty()) {
+      return Optional.empty();
+    }
+    final IndexValue iv = readIndexValue(rawOpt.get());
+    final int subCount = iv.subCount;
+    final RangeRelativeOffsetList tail = iv.list;
+
+    // 3a. Check the tail first (newest entries).
+    final OptionalInt tailHit = tail.latestLeq(withinRangeCeil);
+    if (tailHit.isPresent()) {
+      return Optional.of(rangeId * rangeSize + tailHit.getAsInt());
+    }
+
+    // 3b. If the tail has no entry ≤ ceil (all tail entries are newer than ceil, or tail is
+    //     empty), walk sub-blocks from highest subId downward (most-recently-split first).
+    //     Each sub-block was evicted from the tail before all current tail entries, so its
+    //     entries are strictly smaller. We stop at the first sub-block that has an entry ≤ ceil.
+    for (int subId = subCount - 1; subId >= 0; subId--) {
+      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subId);
+      final Optional<byte[]> subRaw =
+          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE, subKey.toArrayUnsafe());
+      if (subRaw.isEmpty()) {
+        continue; // should not happen in well-formed data, but skip gracefully
+      }
+      final RangeRelativeOffsetList subList =
+          RangeRelativeOffsetList.fromBytes(Bytes.wrap(subRaw.get()));
+      final OptionalInt subHit = subList.latestLeq(withinRangeCeil);
+      if (subHit.isPresent()) {
+        return Optional.of(rangeId * rangeSize + subHit.getAsInt());
+      }
+    }
+
+    return Optional.empty();
   }
 
   // ===========================================================================

@@ -218,4 +218,44 @@ class ArchiveNodeKeyTest {
   void bloomKeyExactBytes() {
     assertThat(ArchiveNodeKey.bloomKey(1L)).isEqualTo(Bytes.fromHexString("0x0000000000000001"));
   }
+
+  // -----------------------------------------------------------------------
+  // subBlockKey()
+  // -----------------------------------------------------------------------
+
+  @Test
+  void subBlockKeySizeIsNaturalKeyPlusSixteen() {
+    // subBlockKey = naturalKey ‖ rangeId(8B) ‖ subId(8B)
+    Bytes naturalKey = ArchiveNodeKey.storage(ACCOUNT_HASH, LOCATION);
+    Bytes sbk = ArchiveNodeKey.subBlockKey(naturalKey, 3L, 0L);
+    assertThat(sbk.size()).isEqualTo(naturalKey.size() + 8 + 8);
+  }
+
+  @Test
+  void subBlockKeyEncodesRangeIdAndSubIdBigEndian() {
+    Bytes naturalKey = ArchiveNodeKey.account(LOCATION);
+    long rangeId = 5L;
+    long subId = 2L;
+    Bytes sbk = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subId);
+    // rangeId occupies bytes [naturalKey.size(), naturalKey.size()+8)
+    assertThat(sbk.getLong(naturalKey.size())).isEqualTo(rangeId);
+    // subId occupies the final 8 bytes
+    assertThat(sbk.getLong(sbk.size() - 8)).isEqualTo(subId);
+  }
+
+  @Test
+  void subBlockKeyExactBytes() {
+    // naturalKey(0x0102030405) ‖ rangeId 1 as 8B BE ‖ subId 0 as 8B BE
+    Bytes nk = Bytes.fromHexString("0x0102030405");
+    assertThat(ArchiveNodeKey.subBlockKey(nk, 1L, 0L))
+        .isEqualTo(Bytes.fromHexString("0x010203040500000000000000010000000000000000"));
+  }
+
+  @Test
+  void subBlockKeyDifferentSubIdsProduceDifferentKeys() {
+    Bytes naturalKey = ArchiveNodeKey.account(LOCATION);
+    Bytes sbk0 = ArchiveNodeKey.subBlockKey(naturalKey, 0L, 0L);
+    Bytes sbk1 = ArchiveNodeKey.subBlockKey(naturalKey, 0L, 1L);
+    assertThat(sbk0).isNotEqualTo(sbk1);
+  }
 }
