@@ -72,6 +72,43 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       true,
       false,
       true),
+  // Design 5 — Trie-Node Differential Index column families
+  TRIE_NODE_HISTORY_ARCHIVE(
+      "TRIE_NODE_HISTORY_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true,
+      true),
+  TRIE_NODE_INDEX_ARCHIVE(
+      "TRIE_NODE_INDEX_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true,
+      true),
+  TRIE_NODE_RANGE_MARKER_ARCHIVE(
+      "TRIE_NODE_RANGE_MARKER_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true,
+      true),
+  TRIE_NODE_BLOOM_ARCHIVE(
+      "TRIE_NODE_BLOOM_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true,
+      true),
+  TRIE_NODE_SUBBLOCK_ARCHIVE(
+      "TRIE_NODE_SUBBLOCK_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      true,
+      false,
+      true,
+      true),
+
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE
 
   // previously supported GoQuorum private states
