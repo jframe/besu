@@ -168,6 +168,150 @@ public final class TrieNodeChangeIndex {
   }
 
   // ---------------------------------------------------------------------------
+  // Fast-path query: modifiedAfter
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns {@code true} iff {@code naturalKey} has at least one change in the open interval {@code
+   * (t, headBlock]} (i.e., strictly after {@code t}, at or before {@code headBlock}).
+   *
+   * <p>This is the <em>fast path</em> for the Stage-4 proof-node loader: when this method returns
+   * {@code false}, the current live-trie node is the correct historical node for the proof (no
+   * re-indexing needed). Callers pass {@code chainHead.getNumber()} as {@code headBlock}.
+   *
+   * <h3>Algorithm — ascending range walk</h3>
+   *
+   * <ol>
+   *   <li>Compute {@code startRange = t / rangeSize} and {@code headRange = headBlock / rangeSize}.
+   *   <li>Walk ranges {@code r = startRange} to {@code r = headRange} (ascending).
+   *   <li>For each range:
+   *       <ul>
+   *         <li><strong>Bloom short-circuit</strong> — if bloom is absent or negative for {@code
+   *             naturalKey}, skip.
+   *         <li><strong>Range-marker check</strong> — if the marker for {@code (naturalKey, r)} is
+   *             absent, skip (eliminates bloom false-positives before list read).
+   *         <li><strong>Within-range floor</strong> — for {@code r == startRange}: floor = T's
+   *             within-range offset (strictly, we need any entry {@code > floor}); for {@code r >
+   *             startRange}: floor = -1 (any entry qualifies).
+   *         <li><strong>Has-any-above check</strong> — use {@link
+   *             RangeRelativeOffsetList#latestLeq} with the full range max ({@code rangeSize - 1})
+   *             to get the last (largest) entry. If that value {@code > floor}, a qualifying change
+   *             exists.
+   *       </ul>
+   *   <li>If any range satisfies → {@code true}. If the entire walk is exhausted → {@code false}.
+   * </ol>
+   *
+   * <p><strong>Stopping condition:</strong> the walk is bounded by {@code headRange}. Ranges beyond
+   * {@code headBlock} are not inspected. An alternative bloom-based stop (stop at the first absent
+   * bloom) would also be correct on a live chain where ranges are populated continuously upward,
+   * but the explicit {@code headBlock} bound is simpler and does not require knowing the chain head
+   * from outside.
+   *
+   * <h3>Correctness invariant</h3>
+   *
+   * A false negative (returning {@code false} when a change exists after {@code t}) is a
+   * <strong>critical correctness bug</strong> — it would cause Stage 4 to serve a stale node. A
+   * false positive (returning {@code true} when unchanged) is only a performance miss. Bloom false
+   * positives are acceptable; the range-marker and offset-list checks must not introduce false
+   * negatives.
+   *
+   * <p><strong>Known false-positive source:</strong> when {@code t} and {@code headBlock} share the
+   * same range, {@link #hasChangeAboveFloor} uses {@code latestLeq(rangeSize - 1)} (the full-range
+   * max) not {@code headBlock}'s within-range offset as the ceiling. Therefore a change that exists
+   * strictly after {@code headBlock} but before the range boundary will be reported as {@code
+   * true}. Stage 4 must tolerate this — it triggers a {@link #latestChangeBlock} lookup which will
+   * find the actual latest change ≤ T and serve the correct node.
+   *
+   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})
+   * @param t the target proof block (exclusive lower bound of the search window)
+   * @param headBlock the chain head block number (inclusive upper bound of the search window);
+   *     callers should pass {@code chainHead.getNumber()}
+   * @return {@code true} iff a change exists in {@code (t, headBlock]}
+   * @throws IllegalArgumentException if {@code t < 0}, {@code headBlock < 0}, or {@code headBlock <
+   *     t}
+   */
+  public boolean modifiedAfter(final Bytes naturalKey, final long t, final long headBlock) {
+    if (t < 0) {
+      throw new IllegalArgumentException("t must be >= 0, got " + t);
+    }
+    if (headBlock < 0) {
+      throw new IllegalArgumentException("headBlock must be >= 0, got " + headBlock);
+    }
+    if (headBlock < t) {
+      throw new IllegalArgumentException(
+          "headBlock must be >= t, got headBlock=" + headBlock + ", t=" + t);
+    }
+
+    final long startRange = t / rangeSize;
+    final long headRange = headBlock / rangeSize;
+    // Maximum within-range offset value (= rangeSize - 1); cast is safe because rangeSize
+    // is guarded to be <= Integer.MAX_VALUE + 1 in the constructor.
+    final int maxOffset = (int) (rangeSize - 1);
+
+    for (long r = startRange; r <= headRange; r++) {
+      // Within-range floor (exclusive): for the startRange we need offset strictly > T's offset;
+      // for higher ranges every offset in the range is > T, so floor = -1 (any entry qualifies).
+      final int floor = (r == startRange) ? (int) (t - r * rangeSize) : -1;
+
+      if (hasChangeAboveFloor(naturalKey, r, floor, maxOffset)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Returns {@code true} if range {@code rangeId} contains a change for {@code naturalKey} with an
+   * offset strictly greater than {@code floor}.
+   *
+   * <p>Short-circuit order (cheapest-first):
+   *
+   * <ol>
+   *   <li><strong>Bloom</strong> — if absent or negative, return false.
+   *   <li><strong>Range marker</strong> — if absent, return false (eliminates bloom
+   *       false-positives).
+   *   <li><strong>Offset list</strong> — read the list and check whether the largest entry
+   *       (obtained via {@code latestLeq(maxOffset)}) is greater than {@code floor}.
+   * </ol>
+   *
+   * @param naturalKey the node's natural key
+   * @param rangeId the range to search
+   * @param floor the exclusive lower bound (offsets must be strictly {@code > floor}); pass {@code
+   *     -1} to accept any entry (used for ranges entirely above {@code startRange})
+   * @param maxOffset the maximum valid offset for this range ({@code rangeSize - 1})
+   * @return {@code true} if any offset {@code > floor} exists in this range for this key
+   */
+  private boolean hasChangeAboveFloor(
+      final Bytes naturalKey, final long rangeId, final int floor, final int maxOffset) {
+
+    // 1. Bloom short-circuit.
+    if (!bloomMaybeContains(rangeId, naturalKey)) {
+      return false;
+    }
+
+    // 2. Range-marker short-circuit.
+    if (!rangeMarkerPresent(naturalKey, rangeId)) {
+      return false;
+    }
+
+    // 3. Offset list: get the last (largest) entry using latestLeq(maxOffset).
+    //    If the largest entry > floor, a qualifying change exists.
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
+    return storage
+        .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe())
+        .map(
+            bytes -> {
+              final RangeRelativeOffsetList list =
+                  RangeRelativeOffsetList.fromBytes(Bytes.wrap(bytes));
+              // The last entry is the largest. latestLeq(maxOffset) returns the largest entry
+              // that is <= maxOffset — which is simply the last entry, since all offsets are
+              // in [0, maxOffset]. If that value > floor, a change strictly after T exists.
+              return list.latestLeq(maxOffset).stream().anyMatch(last -> last > floor);
+            })
+        .orElse(false);
+  }
+
+  // ---------------------------------------------------------------------------
   // Read helpers
   // ---------------------------------------------------------------------------
 

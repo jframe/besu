@@ -388,4 +388,218 @@ class TrieNodeChangeIndexTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("t");
   }
+
+  // ===========================================================================
+  // Task 2.5: modifiedAfter(naturalKey, t, headBlock) ascending range walk
+  // ===========================================================================
+
+  // -------------------------------------------------------------------------
+  // Basic: change AFTER T → true
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterReturnsTrueWhenChangeExistsAfterT() {
+    // Change at block 1_000 (range 0, offset 1_000). T=500, headBlock=2_000_000.
+    // The change is strictly after T → should return true.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 1_000);
+    tx.commit();
+    assertThat(idx.modifiedAfter(KEY, 500, 2_000_000)).isTrue();
+  }
+
+  // -------------------------------------------------------------------------
+  // Basic: change BEFORE T → false
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterReturnsFalseWhenChangeIsBeforeT() {
+    // Change at block 500 (range 0, offset 500). T=1_000, headBlock=2_000_000.
+    // The only change is before T → should return false.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 500);
+    tx.commit();
+    assertThat(idx.modifiedAfter(KEY, 1_000, 2_000_000)).isFalse();
+  }
+
+  // -------------------------------------------------------------------------
+  // Boundary: change exactly at T is NOT "after T" → false
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterReturnsFalseWhenChangeExactlyAtT() {
+    // Change at T=1_000. "After T" is strictly > T, so T itself does not count.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 1_000);
+    tx.commit();
+    assertThat(idx.modifiedAfter(KEY, 1_000, 2_000_000)).isFalse();
+  }
+
+  // -------------------------------------------------------------------------
+  // Boundary: change at T+1 IS "after T" → true
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterReturnsTrueWhenChangeAtTPlus1() {
+    // Change at T+1=1_001. Strictly after T=1_000 → true.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 1_001);
+    tx.commit();
+    assertThat(idx.modifiedAfter(KEY, 1_000, 2_000_000)).isTrue();
+  }
+
+  // -------------------------------------------------------------------------
+  // Cross-range: change in range 0 and range 2; query T in range 1
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterCrossRangeReturnsTrueWhenLaterRangeHasChange() {
+    // rangeSize=1_000_000: range 0=[0,999_999], range 1=[1_000_000,1_999_999],
+    //                       range 2=[2_000_000,2_999_999]
+    // Changes at 500_000 (range 0) and 2_500_000 (range 2).
+    // T=1_000_000 (in range 1), headBlock=3_000_000.
+    // range 1 is empty; range 2 has a change (2_500_000 > T) → true.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx0 = kv.startTransaction();
+    idx.append(tx0, KEY, 500_000);
+    tx0.commit();
+    var tx2 = kv.startTransaction();
+    idx.append(tx2, KEY, 2_500_000);
+    tx2.commit();
+    assertThat(idx.modifiedAfter(KEY, 1_000_000, 3_000_000)).isTrue();
+  }
+
+  @Test
+  void modifiedAfterCrossRangeReturnsFalseWhenAllChangesBeforeT() {
+    // Same setup: changes at 500_000 and 2_500_000.
+    // T=2_600_000 (in range 2 after the range-2 change), headBlock=3_000_000.
+    // Range 2 has a change, but it's at 2_500_000 which is < T → false.
+    // No ranges above 2 have changes → false.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx0 = kv.startTransaction();
+    idx.append(tx0, KEY, 500_000);
+    tx0.commit();
+    var tx2 = kv.startTransaction();
+    idx.append(tx2, KEY, 2_500_000);
+    tx2.commit();
+    assertThat(idx.modifiedAfter(KEY, 2_600_000, 3_000_000)).isFalse();
+  }
+
+  // -------------------------------------------------------------------------
+  // Bloom-negative skips range: key never indexed → false
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterBloomNegativeReturnsFalse() {
+    // KEY is never indexed; bloom is empty → false.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    // Only OTHER_KEY is indexed, so bloom for range 0 is positive for OTHER_KEY but negative KEY.
+    var tx = kv.startTransaction();
+    idx.append(tx, OTHER_KEY, 500_000);
+    tx.commit();
+    assertThat(idx.modifiedAfter(KEY, 0, 2_000_000)).isFalse();
+  }
+
+  // -------------------------------------------------------------------------
+  // Validation: negative T → IllegalArgumentException mentioning "t"
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterNegativeTThrows() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    assertThatThrownBy(() -> idx.modifiedAfter(KEY, -1, 1_000_000))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("t");
+  }
+
+  // -------------------------------------------------------------------------
+  // Validation: negative headBlock → IllegalArgumentException
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterNegativeHeadBlockThrows() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    assertThatThrownBy(() -> idx.modifiedAfter(KEY, 0, -1))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("headBlock");
+  }
+
+  // -------------------------------------------------------------------------
+  // Validation: headBlock < t → IllegalArgumentException
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterHeadBlockLessThanTThrows() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    assertThatThrownBy(() -> idx.modifiedAfter(KEY, 1_000, 500))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("headBlock");
+  }
+
+  // -------------------------------------------------------------------------
+  // headBlock == t → no range above startRange; nothing after T → false
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterHeadBlockEqualsTReturnsFalse() {
+    // headBlock == t means the search window (T, T] is empty; floor = T's within-range offset,
+    // and the change at T has offset == floor, so floor > floor is false.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 500);
+    tx.commit();
+    assertThat(idx.modifiedAfter(KEY, 500, 500)).isFalse();
+  }
+
+  // -------------------------------------------------------------------------
+  // Known false-positive: t and headBlock in same range; change after headBlock but
+  // before range boundary → modifiedAfter returns true (intentional conservative behaviour)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterInRangeFalsePositiveWhenChangeExceedsHeadBlockButNotRangeBoundary() {
+    // rangeSize=1_000_000. Change at block 700 (range 0, offset 700).
+    // t=500, headBlock=600 — both in range 0, same startRange=headRange=0.
+    // hasChangeAboveFloor uses latestLeq(999_999) (full-range max), not headBlock's offset (600).
+    // The last entry is 700 which > floor (500) → returns true, even though 700 > headBlock (600).
+    // This is a known, acceptable false positive: Stage 4 handles it by falling back to
+    // latestChangeBlock which finds the actual latest change ≤ T.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 700);
+    tx.commit();
+    assertThat(idx.modifiedAfter(KEY, 500, 600)).isTrue();
+  }
+
+  // -------------------------------------------------------------------------
+  // headBlock bounds the walk: change in range beyond headBlock is NOT seen → false
+  // -------------------------------------------------------------------------
+
+  @Test
+  void modifiedAfterDoesNotWalkBeyondHeadBlock() {
+    // Change at 2_500_000 (range 2). headBlock=1_999_999 (range 1) → walk stops at range 1;
+    // range 2 never consulted even though it has a change.
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 2_500_000);
+    tx.commit();
+    // T=0, headBlock=1_999_999 → only ranges 0 and 1 are checked; range 2 not reached.
+    assertThat(idx.modifiedAfter(KEY, 0, 1_999_999)).isFalse();
+  }
 }
