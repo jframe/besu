@@ -14,6 +14,11 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
+
 import java.nio.ByteBuffer;
 import java.util.BitSet;
 
@@ -42,6 +47,16 @@ public class TrieNodeIndexProgress {
 
   /** Sentinel value for {@link #indexStartBlock()} when no backfill has started yet. */
   public static final long UNSET_INDEX_START = Long.MAX_VALUE;
+
+  /**
+   * Key used to persist this record in {@code TRIE_BRANCH_STORAGE}. Co-located with {@code
+   * WORLD_BLOCK_NUMBER_KEY} so that all metadata for the world-state live in the same column
+   * family.
+   *
+   * <p>The hex value {@code 0x74726965496e646578} encodes the ASCII string {@code "trieIndex"}.
+   */
+  static final byte[] TRIE_NODE_INDEX_PROGRESS_KEY =
+      "trieNodeIndexProgress".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
   private final long rangeSize;
 
@@ -240,5 +255,38 @@ public class TrieNodeIndexProgress {
     }
     BitSet bitmap = BitSet.valueOf(words);
     return new TrieNodeIndexProgress(rangeSize, bitmap, last, start);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Storage I/O
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Loads a {@link TrieNodeIndexProgress} from {@code TRIE_BRANCH_STORAGE} in the given storage.
+   *
+   * <p>If no progress record is found (e.g. on first startup), returns a fresh, empty instance.
+   *
+   * @param storage the segmented key-value storage to read from
+   * @param rangeSize the number of blocks per index range (must match the value used at write time)
+   * @return the restored progress record, or a new empty one if absent
+   */
+  public static TrieNodeIndexProgress load(
+      final SegmentedKeyValueStorage storage, final long rangeSize) {
+    return storage
+        .get(TRIE_BRANCH_STORAGE, TRIE_NODE_INDEX_PROGRESS_KEY)
+        .map(bytes -> fromBytes(rangeSize, bytes))
+        .orElseGet(() -> new TrieNodeIndexProgress(rangeSize));
+  }
+
+  /**
+   * Persists this progress record to {@code TRIE_BRANCH_STORAGE} in the given transaction.
+   *
+   * <p>The write is appended to {@code tx} and committed by the caller along with any other pending
+   * writes for the block.
+   *
+   * @param tx the transaction on which to write the progress bytes
+   */
+  public void save(final SegmentedKeyValueStorageTransaction tx) {
+    tx.put(TRIE_BRANCH_STORAGE, TRIE_NODE_INDEX_PROGRESS_KEY, toBytes());
   }
 }

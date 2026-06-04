@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeDiffCodec;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
@@ -103,6 +104,19 @@ class BonsaiArchiveTrieNodeStrategyTest {
         true, // trieNodeIndexEnabled
         historyStore,
         changeIndex);
+  }
+
+  /** Strategy with trie-node index ENABLED, suffix archive ENABLED, and progress tracking wired. */
+  private BonsaiArchiveTrieNodeStrategy strategyWithIndexAndProgress(
+      final TrieNodeIndexProgress progress) {
+    return new BonsaiArchiveTrieNodeStrategy(
+        INTERVAL,
+        null, // no trieLoader
+        new BonsaiTrieNodeStrategy(),
+        true, // trieNodeIndexEnabled
+        historyStore,
+        changeIndex,
+        progress);
   }
 
   /** Strategy with trie-node index DISABLED (the existing behaviour). */
@@ -417,5 +431,131 @@ class BonsaiArchiveTrieNodeStrategyTest {
     assertThat(entry101).isPresent();
     assertThat(TrieNodeDiffCodec.decode(entry101.get()).isFull()).isTrue();
     assertThat(TrieNodeDiffCodec.decode(entry101.get()).isCreation()).isFalse();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Task 3.4: Coverage-progress advancement on block flush
+  // ---------------------------------------------------------------------------
+
+  /**
+   * After writing a node at block N and flushing with storage context, {@code
+   * progress.lastIndexedBlock()} must equal N.
+   */
+  @Test
+  void progress_flushAdvancesLastIndexedBlock() {
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
+
+    final long targetBlock = 100L;
+    setWorldBlockNumber(targetBlock - 1); // getCurrentBlockNumber returns targetBlock
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
+    strategy.flushPendingBlooms(tx, storage);
+    tx.commit();
+
+    assertThat(progress.lastIndexedBlock()).isEqualTo(targetBlock);
+  }
+
+  /**
+   * At the range boundary (block = rangeSize - 1 = 999_999), {@code progress.covers(0)} must be
+   * true after flush.
+   */
+  @Test
+  void progress_atRangeBoundary_marksRangeComplete() {
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
+
+    // Block rangeSize - 1 is the last block in range 0 → markRangeComplete(0) must be called.
+    final long lastBlockInRange0 = ArchiveNodeKey.RANGE_SIZE - 1;
+    setWorldBlockNumber(lastBlockInRange0 - 1);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
+    strategy.flushPendingBlooms(tx, storage);
+    tx.commit();
+
+    assertThat(progress.lastIndexedBlock()).isEqualTo(lastBlockInRange0);
+    // Range 0 covers blocks [0, rangeSize) — covers(0) must be true.
+    assertThat(progress.covers(0L)).isTrue();
+    // Range 1 not yet indexed — covers(rangeSize) must be false.
+    assertThat(progress.covers(ArchiveNodeKey.RANGE_SIZE)).isFalse();
+  }
+
+  /**
+   * Mid-range blocks do NOT mark the range complete: {@code covers(block)} returns false until the
+   * last block of the range is flushed.
+   */
+  @Test
+  void progress_midRangeBlock_doesNotMarkRangeComplete() {
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
+
+    // Block 500_000 is mid-range.
+    final long midBlock = 500_000L;
+    setWorldBlockNumber(midBlock - 1);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
+    strategy.flushPendingBlooms(tx, storage);
+    tx.commit();
+
+    assertThat(progress.lastIndexedBlock()).isEqualTo(midBlock);
+    assertThat(progress.covers(midBlock)).isFalse();
+  }
+
+  /**
+   * {@code TrieNodeIndexProgress.load(storage, rangeSize)} round-trips: after saving via {@code
+   * flushPendingBlooms}, loading from the same storage returns an equivalent record.
+   */
+  @Test
+  void progress_loadRoundTrip() {
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
+
+    // Write at the last block of range 0 so markRangeComplete is triggered.
+    final long lastBlockInRange0 = ArchiveNodeKey.RANGE_SIZE - 1;
+    setWorldBlockNumber(lastBlockInRange0 - 1);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
+    strategy.flushPendingBlooms(tx, storage);
+    tx.commit();
+
+    // Now load from the same storage.
+    final TrieNodeIndexProgress loaded =
+        TrieNodeIndexProgress.load(storage, ArchiveNodeKey.RANGE_SIZE);
+    assertThat(loaded.lastIndexedBlock()).isEqualTo(lastBlockInRange0);
+    assertThat(loaded.covers(0L)).isTrue();
+    assertThat(loaded.covers(ArchiveNodeKey.RANGE_SIZE)).isFalse();
+  }
+
+  /**
+   * When the flag is disabled (no-progress strategy), {@code flushPendingBlooms(tx, storage)} is
+   * not available on the strategy but the old single-arg overload still works — coverage never
+   * advances.
+   */
+  @Test
+  void progress_flagDisabled_noProgressWritten() {
+    // When progress=null (6-arg constructor), flushPendingBlooms(tx, storage) must NOT persist any
+    // progress bytes (it simply skips the progress block).
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+    // Construct WITH progress, but index disabled — the index-disabled code path never calls
+    // progress.setLastIndexedBlock, so lastIndexedBlock stays UNSET.
+    final BonsaiArchiveTrieNodeStrategy strategy =
+        new BonsaiArchiveTrieNodeStrategy(
+            INTERVAL,
+            null,
+            new BonsaiTrieNodeStrategy(),
+            false, // trieNodeIndexEnabled = false
+            historyStore,
+            changeIndex,
+            progress);
+
+    final long targetBlock = 100L;
+    setWorldBlockNumber(targetBlock - 1);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
+    strategy.flushPendingBlooms(tx, storage);
+    tx.commit();
+
+    // Index is disabled: progress must not have advanced.
+    assertThat(progress.lastIndexedBlock()).isEqualTo(TrieNodeIndexProgress.UNSET_LAST_INDEXED);
   }
 }

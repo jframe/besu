@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeDiffCodec;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -90,6 +91,12 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   private final TrieNodeChangeIndex changeIndex;
 
   /**
+   * Coverage-progress tracker. Non-null only when {@link #trieNodeIndexEnabled} is {@code true}.
+   * Updated in {@link #flushPendingBlooms(SegmentedKeyValueStorageTransaction)} after each block.
+   */
+  private final TrieNodeIndexProgress progress;
+
+  /**
    * Pending per-range bloom accumulator for the current block. Populated by {@link
    * #captureTrieNodeDiff} and flushed by {@link
    * #flushPendingBlooms(SegmentedKeyValueStorageTransaction)}.
@@ -135,6 +142,39 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final boolean trieNodeIndexEnabled,
       final TrieNodeHistoryStore historyStore,
       final TrieNodeChangeIndex changeIndex) {
+    this(
+        trieNodeCheckpointInterval,
+        trieLoader,
+        baseStrategy,
+        trieNodeIndexEnabled,
+        historyStore,
+        changeIndex,
+        null);
+  }
+
+  /**
+   * Full constructor used when the trie-node differential index is enabled and coverage progress
+   * tracking is required.
+   *
+   * @param trieNodeCheckpointInterval suffix-archive checkpoint interval (null = proofs disabled)
+   * @param trieLoader optional trie loader for cache warming
+   * @param baseStrategy underlying strategy for live-trie reads/writes
+   * @param trieNodeIndexEnabled whether to capture diffs to the differential index
+   * @param historyStore the diff-entry store; must not be null if {@code trieNodeIndexEnabled}
+   * @param changeIndex the change-block index; must not be null if {@code trieNodeIndexEnabled}
+   * @param progress the coverage-progress tracker to advance on each block flush; may be {@code
+   *     null} if coverage tracking is not needed (e.g. tests or migrator without progress wiring)
+   * @throws IllegalArgumentException if {@code trieNodeIndexEnabled} is {@code true} but {@code
+   *     trieNodeCheckpointInterval} is {@code null}
+   */
+  public BonsaiArchiveTrieNodeStrategy(
+      final Long trieNodeCheckpointInterval,
+      final BonsaiCachedMerkleTrieLoader trieLoader,
+      final TrieNodeStrategy baseStrategy,
+      final boolean trieNodeIndexEnabled,
+      final TrieNodeHistoryStore historyStore,
+      final TrieNodeChangeIndex changeIndex,
+      final TrieNodeIndexProgress progress) {
     if (trieNodeIndexEnabled && trieNodeCheckpointInterval == null) {
       throw new IllegalArgumentException(
           "trieNodeCheckpointInterval must not be null when trieNodeIndexEnabled=true");
@@ -145,6 +185,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     this.trieNodeIndexEnabled = trieNodeIndexEnabled;
     this.historyStore = historyStore;
     this.changeIndex = changeIndex;
+    this.progress = progress;
   }
 
   @Override
@@ -427,10 +468,49 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   }
 
   /**
-   * Writes all accumulated per-range bloom bits from the current block to the given transaction.
+   * Writes all accumulated per-range bloom bits from the current block to the given transaction,
+   * and — when a {@link TrieNodeIndexProgress} was supplied — advances coverage progress.
    *
    * <p>Must be called before committing the block's transaction to ensure bloom correctness. After
    * this call, the accumulator is cleared and ready for the next block.
+   *
+   * <p>Progress advancement (when {@code progress} is non-null and the index is enabled):
+   *
+   * <ol>
+   *   <li>Reads the current block number {@code N} from committed storage.
+   *   <li>Calls {@link TrieNodeIndexProgress#setLastIndexedBlock(long)} with {@code N}.
+   *   <li>If {@code N} is the last block in its range (i.e. {@code (N + 1) % rangeSize == 0}),
+   *       calls {@link TrieNodeIndexProgress#markRangeComplete(long)}.
+   *   <li>Persists the updated progress via {@link TrieNodeIndexProgress#save}.
+   * </ol>
+   *
+   * @param tx the transaction on which to write bloom entries and the updated progress bytes
+   * @param storage committed storage used to read the current block number for progress advancement
+   */
+  public void flushPendingBlooms(
+      final SegmentedKeyValueStorageTransaction tx, final SegmentedKeyValueStorage storage) {
+    if (!pendingBlooms.isEmpty()) {
+      changeIndex.flushBloomAccumulator(tx, pendingBlooms);
+      pendingBlooms.clear();
+    }
+    if (trieNodeIndexEnabled && progress != null) {
+      final long block = getCurrentBlockNumber(storage);
+      progress.setLastIndexedBlock(block);
+      final long rangeSize = ArchiveNodeKey.RANGE_SIZE;
+      if ((block + 1) % rangeSize == 0) {
+        progress.markRangeComplete(block / rangeSize);
+      }
+      progress.save(tx);
+    }
+  }
+
+  /**
+   * Convenience overload that flushes blooms without advancing coverage progress.
+   *
+   * <p>This signature is preserved for callers that do not have a committed {@link
+   * SegmentedKeyValueStorage} reference at flush time (e.g. tests that construct the strategy
+   * without progress wiring). When a storage reference is available, prefer {@link
+   * #flushPendingBlooms(SegmentedKeyValueStorageTransaction, SegmentedKeyValueStorage)}.
    *
    * @param tx the transaction on which to write bloom entries
    */
