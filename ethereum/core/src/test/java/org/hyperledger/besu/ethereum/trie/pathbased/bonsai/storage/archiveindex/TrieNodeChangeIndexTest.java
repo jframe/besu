@@ -197,4 +197,195 @@ class TrieNodeChangeIndexTest {
     assertThat(idx.bloomMaybeContains(0, storageKey)).isTrue();
     assertThat(idx.latestChangeBlock(storageKey, 999_999)).hasValue(42_000L);
   }
+
+  // ===========================================================================
+  // Task 2.4: cross-range descending walk tests
+  // ===========================================================================
+
+  // -------------------------------------------------------------------------
+  // Cross-range: change in range 0 and range 2, query at T in range 1
+  // -------------------------------------------------------------------------
+
+  @Test
+  void crossRangeQueryInMiddleRangeReturnsRange0Block() {
+    // rangeSize = 1_000_000 → range 0 = [0, 999_999], range 1 = [1_000_000, 1_999_999],
+    //                          range 2 = [2_000_000, 2_999_999]
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    // Append in separate transactions to avoid the bloom same-tx hazard.
+    var tx0 = kv.startTransaction();
+    idx.append(tx0, KEY, 500_000); // range 0, offset 500_000
+    tx0.commit();
+
+    var tx2 = kv.startTransaction();
+    idx.append(tx2, KEY, 2_500_000); // range 2, offset 500_000
+    tx2.commit();
+
+    // T = 1_500_000 → in range 1; range 2 is above T so skipped; range 1 empty; range 0 → 500_000
+    assertThat(idx.latestChangeBlock(KEY, 1_500_000)).hasValue(500_000L);
+  }
+
+  @Test
+  void crossRangeQueryAtRange2AfterChangeReturnsRange2Block() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    var tx0 = kv.startTransaction();
+    idx.append(tx0, KEY, 500_000);
+    tx0.commit();
+
+    var tx2 = kv.startTransaction();
+    idx.append(tx2, KEY, 2_500_000);
+    tx2.commit();
+
+    // T = 2_700_000 → in range 2, after the range-2 change → returns 2_500_000
+    assertThat(idx.latestChangeBlock(KEY, 2_700_000)).hasValue(2_500_000L);
+  }
+
+  @Test
+  void crossRangeQueryAtRange2BeforeChangeReturnsRange0Block() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    var tx0 = kv.startTransaction();
+    idx.append(tx0, KEY, 500_000);
+    tx0.commit();
+
+    var tx2 = kv.startTransaction();
+    idx.append(tx2, KEY, 2_500_000);
+    tx2.commit();
+
+    // T = 2_400_000 → in range 2, before the range-2 change (2_500_000); falls back to range 0
+    assertThat(idx.latestChangeBlock(KEY, 2_400_000)).hasValue(500_000L);
+  }
+
+  @Test
+  void crossRangeQueryBeforeAllChangesIsEmpty() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    var tx0 = kv.startTransaction();
+    idx.append(tx0, KEY, 500_000);
+    tx0.commit();
+
+    var tx2 = kv.startTransaction();
+    idx.append(tx2, KEY, 2_500_000);
+    tx2.commit();
+
+    // T = 400_000 → in range 0, before the range-0 change (500_000) → empty
+    assertThat(idx.latestChangeBlock(KEY, 400_000)).isEmpty();
+  }
+
+  // -------------------------------------------------------------------------
+  // Never-changed key → empty
+  // -------------------------------------------------------------------------
+
+  @Test
+  void neverChangedKeyIsEmpty() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    // No appends at all for KEY
+    assertThat(idx.latestChangeBlock(KEY, 5_000_000)).isEmpty();
+  }
+
+  // -------------------------------------------------------------------------
+  // Bloom-negative short-circuit: a key never appended returns empty across ranges
+  // -------------------------------------------------------------------------
+
+  @Test
+  void bloomNegativeShortCircuitsAcrossRanges() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    // Append OTHER_KEY to ranges 0, 1, 2 — blooms have bits, but NOT for KEY
+    var tx0 = kv.startTransaction();
+    idx.append(tx0, OTHER_KEY, 100_000);
+    tx0.commit();
+
+    var tx1 = kv.startTransaction();
+    idx.append(tx1, OTHER_KEY, 1_100_000);
+    tx1.commit();
+
+    var tx2 = kv.startTransaction();
+    idx.append(tx2, OTHER_KEY, 2_200_000);
+    tx2.commit();
+
+    // KEY was never appended; bloom for each range is negative for KEY → empty
+    assertThat(idx.latestChangeBlock(KEY, 2_500_000)).isEmpty();
+    assertThat(idx.bloomMaybeContains(0, KEY)).isFalse();
+    assertThat(idx.bloomMaybeContains(1, KEY)).isFalse();
+    assertThat(idx.bloomMaybeContains(2, KEY)).isFalse();
+  }
+
+  // -------------------------------------------------------------------------
+  // Multiple changes in range 0 + one in range 2; verify latestLeq + cross-range
+  // -------------------------------------------------------------------------
+
+  @Test
+  void multipleChangesInRange0PlusRange2CrossRangeInterplay() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    // Two changes in range 0
+    var tx0a = kv.startTransaction();
+    idx.append(tx0a, KEY, 200_000); // range 0, offset 200_000
+    tx0a.commit();
+
+    var tx0b = kv.startTransaction();
+    idx.append(tx0b, KEY, 700_000); // range 0, offset 700_000
+    tx0b.commit();
+
+    // One change in range 2
+    var tx2 = kv.startTransaction();
+    idx.append(tx2, KEY, 2_300_000); // range 2, offset 300_000
+    tx2.commit();
+
+    // T in range 0, between the two range-0 changes → picks 200_000 (700_000 is above T)
+    assertThat(idx.latestChangeBlock(KEY, 500_000)).hasValue(200_000L);
+
+    // T at range-0 upper bound → picks 700_000
+    assertThat(idx.latestChangeBlock(KEY, 999_999)).hasValue(700_000L);
+
+    // T in range 1 → range 1 empty, falls back to range 0 → picks 700_000 (latest in range 0)
+    assertThat(idx.latestChangeBlock(KEY, 1_500_000)).hasValue(700_000L);
+
+    // T in range 2 after range-2 change → picks 2_300_000
+    assertThat(idx.latestChangeBlock(KEY, 2_999_999)).hasValue(2_300_000L);
+
+    // T in range 2 before range-2 change → falls back to range 0 → picks 700_000
+    assertThat(idx.latestChangeBlock(KEY, 2_100_000)).hasValue(700_000L);
+  }
+
+  // -------------------------------------------------------------------------
+  // Inclusive ceiling in the cross-range start range: change exactly at T in a
+  // higher range is returned
+  // -------------------------------------------------------------------------
+
+  @Test
+  void changeExactlyAtTInHigherRangeIsReturned() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 2_500_000); // range 2, offset 500_000
+    tx.commit();
+
+    // T == the change block, in range 2 (the start range). The within-range ceiling equals T's
+    // offset (inclusive), so latestLeq must include the offset exactly at T.
+    assertThat(idx.latestChangeBlock(KEY, 2_500_000)).hasValue(2_500_000L);
+  }
+
+  // -------------------------------------------------------------------------
+  // Negative T → clear IllegalArgumentException naming "t"
+  // -------------------------------------------------------------------------
+
+  @Test
+  void latestChangeBlockNegativeTThrows() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    assertThatThrownBy(() -> idx.latestChangeBlock(KEY, -1))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("t");
+  }
 }

@@ -26,7 +26,7 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.bytes.MutableBytes;
 
 /**
- * Per-node change-block index over a {@link SegmentedKeyValueStorage} (Design 5, Task 2.3).
+ * Per-node change-block index over a {@link SegmentedKeyValueStorage} (Design 5, Tasks 2.3–2.4).
  *
  * <p>Three column families are maintained:
  *
@@ -78,6 +78,13 @@ public final class TrieNodeChangeIndex {
   public TrieNodeChangeIndex(final SegmentedKeyValueStorage storage, final long rangeSize) {
     if (rangeSize <= 0) {
       throw new IllegalArgumentException("rangeSize must be > 0, got " + rangeSize);
+    }
+    // The within-range ceiling (rangeSize - 1) is cast to int in latestChangeBlock, so rangeSize
+    // must fit in an int after subtracting 1 (i.e. <= Integer.MAX_VALUE + 1) to avoid silent
+    // truncation. ArchiveNodeKey.RANGE_SIZE (1,000,000) is well within this bound.
+    if (rangeSize > (long) Integer.MAX_VALUE + 1L) {
+      throw new IllegalArgumentException(
+          "rangeSize must be <= Integer.MAX_VALUE + 1, got " + rangeSize);
     }
     this.storage = storage;
     this.rangeSize = rangeSize;
@@ -198,50 +205,91 @@ public final class TrieNodeChangeIndex {
   }
 
   /**
-   * Returns the latest block ≤ {@code t} at which {@code naturalKey} changed, within the single
-   * range that contains {@code t}.
+   * Returns the latest block ≤ {@code t} at which {@code naturalKey} changed, searching all ranges
+   * from {@code rangeId(t)} down to 0.
    *
-   * <p>Returns {@link Optional#empty()} if:
+   * <p>The descending walk visits ranges in order from highest (the range containing {@code t}) to
+   * lowest (range 0). For each range the per-range search is:
    *
-   * <ul>
-   *   <li>The bloom for the range is absent or negative (definitive: key not in range).
-   *   <li>The offset list is absent or all offsets are greater than {@code offset(t)}.
-   * </ul>
+   * <ol>
+   *   <li><strong>Bloom short-circuit</strong> — if the range bloom is absent or negative for
+   *       {@code naturalKey}, skip this range immediately (O(1), no list read).
+   *   <li><strong>Range-marker check</strong> — if the range marker is absent for {@code
+   *       (naturalKey, rangeId)}, skip (O(1); guards against bloom false-positives before a list
+   *       read).
+   *   <li><strong>Offset-list lookup</strong> — read the packed offset list and return the largest
+   *       offset ≤ {@code withinRangeCeil}, converted to an absolute block number.
+   * </ol>
    *
-   * <p>This implementation covers only the single-range case. Task 2.4 will extend it to walk
-   * earlier ranges by calling the package-private {@link #latestChangeInRange} helper in a
-   * descending loop.
+   * <p>The first range that yields a non-empty result is returned immediately (first-hit-wins from
+   * the top is correct because we walk from the highest range downward: any hit in range {@code r}
+   * is necessarily the latest change ≤ T, since all ranges above {@code r} either have no entry or
+   * have no offset ≤ their ceiling, and ranges below {@code r} have only smaller block numbers).
+   *
+   * <p><strong>Lower bound:</strong> the walk always continues to range 0. Ranges below the
+   * backfill coverage floor simply have no bloom or marker and are skipped in O(1). An {@code
+   * indexStartBlock}-based early stop is a later optimisation (the coverage gate enforcing that
+   * {@code t ≥ indexStartBlock} will be applied at the provider level in Stage 4).
    *
    * @param naturalKey the node's natural key
    * @param t the query block (inclusive upper bound)
-   * @return the latest change block ≤ t, or empty
+   * @return the latest change block ≤ t, or empty if no such change exists in any range
+   * @throws IllegalArgumentException if {@code t} is negative
    */
   public Optional<Long> latestChangeBlock(final Bytes naturalKey, final long t) {
-    final long rangeId = t / rangeSize;
-    final int withinRangeCeil = (int) (t - rangeId * rangeSize);
-    return latestChangeInRange(naturalKey, rangeId, withinRangeCeil);
+    if (t < 0) {
+      throw new IllegalArgumentException("t must be >= 0, got " + t);
+    }
+    final long startRange = t / rangeSize;
+    for (long r = startRange; r >= 0; r--) {
+      // Within-range ceiling: for the T-range use T's offset; for all earlier ranges the entire
+      // range is ≤ T, so the ceiling is the maximum possible offset (rangeSize - 1).
+      final int ceil = (r == startRange) ? (int) (t - r * rangeSize) : (int) (rangeSize - 1);
+      final Optional<Long> hit = latestChangeInRange(naturalKey, r, ceil);
+      if (hit.isPresent()) {
+        return hit;
+      }
+    }
+    return Optional.empty();
   }
 
   /**
    * Returns the latest change block within a single range, at or before {@code withinRangeCeil}.
    *
-   * <p>This helper is designed to be called by Task 2.4's descending range-walk loop. For range
-   * {@code rangeId} the absolute block for offset {@code o} is {@code rangeId * rangeSize + o}.
+   * <p>Short-circuit order (cheapest-first):
+   *
+   * <ol>
+   *   <li><strong>Bloom</strong> — if the range bloom is absent or negative, return empty
+   *       immediately (O(1), no storage read for this node).
+   *   <li><strong>Range marker</strong> — if the presence marker for {@code (naturalKey, rangeId)}
+   *       is absent, return empty (O(1); eliminates bloom false-positives before reading the offset
+   *       list).
+   *   <li><strong>Offset list</strong> — read the packed list and return the largest offset ≤
+   *       {@code withinRangeCeil}, converted to an absolute block number.
+   * </ol>
+   *
+   * <p>For range {@code rangeId} the absolute block for offset {@code o} is {@code rangeId *
+   * rangeSize + o}.
    *
    * @param naturalKey the node's natural key
    * @param rangeId the range to search
    * @param withinRangeCeil the offset ceiling (inclusive) within the range
    * @return the absolute block number of the latest change ≤ ceiling, or empty
    */
-  Optional<Long> latestChangeInRange(
+  private Optional<Long> latestChangeInRange(
       final Bytes naturalKey, final long rangeId, final int withinRangeCeil) {
 
-    // Bloom short-circuit: if the range bloom is absent or negative, no changes here.
+    // 1. Bloom short-circuit: if the range bloom is absent or negative, no changes here.
     if (!bloomMaybeContains(rangeId, naturalKey)) {
       return Optional.empty();
     }
 
-    // Read the packed offset list for this node / range.
+    // 2. Range-marker short-circuit: eliminates bloom false-positives before a list read.
+    if (!rangeMarkerPresent(naturalKey, rangeId)) {
+      return Optional.empty();
+    }
+
+    // 3. Read the packed offset list for this node / range.
     final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
     return storage
         .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe())
