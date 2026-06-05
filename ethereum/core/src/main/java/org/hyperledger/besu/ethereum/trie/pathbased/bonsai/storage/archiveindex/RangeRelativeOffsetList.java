@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
-import java.util.Objects;
+import java.util.Arrays;
 import java.util.OptionalInt;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -44,19 +44,27 @@ public final class RangeRelativeOffsetList {
   static final int ENTRY_BYTES = 3;
 
   private static final RangeRelativeOffsetList EMPTY =
-      new RangeRelativeOffsetList(Bytes.EMPTY, Integer.MIN_VALUE);
+      new RangeRelativeOffsetList(new byte[0], 0, Integer.MIN_VALUE);
 
-  /** The packed buffer. Length is always a multiple of {@value ENTRY_BYTES}. */
-  private final Bytes buf;
+  /**
+   * Raw backing byte array. Length is always {@code size * ENTRY_BYTES}. Immutable after
+   * construction — {@link #append} allocates a new array via {@link Arrays#copyOf} rather than
+   * mutating this one.
+   */
+  private final byte[] rawBuf;
+
+  /** Number of entries in the list. Equal to {@code rawBuf.length / ENTRY_BYTES}. */
+  private final int size;
 
   /**
    * Cached value of the last appended offset, or {@link Integer#MIN_VALUE} when the list is empty.
-   * Stored alongside {@code buf} to avoid re-reading on every {@code append()} call.
+   * Stored alongside {@code rawBuf} to avoid re-reading on every {@code append()} call.
    */
   private final int lastOffset;
 
-  private RangeRelativeOffsetList(final Bytes buf, final int lastOffset) {
-    this.buf = buf;
+  private RangeRelativeOffsetList(final byte[] rawBuf, final int size, final int lastOffset) {
+    this.rawBuf = rawBuf;
+    this.size = size;
     this.lastOffset = lastOffset;
   }
 
@@ -81,10 +89,12 @@ public final class RangeRelativeOffsetList {
       throw new IllegalArgumentException(
           "Packed offset buffer length must be a multiple of 3, got " + packed.size());
     }
-    // Read the last entry to prime lastOffset
-    int n = packed.size() / ENTRY_BYTES;
-    int last = readEntry(packed, n - 1);
-    return new RangeRelativeOffsetList(packed, last);
+    // Use toArray() to get a copy of exactly the slice bytes — toArrayUnsafe() may return the full
+    // backing array for Tuweni slices, which would corrupt the size and entry reads.
+    final byte[] b = packed.toArray();
+    final int n = b.length / ENTRY_BYTES;
+    final int last = readEntry(b, n - 1);
+    return new RangeRelativeOffsetList(b, n, last);
   }
 
   // -------------------------------------------------------------------------
@@ -100,6 +110,10 @@ public final class RangeRelativeOffsetList {
    *   <li>If {@code offset} is outside {@code [0, 0xFFFFFF]} → throws {@link
    *       IllegalArgumentException}.
    * </ul>
+   *
+   * <p>This method allocates exactly one new byte array of size {@code rawBuf.length + ENTRY_BYTES}
+   * via {@link Arrays#copyOf}, giving O(1) amortised allocation cost per append (one object, no
+   * intermediate wrappers).
    */
   public RangeRelativeOffsetList append(final int offset) {
     if (offset < 0 || offset > MAX_OFFSET) {
@@ -118,12 +132,14 @@ public final class RangeRelativeOffsetList {
               + " < current tail "
               + lastOffset);
     }
-    Bytes entry =
-        Bytes.of(
-            (byte) ((offset >> 16) & 0xFF), (byte) ((offset >> 8) & 0xFF), (byte) (offset & 0xFF));
-    // TODO(stage-3): replace Bytes.concatenate with a growable byte[] builder to avoid O(n^2)
-    // copying when appending many offsets to one node's list during block import.
-    return new RangeRelativeOffsetList(Bytes.concatenate(buf, entry), offset);
+    // Grow the backing array by exactly one entry. Arrays.copyOf allocates one new array and copies
+    // the existing content in a single native operation — no intermediate Bytes wrappers.
+    final byte[] grown = Arrays.copyOf(rawBuf, rawBuf.length + ENTRY_BYTES);
+    final int pos = rawBuf.length;
+    grown[pos] = (byte) ((offset >> 16) & 0xFF);
+    grown[pos + 1] = (byte) ((offset >> 8) & 0xFF);
+    grown[pos + 2] = (byte) (offset & 0xFF);
+    return new RangeRelativeOffsetList(grown, size + 1, offset);
   }
 
   /**
@@ -132,7 +148,10 @@ public final class RangeRelativeOffsetList {
    * <p>For storage: use {@code fromBytes(list.toBytes())} to reconstruct.
    */
   public Bytes toBytes() {
-    return buf;
+    if (rawBuf.length == 0) {
+      return Bytes.EMPTY;
+    }
+    return Bytes.wrap(rawBuf);
   }
 
   /**
@@ -141,18 +160,17 @@ public final class RangeRelativeOffsetList {
    * offsets are greater than {@code target}.
    */
   public OptionalInt latestLeq(final int target) {
-    int n = size();
-    if (n == 0) {
+    if (size == 0) {
       return OptionalInt.empty();
     }
     // Binary search for the rightmost slot whose value ≤ target.
     // Maintain: all slots in [0, lo) have value ≤ target (known good),
     //            all slots in [hi, n) have value > target.
     int lo = 0;
-    int hi = n;
+    int hi = size;
     while (lo < hi) {
       int mid = (lo + hi) >>> 1;
-      if (readEntry(buf, mid) <= target) {
+      if (readEntry(rawBuf, mid) <= target) {
         lo = mid + 1;
       } else {
         hi = mid;
@@ -162,17 +180,17 @@ public final class RangeRelativeOffsetList {
     if (lo == 0) {
       return OptionalInt.empty();
     }
-    return OptionalInt.of(readEntry(buf, lo - 1));
+    return OptionalInt.of(readEntry(rawBuf, lo - 1));
   }
 
   /** Returns the number of entries in the list. */
   public int size() {
-    return buf.size() / ENTRY_BYTES;
+    return size;
   }
 
   /** Returns {@code true} if the list contains no entries. */
   public boolean isEmpty() {
-    return buf.isEmpty();
+    return size == 0;
   }
 
   // -------------------------------------------------------------------------
@@ -183,28 +201,26 @@ public final class RangeRelativeOffsetList {
   public boolean equals(final Object obj) {
     if (this == obj) return true;
     if (!(obj instanceof RangeRelativeOffsetList other)) return false;
-    return Objects.equals(buf, other.buf);
+    return Arrays.equals(rawBuf, other.rawBuf);
   }
 
   @Override
   public int hashCode() {
-    return buf.hashCode();
+    return Arrays.hashCode(rawBuf);
   }
 
   @Override
   public String toString() {
-    return "RangeRelativeOffsetList{size=" + size() + ", bytes=" + buf + "}";
+    return "RangeRelativeOffsetList{size=" + size + ", bytes=" + toBytes() + "}";
   }
 
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
 
-  /** Reads the 3-byte big-endian entry at slot index {@code i} from the buffer. */
-  private static int readEntry(final Bytes b, final int i) {
-    int base = i * ENTRY_BYTES;
-    return ((b.get(base) & 0xFF) << 16)
-        | ((b.get(base + 1) & 0xFF) << 8)
-        | (b.get(base + 2) & 0xFF);
+  /** Reads the 3-byte big-endian entry at slot index {@code i} from the raw byte array. */
+  private static int readEntry(final byte[] b, final int i) {
+    final int base = i * ENTRY_BYTES;
+    return ((b[base] & 0xFF) << 16) | ((b[base + 1] & 0xFF) << 8) | (b[base + 2] & 0xFF);
   }
 }

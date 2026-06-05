@@ -497,46 +497,55 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   }
 
   /**
-   * Writes all accumulated per-range bloom bits from the current block to the given transaction,
-   * and — when a {@link TrieNodeIndexProgress} was supplied — advances coverage progress.
+   * Writes accumulated per-range bloom bits (at range boundaries only) and advances coverage
+   * progress for the current block.
    *
-   * <p>Must be called before committing the block's transaction to ensure bloom correctness. After
-   * this call, the accumulator is cleared and ready for the next block.
+   * <p>The bloom filter is a 128 KiB byte array per range. Writing it on every block is pure GC
+   * pressure; correctness only requires the bloom to be present when a range is complete (the
+   * range-marker check provides the authoritative answer for individual blocks). Therefore the
+   * bloom flush is deferred: it is only written to {@code tx} when the current block is the last
+   * block of its range (i.e. {@code (block + 1) % rangeSize == 0}). On all other blocks the
+   * in-memory accumulator is retained for the next block.
    *
-   * <p>Progress advancement (when {@code progress} is non-null and the index is enabled):
+   * <p>Progress advancement (when {@code progress} is non-null and the index is enabled) happens on
+   * every block:
    *
    * <ol>
    *   <li>Reads the current block number {@code N} from committed storage.
    *   <li>Calls {@link TrieNodeIndexProgress#setLastIndexedBlock(long)} with {@code N}.
-   *   <li>If {@code N} is the last block in its range (i.e. {@code (N + 1) % rangeSize == 0}),
-   *       calls {@link TrieNodeIndexProgress#markRangeComplete(long)}.
+   *   <li>Calls {@link TrieNodeIndexProgress#setIndexStartBlock(long)} with the start of {@code
+   *       N}'s range.
+   *   <li>If {@code N} is the last block in its range, also calls {@link
+   *       TrieNodeIndexProgress#markRangeComplete(long)} and flushes the bloom accumulator.
    *   <li>Persists the updated progress via {@link TrieNodeIndexProgress#save}.
    * </ol>
    *
    * <p><strong>Migrator equivalent:</strong> the archive migrator does <em>not</em> call this 2-arg
    * overload (the live-block path). Instead it calls the 1-arg {@link
    * #flushPendingBlooms(SegmentedKeyValueStorageTransaction)} for blooms, then delegates progress
-   * advancement to {@code BonsaiFlatDbToArchiveMigrator.advanceMigrationIndexProgress} which
-   * additionally calls {@link TrieNodeIndexProgress#setIndexStartBlock(long)} and uses the known
-   * migration block number rather than reading {@code WORLD_BLOCK_NUMBER_KEY} from live storage.
-   * Keep the three progress mutations ({@code setLastIndexedBlock}, {@code markRangeComplete},
-   * {@code save}) in sync between the two paths.
+   * advancement to {@code BonsaiFlatDbToArchiveMigrator.advanceMigrationIndexProgress} which uses
+   * the known migration block number rather than reading {@code WORLD_BLOCK_NUMBER_KEY} from live
+   * storage. Keep the progress mutations in sync between the two paths.
    *
    * @param tx the transaction on which to write bloom entries and the updated progress bytes
    * @param storage committed storage used to read the current block number for progress advancement
    */
   public void flushPendingBlooms(
       final SegmentedKeyValueStorageTransaction tx, final SegmentedKeyValueStorage storage) {
-    if (!pendingBlooms.isEmpty()) {
+    final long block = getCurrentBlockNumber(storage);
+    // Only flush the 128 KiB bloom array at range boundaries to avoid per-block GC pressure.
+    // The bloom is a fast-path optimisation; correctness is guaranteed by the range-marker check.
+    final boolean atRangeBoundary = (block + 1) % ArchiveNodeKey.RANGE_SIZE == 0;
+    if (atRangeBoundary && !pendingBlooms.isEmpty()) {
       changeIndex.flushBloomAccumulator(tx, pendingBlooms);
       pendingBlooms.clear();
     }
     if (trieNodeIndexEnabled && progress != null) {
-      final long block = getCurrentBlockNumber(storage);
       progress.setLastIndexedBlock(block);
-      final long rangeSize = progress.rangeSize();
-      if ((block + 1) % rangeSize == 0) {
-        progress.markRangeComplete(block / rangeSize);
+      final long rangeId = block / ArchiveNodeKey.RANGE_SIZE;
+      progress.setIndexStartBlock(rangeId * ArchiveNodeKey.RANGE_SIZE);
+      if (atRangeBoundary) {
+        progress.markRangeComplete(rangeId);
       }
       progress.save(tx);
     }
