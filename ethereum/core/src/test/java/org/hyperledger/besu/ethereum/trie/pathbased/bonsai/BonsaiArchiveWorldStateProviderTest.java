@@ -20,12 +20,17 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBa
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
+import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFullFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
@@ -36,7 +41,9 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 
+import java.util.Collections;
 import java.util.Optional;
+import java.util.function.Function;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -278,6 +285,165 @@ public class BonsaiArchiveWorldStateProviderTest {
         .isInstanceOf(BonsaiArchiveFlatDbStrategy.class);
   }
 
+  // --- Trie-node index proof routing tests ---
+
+  /**
+   * Flag off → falls through to parent. Parent cannot serve blocks beyond maxLayersToLoad via
+   * trie-log rollback so the result is empty.
+   */
+  @Test
+  void trieNodeIndex_flagOff_fallsThroughToParent() {
+    final BonsaiArchiveWorldStateProvider indexProvider =
+        createProviderWithTrieNodeIndex(true, false);
+    // mark range 0 as complete so only the flag matters
+    markRange0Complete(indexProvider);
+
+    final BlockHeader historicalHeader =
+        new BlockHeaderTestFixture()
+            .number(CHAIN_HEAD - MAX_LAYERS - 1)
+            .stateRoot(Hash.EMPTY_TRIE_HASH)
+            .buildHeader();
+    when(blockchain.getBlockHeader(historicalHeader.getHash()))
+        .thenReturn(Optional.of(historicalHeader));
+    indexProvider.setArchiveMigrationProgressSupplier(() -> CHAIN_HEAD);
+
+    final Optional<Optional<WorldStateProof>> result =
+        indexProvider.getAccountProof(
+            historicalHeader, Address.ZERO, Collections.emptyList(), Optional::of);
+
+    // Parent path is taken; blocks beyond maxLayersToLoad can't be served → empty
+    assertThat(result).isEmpty();
+  }
+
+  /**
+   * Flag on but the range is not yet covered (progress bitmap not set) → falls through to parent.
+   */
+  @Test
+  void trieNodeIndex_flagOn_notCovered_fallsThroughToParent() {
+    final BonsaiArchiveWorldStateProvider indexProvider =
+        createProviderWithTrieNodeIndex(true, true);
+    // do NOT mark range 0 complete
+
+    final BlockHeader historicalHeader =
+        new BlockHeaderTestFixture()
+            .number(CHAIN_HEAD - MAX_LAYERS - 1)
+            .stateRoot(Hash.EMPTY_TRIE_HASH)
+            .buildHeader();
+    when(blockchain.getBlockHeader(historicalHeader.getHash()))
+        .thenReturn(Optional.of(historicalHeader));
+    indexProvider.setArchiveMigrationProgressSupplier(() -> CHAIN_HEAD);
+
+    final Optional<Optional<WorldStateProof>> result =
+        indexProvider.getAccountProof(
+            historicalHeader, Address.ZERO, Collections.emptyList(), Optional::of);
+
+    // Coverage gate fails; falls through to parent → empty
+    assertThat(result).isEmpty();
+  }
+
+  /**
+   * Flag on, range covered, but the block is near-head (within maxLayersToLoad) → falls through to
+   * the parent path. The test does not populate the near-head trie-log cache, so the parent cannot
+   * serve this block and returns empty — confirming the age gate, not just the coverage gate,
+   * controls routing.
+   */
+  @Test
+  void trieNodeIndex_flagOn_covered_nearHead_fallsThroughToParent() {
+    final BonsaiArchiveWorldStateProvider indexProvider =
+        createProviderWithTrieNodeIndex(true, true);
+    markRange0Complete(indexProvider);
+
+    // Block is within maxLayersToLoad of the chain head → NOT historical
+    final BlockHeader nearHeadHeader =
+        new BlockHeaderTestFixture()
+            .number(CHAIN_HEAD - 1)
+            .stateRoot(Hash.EMPTY_TRIE_HASH)
+            .buildHeader();
+    when(blockchain.getBlockHeader(nearHeadHeader.getHash()))
+        .thenReturn(Optional.of(nearHeadHeader));
+
+    final Optional<Optional<WorldStateProof>> result =
+        indexProvider.getAccountProof(
+            nearHeadHeader, Address.ZERO, Collections.emptyList(), Optional::of);
+
+    // Parent path is taken; trie-log cache is not populated for this block in the test → empty.
+    assertThat(result).isEmpty();
+  }
+
+  /**
+   * Flag on, range covered, historical block → trie-node index path is taken. The stateRoot is set
+   * to the empty-trie root hash so the proof provider can generate a valid (empty-account) proof
+   * without any real trie data in storage.
+   */
+  @Test
+  void trieNodeIndex_flagOn_covered_historical_usesIndexPath() {
+    final BonsaiArchiveWorldStateProvider indexProvider =
+        createProviderWithTrieNodeIndex(true, true);
+    markRange0Complete(indexProvider);
+
+    final Hash emptyTrieRoot = Hash.EMPTY_TRIE_HASH;
+    final BlockHeader historicalHeader =
+        new BlockHeaderTestFixture()
+            .number(CHAIN_HEAD - MAX_LAYERS - 1)
+            .stateRoot(emptyTrieRoot)
+            .buildHeader();
+    when(blockchain.getBlockHeader(historicalHeader.getHash()))
+        .thenReturn(Optional.of(historicalHeader));
+    indexProvider.setArchiveMigrationProgressSupplier(() -> CHAIN_HEAD);
+
+    final Optional<Optional<WorldStateProof>> result =
+        indexProvider.getAccountProof(
+            historicalHeader, Address.ZERO, Collections.emptyList(), Optional::of);
+
+    // The trie-node index path was taken: isWorldStateAvailable returns true, the empty-trie root
+    // requires no node lookups, so the proof provider returns a non-empty WorldStateProof
+    // (account absent in the empty trie, but a valid proof is still produced).
+    assertThat(result).isPresent();
+    assertThat(result.get()).isPresent();
+  }
+
+  /**
+   * The mapper function is applied to the proof result. Verify that a mapper returning empty
+   * propagates correctly (empty outer Optional).
+   */
+  @Test
+  void trieNodeIndex_flagOn_covered_mapperReturnsEmpty_propagatesEmpty() {
+    final BonsaiArchiveWorldStateProvider indexProvider =
+        createProviderWithTrieNodeIndex(true, true);
+    markRange0Complete(indexProvider);
+
+    final Hash emptyTrieRoot = Hash.EMPTY_TRIE_HASH;
+    final BlockHeader historicalHeader =
+        new BlockHeaderTestFixture()
+            .number(CHAIN_HEAD - MAX_LAYERS - 1)
+            .stateRoot(emptyTrieRoot)
+            .buildHeader();
+    when(blockchain.getBlockHeader(historicalHeader.getHash()))
+        .thenReturn(Optional.of(historicalHeader));
+    indexProvider.setArchiveMigrationProgressSupplier(() -> CHAIN_HEAD);
+
+    // Mapper always returns empty regardless of proof content.
+    final Function<Optional<WorldStateProof>, Optional<String>> mapper = proof -> Optional.empty();
+    final Optional<String> result =
+        indexProvider.getAccountProof(
+            historicalHeader, Address.ZERO, Collections.emptyList(), mapper);
+
+    assertThat(result).isEmpty();
+  }
+
+  // ---- Helpers ----
+
+  /**
+   * Injects a {@link TrieNodeIndexProgress} with range 0 marked complete into the provider, making
+   * {@link TrieNodeIndexProgress#covers(long)} return {@code true} for any block in the range [0,
+   * {@link ArchiveNodeKey#RANGE_SIZE}).
+   */
+  private static void markRange0Complete(final BonsaiArchiveWorldStateProvider provider) {
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+    progress.markRangeComplete(0L);
+    provider.setTrieNodeIndexProgress(progress);
+  }
+
   private BonsaiArchiveWorldStateProvider createProvider(final boolean archiveModeReady) {
     return createProviderWithProofs(archiveModeReady, false, 100L);
   }
@@ -286,6 +452,19 @@ public class BonsaiArchiveWorldStateProviderTest {
       final boolean archiveModeReady,
       final boolean stateProofsEnabled,
       final long checkpointInterval) {
+    return createProviderInternal(archiveModeReady, stateProofsEnabled, checkpointInterval, false);
+  }
+
+  private BonsaiArchiveWorldStateProvider createProviderWithTrieNodeIndex(
+      final boolean archiveModeReady, final boolean trieNodeIndexEnabled) {
+    return createProviderInternal(archiveModeReady, false, 100L, trieNodeIndexEnabled);
+  }
+
+  private BonsaiArchiveWorldStateProvider createProviderInternal(
+      final boolean archiveModeReady,
+      final boolean stateProofsEnabled,
+      final long checkpointInterval,
+      final boolean trieNodeIndexEnabled) {
     final var config =
         ImmutableDataStorageConfiguration.builder()
             .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
@@ -296,6 +475,7 @@ public class BonsaiArchiveWorldStateProviderTest {
                         ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                             .stateProofsEnabled(stateProofsEnabled)
                             .archiveTrieNodeCheckpointInterval(checkpointInterval)
+                            .trieNodeIndexEnabled(trieNodeIndexEnabled)
                             .build())
                     .build())
             .build();
