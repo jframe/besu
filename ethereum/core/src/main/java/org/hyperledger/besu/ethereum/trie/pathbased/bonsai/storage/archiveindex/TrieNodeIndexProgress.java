@@ -104,6 +104,19 @@ public class TrieNodeIndexProgress {
   }
 
   // ---------------------------------------------------------------------------
+  // rangeSize accessor
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns the number of blocks in each indexing range.
+   *
+   * @return the range size supplied at construction time
+   */
+  public long rangeSize() {
+    return rangeSize;
+  }
+
+  // ---------------------------------------------------------------------------
   // Coverage gate
   // ---------------------------------------------------------------------------
 

@@ -765,6 +765,178 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         .isEqualTo(stateRoot);
   }
 
+  // --- Task 5.2: indexStartBlock / lastIndexedBlock / covers tests ---
+
+  /**
+   * Task 5.2 (core): after migrating block 1 with a trie checkpoint at block 1, the migrator must
+   * have advanced {@code migrationIndexProgress} such that:
+   *
+   * <ul>
+   *   <li>{@code lastIndexedBlock() == 1}
+   *   <li>{@code indexStartBlock() == 0} (range 0 starts at block 0)
+   *   <li>{@code covers(1)} is false — the range is not yet complete (only 2 of rangeSize=2 blocks
+   *       processed, but block 1 is the *last* block of the range when rangeSize=2, so covers(1) is
+   *       true for rangeSize=2)
+   * </ul>
+   *
+   * <p>Uses {@code rangeSize=2} so a single checkpoint (block 1, interval=2) coincides with the end
+   * of range 0, making {@code covers()} return {@code true} after migration.
+   */
+  @Test
+  public void trieMigratorWithIndexEnabled_advancesIndexProgressAtCheckpoint() throws Exception {
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    final TrieNodeChangeIndex changeIndex = new TrieNodeChangeIndex(storage, 2L);
+    // rangeSize=2 so block 1 is the last block of range 0 ((1+1) % 2 == 0 → complete).
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(2L);
+
+    // interval=2 fires a checkpoint at block 1: (1+1) % 2 == 0.
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        createMigratorWithRealTrieLogsAndIndex(2, historyStore, changeIndex, progress);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    // lastIndexedBlock advances to the checkpoint block.
+    assertThat(progress.lastIndexedBlock())
+        .as("lastIndexedBlock should be 1 after migrating block 1")
+        .isEqualTo(1L);
+
+    // indexStartBlock extends downward to the start of the range containing block 1 (range 0 →
+    // start = 0).
+    assertThat(progress.indexStartBlock())
+        .as("indexStartBlock should be 0 (start of range 0)")
+        .isEqualTo(0L);
+
+    // Block 1 is the last block of range 0 (rangeSize=2, (1+1)%2==0) → range 0 is complete.
+    assertThat(progress.covers(0L))
+        .as("covers(0) should be true — block 0 is in the completed range 0")
+        .isTrue();
+    assertThat(progress.covers(1L))
+        .as("covers(1) should be true — block 1 is in the completed range 0")
+        .isTrue();
+    // Range 1 (blocks 2-3) has never been indexed → not complete.
+    assertThat(progress.covers(2L))
+        .as("covers(2) should be false — range 1 has not been indexed")
+        .isFalse();
+  }
+
+  /**
+   * Task 5.2 (partial range): when block K is a checkpoint block but NOT the last block in its
+   * range, {@code lastIndexedBlock} advances but {@code covers()} is still false.
+   */
+  @Test
+  public void trieMigratorWithIndexEnabled_indexProgressPartialRange() throws Exception {
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    // rangeSize=4: range 0 covers blocks 0-3. Block 1 is NOT the last block of range 0.
+    final TrieNodeChangeIndex changeIndex = new TrieNodeChangeIndex(storage, 4L);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(4L);
+
+    // interval=2 fires a checkpoint at block 1. Block 1 is NOT the end of range 0 (rangeSize=4).
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        createMigratorWithRealTrieLogsAndIndex(2, historyStore, changeIndex, progress);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    assertThat(progress.lastIndexedBlock())
+        .as("lastIndexedBlock should advance to checkpoint block 1")
+        .isEqualTo(1L);
+
+    assertThat(progress.indexStartBlock())
+        .as("indexStartBlock should be 0 (start of range 0)")
+        .isEqualTo(0L);
+
+    // Block 1 is in range 0 (0-3) but range 0 is not complete (last block = 3, not yet indexed).
+    assertThat(progress.covers(1L))
+        .as("covers(1) should be false — range 0 is not complete yet")
+        .isFalse();
+  }
+
+  /**
+   * Task 5.2 (parallel range independence): two simulated range workers building independent
+   * TrieNodeIndexProgress instances over disjoint block ranges do not interfere with each other.
+   *
+   * <p>Worker A processes blocks 0-1 (range 0 with rangeSize=2). Worker B processes blocks 2-3
+   * (range 1 with rangeSize=2). After both complete:
+   *
+   * <ul>
+   *   <li>Worker A: {@code covers(0)} and {@code covers(1)} are true; {@code covers(2)} is false.
+   *   <li>Worker B: {@code covers(2)} and {@code covers(3)} are true; {@code covers(0)} is false.
+   * </ul>
+   *
+   * <p>Since the CF keys are keyed by (naturalKey, rangeId), workers writing to different rangeIds
+   * never collide. The bloom CF is keyed by rangeId alone, so different ranges also have distinct
+   * bloom keys.
+   */
+  @Test
+  public void trieMigratorWithIndexEnabled_parallelRangesAreIndependent() throws Exception {
+    // Tests data isolation (separate TrieNodeIndexProgress objects per range), not thread-safety.
+    // Worker A: range 0 with rangeSize=2 — processes block 1 as the checkpoint.
+    // (Block 0 = genesis with empty trie log; block 1 has the account state root.)
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    // Progress A uses rangeSize=2: block 1 completes range 0.
+    final TrieNodeIndexProgress progressA = new TrieNodeIndexProgress(2L);
+    progressA.setLastIndexedBlock(1L);
+    progressA.setIndexStartBlock(0L);
+    progressA.markRangeComplete(0L); // range 0 complete
+
+    // Progress B uses rangeSize=2: simulate a worker that completed range 1 (blocks 2-3).
+    final TrieNodeIndexProgress progressB = new TrieNodeIndexProgress(2L);
+    progressB.setLastIndexedBlock(3L);
+    progressB.setIndexStartBlock(2L);
+    progressB.markRangeComplete(1L); // range 1 complete
+
+    // Worker A covers blocks 0-1 but NOT 2-3.
+    assertThat(progressA.covers(0L)).as("A covers block 0").isTrue();
+    assertThat(progressA.covers(1L)).as("A covers block 1").isTrue();
+    assertThat(progressA.covers(2L)).as("A does not cover block 2 (range 1)").isFalse();
+    assertThat(progressA.covers(3L)).as("A does not cover block 3 (range 1)").isFalse();
+
+    // Worker B covers blocks 2-3 but NOT 0-1.
+    assertThat(progressB.covers(0L)).as("B does not cover block 0 (range 0)").isFalse();
+    assertThat(progressB.covers(1L)).as("B does not cover block 1 (range 0)").isFalse();
+    assertThat(progressB.covers(2L)).as("B covers block 2").isTrue();
+    assertThat(progressB.covers(3L)).as("B covers block 3").isTrue();
+
+    // indexStartBlock is monotonically non-increasing within each worker.
+    assertThat(progressA.indexStartBlock()).as("A indexStartBlock").isEqualTo(0L);
+    assertThat(progressB.indexStartBlock()).as("B indexStartBlock").isEqualTo(2L);
+
+    // Neither worker's progress affects the other: marking range 0 in A has no effect on B,
+    // and marking range 1 in B has no effect on A.
+    assertThat(progressA.covers(2L))
+        .as("A still does not cover range 1 after B marks it")
+        .isFalse();
+    assertThat(progressB.covers(0L))
+        .as("B still does not cover range 0 after A marks it")
+        .isFalse();
+  }
+
   // --- test helpers ---
 
   private MutableBlockchain createInMemoryBlockchain(final Block genesisBlock) {
