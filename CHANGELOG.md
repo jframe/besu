@@ -30,6 +30,7 @@
 - Fix `RLPException` observed during BFT (QBFT/IBFT2) rolling upgrades from Besu 25.x. Use the flag `--Xbft-legacy-protocol-encoding` on each upgrading Besu node to remain compatible with existing Besu 25.x nodes on the BFT network. [#10499](https://github.com/besu-eth/besu/pull/10499)
 
 ### Additions and Improvements
+- Add experimental trie-node differential index for Bonsai archive nodes (`--Xbonsai-archive-trie-node-index-enabled`, default: off). When enabled together with `--data-storage-format=X_BONSAI_ARCHIVE`, Besu records diff-compressed trie-node history and a per-node block index so that `eth_getProof` for historical blocks is served by direct index lookup instead of a `seekForPrev` scan. Disk usage is smaller than Forest mode. Enabling this flag on an existing archive node requires re-running the flat-db migration to backfill trie-node history.
 - Add state-proof support for Bonsai archive nodes: when `--Xbonsai-state-proofs-enabled` is set, trie nodes are checkpointed at configurable block intervals and `eth_getProof` can be served for any historical block covered by the archive
 - Add `eth_baseFee` JSON-RPC method, returning the calculated base fee of the next block [#10457](https://github.com/besu-eth/besu/pull/10457)
 - Add `eth_getStorageValues` JSON-RPC method for batched reads of multiple storage slots across multiple accounts in a single call [#10259](https://github.com/besu-eth/besu/pull/10259)
