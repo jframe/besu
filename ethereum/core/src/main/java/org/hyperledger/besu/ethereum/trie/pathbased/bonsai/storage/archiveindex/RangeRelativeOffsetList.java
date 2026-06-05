@@ -207,6 +207,19 @@ public final class RangeRelativeOffsetList {
     return size == 0;
   }
 
+  /**
+   * Returns the largest (last) offset in this list, or empty if the list is empty.
+   *
+   * <p>Because entries are stored in non-decreasing order, the last entry is the maximum. This
+   * method reads the cached {@link #lastOffset} field directly — O(1), no binary search needed.
+   *
+   * @return the largest offset, or {@link OptionalInt#empty()} if the list is empty
+   */
+  public OptionalInt last() {
+    if (isEmpty()) return OptionalInt.empty();
+    return OptionalInt.of(readEntry(rawBuf, size - 1));
+  }
+
   // -------------------------------------------------------------------------
   // equals / hashCode
   // -------------------------------------------------------------------------

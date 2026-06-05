@@ -523,6 +523,104 @@ public final class TrieNodeChangeIndex {
   // ---------------------------------------------------------------------------
 
   /**
+   * Returns the full assembled {@link RangeRelativeOffsetList} (sub-blocks + tail) for {@code
+   * (naturalKey, rangeId)} using a single bloom + range-marker + index-list read.
+   *
+   * <p>This is the key building block for the single-list-read optimisation in {@link
+   * ArchiveProofNodeLoader}: callers that need to answer both "modifiedAfter T?" and
+   * "latestChangeBlock ≤ T?" for the same key/range can call this once and query the returned list
+   * in memory, avoiding the triple index-list read that the old two-call sequence produced.
+   *
+   * <p>Returns {@link Optional#empty()} if:
+   *
+   * <ul>
+   *   <li>The bloom is absent or negative for {@code naturalKey} in {@code rangeId} (fast
+   *       negative).
+   *   <li>The range marker is absent for {@code (naturalKey, rangeId)}.
+   *   <li>The index entry is absent (corrupt/missing data).
+   * </ul>
+   *
+   * <p>The returned list is the full set of within-range offsets assembled from all sub-blocks
+   * (oldest first) followed by the tail (newest), sorted ascending. It is NOT filtered by any
+   * ceiling — all recorded offsets for this key in this range are included. Callers should use
+   * {@link RangeRelativeOffsetList#latestLeq} or {@link RangeRelativeOffsetList#last} to query.
+   *
+   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})
+   * @param rangeId the range identifier
+   * @return the full offset list for this key/range, or empty if no data found
+   */
+  Optional<RangeRelativeOffsetList> readRangeList(final Bytes naturalKey, final long rangeId) {
+    // 1. Bloom short-circuit (fast negative).
+    if (!bloomMaybeContains(rangeId, naturalKey)) {
+      return Optional.empty();
+    }
+
+    // 2. Range-marker check (eliminates bloom false-positives before list read).
+    if (!rangeMarkerPresent(naturalKey, rangeId)) {
+      return Optional.empty();
+    }
+
+    // 3. Read the [4B subCount][packed offsets] index value and assemble the full list.
+    return assembleFullRangeList(naturalKey, rangeId);
+  }
+
+  /**
+   * Assembles the full (sub-blocks + tail) {@link RangeRelativeOffsetList} for {@code (naturalKey,
+   * rangeId)} directly from storage, WITHOUT performing bloom or range-marker checks.
+   *
+   * <p>Shared implementation used by both {@link #readRangeList} (which adds bloom/marker guards)
+   * and {@link #getChangeBlocksUpTo} (which adds a ceiling filter). Callers that have already
+   * confirmed the bloom and marker are positive should call this directly.
+   *
+   * @param naturalKey the account or storage natural key
+   * @param rangeId the range identifier
+   * @return the full offset list assembled from sub-blocks + tail, or empty if the index entry is
+   *     absent
+   */
+  private Optional<RangeRelativeOffsetList> assembleFullRangeList(
+      final Bytes naturalKey, final long rangeId) {
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
+    final Optional<byte[]> rawOpt =
+        storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe());
+    if (rawOpt.isEmpty()) {
+      return Optional.empty();
+    }
+    final IndexValue iv = readIndexValue(rawOpt.get());
+    final int subCount = iv.subCount;
+    final RangeRelativeOffsetList tail = iv.list;
+
+    // Fast path: no sub-blocks — the tail IS the full list.
+    if (subCount == 0) {
+      return Optional.of(tail);
+    }
+
+    // Slow path: prepend sub-block entries then append the tail entries.
+    // Sub-block entries are strictly older (smaller offsets) than the tail.
+
+    // Build the combined list by appending all offsets in ascending order.
+    RangeRelativeOffsetList combined = RangeRelativeOffsetList.empty();
+    for (int subId = 0; subId < subCount; subId++) {
+      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subId);
+      final Optional<byte[]> subRaw =
+          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE, subKey.toArrayUnsafe());
+      if (subRaw.isEmpty()) {
+        continue; // should not happen in well-formed data, but skip gracefully
+      }
+      final RangeRelativeOffsetList subList =
+          RangeRelativeOffsetList.fromBytes(Bytes.wrap(subRaw.get()));
+      final int subSize = subList.size();
+      for (int i = 0; i < subSize; i++) {
+        combined = combined.append(subList.get(i));
+      }
+    }
+    final int tailSize = tail.size();
+    for (int i = 0; i < tailSize; i++) {
+      combined = combined.append(tail.get(i));
+    }
+    return Optional.of(combined);
+  }
+
+  /**
    * Returns the sorted (ascending) list of all absolute block numbers at which {@code naturalKey}
    * changed within the range containing {@code block}, restricted to blocks ≤ {@code block}.
    *
@@ -555,52 +653,22 @@ public final class TrieNodeChangeIndex {
       return Optional.empty();
     }
 
-    // 3. Read the [4B subCount][packed offsets] index value.
-    final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
-    final Optional<byte[]> rawOpt =
-        storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe());
-    if (rawOpt.isEmpty()) {
+    // 3. Assemble the full range list (sub-blocks + tail) and filter by ceiling.
+    final Optional<RangeRelativeOffsetList> fullListOpt =
+        assembleFullRangeList(naturalKey, rangeId);
+    if (fullListOpt.isEmpty()) {
       return Optional.empty();
     }
-    final IndexValue iv = readIndexValue(rawOpt.get());
-    final int subCount = iv.subCount;
-    final RangeRelativeOffsetList tail = iv.list;
+    final RangeRelativeOffsetList fullList = fullListOpt.get();
 
-    // Accumulate all offsets ≤ withinRangeCeil from sub-blocks (oldest → newest) then tail.
-    // Size estimate: subCount * subBlockSplitAt + tail.size(); cap at a reasonable initial value.
+    // Accumulate all offsets ≤ withinRangeCeil as absolute block numbers.
     final long rangeBase = rangeId * rangeSize;
-    int estimatedSize = subCount * subBlockSplitAt + tail.size();
-    final ArrayList<Long> blocks = new ArrayList<>(estimatedSize);
-
-    // 3a. Sub-blocks: subId 0 is the oldest, subId subCount-1 is the most-recently-split (but
-    //     still older than the current tail). Walk ascending so that output is sorted ascending.
-    for (int subId = 0; subId < subCount; subId++) {
-      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subId);
-      final Optional<byte[]> subRaw =
-          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE, subKey.toArrayUnsafe());
-      if (subRaw.isEmpty()) {
-        continue; // should not happen in well-formed data, but skip gracefully
-      }
-      final RangeRelativeOffsetList subList =
-          RangeRelativeOffsetList.fromBytes(Bytes.wrap(subRaw.get()));
-      // All sub-block entries are strictly older (smaller offsets) than the current tail.
-      // Include only those ≤ withinRangeCeil.
-      final int subSize = subList.size();
-      for (int i = 0; i < subSize; i++) {
-        final int offset = subList.get(i);
-        if (offset > withinRangeCeil) {
-          break; // sub-block entries are sorted ascending; no need to scan further
-        }
-        blocks.add(rangeBase + offset);
-      }
-    }
-
-    // 3b. Tail entries ≤ withinRangeCeil.
-    final int tailSize = tail.size();
-    for (int i = 0; i < tailSize; i++) {
-      final int offset = tail.get(i);
+    final int listSize = fullList.size();
+    final ArrayList<Long> blocks = new ArrayList<>(listSize);
+    for (int i = 0; i < listSize; i++) {
+      final int offset = fullList.get(i);
       if (offset > withinRangeCeil) {
-        break; // tail is also sorted ascending
+        break; // list is sorted ascending; no need to scan further
       }
       blocks.add(rangeBase + offset);
     }

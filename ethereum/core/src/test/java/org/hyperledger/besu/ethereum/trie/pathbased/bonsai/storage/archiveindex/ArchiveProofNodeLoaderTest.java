@@ -338,4 +338,99 @@ class ArchiveProofNodeLoaderTest {
 
     assertThat(result).hasValue(liveNode);
   }
+
+  // ---------------------------------------------------------------------------
+  // Test 7: Single-range fast path — node never indexed (no range entry at all)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * When the node has never been indexed (no bloom entry, no range marker), the single-range fast
+   * path should return the live trie node directly (the node was never modified so the live version
+   * IS the historical version). T=100, HEAD=200, both in range 0.
+   */
+  @Test
+  void nodeNeverIndexedReturnsLiveNodeInSingleRange() {
+    final long targetBlock = 100;
+    final long headBlock = 200;
+
+    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
+    final Bytes liveNode = branchWith(7, 42);
+
+    // No index entries — node was never recorded as changed.
+    putLiveNode(accountNaturalKey, liveNode);
+
+    final ArchiveProofNodeLoader loader =
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+
+    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final Bytes32 expectedHash = keccak(liveNode);
+    final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, expectedHash);
+
+    assertThat(result).hasValue(liveNode);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Test 8: Single-range — changed exactly at T (bStar == T), FULL entry at T
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Node changed exactly at T and again after T. The historical version at T is the FULL entry at
+   * T. HEAD=200, T=50, change at 50 (FULL) and 80 (DIFF after T). The single-range list read finds
+   * bStar=50 via latestLeq(50) and the preloaded list is passed to the history reader.
+   */
+  @Test
+  void nodeChangedExactlyAtTReturnsTVersion() {
+    final long targetBlock = 50;
+    final long headBlock = 200;
+
+    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
+    final Bytes vT = branchWith(2, 50); // version at T=50
+    final Bytes vHead = branchWith(6, 80); // live version after T
+
+    putEntry(accountNaturalKey, 50, TrieNodeDiffCodec.encodeFull(vT));
+    appendIndex(accountNaturalKey, 50);
+    putEntry(accountNaturalKey, 80, TrieNodeDiffCodec.encodeDiff(vT, vHead));
+    appendIndex(accountNaturalKey, 80);
+
+    putLiveNode(accountNaturalKey, vHead);
+
+    final ArchiveProofNodeLoader loader =
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+
+    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final Bytes32 expectedHash = keccak(vT);
+    final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, expectedHash);
+
+    assertThat(result).hasValue(vT);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Test 9: Single-range — node changed only before T, no change after T
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Node changed only at block 30 (before T=80). No change after T. HEAD=200. The single-range fast
+   * path detects no change after T using the preloaded list (last entry = 30 ≤ 80) and returns the
+   * live trie node. This avoids calling modifiedAfter separately.
+   */
+  @Test
+  void nodeChangedOnlyBeforeTReturnedFromLiveTrieViaSingleRangeList() {
+    final long targetBlock = 80;
+    final long headBlock = 200;
+
+    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
+    final Bytes liveNode = branchWith(1, 30);
+
+    appendIndex(accountNaturalKey, 30);
+    putLiveNode(accountNaturalKey, liveNode);
+
+    final ArchiveProofNodeLoader loader =
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+
+    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final Bytes32 expectedHash = keccak(liveNode);
+    final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, expectedHash);
+
+    assertThat(result).hasValue(liveNode);
+  }
 }

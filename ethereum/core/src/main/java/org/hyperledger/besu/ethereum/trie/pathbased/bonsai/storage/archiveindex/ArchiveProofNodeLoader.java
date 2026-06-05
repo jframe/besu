@@ -22,6 +22,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -139,7 +140,27 @@ public final class ArchiveProofNodeLoader {
   /**
    * Resolves the trie node for {@code naturalKey} at {@code targetBlock}.
    *
-   * <p>See class Javadoc for the full algorithm (fast path → history path → hash verify).
+   * <h2>Algorithm</h2>
+   *
+   * <ol>
+   *   <li><strong>Single-list-read optimisation</strong> — call {@link
+   *       TrieNodeChangeIndex#readRangeList} once for {@code (naturalKey, targetBlock's rangeId)}.
+   *       This single bloom + marker + list read provides all information needed to determine both
+   *       whether the node changed after T (fast-path check) and the latest change ≤ T (for history
+   *       reconstruction), avoiding the triple-read pattern of the old two-call sequence.
+   *   <li><strong>Fast path</strong> — if the range list shows no change after targetBlock AND no
+   *       higher ranges have changes (single-range chain or confirmed by {@link
+   *       TrieNodeChangeIndex#modifiedAfter}), the live trie node is correct. Return it directly.
+   *   <li><strong>History path</strong> — otherwise, find {@code b*} (latest change ≤ T) using the
+   *       preloaded list and delegate to {@link TrieNodeHistoryReader#nodeAt(Bytes, long,
+   *       RangeRelativeOffsetList, long)} with the preloaded list to avoid a second list read.
+   *   <li><strong>Hash verification</strong> — compute {@code keccak256(node)} and compare to
+   *       {@code expectedHash}. A mismatch throws {@link IllegalStateException} (fail-closed).
+   * </ol>
+   *
+   * <p>For chains where all blocks are in range 0 (< 1,000,000 blocks), a single {@code
+   * readRangeList} call handles ALL three logical checks for each node — reducing 9 RocksDB reads
+   * to 3.
    *
    * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey}); must not be
    *     {@code null}
@@ -150,21 +171,87 @@ public final class ArchiveProofNodeLoader {
    *     expectedHash} (fail-closed on data inconsistency)
    */
   private Optional<Bytes> resolveNodeAt(final Bytes naturalKey, final Bytes32 expectedHash) {
-    // Step 1: fast path — if the node was NOT modified after targetBlock (up to headBlock),
-    // the live trie is the correct historical version. Read it directly from TRIE_BRANCH_STORAGE.
-    if (!index.modifiedAfter(naturalKey, targetBlock, headBlock)) {
+    final long rangeId = targetBlock / index.rangeSize;
+    final long headRangeId = headBlock / index.rangeSize;
+    final int withinRangeT = (int) (targetBlock - rangeId * index.rangeSize);
+
+    // Step 1: single bloom + marker + list read for targetBlock's range.
+    final Optional<RangeRelativeOffsetList> listOpt = index.readRangeList(naturalKey, rangeId);
+
+    if (listOpt.isEmpty()) {
+      // No changes at all for this key in targetBlock's range.
+      // Fast path if also no changes in higher ranges (i.e. live trie is the T-version).
+      if (rangeId == headRangeId) {
+        // Single-range chain (or T and HEAD share the same range) — no changes anywhere.
+        return liveStorage
+            .get(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe())
+            .map(Bytes::wrap);
+      }
+      // Multi-range: check whether higher ranges have any changes after T.
+      if (!index.modifiedAfter(naturalKey, targetBlock, headBlock)) {
+        return liveStorage
+            .get(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe())
+            .map(Bytes::wrap);
+      }
+      // Changed after T but no recorded change ≤ T in any range → node absent at T.
+      // Need to check earlier ranges for a bStar — fall back to the standard path.
+      return resolveFromHistory(naturalKey, expectedHash);
+    }
+
+    // We have the list for targetBlock's range. Use it to answer both questions in memory:
+    //   (a) Was the node modified after T (in this range)?
+    //   (b) What is the latest change ≤ T (bStar)?
+
+    final RangeRelativeOffsetList list = listOpt.get();
+
+    // (b) Latest change ≤ T within this range.
+    final OptionalInt bStarOffsetOpt = list.latestLeq(withinRangeT);
+
+    // (a) Modified after T: any entry in this range > withinRangeT?
+    //     The last entry is the largest; if it is > withinRangeT then yes.
+    final OptionalInt lastOpt = list.last();
+    final boolean modifiedAfterTInThisRange =
+        lastOpt.isPresent() && lastOpt.getAsInt() > withinRangeT;
+
+    // Determine whether the node was modified after T across ALL ranges up to headBlock.
+    final boolean modifiedAfterT;
+    if (rangeId == headRangeId) {
+      // T and HEAD are in the same range — the list we already have covers everything.
+      modifiedAfterT = modifiedAfterTInThisRange;
+    } else {
+      // T and HEAD are in different ranges. If this range has a change after T, that's enough.
+      // Otherwise we need to check higher ranges (fall back to modifiedAfter for ranges > rangeId).
+      modifiedAfterT =
+          modifiedAfterTInThisRange || index.modifiedAfter(naturalKey, targetBlock, headBlock);
+    }
+
+    if (!modifiedAfterT) {
+      // Fast path: live trie is the T-version.
+      // Note: fast path does NOT verify the hash (same reasoning as original implementation).
       return liveStorage
           .get(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe())
           .map(Bytes::wrap);
-      // Note: the fast path does NOT verify the hash. The caller (trie framework) supplied
-      // expectedHash from a trusted parent node, and the live trie is definitionally correct when
-      // no post-T changes exist. Hash verification on the fast path would be redundant and costly.
     }
 
-    // Step 2: history path — delegate to the reader to reconstruct the node at targetBlock.
-    final Optional<Bytes> nodeOpt = historyReader.nodeAt(naturalKey, targetBlock);
+    // History path — find bStar and reconstruct.
+    final long bStar;
+    if (bStarOffsetOpt.isPresent()) {
+      // bStar is within this range — compute absolute block number.
+      bStar = rangeId * index.rangeSize + bStarOffsetOpt.getAsInt();
+    } else {
+      // No change ≤ T in this range — need to check earlier ranges.
+      final Optional<Long> bStarOpt = index.latestChangeBlock(naturalKey, targetBlock);
+      if (bStarOpt.isEmpty()) {
+        // Never changed before T (but changed after T) → node absent at T.
+        return Optional.empty();
+      }
+      bStar = bStarOpt.get();
+    }
+
+    // Reconstruct using the preloaded list to avoid a third index read (for single-range case
+    // where bStar is in targetBlock's range).
+    final Optional<Bytes> nodeOpt = historyReader.nodeAt(naturalKey, bStar, list, rangeId);
     if (nodeOpt.isEmpty()) {
-      // Node was absent at targetBlock (never written, or deleted before targetBlock).
       return Optional.empty();
     }
 
@@ -184,6 +271,35 @@ public final class ArchiveProofNodeLoader {
               + " — index/store inconsistency detected");
     }
 
+    return nodeOpt;
+  }
+
+  /**
+   * Fallback for the case where {@code readRangeList} returned empty but {@code modifiedAfter}
+   * indicated changes exist after T. Uses the existing two-step approach to resolve the node.
+   *
+   * <p>This path handles chains where targetBlock is in a range with no recorded changes for the
+   * key, but the key had changes in earlier ranges and/or higher ranges.
+   */
+  private Optional<Bytes> resolveFromHistory(final Bytes naturalKey, final Bytes32 expectedHash) {
+    final Optional<Bytes> nodeOpt = historyReader.nodeAt(naturalKey, targetBlock);
+    if (nodeOpt.isEmpty()) {
+      return Optional.empty();
+    }
+    final Bytes node = nodeOpt.get();
+    final Bytes32 actualHash = keccak256(node);
+    if (!actualHash.equals(expectedHash)) {
+      throw new IllegalStateException(
+          "trie node hash mismatch for naturalKey="
+              + naturalKey
+              + " at targetBlock="
+              + targetBlock
+              + ": expected="
+              + expectedHash
+              + ", actual="
+              + actualHash
+              + " — index/store inconsistency detected");
+    }
     return nodeOpt;
   }
 }

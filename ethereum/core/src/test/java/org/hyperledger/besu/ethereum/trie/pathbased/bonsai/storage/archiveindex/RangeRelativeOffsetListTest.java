@@ -252,6 +252,42 @@ class RangeRelativeOffsetListTest {
   }
 
   // -------------------------------------------------------------------------
+  // last() — returns the largest offset or empty
+  // -------------------------------------------------------------------------
+
+  @Test
+  void lastOnEmptyListReturnsEmpty() {
+    assertThat(RangeRelativeOffsetList.empty().last()).isEqualTo(OptionalInt.empty());
+  }
+
+  @Test
+  void lastOnSingleElementReturnsThatElement() {
+    var list = RangeRelativeOffsetList.empty().append(42);
+    assertThat(list.last()).hasValue(42);
+  }
+
+  @Test
+  void lastReturnsLargestOffset() {
+    var list = RangeRelativeOffsetList.empty().append(10).append(200).append(999_999);
+    assertThat(list.last()).hasValue(999_999);
+  }
+
+  @Test
+  void lastMatchesLatestLeqMaxOffset() {
+    // last() and latestLeq(MAX) should agree
+    var list = RangeRelativeOffsetList.empty().append(100).append(500).append(700);
+    assertThat(list.last()).hasValue(700);
+    assertThat(list.latestLeq(0xFFFFFF)).hasValue(700);
+  }
+
+  @Test
+  void lastAfterFromBytesRoundTrip() {
+    var list = RangeRelativeOffsetList.empty().append(1).append(999).append(50_000);
+    var restored = RangeRelativeOffsetList.fromBytes(list.toBytes());
+    assertThat(restored.last()).hasValue(50_000);
+  }
+
+  // -------------------------------------------------------------------------
   // equals / hashCode
   // -------------------------------------------------------------------------
 

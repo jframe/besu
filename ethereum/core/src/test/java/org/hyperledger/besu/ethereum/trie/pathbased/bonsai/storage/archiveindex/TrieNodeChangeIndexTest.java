@@ -987,4 +987,110 @@ class TrieNodeChangeIndexTest {
     // KEY has no entries in any range → 0.
     assertThat(idx.countMutationsInEarlierRanges(KEY, 1)).isEqualTo(0);
   }
+
+  // ===========================================================================
+  // readRangeList: returns the full (unfiltered) offset list for (naturalKey, rangeId)
+  // ===========================================================================
+
+  // -------------------------------------------------------------------------
+  // Unknown key → empty (bloom negative)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void readRangeListUnknownKeyReturnsEmpty() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    // No appends at all.
+    assertThat(idx.readRangeList(KEY, 0)).isEmpty();
+  }
+
+  // -------------------------------------------------------------------------
+  // Key in different range → empty (range-marker negative)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void readRangeListWrongRangeReturnsEmpty() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 500_000); // range 0
+    tx.commit();
+    // Querying range 1 where KEY has no entries.
+    assertThat(idx.readRangeList(KEY, 1)).isEmpty();
+  }
+
+  // -------------------------------------------------------------------------
+  // Single entry: returns list containing just that offset
+  // -------------------------------------------------------------------------
+
+  @Test
+  void readRangeListSingleEntryReturnsListWithOneOffset() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 300_000); // range 0, offset 300_000
+    tx.commit();
+
+    var listOpt = idx.readRangeList(KEY, 0);
+    assertThat(listOpt).isPresent();
+    var list = listOpt.get();
+    assertThat(list.size()).isEqualTo(1);
+    assertThat(list.latestLeq(999_999)).hasValue(300_000);
+    assertThat(list.last()).hasValue(300_000);
+  }
+
+  // -------------------------------------------------------------------------
+  // Multiple entries: returns ALL offsets (unfiltered, no ceiling)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void readRangeListReturnsAllEntriesUnceiledForRange() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    for (long block : new long[] {100_000L, 400_000L, 700_000L}) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, block);
+      tx.commit();
+    }
+
+    var listOpt = idx.readRangeList(KEY, 0);
+    assertThat(listOpt).isPresent();
+    var list = listOpt.get();
+    // All three entries returned — no ceiling filter applied.
+    assertThat(list.size()).isEqualTo(3);
+    assertThat(list.latestLeq(150_000)).hasValue(100_000);
+    assertThat(list.latestLeq(500_000)).hasValue(400_000);
+    assertThat(list.last()).hasValue(700_000);
+  }
+
+  // -------------------------------------------------------------------------
+  // After split: readRangeList returns combined sub-blocks + tail (all entries)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void readRangeListAfterSplitReturnsCombinedList() {
+    // threshold=10, splitAt=5: after 11 appends sub-block 0 holds offsets 0–4 (×100),
+    // tail holds 5–10 (×100). readRangeList should return all 11 entries.
+    var kv = new org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage();
+    var idx = smallThresholdIndex(kv);
+
+    for (int i = 0; i < 11; i++) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, i * 100);
+      tx.commit();
+    }
+
+    var listOpt = idx.readRangeList(KEY, 0);
+    assertThat(listOpt).isPresent();
+    var list = listOpt.get();
+    assertThat(list.size()).isEqualTo(11);
+
+    // Verify all offsets are present and in order.
+    for (int i = 0; i < 11; i++) {
+      assertThat(list.get(i)).isEqualTo(i * 100);
+    }
+    assertThat(list.last()).hasValue(1000);
+    assertThat(list.latestLeq(350)).hasValue(300);
+  }
 }
