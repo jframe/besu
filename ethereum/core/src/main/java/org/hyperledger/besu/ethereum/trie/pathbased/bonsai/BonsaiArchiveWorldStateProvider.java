@@ -388,20 +388,21 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final long headBlock = blockchain.getChainHeadHeader().getNumber();
     final long maxLayers = trieLogManager.getMaxLayersToLoad();
 
-    // Historical + index enabled + migration covered + block indexed → use index path.
-    // archiveMigrationProgressSupplier guards the same window as isHistoricalQuery: it ensures the
-    // archive flat-DB and trie-node CFs hold data for targetBlock before we attempt a proof.
-    // For the live-import path, lastIndexedBlock() >= targetBlock is sufficient: blocks are indexed
-    // sequentially so every block up to lastIndexedBlock is fully captured.  covers() is only
-    // needed for the backfill/migrator path where ranges may be indexed out of order; for a running
-    // node that gate would never be true until block 999_999 (first range boundary), making the
-    // index path unreachable on any chain shorter than RANGE_SIZE.
+    // Historical + index enabled + block indexed → use Design-5 index path.
+    // The archiveMigrationProgressSupplier check is intentionally OMITTED here: the Design-5
+    // ArchiveProofNodeLoader reads only from TRIE_NODE_HISTORY_ARCHIVE and the live trie — it does
+    // not need the flat-DB archive CFs (ACCOUNT_INFO_STATE_ARCHIVE, ACCOUNT_STORAGE_ARCHIVE) that
+    // the migration populates.  Including the supplier check caused the index path to be blocked
+    // whenever the migrator was behind the chain head, forcing all proofs through the legacy
+    // seekForPrev rollback path even though the trie-node index was fully populated.
+    //
+    // lastIndexedBlock() >= targetBlock is sufficient for the live-import path (blocks are indexed
+    // sequentially). covers() handles the backfill/migrator path where ranges complete out of order.
     final boolean blockIsIndexed =
         trieNodeIndexProgress.lastIndexedBlock() >= targetBlock
             || trieNodeIndexProgress.covers(targetBlock);
     if (trieNodeIndexEnabled
         && headBlock - targetBlock >= maxLayers
-        && archiveMigrationProgressSupplier.getAsLong() >= targetBlock
         && blockIsIndexed) {
 
       final Hash stateRoot = blockHeader.getStateRoot();
