@@ -378,6 +378,10 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     if (proofBlock.isPresent()) {
       return Bytes.wrap(proofBlock.get()).toLong();
     }
+    // TODO: block 1's trie nodes are indexed at block 0 because WORLD_BLOCK_NUMBER_KEY
+    // is written in the same tx as the trie nodes and hasn't committed yet. Callers
+    // querying history at block 0 may see block-1 state. Fix: read from a pre-committed
+    // block-number key or pass the block number explicitly from the persist() caller.
     return storage
         .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
         .map(b -> Bytes.wrap(b).toLong() + 1L)
