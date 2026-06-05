@@ -533,13 +533,16 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   public void flushPendingBlooms(
       final SegmentedKeyValueStorageTransaction tx, final SegmentedKeyValueStorage storage) {
     final long block = getCurrentBlockNumber(storage);
-    // Only flush the 128 KiB bloom array at range boundaries to avoid per-block GC pressure.
-    // The bloom is a fast-path optimisation; correctness is guaranteed by the range-marker check.
-    final boolean atRangeBoundary = (block + 1) % ArchiveNodeKey.RANGE_SIZE == 0;
-    if (atRangeBoundary && !pendingBlooms.isEmpty()) {
+    // Flush the bloom on every block. The earlier deferral-to-range-boundary optimisation caused
+    // correctness failures: an empty bloom produces false negatives in modifiedAfter(), making the
+    // fast-path return the live trie node for nodes that DID change after T, causing hash mismatches
+    // and silent proof failures. Now that the O(n²) RangeRelativeOffsetList.append is fixed, the
+    // 128 KiB bloom write per block is no longer a significant GC source.
+    if (!pendingBlooms.isEmpty()) {
       changeIndex.flushBloomAccumulator(tx, pendingBlooms);
       pendingBlooms.clear();
     }
+    final boolean atRangeBoundary = (block + 1) % ArchiveNodeKey.RANGE_SIZE == 0;
     if (trieNodeIndexEnabled && progress != null) {
       progress.setLastIndexedBlock(block);
       final long rangeId = block / ArchiveNodeKey.RANGE_SIZE;
