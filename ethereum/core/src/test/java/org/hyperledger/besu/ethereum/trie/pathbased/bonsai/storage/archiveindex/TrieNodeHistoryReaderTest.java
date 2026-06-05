@@ -317,4 +317,76 @@ class TrieNodeHistoryReaderTest {
     assertThat(reader.nodeAt(KEY, 101)).hasValue(v101);
     assertThat(reader.nodeAt(KEY, 100)).hasValue(v100);
   }
+
+  /**
+   * Hot node changed every block for 50 blocks (blocks 0–49). With {@code CHECKPOINT_INTERVAL = 16}
+   * this produces:
+   *
+   * <ul>
+   *   <li>FULL at mutations 0, 16, 32, 48 (blocks 0, 16, 32, 48)
+   *   <li>DIFFs at all other blocks
+   * </ul>
+   *
+   * Verifies that {@code nodeAt} returns the correct result for:
+   *
+   * <ul>
+   *   <li>The last block (49) — nearest FULL at block 48, one DIFF to apply
+   *   <li>A mid-range block (35) — nearest FULL at block 32, 3 DIFFs to apply
+   *   <li>A FULL checkpoint block (16) — returned directly with no reconstruction
+   *   <li>The first block (0) — FULL, returned directly
+   * </ul>
+   *
+   * <p>This exercises the optimised single-index-list-read path in {@link
+   * TrieNodeHistoryReader#nodeAt} rather than the old backward-walk loop.
+   */
+  @Test
+  void hotNodeChanged50TimesReconstructsCorrectlyForMidRangeBlock() {
+    final int TOTAL_BLOCKS = 50;
+    final int CHECKPOINT_INTERVAL = TrieNodeHistoryReader.CHECKPOINT_INTERVAL; // 16
+
+    // Build TOTAL_BLOCKS versions; v[i] has child slot (i % 16) filled with hash(i).
+    final Bytes[] versions = new Bytes[TOTAL_BLOCKS];
+    for (int i = 0; i < TOTAL_BLOCKS; i++) {
+      versions[i] = branchWith(i % 16, i);
+    }
+
+    // Determine which blocks get FULL entries (mutations 0, 16, 32, 48 in a 0-based scheme).
+    // Mutation 0 is block 0; mutation count starts at 0.
+    // The write path stores FULL when (mutationCount % CHECKPOINT_INTERVAL == 0).
+    // For a node starting at block 0 with changes every block: mutation i → block i.
+    // FULLs: blocks 0, 16, 32, 48.
+    for (int block = 0; block < TOTAL_BLOCKS; block++) {
+      final boolean isFull = (block % CHECKPOINT_INTERVAL == 0);
+      final Bytes entry;
+      if (isFull) {
+        entry = TrieNodeDiffCodec.encodeFull(versions[block]);
+      } else {
+        entry = TrieNodeDiffCodec.encodeDiff(versions[block - 1], versions[block]);
+      }
+      putEntry(KEY, block, entry);
+      appendIndex(KEY, block);
+    }
+
+    // 1. nodeAt(49): FULL@48, DIFF@49 → v49
+    assertThat(reader.nodeAt(KEY, 49))
+        .hasValueSatisfying(b -> assertThat(b).isEqualTo(versions[49]));
+
+    // 2. nodeAt(35): FULL@32, DIFF@33, DIFF@34, DIFF@35 → v35
+    assertThat(reader.nodeAt(KEY, 35))
+        .hasValueSatisfying(b -> assertThat(b).isEqualTo(versions[35]));
+
+    // 3. nodeAt(16): exact FULL checkpoint — returned directly, no reconstruction
+    assertThat(reader.nodeAt(KEY, 16)).hasValue(versions[16]);
+
+    // 4. nodeAt(0): first block, FULL — returned directly
+    assertThat(reader.nodeAt(KEY, 0)).hasValue(versions[0]);
+
+    // 5. nodeAt(47): FULL@32, DIFFs@33–47 → v47 (15 DIFFs, max steady-state walk depth)
+    assertThat(reader.nodeAt(KEY, 47))
+        .hasValueSatisfying(b -> assertThat(b).isEqualTo(versions[47]));
+
+    // 6. nodeAt(50) beyond the recorded range — latest change is block 49 (DIFF), reconstruct v49
+    assertThat(reader.nodeAt(KEY, 50))
+        .hasValueSatisfying(b -> assertThat(b).isEqualTo(versions[49]));
+  }
 }

@@ -777,4 +777,214 @@ class TrieNodeChangeIndexTest {
     assertThat(idx.latestChangeBlock(OTHER_KEY, 600)).hasValue(500L);
     assertThat(idx.latestChangeBlock(OTHER_KEY, 400)).isEmpty();
   }
+
+  // ===========================================================================
+  // getChangeBlocksUpTo: new method for optimised backward walk
+  // ===========================================================================
+
+  // -------------------------------------------------------------------------
+  // Basic: single entry in range 0
+  // -------------------------------------------------------------------------
+
+  @Test
+  void getChangeBlocksUpToSingleEntry() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 500_000);
+    tx.commit();
+
+    // T = 500_000: should return [500_000].
+    assertThat(idx.getChangeBlocksUpTo(KEY, 500_000))
+        .hasValueSatisfying(arr -> assertThat(arr).containsExactly(500_000L));
+
+    // T = 999_999: same entry (only one exists).
+    assertThat(idx.getChangeBlocksUpTo(KEY, 999_999))
+        .hasValueSatisfying(arr -> assertThat(arr).containsExactly(500_000L));
+
+    // T = 499_999: the only entry is above T → empty.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 499_999)).isEmpty();
+  }
+
+  // -------------------------------------------------------------------------
+  // Multiple entries in range 0, all <= T
+  // -------------------------------------------------------------------------
+
+  @Test
+  void getChangeBlocksUpToMultipleEntriesAllIncluded() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    for (long block : new long[] {100_000L, 300_000L, 700_000L}) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, block);
+      tx.commit();
+    }
+
+    // T = 700_000: all three included.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 700_000))
+        .hasValueSatisfying(arr -> assertThat(arr).containsExactly(100_000L, 300_000L, 700_000L));
+
+    // T = 400_000: first two included.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 400_000))
+        .hasValueSatisfying(arr -> assertThat(arr).containsExactly(100_000L, 300_000L));
+
+    // T = 200_000: only first included.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 200_000))
+        .hasValueSatisfying(arr -> assertThat(arr).containsExactly(100_000L));
+  }
+
+  // -------------------------------------------------------------------------
+  // Key not present in this range → empty (bloom negative)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void getChangeBlocksUpToUnknownKeyReturnsEmpty() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    // No appends at all.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 500_000)).isEmpty();
+  }
+
+  // -------------------------------------------------------------------------
+  // Cross-range: T in range 1, entries in range 0 only → empty (different range)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void getChangeBlocksUpToCrossRangeReturnsEmptyForQueryRangeWithNoEntries() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 500_000); // range 0
+    tx.commit();
+
+    // T = 1_500_000 in range 1: range 1 has no entries for KEY → empty.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 1_500_000)).isEmpty();
+  }
+
+  // -------------------------------------------------------------------------
+  // With sub-block split: entries span sub-blocks and tail, all <= T
+  // -------------------------------------------------------------------------
+
+  @Test
+  void getChangeBlocksUpToAfterSplitIncludesSubBlockAndTailEntries() {
+    // threshold=10, splitAt=5: after 11 appends sub-block 0 holds offsets 0–4 (×100),
+    // tail holds 5–10 (×100).
+    var kv = new org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage();
+    var idx = smallThresholdIndex(kv);
+
+    for (int i = 0; i < 11; i++) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, i * 100);
+      tx.commit();
+    }
+
+    // T = 1000 (last entry): all 11 entries should appear.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 1000))
+        .hasValueSatisfying(
+            arr ->
+                assertThat(arr)
+                    .containsExactly(
+                        0L, 100L, 200L, 300L, 400L, 500L, 600L, 700L, 800L, 900L, 1000L));
+
+    // T = 450: first 5 sub-block entries (0–400) + first tail entry (500 > 450 → excluded) → 5.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 450))
+        .hasValueSatisfying(arr -> assertThat(arr).containsExactly(0L, 100L, 200L, 300L, 400L));
+
+    // T = 600: first 5 sub-block + 2 tail (500, 600) → 7 entries.
+    assertThat(idx.getChangeBlocksUpTo(KEY, 600))
+        .hasValueSatisfying(
+            arr -> assertThat(arr).containsExactly(0L, 100L, 200L, 300L, 400L, 500L, 600L));
+  }
+
+  // ===========================================================================
+  // countMutationsInEarlierRanges: new method for cross-range mutation counting
+  // ===========================================================================
+
+  // -------------------------------------------------------------------------
+  // Range 0 only: countMutationsInEarlierRanges(key, rangeId=0) → 0
+  // -------------------------------------------------------------------------
+
+  @Test
+  void countMutationsInEarlierRangesRangeZeroIsZero() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    var tx = kv.startTransaction();
+    idx.append(tx, KEY, 100_000);
+    tx.commit();
+
+    // rangeId=0: no earlier ranges → 0.
+    assertThat(idx.countMutationsInEarlierRanges(KEY, 0)).isEqualTo(0);
+  }
+
+  // -------------------------------------------------------------------------
+  // Entries in range 0, query for range 1: count = entries in range 0
+  // -------------------------------------------------------------------------
+
+  @Test
+  void countMutationsInEarlierRangesCountsRange0EntriesForRange1() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    // Append 3 entries to range 0.
+    for (long block : new long[] {100_000L, 400_000L, 700_000L}) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, block);
+      tx.commit();
+    }
+
+    // rangeId=1: range 0 has 3 entries → 3.
+    assertThat(idx.countMutationsInEarlierRanges(KEY, 1)).isEqualTo(3);
+
+    // rangeId=2: still only range 0 has entries → 3.
+    assertThat(idx.countMutationsInEarlierRanges(KEY, 2)).isEqualTo(3);
+  }
+
+  // -------------------------------------------------------------------------
+  // Entries in ranges 0 and 1, query for range 2
+  // -------------------------------------------------------------------------
+
+  @Test
+  void countMutationsInEarlierRangesAcrossMultipleRanges() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    // 2 entries in range 0.
+    var tx0a = kv.startTransaction();
+    idx.append(tx0a, KEY, 200_000);
+    tx0a.commit();
+    var tx0b = kv.startTransaction();
+    idx.append(tx0b, KEY, 800_000);
+    tx0b.commit();
+
+    // 4 entries in range 1.
+    for (long block : new long[] {1_100_000L, 1_300_000L, 1_600_000L, 1_900_000L}) {
+      var tx = kv.startTransaction();
+      idx.append(tx, KEY, block);
+      tx.commit();
+    }
+
+    // rangeId=1: only range 0 counted → 2.
+    assertThat(idx.countMutationsInEarlierRanges(KEY, 1)).isEqualTo(2);
+
+    // rangeId=2: ranges 0 and 1 counted → 2 + 4 = 6.
+    assertThat(idx.countMutationsInEarlierRanges(KEY, 2)).isEqualTo(6);
+  }
+
+  // -------------------------------------------------------------------------
+  // Key absent from earlier ranges → 0
+  // -------------------------------------------------------------------------
+
+  @Test
+  void countMutationsInEarlierRangesUnknownKeyReturnsZero() {
+    var kv = new SegmentedInMemoryKeyValueStorage();
+    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
+    // Append OTHER_KEY to range 0, not KEY.
+    var tx = kv.startTransaction();
+    idx.append(tx, OTHER_KEY, 100_000);
+    tx.commit();
+
+    // KEY has no entries in any range → 0.
+    assertThat(idx.countMutationsInEarlierRanges(KEY, 1)).isEqualTo(0);
+  }
 }

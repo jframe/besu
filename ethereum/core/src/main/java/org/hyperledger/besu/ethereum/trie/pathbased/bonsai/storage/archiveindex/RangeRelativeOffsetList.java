@@ -183,6 +183,20 @@ public final class RangeRelativeOffsetList {
     return OptionalInt.of(readEntry(rawBuf, lo - 1));
   }
 
+  /**
+   * Returns the offset value at slot index {@code i} (zero-based).
+   *
+   * <p>Package-private: used by sibling classes (e.g. {@link TrieNodeChangeIndex}) to iterate all
+   * entries without materialising an intermediate collection.
+   *
+   * @param i the slot index; must be in {@code [0, size)}
+   * @return the 3-byte big-endian offset stored at slot {@code i}
+   * @throws ArrayIndexOutOfBoundsException if {@code i} is out of range
+   */
+  int get(final int i) {
+    return readEntry(rawBuf, i);
+  }
+
   /** Returns the number of entries in the list. */
   public int size() {
     return size;

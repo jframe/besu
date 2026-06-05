@@ -19,6 +19,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -88,7 +89,13 @@ public final class TrieNodeChangeIndex {
   private static final int SUBCOUNT_BYTES = 4;
 
   private final SegmentedKeyValueStorage storage;
-  private final long rangeSize;
+
+  /**
+   * Blocks per range. Package-private so that {@link TrieNodeHistoryReader} can compute rangeId
+   * arithmetic without a separate accessor method.
+   */
+  final long rangeSize;
+
   private final int subBlockThreshold;
   private final int subBlockSplitAt;
 
@@ -509,6 +516,147 @@ public final class TrieNodeChangeIndex {
       final RangeRelativeOffsetList list, final int from) {
     final Bytes buf = list.toBytes();
     return RangeRelativeOffsetList.fromBytes(buf.slice(from * RangeRelativeOffsetList.ENTRY_BYTES));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Optimised read helpers for TrieNodeHistoryReader
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns the sorted (ascending) list of all absolute block numbers at which {@code naturalKey}
+   * changed within the range containing {@code block}, restricted to blocks ≤ {@code block}.
+   *
+   * <p>The returned array collects entries from all sub-blocks (oldest first) and the tail,
+   * converting each within-range offset to an absolute block number ({@code rangeId * rangeSize +
+   * offset}). Only offsets ≤ {@code block}'s within-range offset are included.
+   *
+   * <p>Returns {@link java.util.Optional#empty()} if the bloom or range marker is negative for this
+   * key/range (fast-negative path), or if no entries exist ≤ {@code block} within the range.
+   *
+   * <p>Used by {@link TrieNodeHistoryReader} to locate the nearest FULL checkpoint without repeated
+   * {@link #latestChangeBlock} calls — one index-list read replaces up to 15 individual reads in
+   * the hot case (CHECKPOINT_INTERVAL = 16).
+   *
+   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})
+   * @param block the inclusive upper bound
+   * @return sorted absolute block numbers ≤ block in this key's range, or empty if none
+   */
+  Optional<long[]> getChangeBlocksUpTo(final Bytes naturalKey, final long block) {
+    final long rangeId = block / rangeSize;
+    final int withinRangeCeil = (int) (block - rangeId * rangeSize);
+
+    // 1. Bloom short-circuit (fast negative).
+    if (!bloomMaybeContains(rangeId, naturalKey)) {
+      return Optional.empty();
+    }
+
+    // 2. Range-marker check (eliminates bloom false-positives before list read).
+    if (!rangeMarkerPresent(naturalKey, rangeId)) {
+      return Optional.empty();
+    }
+
+    // 3. Read the [4B subCount][packed offsets] index value.
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
+    final Optional<byte[]> rawOpt =
+        storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe());
+    if (rawOpt.isEmpty()) {
+      return Optional.empty();
+    }
+    final IndexValue iv = readIndexValue(rawOpt.get());
+    final int subCount = iv.subCount;
+    final RangeRelativeOffsetList tail = iv.list;
+
+    // Accumulate all offsets ≤ withinRangeCeil from sub-blocks (oldest → newest) then tail.
+    // Size estimate: subCount * subBlockSplitAt + tail.size(); cap at a reasonable initial value.
+    final long rangeBase = rangeId * rangeSize;
+    int estimatedSize = subCount * subBlockSplitAt + tail.size();
+    final ArrayList<Long> blocks = new ArrayList<>(estimatedSize);
+
+    // 3a. Sub-blocks: subId 0 is the oldest, subId subCount-1 is the most-recently-split (but
+    //     still older than the current tail). Walk ascending so that output is sorted ascending.
+    for (int subId = 0; subId < subCount; subId++) {
+      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subId);
+      final Optional<byte[]> subRaw =
+          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE, subKey.toArrayUnsafe());
+      if (subRaw.isEmpty()) {
+        continue; // should not happen in well-formed data, but skip gracefully
+      }
+      final RangeRelativeOffsetList subList =
+          RangeRelativeOffsetList.fromBytes(Bytes.wrap(subRaw.get()));
+      // All sub-block entries are strictly older (smaller offsets) than the current tail.
+      // Include only those ≤ withinRangeCeil.
+      final int subSize = subList.size();
+      for (int i = 0; i < subSize; i++) {
+        final int offset = subList.get(i);
+        if (offset > withinRangeCeil) {
+          break; // sub-block entries are sorted ascending; no need to scan further
+        }
+        blocks.add(rangeBase + offset);
+      }
+    }
+
+    // 3b. Tail entries ≤ withinRangeCeil.
+    final int tailSize = tail.size();
+    for (int i = 0; i < tailSize; i++) {
+      final int offset = tail.get(i);
+      if (offset > withinRangeCeil) {
+        break; // tail is also sorted ascending
+      }
+      blocks.add(rangeBase + offset);
+    }
+
+    if (blocks.isEmpty()) {
+      return Optional.empty();
+    }
+
+    final long[] result = new long[blocks.size()];
+    for (int i = 0; i < result.length; i++) {
+      result[i] = blocks.get(i);
+    }
+    return Optional.of(result);
+  }
+
+  /**
+   * Returns the total number of mutations recorded for {@code naturalKey} in all ranges strictly
+   * before {@code rangeId} (i.e. ranges 0, 1, …, rangeId − 1).
+   *
+   * <p>Used by {@link TrieNodeHistoryReader} alongside {@link #getChangeBlocksUpTo} to compute the
+   * global mutation index of {@code b*} when the node's history spans multiple ranges, so that the
+   * correct FULL checkpoint position can be determined regardless of range boundaries.
+   *
+   * <p>Each range contributes {@code subCount * DEFAULT_SUBBLOCK_SPLIT_AT + tailEntries} mutations,
+   * derived from the packed {@code [4B subCount][3N offsets]} index value. Ranges with no
+   * range-marker for this key are skipped in O(1).
+   *
+   * @param naturalKey the node's natural key (from {@link ArchiveNodeKey})
+   * @param rangeId the (exclusive) upper bound; pass 0 to get 0 immediately
+   * @return the total mutation count in ranges [0, rangeId)
+   */
+  int countMutationsInEarlierRanges(final Bytes naturalKey, final long rangeId) {
+    if (rangeId <= 0) {
+      return 0;
+    }
+    int total = 0;
+    for (long r = 0; r < rangeId; r++) {
+      if (!rangeMarkerPresent(naturalKey, r)) {
+        continue;
+      }
+      final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, r);
+      final Optional<byte[]> raw =
+          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe());
+      if (raw.isEmpty()) {
+        continue;
+      }
+      final byte[] b = raw.get();
+      if (b.length < SUBCOUNT_BYTES) {
+        continue;
+      }
+      final int subCount =
+          ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
+      final int tailEntries = (b.length - SUBCOUNT_BYTES) / RangeRelativeOffsetList.ENTRY_BYTES;
+      total += subCount * DEFAULT_SUBBLOCK_SPLIT_AT + tailEntries;
+    }
+    return total;
   }
 
   // ---------------------------------------------------------------------------
