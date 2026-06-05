@@ -17,6 +17,11 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_BLOOM_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_RANGE_MARKER_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_HASH_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
@@ -30,6 +35,9 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMer
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.NoopBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.CacheManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveMigrationTrieNodeStrategy;
@@ -117,8 +125,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private BonsaiCachedMerkleTrieLoader migrationTrieLoader;
   private BonsaiWorldStateKeyValueStorage migrationKvStorage;
 
+  // Optional trie-node differential-index components (null when index is disabled).
+  private final TrieNodeHistoryStore migrationHistoryStore;
+  private final TrieNodeChangeIndex migrationChangeIndex;
+  private final TrieNodeIndexProgress migrationIndexProgress;
+  // The migration strategy reference — retained so we can call flushPendingBlooms after persist().
+  private BonsaiArchiveMigrationTrieNodeStrategy migrationTrieNodeStrategy;
+
   /**
-   * Creates a new BonsaiFlatDbToArchiveMigrator.
+   * Creates a new BonsaiFlatDbToArchiveMigrator without trie-node differential index support.
    *
    * @param worldStateStorage the Bonsai world state storage
    * @param trieLogManager the trie log manager for reading trie logs
@@ -134,11 +149,70 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final ScheduledExecutorService executorService,
       final MetricsSystem metricsSystem,
       final BonsaiArchiveFlatDbStrategy archiveStrategy) {
+    this(
+        worldStateStorage,
+        trieLogManager,
+        blockchain,
+        executorService,
+        metricsSystem,
+        archiveStrategy,
+        null,
+        null,
+        null);
+  }
+
+  /**
+   * Creates a new BonsaiFlatDbToArchiveMigrator with trie-node differential index support.
+   *
+   * <p>When {@code historyStore} and {@code changeIndex} are both non-null (and {@code
+   * archiveStrategy} has a non-null checkpoint interval), each checkpoint's trie-node writes are
+   * also captured into the differential index so that migrated blocks gain fast historical proofs.
+   * {@code progress} is optional (may be null) even when the other two are supplied.
+   *
+   * <p>Partial injection — exactly one of {@code historyStore} / {@code changeIndex} non-null — is
+   * rejected with {@link IllegalArgumentException}: both must be null (index disabled) or both
+   * non-null (index enabled).
+   *
+   * @param worldStateStorage the Bonsai world state storage
+   * @param trieLogManager the trie log manager for reading trie logs
+   * @param blockchain the blockchain for reading block headers
+   * @param executorService the executor service for running migration on a separate thread
+   * @param metricsSystem the metrics system for tracking migration progress
+   * @param archiveStrategy the archive flat DB strategy for writing archive keys
+   * @param historyStore the diff-entry store to write history entries to; must be non-null when
+   *     {@code changeIndex} is non-null, null when {@code changeIndex} is null
+   * @param changeIndex the change-block index to record mutations in; must be non-null when {@code
+   *     historyStore} is non-null, null when {@code historyStore} is null
+   * @param progress the coverage-progress tracker to advance after each block; may be null
+   * @throws IllegalArgumentException if exactly one of {@code historyStore} / {@code changeIndex}
+   *     is non-null
+   */
+  public BonsaiFlatDbToArchiveMigrator(
+      final BonsaiWorldStateKeyValueStorage worldStateStorage,
+      final TrieLogManager trieLogManager,
+      final Blockchain blockchain,
+      final ScheduledExecutorService executorService,
+      final MetricsSystem metricsSystem,
+      final BonsaiArchiveFlatDbStrategy archiveStrategy,
+      final TrieNodeHistoryStore historyStore,
+      final TrieNodeChangeIndex changeIndex,
+      final TrieNodeIndexProgress progress) {
+    if ((historyStore == null) != (changeIndex == null)) {
+      throw new IllegalArgumentException(
+          "historyStore and changeIndex must both be null (index disabled) or both non-null"
+              + " (index enabled); got historyStore="
+              + (historyStore == null ? "null" : "non-null")
+              + ", changeIndex="
+              + (changeIndex == null ? "null" : "non-null"));
+    }
     this.worldStateStorage = worldStateStorage;
     this.trieLogManager = trieLogManager;
     this.blockchain = blockchain;
     this.executorService = executorService;
     this.archiveStrategy = archiveStrategy;
+    this.migrationHistoryStore = historyStore;
+    this.migrationChangeIndex = changeIndex;
+    this.migrationIndexProgress = progress;
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
         "bonsai_archive_migration_block",
@@ -464,6 +538,19 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         new StaticArchiveFlatDbStrategyProvider(metricsSystem, readStrategy);
     provider.loadFlatDbStrategy(migrationTrieStorage);
     migrationTrieLoader = new NoopBonsaiCachedMerkleTrieLoader();
+    final boolean indexEnabled = migrationHistoryStore != null && migrationChangeIndex != null;
+    if (indexEnabled) {
+      migrationTrieNodeStrategy =
+          new BonsaiArchiveMigrationTrieNodeStrategy(
+              interval,
+              migrationTrieLoader,
+              migrationHistoryStore,
+              migrationChangeIndex,
+              migrationIndexProgress);
+    } else {
+      migrationTrieNodeStrategy =
+          new BonsaiArchiveMigrationTrieNodeStrategy(interval, migrationTrieLoader);
+    }
     migrationKvStorage =
         new BonsaiWorldStateKeyValueStorage(
             provider,
@@ -471,7 +558,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             new InMemoryKeyValueStorage(),
             CacheManager.NO_OP_CACHE,
             0L,
-            new BonsaiArchiveMigrationTrieNodeStrategy(interval, migrationTrieLoader));
+            migrationTrieNodeStrategy);
     final CodeCache codeCache = new CodeCache();
     migrationWorldState =
         new BonsaiWorldState(
@@ -558,6 +645,30 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 // the next window find this window's nodes immediately — no clearInMemory() wipe
                 // of a read substrate. Only the in-memory metadata keys are refreshed.
                 migrationTrieStorage.seedCheckpoint(header);
+                // Flush the in-memory bloom accumulator populated during persist().
+                //
+                // Atomicity gap: the history and change-index entries were committed inside
+                // persist()'s MigrationTransaction (routed to realTx). The bloom bits are
+                // in-memory only after persist() returns and must be committed here in a separate
+                // transaction. If the process crashes between the two commits the bloom for this
+                // range is absent on restart. This is safe: a bloom miss is a false negative in
+                // TrieNodeChangeIndex.bloomMaybeContains, which triggers a fallback to the
+                // per-range range-marker check — the correct result is returned without the bloom
+                // optimisation. No bloom rebuild is needed on restart.
+                //
+                // Progress tracking (setLastIndexedBlock / markRangeComplete) is skipped:
+                // getCurrentBlockNumber reads WORLD_BLOCK_NUMBER_KEY from the live
+                // worldStateStorage which reflects HEAD, not the migration checkpoint block.
+                // Callers that need index coverage progress should update migrationIndexProgress
+                // directly after migration completes.
+                if (migrationTrieNodeStrategy != null) {
+                  final SegmentedKeyValueStorageTransaction bloomTx =
+                      worldStateStorage
+                          .getComposedWorldStateStorage()
+                          .startLowPriorityTransaction();
+                  migrationTrieNodeStrategy.flushPendingBlooms(bloomTx);
+                  bloomTx.commit();
+                }
                 LOG.info(
                     "Archive trie checkpoint complete: block {} suffix {} stateRoot {}",
                     blockNumber,
@@ -645,7 +756,13 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         // Metadata keys only (WORLD_*, ARCHIVE_PROOF_BLOCK_NUMBER_KEY) — kept in-memory so they
         // never touch live HEAD's TRIE_BRANCH_STORAGE.
         inMemoryTx.put(segmentId, key, value);
-      } else if (segmentId == TRIE_BRANCH_STORAGE_ARCHIVE) {
+      } else if (segmentId == TRIE_BRANCH_STORAGE_ARCHIVE
+          || segmentId == TRIE_NODE_HISTORY_ARCHIVE
+          || segmentId == TRIE_NODE_INDEX_ARCHIVE
+          || segmentId == TRIE_NODE_RANGE_MARKER_ARCHIVE
+          || segmentId == TRIE_NODE_BLOOM_ARCHIVE
+          || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
+        // Trie archive and differential-index segments go to real (persistent) storage.
         realTx.put(segmentId, key, value);
       }
       // flat account/storage writes dropped — processBlock() handles those separately
@@ -655,8 +772,19 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     public void remove(final SegmentIdentifier segmentId, final byte[] key) {
       if (segmentId == TRIE_BRANCH_STORAGE) {
         inMemoryTx.remove(segmentId, key);
+      } else if (segmentId == TRIE_BRANCH_STORAGE_ARCHIVE
+          || segmentId == TRIE_NODE_HISTORY_ARCHIVE
+          || segmentId == TRIE_NODE_INDEX_ARCHIVE
+          || segmentId == TRIE_NODE_RANGE_MARKER_ARCHIVE
+          || segmentId == TRIE_NODE_BLOOM_ARCHIVE
+          || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
+        // Mirror the put routing: any archive or index CF that can be written can also be removed.
+        // TRIE_BRANCH_STORAGE_ARCHIVE removes do not occur during normal migration (the migrator
+        // only appends archive-suffixed nodes, never deletes them), but the symmetric routing
+        // prevents silent data corruption if a remove were ever issued on this CF.
+        realTx.remove(segmentId, key);
       }
-      // archive removes dropped
+      // flat account/storage removes dropped — processBlock() handles those separately
     }
 
     @Override

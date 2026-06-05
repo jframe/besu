@@ -47,6 +47,11 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKey
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
@@ -71,6 +76,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
@@ -685,6 +691,80 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     verify(trieLogManager, times(2)).getTrieLogLayer(hashAt(3L));
   }
 
+  // --- trie-node index tests ---
+
+  /**
+   * Task 5.1: migrating blocks with the trie-node index enabled populates the differential index so
+   * that {@link TrieNodeHistoryReader#nodeAt} returns the root trie node whose keccak256 matches
+   * block 1's {@code stateRoot}.
+   *
+   * <p>interval=2 triggers a checkpoint at block 1 ({@code (1+1) % 2 == 0}). During {@code
+   * persist(header1)}, {@code putFlatAccountTrieNode} is called for each trie node including the
+   * root (location = empty bytes). The root node location has size ≤ {@code FULL_ABOVE_DEPTH=2}, so
+   * it is always stored as a FULL codec entry. The strategy reads {@code WORLD_BLOCK_NUMBER_KEY}
+   * before it is written in the same transaction, so the root node is indexed at block 0 (the
+   * "off-by-one" in the write path). {@code nodeAt(Bytes.EMPTY, 1)} still resolves to this entry
+   * because {@code latestChangeBlock(key, 1)} finds block 0 ≤ 1.
+   */
+  @Test
+  public void trieMigratorWithIndexEnabled_populatesDiffIndexAtCheckpoint() throws Exception {
+    // Set up block 1 with the correct stateRoot so persist() does not throw a mismatch error.
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    // Build index components backed by the same storage as the migrator.
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    final TrieNodeChangeIndex changeIndex =
+        new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+
+    // Run migration with index enabled (interval=2 → checkpoint at block 1).
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        createMigratorWithRealTrieLogsAndIndex(2, historyStore, changeIndex, progress);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    // Due to the WORLD_BLOCK_NUMBER_KEY write-order in persist(), the root node is indexed
+    // at block 0. Querying at target block 1 resolves to the same entry (latestChangeBlock ≤ 1).
+
+    // Structural assertion 1: the raw history entry at block 0 must be present.
+    // This verifies that MigrationTransaction is actually routing TRIE_NODE_HISTORY_ARCHIVE
+    // writes to realTx (persistent storage) rather than silently dropping them.
+    assertThat(historyStore.get(Bytes.EMPTY, 0L))
+        .withFailMessage(
+            "History store should contain a diff entry for root key at block 0 after migration")
+        .isPresent();
+
+    // Structural assertion 2: the range marker for range 0 must be set.
+    // This verifies that TRIE_NODE_RANGE_MARKER_ARCHIVE writes are also routed correctly.
+    assertThat(changeIndex.rangeMarkerPresent(Bytes.EMPTY, 0L))
+        .withFailMessage("Change index should have a range-0 marker for root key after migration")
+        .isTrue();
+
+    // Semantic assertion: the history reader reconstructs the node and its keccak matches
+    // stateRoot.
+    final TrieNodeHistoryReader reader = new TrieNodeHistoryReader(historyStore, changeIndex);
+    final Optional<Bytes> rootNodeOpt = reader.nodeAt(Bytes.EMPTY, 1);
+
+    assertThat(rootNodeOpt)
+        .withFailMessage("Root trie node should be present in the diff index after migration")
+        .isPresent();
+
+    // The keccak256 of the root node RLP must equal the block's stateRoot.
+    final Hash computedRoot = Hash.hash(rootNodeOpt.get());
+    assertThat(computedRoot)
+        .withFailMessage(
+            "Root node keccak does not match block 1 stateRoot: expected %s got %s",
+            stateRoot, computedRoot)
+        .isEqualTo(stateRoot);
+  }
+
   // --- test helpers ---
 
   private MutableBlockchain createInMemoryBlockchain(final Block genesisBlock) {
@@ -753,6 +833,32 @@ public class BonsaiFlatDbToArchiveMigratorTest {
             Executors.newScheduledThreadPool(1),
             metricsSystem,
             archiveStrategy);
+    migrators.add(migrator);
+    return migrator;
+  }
+
+  // Like createMigratorWithRealTrieLogs but also wires the trie-node differential index.
+  private BonsaiFlatDbToArchiveMigrator createMigratorWithRealTrieLogsAndIndex(
+      final long interval,
+      final TrieNodeHistoryStore historyStore,
+      final TrieNodeChangeIndex changeIndex,
+      final TrieNodeIndexProgress progress) {
+    when(trieLogManager.getMaxLayersToLoad()).thenReturn(BOUNDARY_DISABLED);
+    when(trieLogManager.getTrieLogLayer(hashAt(0L))).thenReturn(Optional.of(new TrieLogLayer()));
+    final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
+    final BonsaiArchiveFlatDbStrategy archiveStrategy =
+        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy(), interval);
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        new BonsaiFlatDbToArchiveMigrator(
+            worldStateStorage,
+            trieLogManager,
+            blockchain,
+            Executors.newScheduledThreadPool(1),
+            metricsSystem,
+            archiveStrategy,
+            historyStore,
+            changeIndex,
+            progress);
     migrators.add(migrator);
     return migrator;
   }
