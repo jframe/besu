@@ -388,16 +388,21 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final long headBlock = blockchain.getChainHeadHeader().getNumber();
     final long maxLayers = trieLogManager.getMaxLayersToLoad();
 
-    // Historical + index enabled + migration covered + range indexed → use index path.
+    // Historical + index enabled + migration covered + block indexed → use index path.
     // archiveMigrationProgressSupplier guards the same window as isHistoricalQuery: it ensures the
     // archive flat-DB and trie-node CFs hold data for targetBlock before we attempt a proof.
-    // trieNodeIndexProgress.covers() adds the stronger guarantee that the range is fully indexed
-    // (required for ArchiveProofNodeLoader correctness), but does not by itself confirm that the
-    // migration has finished writing flat-DB data for the block.  Both gates are therefore needed.
+    // For the live-import path, lastIndexedBlock() >= targetBlock is sufficient: blocks are indexed
+    // sequentially so every block up to lastIndexedBlock is fully captured.  covers() is only
+    // needed for the backfill/migrator path where ranges may be indexed out of order; for a running
+    // node that gate would never be true until block 999_999 (first range boundary), making the
+    // index path unreachable on any chain shorter than RANGE_SIZE.
+    final boolean blockIsIndexed =
+        trieNodeIndexProgress.lastIndexedBlock() >= targetBlock
+            || trieNodeIndexProgress.covers(targetBlock);
     if (trieNodeIndexEnabled
         && headBlock - targetBlock >= maxLayers
         && archiveMigrationProgressSupplier.getAsLong() >= targetBlock
-        && trieNodeIndexProgress.covers(targetBlock)) {
+        && blockIsIndexed) {
 
       final Hash stateRoot = blockHeader.getStateRoot();
       final SegmentedKeyValueStorage liveStorage =
