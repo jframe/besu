@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
@@ -524,6 +525,55 @@ class BonsaiArchiveTrieNodeStrategyTest {
     assertThat(loaded.lastIndexedBlock()).isEqualTo(lastBlockInRange0);
     assertThat(loaded.covers(0L)).isTrue();
     assertThat(loaded.covers(ArchiveNodeKey.RANGE_SIZE)).isFalse();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Task 6.2: Suffixed-CF write suppression when index is enabled
+  // ---------------------------------------------------------------------------
+
+  /**
+   * When {@code trieNodeIndexEnabled=true}, account trie node writes must NOT populate {@code
+   * TRIE_BRANCH_STORAGE_ARCHIVE} — the suffixed CF is superseded by the differential index and
+   * writing it would be redundant I/O.
+   */
+  @Test
+  void flagEnabled_accountTrieNode_doesNotWriteToSuffixedCF() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+
+    writeAtBlock(strategy, LOCATION_DEEP, SHORT_NODE_V1, 100L);
+
+    // TRIE_BRANCH_STORAGE_ARCHIVE must be empty when index is enabled.
+    assertThat(storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isEmpty();
+  }
+
+  /**
+   * When {@code trieNodeIndexEnabled=true}, storage trie node writes must NOT populate {@code
+   * TRIE_BRANCH_STORAGE_ARCHIVE} — the suffixed CF is superseded by the differential index.
+   */
+  @Test
+  void flagEnabled_storageTrieNode_doesNotWriteToSuffixedCF() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+    final Hash accountHash =
+        Address.fromHexString("0x0000000000000000000000000000000000000099").addressHash();
+
+    writeStorageAtBlock(strategy, accountHash, LOCATION_DEEP, SHORT_NODE_V1, 100L);
+
+    assertThat(storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isEmpty();
+  }
+
+  /**
+   * When {@code trieNodeIndexEnabled=false}, account trie node writes MUST still populate {@code
+   * TRIE_BRANCH_STORAGE_ARCHIVE} so that the legacy proof path can read them via {@code
+   * getNearestBeforeMatchLength}.
+   */
+  @Test
+  void flagDisabled_accountTrieNode_writesToSuffixedCF() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithoutIndex();
+
+    writeAtBlock(strategy, LOCATION_DEEP, SHORT_NODE_V1, 100L);
+
+    // At least one entry should be present in TRIE_BRANCH_STORAGE_ARCHIVE.
+    assertThat(storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isNotEmpty();
   }
 
   /**

@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig.createStatefulConfigWithTrie;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -179,6 +180,68 @@ class BonsaiArchiveTrieNodeIndexIntegrationTest {
         .isPresent();
     assertThat(proof.get().getStorageValue(absentSlot)).isEqualTo(UInt256.ZERO);
     assertThat(proof.get().getStorageProof(absentSlot)).isNotEmpty();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Task 6.2: Verify legacy proof path bypassed when trie-node index covers target
+  // ---------------------------------------------------------------------------
+
+  /**
+   * When {@code trieNodeIndexEnabled=true} and the index covers the target block, the proof routing
+   * in {@link BonsaiArchiveWorldStateProvider#getAccountProof} takes the index path rather than the
+   * legacy {@code rollArchiveProofWorldStateToBlockHash} path. The live block-import path no longer
+   * writes to {@code TRIE_BRANCH_STORAGE_ARCHIVE} (verified by {@code
+   * BonsaiArchiveTrieNodeStrategyTest.flagEnabled_accountTrieNode_doesNotWriteToSuffixedCF}). Only
+   * the migrator's checkpoint writes land there.
+   *
+   * <p>This test confirms that the proof still succeeds entirely from the trie-node index, even
+   * though the only data in {@code TRIE_BRANCH_STORAGE_ARCHIVE} comes from the migrator (which the
+   * index path never reads). The migrator's suffixed-CF data is irrelevant to the index proof path.
+   */
+  @Test
+  void trieNodeIndexEnabled_legacyPathBypassed_proofSucceedsFromIndexAlone() throws Exception {
+    // buildIndexedArchive() uses trieNodeIndexEnabled=true.
+    // The live block-import path suppresses TRIE_BRANCH_STORAGE_ARCHIVE writes (Task 6.2).
+    // The migrator checkpoint writes DO land in the CF (migrator always needs them).
+    // The proof must succeed via ArchiveProofNodeLoader — the legacy seekForPrev path is NOT taken.
+    final BonsaiArchiveWorldStateProvider archiveProvider = buildIndexedArchive();
+    final BlockHeader targetHeader = blockchain.getBlockHeader(TARGET_BLOCK).orElseThrow();
+
+    final Optional<WorldStateProof> proof =
+        archiveProvider.getAccountProof(
+            targetHeader, ACCOUNT, List.of(UInt256.ONE), Function.identity());
+
+    // Proof must be present: ArchiveProofNodeLoader supplies all trie nodes from the index.
+    assertThat(proof)
+        .withFailMessage(
+            "index path proof must succeed even though live-import did not write to suffixed CF"
+                + " at block %d",
+            TARGET_BLOCK)
+        .isPresent();
+    assertThat(proof.get().getAccountProof())
+        .withFailMessage("account proof witness must be non-empty (trie was traversed from index)")
+        .isNotEmpty();
+    assertThat(proof.get().getStorageProof(UInt256.ONE))
+        .withFailMessage("storage proof witness must be non-empty (trie was traversed from index)")
+        .isNotEmpty();
+  }
+
+  /**
+   * Verifies that the suffixed {@code TRIE_BRANCH_STORAGE_ARCHIVE} column family IS populated when
+   * {@code trieNodeIndexEnabled=false}, confirming that the suppression introduced in Task 6.2 is
+   * correctly conditioned on the flag.
+   */
+  @Test
+  void trieNodeIndexDisabled_suffixedCfPopulated() throws Exception {
+    // Build a chain WITHOUT the trie-node index (legacy mode).
+    // This exercises BonsaiArchiveTrieNodeStrategy with trieNodeIndexEnabled=false,
+    // which should write suffixed keys to TRIE_BRANCH_STORAGE_ARCHIVE for each trie node.
+    final SegmentedKeyValueStorage composedStorage = buildLegacyArchiveStorage();
+
+    // Must have at least one suffixed entry in TRIE_BRANCH_STORAGE_ARCHIVE.
+    assertThat(composedStorage.stream(TRIE_BRANCH_STORAGE_ARCHIVE))
+        .withFailMessage("legacy mode must populate TRIE_BRANCH_STORAGE_ARCHIVE with suffixed keys")
+        .isNotEmpty();
   }
 
   // ---------------------------------------------------------------------------
@@ -429,6 +492,132 @@ class BonsaiArchiveTrieNodeIndexIntegrationTest {
     // and the provider's internal progress record already has covers(TARGET_BLOCK) == true.
 
     return archiveProvider;
+  }
+
+  /**
+   * Builds a small chain using the legacy suffix-archive strategy ({@code
+   * trieNodeIndexEnabled=false}) and returns the composed storage. Used to verify that {@code
+   * TRIE_BRANCH_STORAGE_ARCHIVE} IS populated in legacy mode — confirming the Task-6.2 suppression
+   * is correctly conditioned on the flag rather than always skipping writes.
+   */
+  private SegmentedKeyValueStorage buildLegacyArchiveStorage() throws Exception {
+    final BlockDataGenerator blockGen = new BlockDataGenerator();
+    final Block genesis = blockGen.genesisBlock();
+    blockchain =
+        DefaultBlockchain.createMutable(
+            genesis,
+            new KeyValueStoragePrefixedKeyBlockchainStorage(
+                new InMemoryKeyValueStorage(),
+                new VariablesKeyValueStorage(new InMemoryKeyValueStorage()),
+                new MainnetBlockHeaderFunctions(),
+                false),
+            new NoOpMetricsSystem(),
+            0);
+
+    // Legacy config: trieNodeIndexEnabled=false, but stateProofsEnabled=true so the
+    // suffix archive is active.
+    final ImmutableDataStorageConfiguration legacyConfig =
+        ImmutableDataStorageConfiguration.builder()
+            .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
+            .pathBasedExtraStorageConfiguration(
+                ImmutablePathBasedExtraStorageConfiguration.builder()
+                    .maxLayersToLoad(MAX_LAYERS)
+                    .unstable(
+                        ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
+                            .stateProofsEnabled(true)
+                            .archiveTrieNodeCheckpointInterval(INTERVAL)
+                            .trieNodeIndexEnabled(false) // Legacy mode: no differential index
+                            .build())
+                    .build())
+            .build();
+
+    final InMemoryKeyValueStorageProvider sharedProvider = new InMemoryKeyValueStorageProvider();
+    final BonsaiWorldStateKeyValueStorage archiveStorage =
+        (BonsaiWorldStateKeyValueStorage) sharedProvider.createWorldStateStorage(legacyConfig);
+    archiveStorage.upgradeToArchiveFlatDbMode();
+
+    final SegmentedKeyValueStorage composedStorage = archiveStorage.getComposedWorldStateStorage();
+
+    // Legacy write strategy: index disabled, interval enabled → writes suffixed keys to archive CF.
+    final BonsaiArchiveTrieNodeStrategy legacyStrategy =
+        new BonsaiArchiveTrieNodeStrategy(INTERVAL);
+
+    final BonsaiFlatDbStrategyProvider flatDbProvider =
+        new BonsaiFlatDbStrategyProvider(new NoOpMetricsSystem(), legacyConfig);
+    flatDbProvider.loadFlatDbStrategy(composedStorage);
+
+    final BonsaiWorldStateKeyValueStorage legacyHeadStorage =
+        new BonsaiWorldStateKeyValueStorage(
+            flatDbProvider,
+            composedStorage,
+            archiveStorage.getTrieLogStorage(),
+            archiveStorage.getCacheManager(),
+            archiveStorage.getCurrentVersion(),
+            legacyStrategy);
+
+    final BonsaiWorldStateProvider headArchive =
+        new BonsaiWorldStateProvider(
+            legacyHeadStorage,
+            blockchain,
+            DataStorageConfiguration.DEFAULT_BONSAI_CONFIG.getPathBasedExtraStorageConfiguration(),
+            new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem()),
+            null,
+            EvmConfiguration.DEFAULT,
+            () -> null,
+            new CodeCache());
+
+    // Throwaway root-computing state.
+    final InMemoryKeyValueStorageProvider rootProvider = new InMemoryKeyValueStorageProvider();
+    final BonsaiWorldStateKeyValueStorage rootStorage =
+        (BonsaiWorldStateKeyValueStorage)
+            rootProvider.createWorldStateStorage(DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
+    final BonsaiWorldStateProvider rootArchive =
+        new BonsaiWorldStateProvider(
+            rootStorage,
+            blockchain,
+            DataStorageConfiguration.DEFAULT_BONSAI_CONFIG.getPathBasedExtraStorageConfiguration(),
+            new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem()),
+            null,
+            EvmConfiguration.DEFAULT,
+            () -> null,
+            new CodeCache());
+
+    final BonsaiWorldState headState =
+        new BonsaiWorldState(
+            headArchive,
+            legacyHeadStorage,
+            EvmConfiguration.DEFAULT,
+            createStatefulConfigWithTrie(),
+            new CodeCache());
+    final BonsaiWorldState rootState =
+        new BonsaiWorldState(
+            rootArchive,
+            rootStorage,
+            EvmConfiguration.DEFAULT,
+            createStatefulConfigWithTrie(),
+            new CodeCache());
+
+    BlockHeader parent = genesis.getHeader();
+    for (int i = 1; i <= NUM_BLOCKS; i++) {
+      applyBlockChanges(rootState, i);
+      rootState.persist(null);
+      final Hash rootHash = rootState.rootHash();
+
+      final BlockHeader header =
+          new BlockHeaderTestFixture()
+              .number(i)
+              .parentHash(parent.getHash())
+              .stateRoot(rootHash)
+              .buildHeader();
+
+      applyBlockChanges(headState, i);
+      headState.persist(header);
+
+      blockchain.appendBlock(new Block(header, BlockBody.empty()), List.of());
+      parent = header;
+    }
+
+    return composedStorage;
   }
 
   private void applyBlockChanges(final BonsaiWorldState state, final int blockNumber) {

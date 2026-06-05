@@ -75,4 +75,18 @@ public class BonsaiArchiveMigrationTrieNodeStrategy extends BonsaiArchiveTrieNod
         changeIndex,
         progress);
   }
+
+  /**
+   * The migrator always writes suffixed nodes to {@code TRIE_BRANCH_STORAGE_ARCHIVE}, even when the
+   * trie-node differential index is enabled. The checkpoint trie nodes written during migration
+   * replay are consumed by the migrator's own subsequent checkpoint reads — the index alone is not
+   * sufficient to service those internal reads during replay.
+   *
+   * <p>This overrides the live block-import suppression in {@link BonsaiArchiveTrieNodeStrategy}
+   * which would otherwise skip suffixed-CF writes when the index is on.
+   */
+  @Override
+  protected boolean shouldWriteSuffixedCf() {
+    return true;
+  }
 }

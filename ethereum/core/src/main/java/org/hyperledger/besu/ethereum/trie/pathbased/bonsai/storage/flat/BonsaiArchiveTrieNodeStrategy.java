@@ -229,6 +229,27 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
         .or(() -> baseStrategy.getFlatStorageTrieNode(accountHash, location, nodeHash, storage));
   }
 
+  /**
+   * Controls whether this strategy writes suffixed nodes to {@code TRIE_BRANCH_STORAGE_ARCHIVE}.
+   *
+   * <p>When the trie-node differential index is enabled, the suffixed CF is superseded for proofs:
+   * {@link
+   * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveProofNodeLoader}
+   * reconstructs historical state directly from the index without a {@code seekForPrev} scan. The
+   * live block-import path therefore skips suffixed-CF writes to avoid redundant I/O and space.
+   *
+   * <p>The archive migrator (via {@link BonsaiArchiveMigrationTrieNodeStrategy}) overrides this to
+   * return {@code true} unconditionally, because the migrator's checkpoint persist writes are
+   * consumed by the same migrator's subsequent checkpoint reads — the index alone is not sufficient
+   * during migration replay.
+   *
+   * @return {@code true} if suffixed nodes should be written to {@code TRIE_BRANCH_STORAGE_ARCHIVE}
+   */
+  protected boolean shouldWriteSuffixedCf() {
+    // Live block-import: skip when the index supersedes the suffixed CF for proofs.
+    return !trieNodeIndexEnabled;
+  }
+
   @Override
   public void putFlatAccountTrieNode(
       final SegmentedKeyValueStorage storage,
@@ -245,18 +266,20 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     baseStrategy.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
 
     if (trieNodeCheckpointInterval != null) {
-      ensureIntervalSeeded(storage);
-      final BonsaiContext ctx = getStateTrieArchiveContextForWrite(storage);
-      byte[] keySuffixed =
-          BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix(ctx, location.toArrayUnsafe());
-      transaction.put(TRIE_BRANCH_STORAGE_ARCHIVE, keySuffixed, node.toArrayUnsafe());
+      if (shouldWriteSuffixedCf()) {
+        ensureIntervalSeeded(storage);
+        final BonsaiContext ctx = getStateTrieArchiveContextForWrite(storage);
+        byte[] keySuffixed =
+            BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix(ctx, location.toArrayUnsafe());
+        transaction.put(TRIE_BRANCH_STORAGE_ARCHIVE, keySuffixed, node.toArrayUnsafe());
+        LOG.trace(
+            "Archive account trie node written: location={} suffix={}",
+            location,
+            ctx.getBlockNumber().orElse(-1L));
+      }
       if (trieLoader != null) {
         trieLoader.putAccountNode(nodeHash, node);
       }
-      LOG.trace(
-          "Archive account trie node written: location={} suffix={}",
-          location,
-          ctx.getBlockNumber().orElse(-1L));
 
       if (trieNodeIndexEnabled) {
         final long block = getCurrentBlockNumber(storage);
@@ -287,20 +310,22 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
         storage, transaction, accountHash, location, nodeHash, node);
 
     if (trieNodeCheckpointInterval != null) {
-      ensureIntervalSeeded(storage);
-      final BonsaiContext ctx = getStateTrieArchiveContextForWrite(storage);
-      byte[] keySuffixed =
-          BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix(
-              ctx, accountHashLocation.toArrayUnsafe());
-      transaction.put(TRIE_BRANCH_STORAGE_ARCHIVE, keySuffixed, node.toArrayUnsafe());
+      if (shouldWriteSuffixedCf()) {
+        ensureIntervalSeeded(storage);
+        final BonsaiContext ctx = getStateTrieArchiveContextForWrite(storage);
+        byte[] keySuffixed =
+            BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix(
+                ctx, accountHashLocation.toArrayUnsafe());
+        transaction.put(TRIE_BRANCH_STORAGE_ARCHIVE, keySuffixed, node.toArrayUnsafe());
+        LOG.trace(
+            "Archive storage trie node written: account={} location={} suffix={}",
+            accountHash,
+            location,
+            ctx.getBlockNumber().orElse(-1L));
+      }
       if (trieLoader != null) {
         trieLoader.putStorageNode(nodeHash, node);
       }
-      LOG.trace(
-          "Archive storage trie node written: account={} location={} suffix={}",
-          accountHash,
-          location,
-          ctx.getBlockNumber().orElse(-1L));
 
       if (trieNodeIndexEnabled) {
         final long block = getCurrentBlockNumber(storage);
@@ -471,26 +496,6 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
         String.format("%02x", entry.get(0)));
   }
 
-  /**
-   * Writes all accumulated per-range bloom bits from the current block to the given transaction,
-   * and — when a {@link TrieNodeIndexProgress} was supplied — advances coverage progress.
-   *
-   * <p>Must be called before committing the block's transaction to ensure bloom correctness. After
-   * this call, the accumulator is cleared and ready for the next block.
-   *
-   * <p>Progress advancement (when {@code progress} is non-null and the index is enabled):
-   *
-   * <ol>
-   *   <li>Reads the current block number {@code N} from committed storage.
-   *   <li>Calls {@link TrieNodeIndexProgress#setLastIndexedBlock(long)} with {@code N}.
-   *   <li>If {@code N} is the last block in its range (i.e. {@code (N + 1) % rangeSize == 0}),
-   *       calls {@link TrieNodeIndexProgress#markRangeComplete(long)}.
-   *   <li>Persists the updated progress via {@link TrieNodeIndexProgress#save}.
-   * </ol>
-   *
-   * @param tx the transaction on which to write bloom entries and the updated progress bytes
-   * @param storage committed storage used to read the current block number for progress advancement
-   */
   /**
    * Writes all accumulated per-range bloom bits from the current block to the given transaction,
    * and — when a {@link TrieNodeIndexProgress} was supplied — advances coverage progress.
