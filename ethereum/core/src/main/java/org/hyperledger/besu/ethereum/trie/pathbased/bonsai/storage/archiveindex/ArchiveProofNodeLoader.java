@@ -50,8 +50,8 @@ import org.apache.tuweni.bytes.Bytes32;
  *   <li><strong>Index path</strong> — hash mismatch or absent. Read the range list for {@code
  *       targetBlock}'s range via {@link TrieNodeChangeIndex#readRangeList}. Use {@link
  *       RangeRelativeOffsetList#latestLeq} to find {@code b*} (latest change ≤ T) in-memory. If
- *       found, delegate to {@link TrieNodeHistoryReader#nodeAt(Bytes, long, RangeRelativeOffsetList,
- *       long)} with the preloaded list.
+ *       found, delegate to {@link TrieNodeHistoryReader#nodeAt(Bytes, long,
+ *       RangeRelativeOffsetList, long)} with the preloaded list.
  *   <li><strong>History fallback</strong> — if the range list is absent or contains no change ≤ T,
  *       delegate to {@link TrieNodeHistoryReader#nodeAt(Bytes, long)} which walks earlier ranges.
  *   <li><strong>Hash verification</strong> — after index/history reconstruction, compute {@code
@@ -138,13 +138,13 @@ public final class ArchiveProofNodeLoader {
    * <h2>Algorithm</h2>
    *
    * <ol>
-   *   <li><strong>Hash-first fast path</strong> — read {@code TRIE_BRANCH_STORAGE[naturalKey]}.
-   *       The value is stored as {@code hash[32] ‖ nodeBytes}. Compare the first 32 bytes to
-   *       {@code expectedHash}. Match → return node bytes directly (1 read).
+   *   <li><strong>Hash-first fast path</strong> — read {@code TRIE_BRANCH_STORAGE[naturalKey]}. The
+   *       value is stored as {@code hash[32] ‖ nodeBytes}. Compare the first 32 bytes to {@code
+   *       expectedHash}. Match → return node bytes directly (1 read).
    *   <li><strong>Index path</strong> — call {@link TrieNodeChangeIndex#readRangeList} once for
-   *       {@code (naturalKey, targetBlock's rangeId)}. Use {@link RangeRelativeOffsetList#latestLeq}
-   *       to find {@code b*} in-memory. If found, reconstruct from {@link
-   *       TrieNodeHistoryReader#nodeAt(Bytes, long, RangeRelativeOffsetList, long)}.
+   *       {@code (naturalKey, targetBlock's rangeId)}. Use {@link
+   *       RangeRelativeOffsetList#latestLeq} to find {@code b*} in-memory. If found, reconstruct
+   *       from {@link TrieNodeHistoryReader#nodeAt(Bytes, long, RangeRelativeOffsetList, long)}.
    *   <li><strong>History fallback</strong> — if the list is empty or has no change ≤ T, delegate
    *       to {@link TrieNodeHistoryReader#nodeAt(Bytes, long)} which walks earlier ranges.
    *   <li><strong>Hash verification</strong> — verify reconstructed node; throw on mismatch.

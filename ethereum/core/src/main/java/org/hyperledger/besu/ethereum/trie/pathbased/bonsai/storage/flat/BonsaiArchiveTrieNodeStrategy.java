@@ -46,8 +46,8 @@ import org.slf4j.LoggerFactory;
  * <p>When the trie-node differential index is enabled ({@link #trieNodeIndexEnabled}), each write
  * also captures a diff-codec entry in {@code TRIE_NODE_HISTORY_ARCHIVE} and appends a change-block
  * record to the per-node index in {@code TRIE_NODE_INDEX_ARCHIVE}. After each block, callers must
- * invoke {@link #advanceIndexProgress(SegmentedKeyValueStorageTransaction, SegmentedKeyValueStorage)}
- * to persist coverage-progress metadata.
+ * invoke {@link #advanceIndexProgress(SegmentedKeyValueStorageTransaction,
+ * SegmentedKeyValueStorage)} to persist coverage-progress metadata.
  */
 public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
@@ -90,7 +90,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   /**
    * Coverage-progress tracker. Non-null only when {@link #trieNodeIndexEnabled} is {@code true}.
-   * Updated in {@link #advanceIndexProgress(SegmentedKeyValueStorageTransaction, SegmentedKeyValueStorage)} after each block.
+   * Updated in {@link #advanceIndexProgress(SegmentedKeyValueStorageTransaction,
+   * SegmentedKeyValueStorage)} after each block.
    */
   private final TrieNodeIndexProgress progress;
 

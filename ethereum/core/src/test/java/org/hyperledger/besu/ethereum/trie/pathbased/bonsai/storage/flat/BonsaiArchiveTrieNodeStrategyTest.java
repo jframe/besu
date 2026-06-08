@@ -446,9 +446,9 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   /**
-   * After indexing a mid-range block, {@code covers(block)} returns true for that block
-   * (window semantics: any block in [indexStartBlock, lastIndexedBlock] is covered), but returns
-   * false for blocks beyond lastIndexedBlock.
+   * After indexing a mid-range block, {@code covers(block)} returns true for that block (window
+   * semantics: any block in [indexStartBlock, lastIndexedBlock] is covered), but returns false for
+   * blocks beyond lastIndexedBlock.
    */
   @Test
   void progress_midRangeBlock_doesNotMarkRangeComplete() {
@@ -547,8 +547,8 @@ class BonsaiArchiveTrieNodeStrategyTest {
     // Use the 7-arg constructor with index enabled and a real progress tracker.
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(1_000_000L);
     final BonsaiArchiveTrieNodeStrategy strat =
-        new BonsaiArchiveTrieNodeStrategy(16L, null, new BonsaiTrieNodeStrategy(),
-            true, historyStore, changeIndex, progress);
+        new BonsaiArchiveTrieNodeStrategy(
+            16L, null, new BonsaiTrieNodeStrategy(), true, historyStore, changeIndex, progress);
     setWorldBlockNumber(41L); // getCurrentBlockNumber returns WORLD_BLOCK_NUMBER_KEY + 1 = 42
 
     final var tx = storage.startTransaction();

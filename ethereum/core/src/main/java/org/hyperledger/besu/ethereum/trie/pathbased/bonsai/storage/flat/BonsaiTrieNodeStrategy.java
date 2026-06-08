@@ -85,9 +85,7 @@ public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final Bytes node) {
     transaction.put(
-        trieSegment,
-        location.toArrayUnsafe(),
-        Bytes.concatenate(nodeHash, node).toArrayUnsafe());
+        trieSegment, location.toArrayUnsafe(), Bytes.concatenate(nodeHash, node).toArrayUnsafe());
   }
 
   @Override

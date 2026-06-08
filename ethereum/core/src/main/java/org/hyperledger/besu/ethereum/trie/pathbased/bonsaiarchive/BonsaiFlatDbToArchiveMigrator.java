@@ -127,7 +127,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final TrieNodeHistoryStore migrationHistoryStore;
   private final TrieNodeChangeIndex migrationChangeIndex;
   private final TrieNodeIndexProgress migrationIndexProgress;
-  // The migration strategy reference — retained so we can call advanceIndexProgress after persist().
+  // The migration strategy reference — retained so we can call advanceIndexProgress after
+  // persist().
   private BonsaiArchiveMigrationTrieNodeStrategy migrationTrieNodeStrategy;
 
   /**

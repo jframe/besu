@@ -50,7 +50,6 @@ class TrieNodeChangeIndexTest {
     final java.util.Optional<RangeRelativeOffsetList> list = index.readRangeList(key, 0);
     assertThat(list).isPresent();
     assertThat(list.get().size()).isEqualTo(1);
-
   }
 
   // -------------------------------------------------------------------------

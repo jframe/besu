@@ -26,9 +26,7 @@ public class KeyValueSegmentIdentifierTest {
   void trieNodeArchiveSegmentsAreRegistered() {
     for (String name :
         List.of(
-            "TRIE_NODE_HISTORY_ARCHIVE",
-            "TRIE_NODE_INDEX_ARCHIVE",
-            "TRIE_NODE_SUBBLOCK_ARCHIVE")) {
+            "TRIE_NODE_HISTORY_ARCHIVE", "TRIE_NODE_INDEX_ARCHIVE", "TRIE_NODE_SUBBLOCK_ARCHIVE")) {
       assertThatCode(() -> KeyValueSegmentIdentifier.valueOf(name)).doesNotThrowAnyException();
     }
   }

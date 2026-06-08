@@ -714,5 +714,4 @@ public final class TrieNodeChangeIndex {
 
     return Optional.empty();
   }
-
 }

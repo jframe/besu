@@ -136,9 +136,8 @@ class ArchiveProofNodeLoaderTest {
   // ---------------------------------------------------------------------------
 
   /**
-   * Node changed only at block 50 (before T=100). The live node's stored hash matches
-   * expectedHash → hash-first fast path: loader returns the live trie node without reading the
-   * index at all.
+   * Node changed only at block 50 (before T=100). The live node's stored hash matches expectedHash
+   * → hash-first fast path: loader returns the live trie node without reading the index at all.
    */
   @Test
   void unchangedNodeReturnedFromLiveTrie() {
@@ -168,8 +167,8 @@ class ArchiveProofNodeLoaderTest {
 
   /**
    * Node changed at block 50 (before T=60) and again at block 80 (after T=60). The live node is
-   * v80; its stored hash != keccak(v50) → hash-first fails → index path reconstructs v50. Keccak
-   * of result matches expected hash.
+   * v80; its stored hash != keccak(v50) → hash-first fails → index path reconstructs v50. Keccak of
+   * result matches expected hash.
    */
   @Test
   void changedNodeReconstructedFromHistory() {
