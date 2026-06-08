@@ -191,7 +191,25 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
   }
 
   public Optional<Bytes> getTrieNodeUnsafe(final Bytes key) {
-    return composedWorldStateStorage.get(TRIE_BRANCH_STORAGE, key.toArrayUnsafe()).map(Bytes::wrap);
+    return composedWorldStateStorage
+        .get(TRIE_BRANCH_STORAGE, key.toArrayUnsafe())
+        .filter(raw -> raw.length >= BonsaiTrieNodeStrategy.HASH_PREFIX_BYTES)
+        .map(this::stripTrieNodeHashPrefix);
+  }
+
+  @Override
+  public Optional<Bytes> getStateTrieNode(final Bytes location) {
+    return composedWorldStateStorage
+        .get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe())
+        .filter(raw -> raw.length >= BonsaiTrieNodeStrategy.HASH_PREFIX_BYTES)
+        .map(this::stripTrieNodeHashPrefix);
+  }
+
+  private Bytes stripTrieNodeHashPrefix(final byte[] raw) {
+    final int nodeLen = raw.length - BonsaiTrieNodeStrategy.HASH_PREFIX_BYTES;
+    return nodeLen == 0
+        ? Bytes.EMPTY
+        : Bytes.wrap(raw, BonsaiTrieNodeStrategy.HASH_PREFIX_BYTES, nodeLen);
   }
 
   public Optional<Bytes> getStorageValueByStorageSlotKey(

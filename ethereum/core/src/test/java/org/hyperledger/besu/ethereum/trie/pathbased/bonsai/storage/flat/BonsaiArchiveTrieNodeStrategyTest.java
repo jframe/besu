@@ -446,15 +446,16 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   /**
-   * Mid-range blocks do NOT mark the range complete: {@code covers(block)} returns false until the
-   * last block of the range is flushed.
+   * After indexing a mid-range block, {@code covers(block)} returns true for that block
+   * (window semantics: any block in [indexStartBlock, lastIndexedBlock] is covered), but returns
+   * false for blocks beyond lastIndexedBlock.
    */
   @Test
   void progress_midRangeBlock_doesNotMarkRangeComplete() {
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
 
-    // Block 500_000 is mid-range.
+    // Block 500_000 is mid-range (range 0 spans [0, 999_999]).
     final long midBlock = 500_000L;
     setWorldBlockNumber(midBlock - 1);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
@@ -463,7 +464,10 @@ class BonsaiArchiveTrieNodeStrategyTest {
     tx.commit();
 
     assertThat(progress.lastIndexedBlock()).isEqualTo(midBlock);
-    assertThat(progress.covers(midBlock)).isFalse();
+    // Window semantics: block is in [indexStartBlock=0, lastIndexedBlock=500_000] → covered.
+    assertThat(progress.covers(midBlock)).isTrue();
+    // Block beyond the window is not covered.
+    assertThat(progress.covers(midBlock + 1)).isFalse();
   }
 
   /**
