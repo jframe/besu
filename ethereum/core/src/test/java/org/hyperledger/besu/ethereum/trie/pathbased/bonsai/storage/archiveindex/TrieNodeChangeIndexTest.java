@@ -16,6 +16,8 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_BLOOM_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_RANGE_MARKER_ARCHIVE;
 
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
@@ -37,15 +39,27 @@ class TrieNodeChangeIndexTest {
   // -------------------------------------------------------------------------
 
   @Test
-  void appendSetsMarkerBloomAndList() {
-    var kv = new SegmentedInMemoryKeyValueStorage();
-    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
-    var tx = kv.startTransaction();
-    idx.append(tx, KEY, 1_234);
+  void appendSetsList() {
+    final Bytes key = ArchiveNodeKey.account(Bytes.of(0x01));
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000);
+    final org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction tx =
+        kv.startTransaction();
+    index.append(tx, key, 5);
     tx.commit();
-    assertThat(idx.rangeMarkerPresent(KEY, 0)).isTrue();
-    assertThat(idx.bloomMaybeContains(0, KEY)).isTrue();
-    assertThat(idx.latestChangeBlock(KEY, 2_000)).hasValue(1_234L);
+
+    // Index list must be present.
+    final java.util.Optional<RangeRelativeOffsetList> list = index.readRangeList(key, 0);
+    assertThat(list).isPresent();
+    assertThat(list.get().size()).isEqualTo(1);
+
+    // No bloom entry.
+    assertThat(kv.get(TRIE_NODE_BLOOM_ARCHIVE, ArchiveNodeKey.bloomKey(0).toArrayUnsafe()))
+        .isEmpty();
+
+    // No marker entry.
+    final org.apache.tuweni.bytes.Bytes markerKey = ArchiveNodeKey.rangeKey(key, 0);
+    assertThat(kv.get(TRIE_NODE_RANGE_MARKER_ARCHIVE, markerKey.toArrayUnsafe())).isEmpty();
   }
 
   // -------------------------------------------------------------------------
@@ -60,34 +74,6 @@ class TrieNodeChangeIndexTest {
     assertThatThrownBy(() -> idx.append(tx, KEY, -1))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("block");
-  }
-
-  // -------------------------------------------------------------------------
-  // Bloom-negative: empty range returns false for any key
-  // -------------------------------------------------------------------------
-
-  @Test
-  void bloomNegativeEmptyRange() {
-    var kv = new SegmentedInMemoryKeyValueStorage();
-    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
-    // Range 0 has never been written — bloom must be absent → false
-    assertThat(idx.bloomMaybeContains(0, KEY)).isFalse();
-    assertThat(idx.bloomMaybeContains(0, OTHER_KEY)).isFalse();
-  }
-
-  // -------------------------------------------------------------------------
-  // Range marker absent for an uninvolved range
-  // -------------------------------------------------------------------------
-
-  @Test
-  void rangeMarkerAbsentForOtherRange() {
-    var kv = new SegmentedInMemoryKeyValueStorage();
-    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
-    var tx = kv.startTransaction();
-    idx.append(tx, KEY, 1_234); // range 0
-    tx.commit();
-    // Range 1 has no entry for KEY
-    assertThat(idx.rangeMarkerPresent(KEY, 1)).isFalse();
   }
 
   // -------------------------------------------------------------------------
@@ -111,11 +97,6 @@ class TrieNodeChangeIndexTest {
     assertThat(idx.latestChangeBlock(KEY, 500_000)).hasValue(500_000L);
     // latestChangeBlock at 200_000 → 100_000 (the first one)
     assertThat(idx.latestChangeBlock(KEY, 200_000)).hasValue(100_000L);
-
-    // Marker and bloom must still report present after the second append — guards the bloom
-    // fromBytes/toBytes clone/copy round-trip against regressions.
-    assertThat(idx.rangeMarkerPresent(KEY, 0)).isTrue();
-    assertThat(idx.bloomMaybeContains(0, KEY)).isTrue();
   }
 
   // -------------------------------------------------------------------------
@@ -134,23 +115,11 @@ class TrieNodeChangeIndexTest {
   }
 
   // -------------------------------------------------------------------------
-  // latestChangeBlock: bloom-negative range → empty (short-circuit)
+  // Two keys in same range: each gets its own list (list isolation)
   // -------------------------------------------------------------------------
 
   @Test
-  void latestChangeBlockBloomNegativeShortCircuits() {
-    var kv = new SegmentedInMemoryKeyValueStorage();
-    var idx = new TrieNodeChangeIndex(kv, 1_000_000);
-    // Nothing appended — all ranges empty
-    assertThat(idx.latestChangeBlock(KEY, 999_999)).isEmpty();
-  }
-
-  // -------------------------------------------------------------------------
-  // Two keys in same range: each gets its own list/marker; bloom shared
-  // -------------------------------------------------------------------------
-
-  @Test
-  void twoKeysInSameRangeShareBloomButHaveOwnMarkerAndList() {
+  void twoKeysInSameRangeHaveOwnList() {
     var kv = new SegmentedInMemoryKeyValueStorage();
     var idx = new TrieNodeChangeIndex(kv, 1_000_000);
 
@@ -161,14 +130,6 @@ class TrieNodeChangeIndexTest {
     var tx2 = kv.startTransaction();
     idx.append(tx2, OTHER_KEY, 200);
     tx2.commit();
-
-    // Bloom for range 0 should report maybe-present for both keys
-    assertThat(idx.bloomMaybeContains(0, KEY)).isTrue();
-    assertThat(idx.bloomMaybeContains(0, OTHER_KEY)).isTrue();
-
-    // Each key has its own marker in range 0
-    assertThat(idx.rangeMarkerPresent(KEY, 0)).isTrue();
-    assertThat(idx.rangeMarkerPresent(OTHER_KEY, 0)).isTrue();
 
     // Each key's list is independent
     assertThat(idx.latestChangeBlock(KEY, 999_999)).hasValue(100L);
@@ -193,8 +154,6 @@ class TrieNodeChangeIndexTest {
     idx.append(tx, storageKey, 42_000);
     tx.commit();
 
-    assertThat(idx.rangeMarkerPresent(storageKey, 0)).isTrue();
-    assertThat(idx.bloomMaybeContains(0, storageKey)).isTrue();
     assertThat(idx.latestChangeBlock(storageKey, 999_999)).hasValue(42_000L);
   }
 
@@ -311,11 +270,8 @@ class TrieNodeChangeIndexTest {
     idx.append(tx2, OTHER_KEY, 2_200_000);
     tx2.commit();
 
-    // KEY was never appended; bloom for each range is negative for KEY → empty
+    // KEY was never appended; latestChangeBlock must return empty
     assertThat(idx.latestChangeBlock(KEY, 2_500_000)).isEmpty();
-    assertThat(idx.bloomMaybeContains(0, KEY)).isFalse();
-    assertThat(idx.bloomMaybeContains(1, KEY)).isFalse();
-    assertThat(idx.bloomMaybeContains(2, KEY)).isFalse();
   }
 
   // -------------------------------------------------------------------------
