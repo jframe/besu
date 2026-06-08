@@ -396,12 +396,9 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     // whenever the migrator was behind the chain head, forcing all proofs through the legacy
     // seekForPrev rollback path even though the trie-node index was fully populated.
     //
-    // lastIndexedBlock() >= targetBlock is sufficient for the live-import path (blocks are indexed
-    // sequentially). covers() handles the backfill/migrator path where ranges complete out of
-    // order.
-    final boolean blockIsIndexed =
-        trieNodeIndexProgress.lastIndexedBlock() >= targetBlock
-            || trieNodeIndexProgress.covers(targetBlock);
+    // covers() checks block in [indexStartBlock, lastIndexedBlock] — handles both live-import and
+    // migrator paths.
+    final boolean blockIsIndexed = trieNodeIndexProgress.covers(targetBlock);
     if (trieNodeIndexEnabled && headBlock - targetBlock >= maxLayers && blockIsIndexed) {
 
       final Hash stateRoot = blockHeader.getStateRoot();

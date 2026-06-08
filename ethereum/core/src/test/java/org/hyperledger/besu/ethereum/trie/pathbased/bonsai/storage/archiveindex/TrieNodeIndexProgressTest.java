@@ -21,39 +21,40 @@ import org.junit.jupiter.api.Test;
 class TrieNodeIndexProgressTest {
 
   // -------------------------------------------------------------------------
-  // Coverage gate (from the plan)
+  // Coverage gate — window-check semantics: block in [indexStartBlock, lastIndexedBlock]
   // -------------------------------------------------------------------------
 
   @Test
-  void coverageGate() {
-    var p = new TrieNodeIndexProgress(/* rangeSize */ 1_000_000);
+  void covers_returnsFalseWhenUninitialized() {
+    final TrieNodeIndexProgress p = new TrieNodeIndexProgress(1_000_000L);
+    assertThat(p.covers(0)).isFalse();
     assertThat(p.covers(5_000)).isFalse();
-    p.markRangeComplete(0); // range [0, 1_000_000)
-    assertThat(p.covers(5_000)).isTrue();
-    assertThat(p.covers(1_500_000)).isFalse();
   }
 
   @Test
-  void coversMultipleRanges() {
-    var p = new TrieNodeIndexProgress(1_000_000);
-    p.markRangeComplete(0);
-    p.markRangeComplete(2); // range [2_000_000, 3_000_000)
+  void covers_returnsTrueForBlockWithinWindow() {
+    final TrieNodeIndexProgress p = new TrieNodeIndexProgress(1_000_000L);
+    p.setIndexStartBlock(0L);
+    p.setLastIndexedBlock(5_000L);
     assertThat(p.covers(0)).isTrue();
-    assertThat(p.covers(999_999)).isTrue();
-    assertThat(p.covers(1_000_000)).isFalse(); // range 1 not marked
-    assertThat(p.covers(2_000_000)).isTrue();
-    assertThat(p.covers(2_999_999)).isTrue();
-    assertThat(p.covers(3_000_000)).isFalse(); // range 3 not marked
+    assertThat(p.covers(5_000)).isTrue();
+    assertThat(p.covers(2_500)).isTrue();
   }
 
   @Test
-  void coversReturnsFalseForBlockExceedingIntRangeIds() {
-    // With rangeSize 1, rangeId == block. Pick a block whose rangeId exceeds Integer.MAX_VALUE.
-    var p = new TrieNodeIndexProgress(1);
-    long hugeBlock = (long) Integer.MAX_VALUE + 1_000L;
-    assertThat(hugeBlock).isGreaterThan(Integer.MAX_VALUE);
-    // Must return false (not throw, not narrow to a wrong/negative int).
-    assertThat(p.covers(hugeBlock)).isFalse();
+  void covers_returnsFalseOutsideWindow() {
+    final TrieNodeIndexProgress p = new TrieNodeIndexProgress(1_000_000L);
+    p.setIndexStartBlock(1_000_000L);
+    p.setLastIndexedBlock(1_500_000L);
+    assertThat(p.covers(999_999)).isFalse(); // below indexStartBlock
+    assertThat(p.covers(1_500_001)).isFalse(); // above lastIndexedBlock
+    assertThat(p.covers(1_200_000)).isTrue(); // within window
+  }
+
+  @Test
+  void covers_returnsNegativeBlockFalse() {
+    final TrieNodeIndexProgress p = new TrieNodeIndexProgress(1_000_000L);
+    assertThat(p.covers(-1)).isFalse();
   }
 
   // -------------------------------------------------------------------------
@@ -115,23 +116,18 @@ class TrieNodeIndexProgressTest {
   // -------------------------------------------------------------------------
 
   @Test
-  void toBytesFromBytesRoundTrip() {
-    var p = new TrieNodeIndexProgress(1_000_000);
-    p.markRangeComplete(0);
-    p.markRangeComplete(5);
-    p.markRangeComplete(20);
-    p.setLastIndexedBlock(19_999_999);
-    p.setIndexStartBlock(1_000_000);
+  void serialisationRoundTrip() {
+    final TrieNodeIndexProgress p = new TrieNodeIndexProgress(1_000_000L);
+    p.setLastIndexedBlock(42L);
+    p.setIndexStartBlock(0L);
 
-    byte[] serialized = p.toBytes();
-    var restored = TrieNodeIndexProgress.fromBytes(1_000_000, serialized);
+    final byte[] bytes = p.toBytes();
+    assertThat(bytes).hasSize(16); // two longs, 8 bytes each
 
-    assertThat(restored.covers(5_000)).isTrue();
-    assertThat(restored.covers(5_500_000)).isTrue();
-    assertThat(restored.covers(20_500_000)).isTrue();
-    assertThat(restored.covers(1_000_000)).isFalse(); // range 1 not marked
-    assertThat(restored.lastIndexedBlock()).isEqualTo(19_999_999L);
-    assertThat(restored.indexStartBlock()).isEqualTo(1_000_000L);
+    final TrieNodeIndexProgress restored = TrieNodeIndexProgress.fromBytes(1_000_000L, bytes);
+    assertThat(restored.lastIndexedBlock()).isEqualTo(42L);
+    assertThat(restored.indexStartBlock()).isEqualTo(0L);
+    assertThat(restored.covers(42L)).isTrue();
   }
 
   @Test

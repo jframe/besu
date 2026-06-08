@@ -434,13 +434,14 @@ public class BonsaiArchiveWorldStateProviderTest {
   // ---- Helpers ----
 
   /**
-   * Injects a {@link TrieNodeIndexProgress} with range 0 marked complete into the provider, making
-   * {@link TrieNodeIndexProgress#covers(long)} return {@code true} for any block in the range [0,
-   * {@link ArchiveNodeKey#RANGE_SIZE}).
+   * Injects a {@link TrieNodeIndexProgress} covering [0, {@link ArchiveNodeKey#RANGE_SIZE}) into
+   * the provider, making {@link TrieNodeIndexProgress#covers(long)} return {@code true} for any
+   * block in that window.
    */
   private static void markRange0Complete(final BonsaiArchiveWorldStateProvider provider) {
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
-    progress.markRangeComplete(0L);
+    progress.setIndexStartBlock(0L);
+    progress.setLastIndexedBlock(ArchiveNodeKey.RANGE_SIZE - 1L);
     provider.setTrieNodeIndexProgress(progress);
   }
 

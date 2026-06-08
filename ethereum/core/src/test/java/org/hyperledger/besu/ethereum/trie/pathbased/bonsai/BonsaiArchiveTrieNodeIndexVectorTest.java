@@ -459,9 +459,9 @@ class BonsaiArchiveTrieNodeIndexVectorTest {
       parent = header;
     }
 
-    // Mark range 0 complete so covers(TARGET_BLOCK) == true for the index provider.
+    // Set indexStartBlock so covers(TARGET_BLOCK) == true for the index provider.
     final SegmentedKeyValueStorageTransaction progressTx = composedStorage.startTransaction();
-    progress.markRangeComplete(0L);
+    progress.setIndexStartBlock(0L);
     progress.save(progressTx);
     progressTx.commit();
 

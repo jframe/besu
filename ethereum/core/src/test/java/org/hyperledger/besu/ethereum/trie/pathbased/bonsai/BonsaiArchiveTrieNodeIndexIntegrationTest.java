@@ -429,10 +429,9 @@ class BonsaiArchiveTrieNodeIndexIntegrationTest {
       parent = header;
     }
 
-    // All blocks fall in range 0 (< RANGE_SIZE=1,000,000). Mark it complete so the coverage gate
-    // (TrieNodeIndexProgress.covers(TARGET_BLOCK)) returns true for the historical block.
+    // All blocks fall in range 0. Set indexStartBlock so covers(TARGET_BLOCK) returns true.
     final SegmentedKeyValueStorageTransaction progressTx = composedStorage.startTransaction();
-    progress.markRangeComplete(0L);
+    progress.setIndexStartBlock(0L);
     progress.save(progressTx);
     progressTx.commit();
 

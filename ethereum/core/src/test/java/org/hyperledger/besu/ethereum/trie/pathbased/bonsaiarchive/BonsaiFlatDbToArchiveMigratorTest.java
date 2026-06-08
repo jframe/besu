@@ -824,7 +824,8 @@ public class BonsaiFlatDbToArchiveMigratorTest {
 
   /**
    * Task 5.2 (partial range): when block K is a checkpoint block but NOT the last block in its
-   * range, {@code lastIndexedBlock} advances but {@code covers()} is still false.
+   * range, {@code lastIndexedBlock} advances and {@code covers(K)} is true (window-check semantics:
+   * any block in [indexStartBlock, lastIndexedBlock] is serveable, regardless of range boundaries).
    */
   @Test
   public void trieMigratorWithIndexEnabled_indexProgressPartialRange() throws Exception {
@@ -856,9 +857,13 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         .as("indexStartBlock should be 0 (start of range 0)")
         .isEqualTo(0L);
 
-    // Block 1 is in range 0 (0-3) but range 0 is not complete (last block = 3, not yet indexed).
+    // Block 1 is within [indexStartBlock=0, lastIndexedBlock=1] — covers() returns true.
     assertThat(progress.covers(1L))
-        .as("covers(1) should be false — range 0 is not complete yet")
+        .as("covers(1) should be true — block 1 is within the indexed window")
+        .isTrue();
+    // Block 2 is beyond lastIndexedBlock — not yet covered.
+    assertThat(progress.covers(2L))
+        .as("covers(2) should be false — block 2 is beyond lastIndexedBlock")
         .isFalse();
   }
 
@@ -893,17 +898,15 @@ public class BonsaiFlatDbToArchiveMigratorTest {
                 .setStateRoot(stateRoot));
     blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
 
-    // Progress A uses rangeSize=2: block 1 completes range 0.
+    // Progress A covers [0, 1] (window check: indexStartBlock=0, lastIndexedBlock=1).
     final TrieNodeIndexProgress progressA = new TrieNodeIndexProgress(2L);
     progressA.setLastIndexedBlock(1L);
     progressA.setIndexStartBlock(0L);
-    progressA.markRangeComplete(0L); // range 0 complete
 
-    // Progress B uses rangeSize=2: simulate a worker that completed range 1 (blocks 2-3).
+    // Progress B covers [2, 3] (window check: indexStartBlock=2, lastIndexedBlock=3).
     final TrieNodeIndexProgress progressB = new TrieNodeIndexProgress(2L);
     progressB.setLastIndexedBlock(3L);
     progressB.setIndexStartBlock(2L);
-    progressB.markRangeComplete(1L); // range 1 complete
 
     // Worker A covers blocks 0-1 but NOT 2-3.
     assertThat(progressA.covers(0L)).as("A covers block 0").isTrue();

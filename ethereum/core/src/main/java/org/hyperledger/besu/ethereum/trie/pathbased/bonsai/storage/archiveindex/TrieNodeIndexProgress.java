@@ -20,22 +20,22 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import java.nio.ByteBuffer;
-import java.util.BitSet;
 
 /**
- * Tracks which 1,000,000-block ranges have been fully trie-node-indexed, so the read path (Stage 4)
- * never serves a proof from a partially-indexed range.
+ * Tracks the contiguous window of blocks that have been trie-node-indexed, so the read path never
+ * serves a proof from outside the indexed window.
  *
- * <p>The completeness bitmap is keyed by {@code rangeId = block / rangeSize}. Range 0 covers blocks
- * [0, rangeSize), range 1 covers blocks [rangeSize, 2*rangeSize), etc.
+ * <p>Coverage is defined as a closed window [{@link #indexStartBlock()}, {@link
+ * #lastIndexedBlock()}]. {@link #covers(long)} returns {@code true} iff the requested block falls
+ * within that window.
  *
  * <p>Persistence is wired to {@code TRIE_BRANCH_STORAGE} via {@link #load(SegmentedKeyValueStorage,
- * long)} and {@link #save(SegmentedKeyValueStorageTransaction)}. The serialisation format does not
- * yet include a version byte; the format may change before Stage 5 production wiring is complete.
+ * long)} and {@link #save(SegmentedKeyValueStorageTransaction)}. The serialisation format is fixed
+ * 16 bytes (two big-endian longs: {@code lastIndexedBlock}, {@code indexStartBlock}).
  *
  * <p><strong>Thread-safety:</strong> This class is <em>not</em> thread-safe. Callers sharing an
- * instance between a writer thread (block import, Stage 3) and reader threads (proof path, Stage 4)
- * must provide external synchronisation or swap in thread-safe fields before Stage 4 integration.
+ * instance between a writer thread (block import) and reader threads (proof path) must provide
+ * external synchronisation.
  */
 public class TrieNodeIndexProgress {
 
@@ -54,13 +54,6 @@ public class TrieNodeIndexProgress {
       "trieNodeIndexProgress".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
   private final long rangeSize;
-
-  /**
-   * Completed-range bitmap. Bit {@code i} is set iff range {@code i} (blocks [{@code i *
-   * rangeSize}, {@code (i+1) * rangeSize})) has been fully indexed. Realistic mainnet usage: ~22
-   * bits (22 M blocks / 1 M rangeSize), so {@link BitSet} is compact and correct.
-   */
-  private final BitSet completedRanges;
 
   /**
    * The highest block number that has been forwarded-indexed. Starts at {@link #UNSET_LAST_INDEXED}
@@ -87,18 +80,13 @@ public class TrieNodeIndexProgress {
       throw new IllegalArgumentException("rangeSize must be positive, got: " + rangeSize);
     }
     this.rangeSize = rangeSize;
-    this.completedRanges = new BitSet();
     this.lastIndexedBlock = UNSET_LAST_INDEXED;
     this.indexStartBlock = UNSET_INDEX_START;
   }
 
   private TrieNodeIndexProgress(
-      final long rangeSize,
-      final BitSet completedRanges,
-      final long lastIndexedBlock,
-      final long indexStartBlock) {
+      final long rangeSize, final long lastIndexedBlock, final long indexStartBlock) {
     this.rangeSize = rangeSize;
-    this.completedRanges = completedRanges;
     this.lastIndexedBlock = lastIndexedBlock;
     this.indexStartBlock = indexStartBlock;
   }
@@ -121,37 +109,18 @@ public class TrieNodeIndexProgress {
   // ---------------------------------------------------------------------------
 
   /**
-   * Returns {@code true} iff the range containing {@code block} (i.e. {@code block / rangeSize})
-   * has been marked complete via {@link #markRangeComplete(long)}.
+   * Returns {@code true} iff {@code block} falls within the indexed window [{@link
+   * #indexStartBlock()}, {@link #lastIndexedBlock()}].
+   *
+   * <p>Handles both live-import (forward) and migrator (backfill) paths.
    *
    * @param block absolute block number
-   * @return whether the block's range is fully indexed
-   * @see #markRangeComplete(long)
+   * @return whether the block is within the indexed window
    */
   public boolean covers(final long block) {
-    if (block < 0) {
-      return false;
-    }
-    long rangeId = block / rangeSize;
-    if (rangeId > Integer.MAX_VALUE) {
-      // A rangeId this large can never have been marked complete (markRangeComplete rejects it),
-      // so return false rather than narrowing the cast to a wrong (possibly negative) int.
-      return false;
-    }
-    return completedRanges.get((int) rangeId);
-  }
-
-  /**
-   * Marks the given range as fully indexed.
-   *
-   * @param rangeId the range identifier, i.e. {@code block / rangeSize} — NOT a block number
-   * @see #covers(long)
-   */
-  public void markRangeComplete(final long rangeId) {
-    if (rangeId < 0 || rangeId > Integer.MAX_VALUE) {
-      throw new IllegalArgumentException("rangeId out of bounds: " + rangeId);
-    }
-    completedRanges.set((int) rangeId);
+    if (block < 0) return false;
+    if (indexStartBlock == UNSET_INDEX_START) return false;
+    return block >= indexStartBlock && block <= lastIndexedBlock;
   }
 
   // ---------------------------------------------------------------------------
@@ -207,34 +176,21 @@ public class TrieNodeIndexProgress {
   // ---------------------------------------------------------------------------
 
   /**
-   * Serialises this progress record to a compact byte array suitable for storage in the
-   * TRIE_BRANCH_STORAGE metadata column family.
+   * Serialises this progress record to a fixed-width byte array suitable for storage.
    *
-   * <p>Format (little-endian longs):
+   * <p>Format (big-endian longs):
    *
    * <pre>
    *   [8 bytes] lastIndexedBlock
    *   [8 bytes] indexStartBlock
-   *   [4 bytes] bitmap word count  (N)
-   *   [N * 8 bytes] bitmap words (little-endian long[])
    * </pre>
    *
-   * TODO(Stage 3/5): wire to TRIE_BRANCH_STORAGE metadata CF; add a format-version byte before
-   * wiring to storage, and validate {@code bytes.length} before parsing in {@link #fromBytes(long,
-   * byte[])}.
-   *
-   * @return serialised bytes
+   * @return serialised bytes (always exactly 16 bytes)
    */
   public byte[] toBytes() {
-    long[] words = completedRanges.toLongArray();
-    int byteCount = 8 + 8 + 4 + words.length * 8;
-    ByteBuffer buf = ByteBuffer.allocate(byteCount);
+    final ByteBuffer buf = ByteBuffer.allocate(16);
     buf.putLong(lastIndexedBlock);
     buf.putLong(indexStartBlock);
-    buf.putInt(words.length);
-    for (long w : words) {
-      buf.putLong(w);
-    }
     return buf.array();
   }
 
@@ -242,27 +198,17 @@ public class TrieNodeIndexProgress {
    * Deserialises a progress record previously written by {@link #toBytes()}.
    *
    * <p>The caller MUST supply the same {@code rangeSize} that was in effect at write time: {@code
-   * rangeSize} is not stored in the wire format, and a mismatch silently corrupts {@link
-   * #covers(long)} results (a block would map to a different rangeId than when it was indexed).
-   *
-   * <p>TODO(Stage 3/5): wire to TRIE_BRANCH_STORAGE metadata CF; add a format-version byte before
-   * wiring to storage, and validate {@code bytes.length} before parsing.
+   * rangeSize} is not stored in the wire format.
    *
    * @param rangeSize the range size to associate with the restored record (must match write time)
-   * @param bytes bytes produced by {@link #toBytes()}
+   * @param bytes bytes produced by {@link #toBytes()} (must be exactly 16 bytes)
    * @return restored {@link TrieNodeIndexProgress}
    */
   public static TrieNodeIndexProgress fromBytes(final long rangeSize, final byte[] bytes) {
-    ByteBuffer buf = ByteBuffer.wrap(bytes);
-    long last = buf.getLong();
-    long start = buf.getLong();
-    int wordCount = buf.getInt();
-    long[] words = new long[wordCount];
-    for (int i = 0; i < wordCount; i++) {
-      words[i] = buf.getLong();
-    }
-    BitSet bitmap = BitSet.valueOf(words);
-    return new TrieNodeIndexProgress(rangeSize, bitmap, last, start);
+    final ByteBuffer buf = ByteBuffer.wrap(bytes);
+    final long last = buf.getLong();
+    final long start = buf.getLong();
+    return new TrieNodeIndexProgress(rangeSize, last, start);
   }
 
   // ---------------------------------------------------------------------------
