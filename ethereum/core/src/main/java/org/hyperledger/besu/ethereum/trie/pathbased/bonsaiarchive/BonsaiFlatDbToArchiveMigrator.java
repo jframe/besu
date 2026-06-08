@@ -129,7 +129,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private final TrieNodeHistoryStore migrationHistoryStore;
   private final TrieNodeChangeIndex migrationChangeIndex;
   private final TrieNodeIndexProgress migrationIndexProgress;
-  // The migration strategy reference — retained so we can call flushPendingBlooms after persist().
+  // The migration strategy reference — retained so we can call advanceIndexProgress after persist().
   private BonsaiArchiveMigrationTrieNodeStrategy migrationTrieNodeStrategy;
 
   /**
@@ -685,8 +685,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   /**
    * Advances the migration index-coverage progress after a trie checkpoint at {@code blockNumber}.
    *
-   * <p>Called within the bloom-flush transaction so progress is persisted atomically with bloom
-   * entries. Three updates are made:
+   * <p>Two updates are made, then progress is persisted into {@code tx}:
    *
    * <ol>
    *   <li>{@link TrieNodeIndexProgress#setLastIndexedBlock(long)} — monotonically advances the
@@ -696,21 +695,13 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    *       migrator processes blocks in ascending order this call is effectively a no-op after the
    *       first checkpoint in each range (the start is already recorded), but it remains correct
    *       and idempotent.
-   *   <li>{@link TrieNodeIndexProgress#markRangeComplete(long)} — marks the index range as fully
-   *       indexed when {@code blockNumber} is the last block in that range (i.e. {@code
-   *       (blockNumber + 1) % rangeSize == 0}, where {@code rangeSize = progress.rangeSize()}).
    * </ol>
    *
-   * <p>The progress is then persisted into {@code tx} via {@link
-   * TrieNodeIndexProgress#save(SegmentedKeyValueStorageTransaction)}.
-   *
    * <p><strong>Live-block equivalent:</strong> {@link
-   * BonsaiArchiveTrieNodeStrategy#flushPendingBlooms(SegmentedKeyValueStorageTransaction,
-   * SegmentedKeyValueStorage)} performs the same {@code setLastIndexedBlock} / {@code
-   * markRangeComplete} / {@code save} mutations for the live block-import path. That overload reads
-   * the block number from committed storage rather than using a known value, and does not call
-   * {@code setIndexStartBlock} (the live path only indexes forward, never backfills). Keep both
-   * paths in sync when modifying progress-advancement logic.
+   * BonsaiArchiveTrieNodeStrategy#advanceIndexProgress(SegmentedKeyValueStorageTransaction,
+   * SegmentedKeyValueStorage)} performs the same {@code setLastIndexedBlock} / {@code save}
+   * mutations for the live block-import path. Keep both paths in sync when modifying
+   * progress-advancement logic.
    *
    * @param blockNumber the trie checkpoint block that was just persisted
    * @param tx the transaction on which to write the updated progress bytes
@@ -728,11 +719,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     // update; subsequent checkpoints within the same range are no-ops (setIndexStartBlock is
     // monotonically non-increasing).
     migrationIndexProgress.setIndexStartBlock(rangeId * rangeSize);
-
-    // If blockNumber is the last block of its 1,000,000-block range, mark the range complete.
-    if ((blockNumber + 1) % rangeSize == 0) {
-      migrationIndexProgress.markRangeComplete(rangeId);
-    }
 
     migrationIndexProgress.save(tx);
   }
