@@ -535,7 +535,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     final long block = getCurrentBlockNumber(storage);
     // Flush the bloom on every block. The earlier deferral-to-range-boundary optimisation caused
     // correctness failures: an empty bloom produces false negatives in modifiedAfter(), making the
-    // fast-path return the live trie node for nodes that DID change after T, causing hash mismatches
+    // fast-path return the live trie node for nodes that DID change after T, causing hash
+    // mismatches
     // and silent proof failures. Now that the O(n²) RangeRelativeOffsetList.append is fixed, the
     // 128 KiB bloom write per block is no longer a significant GC source.
     if (!pendingBlooms.isEmpty()) {
