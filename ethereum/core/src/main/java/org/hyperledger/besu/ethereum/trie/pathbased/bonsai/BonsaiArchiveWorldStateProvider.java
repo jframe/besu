@@ -406,7 +406,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
           worldStateKeyValueStorage.getComposedWorldStateStorage();
       final ArchiveProofNodeLoader archiveLoader =
           new ArchiveProofNodeLoader(
-              trieNodeChangeIndex, trieNodeHistoryReader, liveStorage, targetBlock, headBlock);
+              trieNodeChangeIndex, trieNodeHistoryReader, liveStorage, targetBlock);
 
       // Build a WorldStateStorageCoordinator whose trie-node accessors delegate to the
       // ArchiveProofNodeLoader. isWorldStateAvailable always returns true: the stateRoot comes from

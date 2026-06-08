@@ -21,6 +21,7 @@ import static org.hyperledger.besu.crypto.Hash.keccak256;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.Optional;
@@ -36,10 +37,13 @@ import org.junit.jupiter.api.Test;
  * <p>Three main scenarios:
  *
  * <ol>
- *   <li>Unchanged node (fast-path): no change after T → live trie read, no history accessed.
- *   <li>Changed node: changed after T → history reader reconstructs version at b*, hash verified.
+ *   <li>Hash-first fast path: stored hash matches expectedHash → live trie read, no index accessed.
+ *   <li>Changed node: stored hash differs → index path reconstructs version at b*, hash verified.
  *   <li>Hash mismatch: history returns valid node but expected hash doesn't match → throws.
  * </ol>
+ *
+ * <p>Live nodes are stored in the new {@code hash[32] ‖ nodeBytes} format that {@link
+ * BonsaiTrieNodeStrategy} writes. The {@link #putLiveNode} helper encodes this format.
  *
  * <p>Note on types: {@link NodeLoader#getNode} takes a {@link Bytes32} for the hash parameter.
  * Tests use {@code keccak256(node)} from {@link org.hyperledger.besu.crypto.Hash} which returns
@@ -114,42 +118,42 @@ class ArchiveProofNodeLoaderTest {
   }
 
   /**
-   * Write a node directly to the live TRIE_BRANCH_STORAGE (simulates the live trie at HEAD).
+   * Write a node directly to the live TRIE_BRANCH_STORAGE in the {@code hash[32] ‖ nodeBytes}
+   * format used by {@link BonsaiTrieNodeStrategy}.
    *
    * <p>Key = naturalKey (account trie: location; storage trie: accountHash ‖ location).
    */
   private void putLiveNode(final Bytes naturalKey, final Bytes node) {
+    final Bytes32 hash = keccak(node);
+    final byte[] value = Bytes.concatenate(hash, node).toArrayUnsafe();
     var tx = kv.startTransaction();
-    tx.put(
-        KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE,
-        naturalKey.toArrayUnsafe(),
-        node.toArrayUnsafe());
+    tx.put(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe(), value);
     tx.commit();
   }
 
   // ---------------------------------------------------------------------------
-  // Test 1: Fast-path — unchanged node after T returns live trie value
+  // Test 1: Hash-first fast path — hash matches live node, returned directly
   // ---------------------------------------------------------------------------
 
   /**
-   * Node changed only at block 50 (before T=100). HEAD=200. No change in (100, 200] → fast path:
-   * loader returns the live trie node directly without reading history.
+   * Node changed only at block 50 (before T=100). The live node's stored hash matches
+   * expectedHash → hash-first fast path: loader returns the live trie node without reading the
+   * index at all.
    */
   @Test
   void unchangedNodeReturnedFromLiveTrie() {
     final long targetBlock = 100;
-    final long headBlock = 200;
 
     final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes liveNode = branchWith(3, 50);
 
-    // Index records block 50 only (before T=100 → no change in (100, 200]).
+    // Index records block 50 only (not consulted — hash-first takes the fast path).
     appendIndex(accountNaturalKey, 50);
-    // Live trie holds the current version.
+    // Live trie holds the current version in hash-prefixed format.
     putLiveNode(accountNaturalKey, liveNode);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     final NodeLoader accountLoader = loader.accountNodeLoader();
     final Bytes32 expectedHash = keccak(liveNode);
@@ -163,14 +167,13 @@ class ArchiveProofNodeLoaderTest {
   // ---------------------------------------------------------------------------
 
   /**
-   * Node changed at block 50 (before T=60) and again at block 80 (after T=60). HEAD=200. Loader
-   * detects a change in (60, 200] → history path: reconstructs version at b*=50 (latest change ≤
-   * T=60). Keccak of result matches expected hash.
+   * Node changed at block 50 (before T=60) and again at block 80 (after T=60). The live node is
+   * v80; its stored hash != keccak(v50) → hash-first fails → index path reconstructs v50. Keccak
+   * of result matches expected hash.
    */
   @Test
   void changedNodeReconstructedFromHistory() {
     final long targetBlock = 60;
-    final long headBlock = 200;
 
     final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
 
@@ -187,7 +190,7 @@ class ArchiveProofNodeLoaderTest {
     putLiveNode(accountNaturalKey, v80);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     // At T=60, the correct version is v50 (latest change ≤ 60 was at block 50).
     final NodeLoader accountLoader = loader.accountNodeLoader();
@@ -204,14 +207,13 @@ class ArchiveProofNodeLoaderTest {
   // ---------------------------------------------------------------------------
 
   /**
-   * Index and history return a valid node at T=60, but the expected hash supplied by the caller
-   * doesn't match the reconstructed node. The loader must throw fail-closed to prevent serving
-   * silently incorrect proof data.
+   * The live node is v80 (hash = keccak(v80)). At T=60, the historical version is v50 (hash =
+   * keccak(v50)). The caller supplies a hash that matches neither live nor historical — the loader
+   * must throw fail-closed after reconstruction.
    */
   @Test
   void hashMismatchThrowsIllegalStateException() {
     final long targetBlock = 60;
-    final long headBlock = 200;
 
     final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
 
@@ -227,11 +229,12 @@ class ArchiveProofNodeLoaderTest {
     putLiveNode(accountNaturalKey, v80);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     final NodeLoader accountLoader = loader.accountNodeLoader();
-    // Wrong expected hash: hash of v80, but the historical version at T=60 is v50.
-    final Bytes32 wrongHash = keccak(v80);
+    // wrongHash matches neither v50 nor v80 — hash-first fails, history returns v50, keccak(v50) !=
+    // wrongHash → throw.
+    final Bytes32 wrongHash = keccak(branchWith(7, 99));
 
     assertThatThrownBy(() -> accountLoader.getNode(ACCOUNT_LOCATION, wrongHash))
         .isInstanceOf(IllegalStateException.class)
@@ -243,31 +246,30 @@ class ArchiveProofNodeLoaderTest {
   // ---------------------------------------------------------------------------
 
   /**
-   * No history entry exists at or before T. The loader returns empty (the node didn't exist at that
-   * block). The test uses the changed-after-T path (index has a change at 100, after T=50).
+   * Node first recorded at block 100 (after T=50). The live node is v100 but its hash does not
+   * match the {@code expectedHash} used in the query (which represents a plausible node at T=50
+   * that does not correspond to v100). The loader finds no change ≤ T=50 and returns empty.
    */
   @Test
   void noHistoryBeforeTargetReturnsEmpty() {
     final long targetBlock = 50;
-    final long headBlock = 200;
 
     final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes v100 = branchWith(3, 100);
 
-    // Node only recorded at block 100 (after T=50) → history path taken but latestChangeBlock
-    // returns empty for T=50.
+    // Node only recorded at block 100 (after T=50).
     putEntry(accountNaturalKey, 100, TrieNodeDiffCodec.encodeFull(v100));
     appendIndex(accountNaturalKey, 100);
-
     putLiveNode(accountNaturalKey, v100);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     final NodeLoader accountLoader = loader.accountNodeLoader();
-    // Any hash — the loader must return empty before hash verification.
-    final Bytes32 hash = keccak(v100);
-    final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, hash);
+    // Use a hash that doesn't match the live node (keccak(v100)) so hash-first fails and we
+    // consult the index. The index confirms no change ≤ T=50 → return empty.
+    final Bytes32 absentNodeHash = keccak(branchWith(0, 1));
+    final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, absentNodeHash);
 
     assertThat(result).isEmpty();
   }
@@ -277,13 +279,12 @@ class ArchiveProofNodeLoaderTest {
   // ---------------------------------------------------------------------------
 
   /**
-   * Storage trie node changed at block 50 and again at block 80. T=60, HEAD=200. The storage node
-   * loader reconstructs version at b*=50 and verifies the keccak.
+   * Storage trie node changed at block 50 and again at block 80. T=60. The storage node loader
+   * reconstructs version at b*=50 and verifies the keccak.
    */
   @Test
   void storageNodeLoaderReconstructsChangedNode() {
     final long targetBlock = 60;
-    final long headBlock = 200;
 
     final Bytes storageNaturalKey = ArchiveNodeKey.storage(ACCOUNT_HASH, STORAGE_LOCATION);
 
@@ -299,7 +300,7 @@ class ArchiveProofNodeLoaderTest {
     putLiveNode(storageNaturalKey, v80);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     final NodeLoader storageLoader = loader.storageNodeLoader(ACCOUNT_HASH);
     final Bytes32 expectedHash = keccak(v50);
@@ -311,17 +312,16 @@ class ArchiveProofNodeLoaderTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Test 6: Storage node loader — unchanged after T (fast path)
+  // Test 6: Storage node loader — unchanged after T (hash-first fast path)
   // ---------------------------------------------------------------------------
 
   /**
-   * Storage trie node unchanged after T: only changed at block 50. T=100, HEAD=200. The storage
-   * node loader takes the fast path and returns the live trie node.
+   * Storage trie node unchanged after T: only changed at block 50. T=100. The storage node loader
+   * takes the hash-first fast path (stored hash matches expectedHash) and returns the live node.
    */
   @Test
   void storageNodeLoaderFastPathForUnchangedNode() {
     final long targetBlock = 100;
-    final long headBlock = 200;
 
     final Bytes storageNaturalKey = ArchiveNodeKey.storage(ACCOUNT_HASH, STORAGE_LOCATION);
     final Bytes liveNode = branchWith(4, 50);
@@ -330,7 +330,7 @@ class ArchiveProofNodeLoaderTest {
     putLiveNode(storageNaturalKey, liveNode);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     final NodeLoader storageLoader = loader.storageNodeLoader(ACCOUNT_HASH);
     final Bytes32 expectedHash = keccak(liveNode);
@@ -340,18 +340,16 @@ class ArchiveProofNodeLoaderTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Test 7: Single-range fast path — node never indexed (no range entry at all)
+  // Test 7: Hash-first fast path — node never indexed (no range entry at all)
   // ---------------------------------------------------------------------------
 
   /**
-   * When the node has never been indexed (no bloom entry, no range marker), the single-range fast
-   * path should return the live trie node directly (the node was never modified so the live version
-   * IS the historical version). T=100, HEAD=200, both in range 0.
+   * Node has never been indexed (no index entries). Live node's stored hash matches expectedHash →
+   * hash-first fast path returns the live node directly. T=100.
    */
   @Test
-  void nodeNeverIndexedReturnsLiveNodeInSingleRange() {
+  void nodeNeverIndexedReturnsLiveNodeDirectly() {
     final long targetBlock = 100;
-    final long headBlock = 200;
 
     final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes liveNode = branchWith(7, 42);
@@ -360,7 +358,7 @@ class ArchiveProofNodeLoaderTest {
     putLiveNode(accountNaturalKey, liveNode);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     final NodeLoader accountLoader = loader.accountNodeLoader();
     final Bytes32 expectedHash = keccak(liveNode);
@@ -375,13 +373,12 @@ class ArchiveProofNodeLoaderTest {
 
   /**
    * Node changed exactly at T and again after T. The historical version at T is the FULL entry at
-   * T. HEAD=200, T=50, change at 50 (FULL) and 80 (DIFF after T). The single-range list read finds
-   * bStar=50 via latestLeq(50) and the preloaded list is passed to the history reader.
+   * T. T=50, change at 50 (FULL) and 80 (DIFF after T). The single-range list read finds bStar=50
+   * via latestLeq(50) and the preloaded list is passed to the history reader.
    */
   @Test
   void nodeChangedExactlyAtTReturnsTVersion() {
     final long targetBlock = 50;
-    final long headBlock = 200;
 
     final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes vT = branchWith(2, 50); // version at T=50
@@ -395,7 +392,7 @@ class ArchiveProofNodeLoaderTest {
     putLiveNode(accountNaturalKey, vHead);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     final NodeLoader accountLoader = loader.accountNodeLoader();
     final Bytes32 expectedHash = keccak(vT);
@@ -409,14 +406,13 @@ class ArchiveProofNodeLoaderTest {
   // ---------------------------------------------------------------------------
 
   /**
-   * Node changed only at block 30 (before T=80). No change after T. HEAD=200. The single-range fast
-   * path detects no change after T using the preloaded list (last entry = 30 ≤ 80) and returns the
-   * live trie node. This avoids calling modifiedAfter separately.
+   * Node changed only at block 30 (before T=80). No change after T. Live node's hash matches
+   * expectedHash → hash-first fast path returns the live node directly, without consulting the
+   * index.
    */
   @Test
   void nodeChangedOnlyBeforeTReturnedFromLiveTrieViaSingleRangeList() {
     final long targetBlock = 80;
-    final long headBlock = 200;
 
     final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes liveNode = branchWith(1, 30);
@@ -425,7 +421,7 @@ class ArchiveProofNodeLoaderTest {
     putLiveNode(accountNaturalKey, liveNode);
 
     final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock, headBlock);
+        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
 
     final NodeLoader accountLoader = loader.accountNodeLoader();
     final Bytes32 expectedHash = keccak(liveNode);
