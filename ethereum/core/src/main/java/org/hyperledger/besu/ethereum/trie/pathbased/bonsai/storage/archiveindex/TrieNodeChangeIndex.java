@@ -352,11 +352,10 @@ public final class TrieNodeChangeIndex {
 
   /**
    * Assembles the full (sub-blocks + tail) {@link RangeRelativeOffsetList} for {@code (naturalKey,
-   * rangeId)} directly from storage, WITHOUT performing bloom or range-marker checks.
+   * rangeId)} directly from storage.
    *
-   * <p>Shared implementation used by both {@link #readRangeList} (which adds bloom/marker guards)
-   * and {@link #getChangeBlocksUpTo} (which adds a ceiling filter). Callers that have already
-   * confirmed the bloom and marker are positive should call this directly.
+   * <p>Shared implementation used by both {@link #readRangeList} and {@link #getChangeBlocksUpTo}
+   * (which adds a ceiling filter). Returns empty when no index entry exists for the key/range.
    *
    * @param naturalKey the account or storage natural key
    * @param rangeId the range identifier
