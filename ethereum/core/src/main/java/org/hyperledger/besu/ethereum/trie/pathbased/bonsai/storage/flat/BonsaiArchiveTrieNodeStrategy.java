@@ -31,8 +31,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -47,9 +45,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>When the trie-node differential index is enabled ({@link #trieNodeIndexEnabled}), each write
  * also captures a diff-codec entry in {@code TRIE_NODE_HISTORY_ARCHIVE} and appends a change-block
- * record to the per-node index in {@code TRIE_NODE_INDEX_ARCHIVE}. The bloom accumulator for the
- * current block is held in-memory and must be flushed by calling {@link
- * #flushPendingBlooms(SegmentedKeyValueStorageTransaction)} before committing the transaction.
+ * record to the per-node index in {@code TRIE_NODE_INDEX_ARCHIVE}. After each block, callers must
+ * invoke {@link #advanceIndexProgress(SegmentedKeyValueStorageTransaction, SegmentedKeyValueStorage)}
+ * to persist coverage-progress metadata.
  */
 public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
@@ -92,19 +90,9 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   /**
    * Coverage-progress tracker. Non-null only when {@link #trieNodeIndexEnabled} is {@code true}.
-   * Updated in {@link #flushPendingBlooms(SegmentedKeyValueStorageTransaction)} after each block.
+   * Updated in {@link #advanceIndexProgress(SegmentedKeyValueStorageTransaction, SegmentedKeyValueStorage)} after each block.
    */
   private final TrieNodeIndexProgress progress;
-
-  /**
-   * Pending per-range bloom accumulator for the current block. Populated by {@link
-   * #captureTrieNodeDiff} and flushed by {@link
-   * #flushPendingBlooms(SegmentedKeyValueStorageTransaction)}.
-   *
-   * <p>Keyed by {@code rangeId}; values are raw bloom bytes (128 KiB each). Access is not
-   * synchronised — this class is used single-threaded per block import.
-   */
-  private final Map<Long, byte[]> pendingBlooms = new HashMap<>();
 
   public BonsaiArchiveTrieNodeStrategy(final Long trieNodeCheckpointInterval) {
     this(trieNodeCheckpointInterval, null);
@@ -438,10 +426,6 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    *   <li>DIFF: structural delta versus the prior node.
    * </ol>
    *
-   * <p>The bloom accumulator ({@link #pendingBlooms}) is updated but not flushed; callers must
-   * invoke {@link #flushPendingBlooms(SegmentedKeyValueStorageTransaction)} before committing the
-   * transaction.
-   *
    * @param tx the transaction on which to write the history and index entries
    * @param naturalKey the account or storage natural key from {@link ArchiveNodeKey}
    * @param location the nibble-path {@code location} bytes for this trie node (used for the
@@ -486,8 +470,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     }
 
     historyStore.put(tx, naturalKey, block, entry);
-    changeIndex.appendListAndMarkerOnly(tx, naturalKey, block);
-    changeIndex.accumulateBloom(pendingBlooms, naturalKey, block);
+    changeIndex.append(tx, naturalKey, block);
 
     LOG.trace(
         "Diff-index entry captured: key={} block={} entryType=0x{}",
@@ -497,15 +480,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   }
 
   /**
-   * Writes accumulated per-range bloom bits (at range boundaries only) and advances coverage
-   * progress for the current block.
-   *
-   * <p>The bloom filter is a 128 KiB byte array per range. Writing it on every block is pure GC
-   * pressure; correctness only requires the bloom to be present when a range is complete (the
-   * range-marker check provides the authoritative answer for individual blocks). Therefore the
-   * bloom flush is deferred: it is only written to {@code tx} when the current block is the last
-   * block of its range (i.e. {@code (block + 1) % rangeSize == 0}). On all other blocks the
-   * in-memory accumulator is retained for the next block.
+   * Advances coverage progress for the current block.
    *
    * <p>Progress advancement (when {@code progress} is non-null and the index is enabled) happens on
    * every block:
@@ -515,64 +490,20 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    *   <li>Calls {@link TrieNodeIndexProgress#setLastIndexedBlock(long)} with {@code N}.
    *   <li>Calls {@link TrieNodeIndexProgress#setIndexStartBlock(long)} with the start of {@code
    *       N}'s range.
-   *   <li>If {@code N} is the last block in its range, also calls {@link
-   *       TrieNodeIndexProgress#markRangeComplete(long)} and flushes the bloom accumulator.
    *   <li>Persists the updated progress via {@link TrieNodeIndexProgress#save}.
    * </ol>
    *
-   * <p><strong>Migrator equivalent:</strong> the archive migrator does <em>not</em> call this 2-arg
-   * overload (the live-block path). Instead it calls the 1-arg {@link
-   * #flushPendingBlooms(SegmentedKeyValueStorageTransaction)} for blooms, then delegates progress
-   * advancement to {@code BonsaiFlatDbToArchiveMigrator.advanceMigrationIndexProgress} which uses
-   * the known migration block number rather than reading {@code WORLD_BLOCK_NUMBER_KEY} from live
-   * storage. Keep the progress mutations in sync between the two paths.
-   *
-   * @param tx the transaction on which to write bloom entries and the updated progress bytes
+   * @param tx the transaction on which to write the updated progress bytes
    * @param storage committed storage used to read the current block number for progress advancement
    */
-  public void flushPendingBlooms(
+  public void advanceIndexProgress(
       final SegmentedKeyValueStorageTransaction tx, final SegmentedKeyValueStorage storage) {
-    final long block = getCurrentBlockNumber(storage);
-    // Flush the bloom on every block. The earlier deferral-to-range-boundary optimisation caused
-    // correctness failures: an empty bloom produces false negatives in modifiedAfter(), making the
-    // fast-path return the live trie node for nodes that DID change after T, causing hash
-    // mismatches
-    // and silent proof failures. Now that the O(n²) RangeRelativeOffsetList.append is fixed, the
-    // 128 KiB bloom write per block is no longer a significant GC source.
-    if (!pendingBlooms.isEmpty()) {
-      changeIndex.flushBloomAccumulator(tx, pendingBlooms);
-      pendingBlooms.clear();
-    }
-    final boolean atRangeBoundary = (block + 1) % ArchiveNodeKey.RANGE_SIZE == 0;
     if (trieNodeIndexEnabled && progress != null) {
-      progress.setLastIndexedBlock(block);
+      final long block = getCurrentBlockNumber(storage);
       final long rangeId = block / ArchiveNodeKey.RANGE_SIZE;
+      progress.setLastIndexedBlock(block);
       progress.setIndexStartBlock(rangeId * ArchiveNodeKey.RANGE_SIZE);
-      if (atRangeBoundary) {
-        progress.markRangeComplete(rangeId);
-      }
       progress.save(tx);
-    }
-  }
-
-  /**
-   * Convenience overload that flushes blooms without advancing coverage progress.
-   *
-   * <p>This signature is preserved for callers that do not have a committed {@link
-   * SegmentedKeyValueStorage} reference at flush time (e.g. tests that construct the strategy
-   * without progress wiring). When a storage reference is available, prefer {@link
-   * #flushPendingBlooms(SegmentedKeyValueStorageTransaction, SegmentedKeyValueStorage)}.
-   *
-   * <p><strong>NOTE:</strong> progress advancement is intentionally skipped here. The archive
-   * migrator calls this 1-arg overload for bloom flushing and then delegates progress advancement
-   * to {@code BonsaiFlatDbToArchiveMigrator.advanceMigrationIndexProgress} separately.
-   *
-   * @param tx the transaction on which to write bloom entries
-   */
-  public void flushPendingBlooms(final SegmentedKeyValueStorageTransaction tx) {
-    if (!pendingBlooms.isEmpty()) {
-      changeIndex.flushBloomAccumulator(tx, pendingBlooms);
-      pendingBlooms.clear();
     }
   }
 }

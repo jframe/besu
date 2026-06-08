@@ -417,17 +417,13 @@ class BonsaiArchiveTrieNodeIndexIntegrationTest {
       applyBlockChanges(headState, i);
       headState.persist(header);
 
-      // Flush the pending bloom accumulator accumulated during persist.
-      // The 1-arg form does NOT read storage for block-number — it simply writes whatever is
-      // in pendingBlooms. Progress is advanced manually below.
-      final SegmentedKeyValueStorageTransaction bloomTx = composedStorage.startTransaction();
-      indexStrategy.flushPendingBlooms(bloomTx);
       // Advance coverage progress to block i. Note: the first block's nodes were recorded at
       // block 0 (see class Javadoc), but setLastIndexedBlock is monotonically non-decreasing
       // so advancing to i still correctly reflects the highest covered block.
+      final SegmentedKeyValueStorageTransaction progressTx = composedStorage.startTransaction();
       progress.setLastIndexedBlock(i);
-      progress.save(bloomTx);
-      bloomTx.commit();
+      progress.save(progressTx);
+      progressTx.commit();
 
       blockchain.appendBlock(new Block(header, BlockBody.empty()), List.of());
       parent = header;

@@ -741,12 +741,6 @@ public class BonsaiFlatDbToArchiveMigratorTest {
             "History store should contain a diff entry for root key at block 0 after migration")
         .isPresent();
 
-    // Structural assertion 2: the range marker for range 0 must be set.
-    // This verifies that TRIE_NODE_RANGE_MARKER_ARCHIVE writes are also routed correctly.
-    assertThat(changeIndex.rangeMarkerPresent(Bytes.EMPTY, 0L))
-        .withFailMessage("Change index should have a range-0 marker for root key after migration")
-        .isTrue();
-
     // Semantic assertion: the history reader reconstructs the node and its keccak matches
     // stateRoot.
     final TrieNodeHistoryReader reader = new TrieNodeHistoryReader(historyStore, changeIndex);

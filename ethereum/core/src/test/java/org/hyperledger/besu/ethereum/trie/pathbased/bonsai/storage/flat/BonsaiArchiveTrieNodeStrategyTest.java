@@ -148,7 +148,6 @@ class BonsaiArchiveTrieNodeStrategyTest {
     setWorldBlockNumber(targetBlock - 1);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, location, NODE_HASH, node);
-    strategy.flushPendingBlooms(tx);
     tx.commit();
   }
 
@@ -162,7 +161,6 @@ class BonsaiArchiveTrieNodeStrategyTest {
     setWorldBlockNumber(targetBlock - 1);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatStorageTrieNode(storage, tx, accountHash, location, NODE_HASH, node);
-    strategy.flushPendingBlooms(tx);
     tx.commit();
   }
 
@@ -358,36 +356,6 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Bloom accumulator correctness
-  // ---------------------------------------------------------------------------
-
-  @Test
-  void bloomAccumulator_twoNodesInSameBlock_bloomContainsBoth() {
-    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
-    final Bytes location2 = Bytes.fromHexString("0x0a0b0c0d0e");
-
-    // Write two different account trie nodes at the same block in the same logical context.
-    // In practice this would be a single tx, but we use two sequential commits for simplicity;
-    // bloom is accumulated per strategy instance and flushed per block.
-    setWorldBlockNumber(99L); // block 100 will be written
-
-    // Write first node.
-    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
-    strategy.putFlatAccountTrieNode(storage, tx1, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
-    strategy.putFlatAccountTrieNode(storage, tx1, location2, NODE_HASH, SHORT_NODE_V2);
-    strategy.flushPendingBlooms(tx1);
-    tx1.commit();
-
-    final long rangeId = 100L / ArchiveNodeKey.RANGE_SIZE;
-    final Bytes naturalKey1 = ArchiveNodeKey.account(LOCATION_DEEP);
-    final Bytes naturalKey2 = ArchiveNodeKey.account(location2);
-
-    // Both keys should appear in the bloom for rangeId 0.
-    assertThat(changeIndex.bloomMaybeContains(rangeId, naturalKey1)).isTrue();
-    assertThat(changeIndex.bloomMaybeContains(rangeId, naturalKey2)).isTrue();
-  }
-
-  // ---------------------------------------------------------------------------
   // Constructor guard (issue 1)
   // ---------------------------------------------------------------------------
 
@@ -451,34 +419,30 @@ class BonsaiArchiveTrieNodeStrategyTest {
     setWorldBlockNumber(targetBlock - 1); // getCurrentBlockNumber returns targetBlock
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
-    strategy.flushPendingBlooms(tx, storage);
+    strategy.advanceIndexProgress(tx, storage);
     tx.commit();
 
     assertThat(progress.lastIndexedBlock()).isEqualTo(targetBlock);
   }
 
   /**
-   * At the range boundary (block = rangeSize - 1 = 999_999), {@code progress.covers(0)} must be
-   * true after flush.
+   * At the range boundary (block = rangeSize - 1), {@code progress.lastIndexedBlock()} must equal
+   * the boundary block and {@code indexStartBlock()} must be the range start.
    */
   @Test
-  void progress_atRangeBoundary_marksRangeComplete() {
+  void progress_atRangeBoundary_advancesLastIndexedBlock() {
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
 
-    // Block rangeSize - 1 is the last block in range 0 → markRangeComplete(0) must be called.
     final long lastBlockInRange0 = ArchiveNodeKey.RANGE_SIZE - 1;
     setWorldBlockNumber(lastBlockInRange0 - 1);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
-    strategy.flushPendingBlooms(tx, storage);
+    strategy.advanceIndexProgress(tx, storage);
     tx.commit();
 
     assertThat(progress.lastIndexedBlock()).isEqualTo(lastBlockInRange0);
-    // Range 0 covers blocks [0, rangeSize) — covers(0) must be true.
-    assertThat(progress.covers(0L)).isTrue();
-    // Range 1 not yet indexed — covers(rangeSize) must be false.
-    assertThat(progress.covers(ArchiveNodeKey.RANGE_SIZE)).isFalse();
+    assertThat(progress.indexStartBlock()).isEqualTo(0L);
   }
 
   /**
@@ -495,7 +459,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     setWorldBlockNumber(midBlock - 1);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
-    strategy.flushPendingBlooms(tx, storage);
+    strategy.advanceIndexProgress(tx, storage);
     tx.commit();
 
     assertThat(progress.lastIndexedBlock()).isEqualTo(midBlock);
@@ -504,27 +468,25 @@ class BonsaiArchiveTrieNodeStrategyTest {
 
   /**
    * {@code TrieNodeIndexProgress.load(storage, rangeSize)} round-trips: after saving via {@code
-   * flushPendingBlooms}, loading from the same storage returns an equivalent record.
+   * advanceIndexProgress}, loading from the same storage returns an equivalent record.
    */
   @Test
   void progress_loadRoundTrip() {
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
 
-    // Write at the last block of range 0 so markRangeComplete is triggered.
     final long lastBlockInRange0 = ArchiveNodeKey.RANGE_SIZE - 1;
     setWorldBlockNumber(lastBlockInRange0 - 1);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
-    strategy.flushPendingBlooms(tx, storage);
+    strategy.advanceIndexProgress(tx, storage);
     tx.commit();
 
     // Now load from the same storage.
     final TrieNodeIndexProgress loaded =
         TrieNodeIndexProgress.load(storage, ArchiveNodeKey.RANGE_SIZE);
     assertThat(loaded.lastIndexedBlock()).isEqualTo(lastBlockInRange0);
-    assertThat(loaded.covers(0L)).isTrue();
-    assertThat(loaded.covers(ArchiveNodeKey.RANGE_SIZE)).isFalse();
+    assertThat(loaded.indexStartBlock()).isEqualTo(0L);
   }
 
   // ---------------------------------------------------------------------------
@@ -576,6 +538,23 @@ class BonsaiArchiveTrieNodeStrategyTest {
     assertThat(storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isNotEmpty();
   }
 
+  @Test
+  void advanceIndexProgress_setsLastIndexedBlock() {
+    // Use the 7-arg constructor with index enabled and a real progress tracker.
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(1_000_000L);
+    final BonsaiArchiveTrieNodeStrategy strat =
+        new BonsaiArchiveTrieNodeStrategy(16L, null, new BonsaiTrieNodeStrategy(),
+            true, historyStore, changeIndex, progress);
+    setWorldBlockNumber(41L); // getCurrentBlockNumber returns WORLD_BLOCK_NUMBER_KEY + 1 = 42
+
+    final var tx = storage.startTransaction();
+    strat.advanceIndexProgress(tx, storage); // renamed method
+    tx.commit();
+
+    assertThat(progress.lastIndexedBlock()).isEqualTo(42L);
+    assertThat(progress.indexStartBlock()).isEqualTo(0L); // start of range 0
+  }
+
   /**
    * When the flag is disabled (no-progress strategy), {@code flushPendingBlooms(tx, storage)} is
    * not available on the strategy but the old single-arg overload still works — coverage never
@@ -602,7 +581,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     setWorldBlockNumber(targetBlock - 1);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
-    strategy.flushPendingBlooms(tx, storage);
+    strategy.advanceIndexProgress(tx, storage);
     tx.commit();
 
     // Index is disabled: progress must not have advanced.

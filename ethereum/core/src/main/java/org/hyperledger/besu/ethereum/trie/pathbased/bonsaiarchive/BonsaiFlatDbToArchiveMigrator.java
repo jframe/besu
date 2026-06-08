@@ -665,16 +665,13 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 // map to different rangeId values, two workers backfilling different ranges never
                 // write to the same CF key. The idempotent-append tail check in
                 // RangeRelativeOffsetList makes re-runs of the same range safe.
-                if (migrationTrieNodeStrategy != null) {
-                  final SegmentedKeyValueStorageTransaction bloomTx =
+                if (migrationTrieNodeStrategy != null && migrationIndexProgress != null) {
+                  final SegmentedKeyValueStorageTransaction progressTx =
                       worldStateStorage
                           .getComposedWorldStateStorage()
                           .startLowPriorityTransaction();
-                  migrationTrieNodeStrategy.flushPendingBlooms(bloomTx);
-                  if (migrationIndexProgress != null) {
-                    advanceMigrationIndexProgress(blockNumber, bloomTx);
-                  }
-                  bloomTx.commit();
+                  advanceMigrationIndexProgress(blockNumber, progressTx);
+                  progressTx.commit();
                 }
                 LOG.info(
                     "Archive trie checkpoint complete: block {} suffix {} stateRoot {}",

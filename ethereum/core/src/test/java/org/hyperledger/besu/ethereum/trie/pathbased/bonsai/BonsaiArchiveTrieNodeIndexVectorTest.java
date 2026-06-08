@@ -449,12 +449,11 @@ class BonsaiArchiveTrieNodeIndexVectorTest {
       applyBlockChanges(headState, i);
       headState.persist(header);
 
-      // Flush the pending bloom accumulator for block i.
-      final SegmentedKeyValueStorageTransaction bloomTx = composedStorage.startTransaction();
-      indexStrategy.flushPendingBlooms(bloomTx);
+      // Advance coverage progress for block i.
+      final SegmentedKeyValueStorageTransaction progressTx = composedStorage.startTransaction();
       progress.setLastIndexedBlock(i);
-      progress.save(bloomTx);
-      bloomTx.commit();
+      progress.save(progressTx);
+      progressTx.commit();
 
       blockchain.appendBlock(new Block(header, BlockBody.empty()), List.of());
       parent = header;

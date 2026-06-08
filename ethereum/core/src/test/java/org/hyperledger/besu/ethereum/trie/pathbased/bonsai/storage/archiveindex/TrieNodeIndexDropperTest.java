@@ -175,22 +175,18 @@ class TrieNodeIndexDropperTest {
   @Test
   void dropBlockRemovesRangeMarkerWhenListBecomesEmpty() {
     final long block = 50L;
-    final long rangeId = block / RANGE_SIZE;
 
     var tx = kv.startTransaction();
     historyStore.put(tx, KEY_A, block, TrieNodeDiffCodec.encodeFull(NODE_RLP_A));
     changeIndex.append(tx, KEY_A, block);
     tx.commit();
 
-    // Range marker should be present before drop
-    assertThat(changeIndex.rangeMarkerPresent(KEY_A, rangeId)).isTrue();
-
     var dropTx = kv.startTransaction();
     dropper.dropBlock(block, kv, dropTx);
     dropTx.commit();
 
-    // Range marker should be gone (list is empty, no sub-blocks)
-    assertThat(changeIndex.rangeMarkerPresent(KEY_A, rangeId)).isFalse();
+    // List is empty; no blocks findable for this key.
+    assertThat(changeIndex.latestChangeBlock(KEY_A, block)).isEmpty();
   }
 
   // -------------------------------------------------------------------------
@@ -201,7 +197,6 @@ class TrieNodeIndexDropperTest {
   void dropBlockPreservesRangeMarkerWhenOtherBlocksRemainInRange() {
     final long blockDrop = 50L;
     final long blockKeep = 60L; // same range (both in range 0 with RANGE_SIZE=1000)
-    final long rangeId = blockDrop / RANGE_SIZE;
 
     // Write blockDrop first and commit so blockKeep's append reads committed state.
     var tx = kv.startTransaction();
@@ -219,8 +214,6 @@ class TrieNodeIndexDropperTest {
     dropper.dropBlock(blockDrop, kv, dropTx);
     dropTx.commit();
 
-    // Range marker still present because blockKeep remains
-    assertThat(changeIndex.rangeMarkerPresent(KEY_A, rangeId)).isTrue();
     // The kept block is still findable
     assertThat(changeIndex.latestChangeBlock(KEY_A, blockKeep)).hasValue(blockKeep);
   }
@@ -299,8 +292,6 @@ class TrieNodeIndexDropperTest {
     final TrieNodeChangeIndex splitIndex =
         new TrieNodeChangeIndex(kv, RANGE_SIZE, threshold, splitAt);
     final TrieNodeIndexDropper splitDropper = new TrieNodeIndexDropper(RANGE_SIZE);
-    final long rangeId = 0L; // all blocks are in range 0 (RANGE_SIZE=1000, blocks 0..999)
-
     // Append 11 entries one-per-transaction (each append must read the prior committed state).
     // Blocks 0..10 — all in range 0, all distinct offsets.
     for (int i = 0; i <= 10; i++) {
@@ -312,19 +303,15 @@ class TrieNodeIndexDropperTest {
     }
 
     // After 11 appends the split has fired: subCount=1, tail has 6 entries (blocks 5..10).
-    assertThat(splitIndex.rangeMarkerPresent(KEY_A, rangeId)).isTrue();
 
     // Drop the most recent tail block (block 10). Tail becomes 5 entries (blocks 5..9).
-    // subCount is still 1, so the range-marker must be PRESERVED.
+    // subCount is still 1.
     var dropTx = kv.startTransaction();
     splitDropper.dropBlock(10L, kv, dropTx);
     dropTx.commit();
 
     // History entry gone.
     assertThat(historyStore.get(KEY_A, 10L)).isEmpty();
-
-    // Range marker must still be present — sub-blocks remain (subCount > 0).
-    assertThat(splitIndex.rangeMarkerPresent(KEY_A, rangeId)).isTrue();
 
     // Older blocks in the tail (e.g. block 5) are still findable.
     assertThat(splitIndex.latestChangeBlock(KEY_A, 9L)).hasValue(9L);

@@ -442,14 +442,14 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     }
 
     /**
-     * If the trie-node strategy is a {@link BonsaiArchiveTrieNodeStrategy}, flushes its pending
-     * bloom accumulator and advances {@code TrieNodeIndexProgress} for the current block into the
-     * given transaction, BEFORE the transaction is committed. Must be called just before {@code
+     * If the trie-node strategy is a {@link BonsaiArchiveTrieNodeStrategy}, advances {@code
+     * TrieNodeIndexProgress} for the current block into the given transaction, BEFORE the
+     * transaction is committed. Must be called just before {@code
      * composedWorldStateTransaction.commit()}.
      */
     private void flushIndexIfEnabled() {
       if (trieNodeStrategy instanceof BonsaiArchiveTrieNodeStrategy archiveStrategy) {
-        archiveStrategy.flushPendingBlooms(composedWorldStateTransaction, worldStorage);
+        archiveStrategy.advanceIndexProgress(composedWorldStateTransaction, worldStorage);
       }
     }
 
