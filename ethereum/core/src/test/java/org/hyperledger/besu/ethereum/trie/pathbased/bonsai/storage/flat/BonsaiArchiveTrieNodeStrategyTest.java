@@ -556,13 +556,12 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   /**
-   * When the flag is disabled (no-progress strategy), {@code flushPendingBlooms(tx, storage)} is
-   * not available on the strategy but the old single-arg overload still works — coverage never
-   * advances.
+   * When the trie-node index is disabled, {@code advanceIndexProgress(tx, storage)} is a no-op —
+   * coverage never advances.
    */
   @Test
   void progress_flagDisabled_noProgressWritten() {
-    // When progress=null (6-arg constructor), flushPendingBlooms(tx, storage) must NOT persist any
+    // When trieNodeIndexEnabled=false, advanceIndexProgress(tx, storage) must NOT persist any
     // progress bytes (it simply skips the progress block).
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
     // Construct WITH progress, but index disabled — the index-disabled code path never calls

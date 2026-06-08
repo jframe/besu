@@ -1060,22 +1060,23 @@ public class BonsaiWorldStateKeyValueStorageTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Updater.commitComposedOnly() wires flushPendingBlooms for BonsaiArchiveTrieNodeStrategy
+  // Updater.commitComposedOnly() wires advanceIndexProgress for BonsaiArchiveTrieNodeStrategy
   // ---------------------------------------------------------------------------
 
   /**
    * Verifies that {@link BonsaiWorldStateKeyValueStorage.Updater#commitComposedOnly()} calls {@link
-   * BonsaiArchiveTrieNodeStrategy#flushPendingBlooms(
+   * BonsaiArchiveTrieNodeStrategy#advanceIndexProgress(
    * org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction,
    * SegmentedKeyValueStorage)} so that {@link TrieNodeIndexProgress#lastIndexedBlock()} advances
    * after each block is persisted.
    *
-   * <p>This is the core wiring test for the Design-5 bloom + progress flush. Without it, a full
-   * sync with {@code --Xbonsai-archive-trie-node-index-enabled=true} captures diffs but {@code
-   * TrieNodeIndexProgress.covers(T)} never advances and proofs fall back to the legacy path.
+   * <p>This is the core wiring test for the Design-5 progress advancement. Without it, a full sync
+   * with {@code --Xbonsai-archive-trie-node-index-enabled=true} captures diffs but {@code
+   * TrieNodeIndexProgress.lastIndexedBlock()} never advances and proofs fall back to the legacy
+   * path.
    */
   @Test
-  void updaterCommitComposedOnly_flushesBloomsAndAdvancesProgress() {
+  void updaterCommitComposedOnly_advancesProgress() {
     // -- Storage setup --------------------------------------------------------
     final ImmutableDataStorageConfiguration archiveConfig =
         ImmutableDataStorageConfiguration.builder()
@@ -1131,7 +1132,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
     final long previousBlock = 5L;
     updateStorageArchiveBlock(composedStorage, previousBlock);
 
-    // -- Write a trie node so pendingBlooms is non-empty ----------------------
+    // -- Write a trie node (causes changeIndex.append on commit) --------------
     final Bytes location = Bytes.fromHexString("0x0102030405060708090a");
     final Bytes32 nodeHash =
         Bytes32.fromHexString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -1143,7 +1144,7 @@ public class BonsaiWorldStateKeyValueStorageTest {
     // Progress has not advanced yet.
     assertThat(progress.lastIndexedBlock()).isEqualTo(TrieNodeIndexProgress.UNSET_LAST_INDEXED);
 
-    // commitComposedOnly() must flush blooms + advance progress atomically.
+    // commitComposedOnly() must advance progress atomically.
     updater.commitComposedOnly();
 
     // getCurrentBlockNumber reads WORLD_BLOCK_NUMBER_KEY (=5) + 1 = 6.
