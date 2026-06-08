@@ -16,8 +16,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_BLOOM_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_RANGE_MARKER_ARCHIVE;
 
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
@@ -53,13 +51,6 @@ class TrieNodeChangeIndexTest {
     assertThat(list).isPresent();
     assertThat(list.get().size()).isEqualTo(1);
 
-    // No bloom entry.
-    assertThat(kv.get(TRIE_NODE_BLOOM_ARCHIVE, ArchiveNodeKey.bloomKey(0).toArrayUnsafe()))
-        .isEmpty();
-
-    // No marker entry.
-    final org.apache.tuweni.bytes.Bytes markerKey = ArchiveNodeKey.rangeKey(key, 0);
-    assertThat(kv.get(TRIE_NODE_RANGE_MARKER_ARCHIVE, markerKey.toArrayUnsafe())).isEmpty();
   }
 
   // -------------------------------------------------------------------------

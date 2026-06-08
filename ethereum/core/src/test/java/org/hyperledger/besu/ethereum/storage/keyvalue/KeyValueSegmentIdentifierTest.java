@@ -28,8 +28,6 @@ public class KeyValueSegmentIdentifierTest {
         List.of(
             "TRIE_NODE_HISTORY_ARCHIVE",
             "TRIE_NODE_INDEX_ARCHIVE",
-            "TRIE_NODE_RANGE_MARKER_ARCHIVE",
-            "TRIE_NODE_BLOOM_ARCHIVE",
             "TRIE_NODE_SUBBLOCK_ARCHIVE")) {
       assertThatCode(() -> KeyValueSegmentIdentifier.valueOf(name)).doesNotThrowAnyException();
     }

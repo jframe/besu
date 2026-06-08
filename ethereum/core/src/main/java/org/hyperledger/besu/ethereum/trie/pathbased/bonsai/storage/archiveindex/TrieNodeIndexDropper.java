@@ -43,9 +43,7 @@ import org.slf4j.LoggerFactory;
  *   <li>Delete the history entry {@code TRIE_NODE_HISTORY_ARCHIVE[naturalKey ‖ block]}.
  *   <li>Remove the offset for {@code block} from the offset list at {@code
  *       TRIE_NODE_INDEX_ARCHIVE[naturalKey ‖ rangeId]}. If the resulting list is empty, also remove
- *       the {@code TRIE_NODE_RANGE_MARKER_ARCHIVE[naturalKey ‖ rangeId]} marker. The range bloom is
- *       <em>not</em> updated (bloom removal is not supported; leaving the false-positive bit in the
- *       bloom is safe but will cause harmless extra index-list lookups — see TODO below).
+ *       the index entry itself.
  * </ol>
  *
  * <p>Reorgs are rare and depth-bounded, so the full CF scan is acceptable. On a live mainnet node
@@ -183,13 +181,7 @@ public final class TrieNodeIndexDropper {
    * Removes {@code offset} from the packed offset list at {@code TRIE_NODE_INDEX_ARCHIVE[naturalKey
    * ‖ rangeId]}.
    *
-   * <p>If the resulting list is empty, also removes the range-marker at {@code
-   * TRIE_NODE_RANGE_MARKER_ARCHIVE[naturalKey ‖ rangeId]}.
-   *
-   * <p>The per-range bloom is intentionally NOT updated. Bloom removal is not supported (clearing a
-   * bit would require knowing it was not set by another key, which requires iterating all keys in
-   * the range). The residual bloom bit is a false positive; the downstream code (range-marker check
-   * + offset-list lookup) will correctly return no hit after the marker/list are cleaned up.
+   * <p>If the resulting list is empty, also removes the index entry itself.
    *
    * <p>TODO: if the sub-block chain ({@code TRIE_NODE_SUBBLOCK_ARCHIVE}) contains the offset (i.e.
    * the key was hot and the offset was evicted from the tail into a sub-block before the reorg),
@@ -262,10 +254,8 @@ public final class TrieNodeIndexDropper {
     final Bytes newPacked = result.slice(0, remainingEntries * ENTRY_BYTES);
 
     if (remainingEntries == 0 && subCount == 0) {
-      // The list is now empty and there are no sub-blocks — remove both the index entry and the
-      // range marker.
+      // The list is now empty and there are no sub-blocks — remove the index entry.
       tx.remove(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes);
-      tx.remove(KeyValueSegmentIdentifier.TRIE_NODE_RANGE_MARKER_ARCHIVE, indexKeyBytes);
     } else {
       // Write back the updated index value with the same subCount (sub-blocks are unchanged).
       final byte[] updated = new byte[SUBCOUNT_BYTES + newPacked.size()];
@@ -275,7 +265,6 @@ public final class TrieNodeIndexDropper {
       updated[3] = (byte) (subCount & 0xFF);
       newPacked.copyTo(MutableBytes.wrap(updated, SUBCOUNT_BYTES, newPacked.size()));
       tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, updated);
-      // Range marker remains (there are still entries in the sub-blocks or the tail).
     }
   }
 }

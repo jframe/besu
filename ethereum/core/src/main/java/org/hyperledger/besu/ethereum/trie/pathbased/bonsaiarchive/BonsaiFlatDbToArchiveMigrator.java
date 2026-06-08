@@ -17,10 +17,8 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_BLOOM_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_RANGE_MARKER_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_HASH_KEY;
@@ -804,8 +802,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       } else if (segmentId == TRIE_BRANCH_STORAGE_ARCHIVE
           || segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
-          || segmentId == TRIE_NODE_RANGE_MARKER_ARCHIVE
-          || segmentId == TRIE_NODE_BLOOM_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
         // Trie archive and differential-index segments go to real (persistent) storage.
         realTx.put(segmentId, key, value);
@@ -820,8 +816,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       } else if (segmentId == TRIE_BRANCH_STORAGE_ARCHIVE
           || segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
-          || segmentId == TRIE_NODE_RANGE_MARKER_ARCHIVE
-          || segmentId == TRIE_NODE_BLOOM_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
         // Mirror the put routing: any archive or index CF that can be written can also be removed.
         // TRIE_BRANCH_STORAGE_ARCHIVE removes do not occur during normal migration (the migrator
