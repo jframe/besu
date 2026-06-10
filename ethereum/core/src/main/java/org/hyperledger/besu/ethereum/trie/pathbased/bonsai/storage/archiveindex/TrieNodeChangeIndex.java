@@ -200,6 +200,90 @@ public final class TrieNodeChangeIndex {
   }
 
   /**
+   * Records that {@code naturalKey} changed at {@code block} (like {@link #append}), and returns
+   * the number of prior mutations for this key — i.e. the mutation count as it was
+   * <em>before</em> the current block's write. Combines what was previously two separate reads
+   * ({@code countMutationsUpTo(key, block-1)} + {@code append(tx, key, block)}) into a single
+   * committed-storage read for the current range.
+   *
+   * <p>For earlier ranges (when {@code rangeId(block) > 0}) the earlier-range counts are still
+   * read individually; in practice all dev-chain and mainnet blocks fall in range 0 (first 1M
+   * blocks) so this is effectively a single read.
+   *
+   * @param tx the transaction on which to write the updated index
+   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})
+   * @param block the block number at which the node changed
+   * @return the number of mutations recorded before {@code block} (checkpoint detection value)
+   */
+  public long appendAndGetPreviousCount(
+      final SegmentedKeyValueStorageTransaction tx, final Bytes naturalKey, final long block) {
+    if (block < 0) {
+      throw new IllegalArgumentException("block must be >= 0, got " + block);
+    }
+    final long rangeId = block / rangeSize;
+    final int offset = (int) (block - rangeId * rangeSize);
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
+    final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
+
+    // Count mutations in earlier ranges (rarely non-zero for chains < rangeSize blocks).
+    long earlierCount = 0L;
+    for (long r = 0; r < rangeId; r++) {
+      final Bytes rKey = ArchiveNodeKey.rangeKey(naturalKey, r);
+      final Optional<byte[]> raw =
+          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, rKey.toArrayUnsafe());
+      if (raw.isPresent()) {
+        final byte[] b = raw.get();
+        if (b.length >= SUBCOUNT_BYTES) {
+          final int sc =
+              ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
+          final int te = (b.length - SUBCOUNT_BYTES) / RangeRelativeOffsetList.ENTRY_BYTES;
+          earlierCount += (long) sc * DEFAULT_SUBBLOCK_SPLIT_AT + te;
+        }
+      }
+    }
+
+    // Read the current range once — shared by count and append.
+    final int[] subCountHolder = new int[1];
+    final RangeRelativeOffsetList list =
+        storage
+            .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
+            .map(
+                b -> {
+                  final IndexValue iv = readIndexValue(b);
+                  subCountHolder[0] = iv.subCount;
+                  return iv.list;
+                })
+            .orElse(RangeRelativeOffsetList.empty());
+
+    final int tailEntries = list.size();
+    final long previousCount =
+        earlierCount + (long) subCountHolder[0] * DEFAULT_SUBBLOCK_SPLIT_AT + tailEntries;
+
+    // Append and write back (same logic as append()).
+    int subCount = subCountHolder[0];
+    RangeRelativeOffsetList updated = list.append(offset);
+
+    if (updated.size() > subBlockThreshold) {
+      final RangeRelativeOffsetList head = sliceHead(updated, subBlockSplitAt);
+      final RangeRelativeOffsetList tail = sliceTail(updated, subBlockSplitAt);
+      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subCount);
+      tx.put(
+          KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE,
+          subKey.toArrayUnsafe(),
+          head.toBytes().toArrayUnsafe());
+      subCount++;
+      updated = tail;
+    }
+
+    tx.put(
+        KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
+        indexKeyBytes,
+        writeIndexValue(subCount, updated));
+
+    return previousCount;
+  }
+
+  /**
    * Returns the total number of diff-index mutations recorded for {@code naturalKey} at or before
    * {@code block}, summing across all index ranges from 0 to {@code rangeId(block)}.
    *

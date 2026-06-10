@@ -458,31 +458,32 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes newNode,
       final SegmentedKeyValueStorage storage) {
 
-    // Compute the current mutation count for this key to determine whether this mutation is a
-    // checkpoint. Delegated to TrieNodeChangeIndex so the packed-format parsing uses the canonical
-    // SUBCOUNT_BYTES and ENTRY_BYTES constants from the archiveindex package.
-    final long currentMutationCount = changeIndex.countMutationsUpTo(naturalKey, block - 1);
-
+    // Determine entry type, append to the index, and write the history entry.
+    //
+    // For creation and FULL_ABOVE_DEPTH nodes the entry type is always FULL regardless of mutation
+    // count, so we call changeIndex.append directly (1 read). For DIFF/checkpoint nodes we use
+    // appendAndGetPreviousCount which returns the pre-write mutation count AND does the append in
+    // a single RocksDB read — replacing the old pattern of countMutationsUpTo + separate append
+    // (2 reads → 1 read for the common case).
     final Bytes entry;
     if (priorNode == null) {
       // Creation: no prior node → always FULL | CREATION.
       entry = TrieNodeDiffCodec.encodeDiff(null, newNode);
+      changeIndex.append(tx, naturalKey, block);
     } else if (location.size() <= FULL_ABOVE_DEPTH) {
-      // Upper-trie node: always FULL to keep proof lookups cheap. Uses the nibble-path location
-      // so that both account nodes (naturalKey == location) and storage nodes (naturalKey =
-      // accountHash ‖ location) are evaluated against the same depth threshold.
+      // Upper-trie node: always FULL to keep proof lookups cheap.
       entry = TrieNodeDiffCodec.encodeFull(newNode);
-    } else if (currentMutationCount % CHECKPOINT_INTERVAL == 0) {
-      // Checkpoint mutation: store FULL so backward walk terminates within CHECKPOINT_INTERVAL
-      // steps.
-      entry = TrieNodeDiffCodec.encodeFull(newNode);
+      changeIndex.append(tx, naturalKey, block);
     } else {
-      // Normal mutation: store the structural delta.
-      entry = TrieNodeDiffCodec.encodeDiff(priorNode, newNode);
+      // DIFF or checkpoint FULL: need mutation count to decide. Combined read+append.
+      final long previousCount = changeIndex.appendAndGetPreviousCount(tx, naturalKey, block);
+      entry =
+          (previousCount % CHECKPOINT_INTERVAL == 0)
+              ? TrieNodeDiffCodec.encodeFull(newNode)
+              : TrieNodeDiffCodec.encodeDiff(priorNode, newNode);
     }
 
     historyStore.put(tx, naturalKey, block, entry);
-    changeIndex.append(tx, naturalKey, block);
 
     LOG.trace(
         "Diff-index entry captured: key={} block={} entryType=0x{}",
