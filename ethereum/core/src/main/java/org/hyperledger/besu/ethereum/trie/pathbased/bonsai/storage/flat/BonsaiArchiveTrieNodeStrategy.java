@@ -181,6 +181,11 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   @Override
   public Optional<Bytes> getFlatAccountTrieNode(
       final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
+    // When the differential index is enabled, historical proof reads go through
+    // ArchiveProofNodeLoader — not this strategy. Live reads only need the current value.
+    if (trieNodeIndexEnabled) {
+      return baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage);
+    }
     Bytes keyNearest =
         BonsaiArchiveKeyUtil.calculateArchiveKeyWithMaxSuffix(
             BonsaiArchiveKeyUtil.getStateArchiveContextForRead(storage), location.toArrayUnsafe());
@@ -200,6 +205,11 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final SegmentedKeyValueStorage storage) {
+    // When the differential index is enabled, historical proof reads go through
+    // ArchiveProofNodeLoader — not this strategy. Live reads only need the current value.
+    if (trieNodeIndexEnabled) {
+      return baseStrategy.getFlatStorageTrieNode(accountHash, location, nodeHash, storage);
+    }
     Bytes accountHashLocation = Bytes.concatenate(accountHash.getBytes(), location);
     Bytes keyNearest =
         BonsaiArchiveKeyUtil.calculateArchiveKeyWithMaxSuffix(
