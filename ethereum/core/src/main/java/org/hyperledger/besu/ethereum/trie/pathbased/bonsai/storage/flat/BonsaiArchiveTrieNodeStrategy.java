@@ -96,6 +96,13 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    */
   private final TrieNodeIndexProgress progress;
 
+  /**
+   * Cached block number for the current block's trie-node writes. {@code Long.MIN_VALUE} means
+   * uninitialised. Populated on the first {@link #getCurrentBlockNumber} call within a block and
+   * invalidated by {@link #advanceIndexProgress} at the end of each block.
+   */
+  private volatile long cachedCurrentBlockNumber = Long.MIN_VALUE;
+
   public BonsaiArchiveTrieNodeStrategy(final Long trieNodeCheckpointInterval) {
     this(trieNodeCheckpointInterval, null);
   }
@@ -406,21 +413,33 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    * Returns the actual block number currently being written (not the window-start used for suffix
    * keying). If {@code ARCHIVE_PROOF_BLOCK_NUMBER_KEY} is set it is used directly; otherwise it is
    * {@code WORLD_BLOCK_NUMBER_KEY + 1} (the next block whose trie nodes are being committed).
+   *
+   * <p>The result is cached for the duration of a single block's trie-node writes and invalidated
+   * by {@link #advanceIndexProgress} at the end of each block, avoiding a RocksDB read per node.
    */
   private long getCurrentBlockNumber(final SegmentedKeyValueStorage storage) {
+    // Proof-path override: explicitly set per-persist, never cached.
     final Optional<byte[]> proofBlock =
         storage.get(TRIE_BRANCH_STORAGE, ARCHIVE_PROOF_BLOCK_NUMBER_KEY);
     if (proofBlock.isPresent()) {
       return Bytes.wrap(proofBlock.get()).toLong();
     }
+    // Fast path: reuse cached value for the duration of the current block's writes.
+    final long cached = cachedCurrentBlockNumber;
+    if (cached != Long.MIN_VALUE) {
+      return cached;
+    }
     // TODO: block 1's trie nodes are indexed at block 0 because WORLD_BLOCK_NUMBER_KEY
     // is written in the same tx as the trie nodes and hasn't committed yet. Callers
     // querying history at block 0 may see block-1 state. Fix: read from a pre-committed
     // block-number key or pass the block number explicitly from the persist() caller.
-    return storage
-        .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
-        .map(b -> Bytes.wrap(b).toLong() + 1L)
-        .orElse(0L);
+    final long block =
+        storage
+            .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
+            .map(b -> Bytes.wrap(b).toLong() + 1L)
+            .orElse(0L);
+    cachedCurrentBlockNumber = block;
+    return block;
   }
 
   // ---------------------------------------------------------------------------
@@ -527,6 +546,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       progress.setLastIndexedBlock(block);
       progress.setIndexStartBlock(rangeId * ArchiveNodeKey.RANGE_SIZE);
       progress.save(tx);
+      // Invalidate so the next block's first write re-reads the committed block number.
+      cachedCurrentBlockNumber = Long.MIN_VALUE;
     }
   }
 }
