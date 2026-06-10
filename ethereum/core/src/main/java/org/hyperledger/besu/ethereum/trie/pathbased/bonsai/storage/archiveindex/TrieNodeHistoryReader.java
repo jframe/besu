@@ -311,7 +311,7 @@ public final class TrieNodeHistoryReader {
             naturalKey);
         return Optional.empty();
       }
-      final Bytes fullEntry = fullEntryOpt.get();
+      Bytes fullEntry = fullEntryOpt.get();
       final TrieNodeDiffCodec.Decoded fullDecoded = TrieNodeDiffCodec.decode(fullEntry);
       if (!fullDecoded.isFull()) {
         LOG.warn(
@@ -347,7 +347,14 @@ public final class TrieNodeHistoryReader {
                 changeBlocks[i]);
             return Optional.empty();
           }
-          diffEntries.add(diffEntry);
+          if (decoded.isFull()) {
+            // A newer FULL entry (FULL_ABOVE_DEPTH or a later checkpoint) supersedes the prior
+            // checkpoint — use it as the new reconstruction base and discard accumulated DIFFs.
+            fullEntry = diffEntry;
+            diffEntries.clear();
+          } else {
+            diffEntries.add(diffEntry);
+          }
         }
         return Optional.of(TrieNodeDiffCodec.reconstruct(fullEntry, diffEntries));
       }
