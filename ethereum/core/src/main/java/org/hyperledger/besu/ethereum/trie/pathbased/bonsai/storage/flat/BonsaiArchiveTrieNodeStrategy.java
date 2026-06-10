@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
+import static org.hyperledger.besu.crypto.Hash.keccak256;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
@@ -189,6 +190,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
             found -> found.key().size() == location.size() + BonsaiArchiveKeyUtil.KEY_SUFFIX_LENGTH)
         .filter(found -> location.commonPrefixLength(found.key()) >= location.size())
         .flatMap(SegmentedKeyValueStorage.NearestKeyValue::wrapBytes)
+        .filter(bytes -> keccak256(bytes).equals(nodeHash))
         .or(() -> baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage));
   }
 
@@ -215,6 +217,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
             found ->
                 accountHashLocation.commonPrefixLength(found.key()) >= accountHashLocation.size())
         .flatMap(SegmentedKeyValueStorage.NearestKeyValue::wrapBytes)
+        .filter(bytes -> keccak256(bytes).equals(nodeHash))
         .or(() -> baseStrategy.getFlatStorageTrieNode(accountHash, location, nodeHash, storage));
   }
 
