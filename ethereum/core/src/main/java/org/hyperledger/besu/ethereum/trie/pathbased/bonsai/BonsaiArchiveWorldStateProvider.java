@@ -149,6 +149,22 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     this.trieNodeHistoryReader = new TrieNodeHistoryReader(historyStore, trieNodeChangeIndex);
     this.trieNodeIndexProgress =
         TrieNodeIndexProgress.load(archiveStorage, ArchiveNodeKey.RANGE_SIZE);
+
+    // When the trie-node index is enabled, replace the live storage's plain BonsaiTrieNodeStrategy
+    // with a BonsaiArchiveTrieNodeStrategy that writes diff-codec history entries and advances the
+    // shared trieNodeIndexProgress on every block commit. Without this, flushIndexIfEnabled() is
+    // always a no-op (wrong instanceof type) and lastIndexed stays at -1 indefinitely.
+    if (trieNodeIndexEnabled) {
+      worldStateKeyValueStorage.setTrieNodeStrategy(
+          new BonsaiArchiveTrieNodeStrategy(
+              trieNodeCheckpointInterval,
+              null,
+              new BonsaiTrieNodeStrategy(),
+              true,
+              historyStore,
+              trieNodeChangeIndex,
+              trieNodeIndexProgress));
+    }
   }
 
   @Override
@@ -399,6 +415,17 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     // covers() checks block in [indexStartBlock, lastIndexedBlock] — handles both live-import and
     // migrator paths.
     final boolean blockIsIndexed = trieNodeIndexProgress.covers(targetBlock);
+    LOG.debug(
+        "getAccountProof routing: target={} head={} maxLayers={} gap={} indexEnabled={}"
+            + " blockIsIndexed={} lastIndexed={} indexStart={}",
+        targetBlock,
+        headBlock,
+        maxLayers,
+        headBlock - targetBlock,
+        trieNodeIndexEnabled,
+        blockIsIndexed,
+        trieNodeIndexProgress.lastIndexedBlock(),
+        trieNodeIndexProgress.indexStartBlock());
     if (trieNodeIndexEnabled && headBlock - targetBlock >= maxLayers && blockIsIndexed) {
 
       final Hash stateRoot = blockHeader.getStateRoot();

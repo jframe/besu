@@ -65,7 +65,7 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
   protected final BonsaiFlatDbStrategyProvider flatDbStrategyProvider;
   protected final CacheManager cacheManager;
   private volatile long cacheVersion;
-  private final TrieNodeStrategy trieNodeStrategy;
+  private TrieNodeStrategy trieNodeStrategy;
 
   public BonsaiWorldStateKeyValueStorage(
       final StorageProvider provider,
@@ -332,6 +332,10 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
 
   public TrieNodeStrategy getTrieNodeStrategy() {
     return trieNodeStrategy;
+  }
+
+  public void setTrieNodeStrategy(final TrieNodeStrategy strategy) {
+    this.trieNodeStrategy = strategy;
   }
 
   public CacheManager getCacheManager() {
