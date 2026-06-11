@@ -635,15 +635,19 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           .ifPresent(
               header -> {
                 migrationWorldState.persist(header);
-                // advanceIndexProgress uses the block-number cache set during persist(), advances
-                // the shared progress, and clears the cache so the next block reads correctly.
+                // flushIndexIfEnabled() inside persist()'s commit() already advanced
+                // migrationIndexProgress to blockNumber (it reads WORLD_BLOCK_NUMBER_KEY before
+                // the transaction commits, so it sees the previous block's number and adds 1).
+                // After persist() returns, WORLD_BLOCK_NUMBER_KEY is committed to the in-memory
+                // layer, so calling advanceIndexProgress() again would read the wrong value
+                // (blockNumber+1). We only need to persist the already-correct progress to real
+                // storage for crash-recovery durability.
                 final SegmentedKeyValueStorageTransaction progressTx =
                     worldStateStorage.getComposedWorldStateStorage().startLowPriorityTransaction();
-                migrationTrieNodeStrategy.advanceIndexProgress(progressTx, migrationTrieStorage);
+                if (migrationIndexProgress != null) {
+                  migrationIndexProgress.save(progressTx);
+                }
                 progressTx.commit();
-                // Update WORLD_BLOCK_NUMBER_KEY in the in-memory layer AFTER advancing progress
-                // so the cache (cleared by advanceIndexProgress) is re-populated correctly on the
-                // next block's getCurrentBlockNumber call.
                 migrationTrieStorage.seedCheckpoint(header);
               });
       return;

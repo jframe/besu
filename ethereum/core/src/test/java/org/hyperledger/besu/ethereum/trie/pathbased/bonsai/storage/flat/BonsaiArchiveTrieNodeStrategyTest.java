@@ -16,7 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -118,27 +118,29 @@ class BonsaiArchiveTrieNodeStrategyTest {
     return new BonsaiArchiveTrieNodeStrategy();
   }
 
-  /** Sets WORLD_BLOCK_NUMBER_KEY to {@code blockNumber} in committed storage. */
-  private void setWorldBlockNumber(final long blockNumber) {
+  /**
+   * Sets ARCHIVE_PROOF_BLOCK_NUMBER_KEY to {@code blockNumber} in committed storage.
+   *
+   * <p>This key is read by {@code getCurrentBlockNumber} before the cache check, so it bypasses
+   * the {@code cachedCurrentBlockNumber} cache and allows sequential writes at different block
+   * numbers within a single test.
+   */
+  private void setArchiveProofBlockNumber(final long blockNumber) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     tx.put(
         TRIE_BRANCH_STORAGE,
-        WORLD_BLOCK_NUMBER_KEY,
+        ARCHIVE_PROOF_BLOCK_NUMBER_KEY,
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
     tx.commit();
   }
 
-  /**
-   * Writes {@code node} via the strategy at block {@code targetBlock}, where {@code
-   * WORLD_BLOCK_NUMBER_KEY} is set to {@code targetBlock - 1} so that {@code getCurrentBlockNumber}
-   * returns {@code targetBlock}.
-   */
+  /** Writes {@code node} via the strategy at block {@code targetBlock}. */
   private void writeAtBlock(
       final BonsaiArchiveTrieNodeStrategy strategy,
       final Bytes location,
       final Bytes node,
       final long targetBlock) {
-    setWorldBlockNumber(targetBlock - 1);
+    setArchiveProofBlockNumber(targetBlock);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, location, NODE_HASH, node);
     tx.commit();
@@ -151,7 +153,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
       final Bytes location,
       final Bytes node,
       final long targetBlock) {
-    setWorldBlockNumber(targetBlock - 1);
+    setArchiveProofBlockNumber(targetBlock);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatStorageTrieNode(storage, tx, accountHash, location, NODE_HASH, node);
     tx.commit();
@@ -390,7 +392,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
 
     final long targetBlock = 100L;
-    setWorldBlockNumber(targetBlock - 1); // getCurrentBlockNumber returns targetBlock
+    setArchiveProofBlockNumber(targetBlock);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
     strategy.advanceIndexProgress(tx, storage);
@@ -409,7 +411,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
 
     final long lastBlockInRange0 = ArchiveNodeKey.RANGE_SIZE - 1;
-    setWorldBlockNumber(lastBlockInRange0 - 1);
+    setArchiveProofBlockNumber(lastBlockInRange0);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
     strategy.advanceIndexProgress(tx, storage);
@@ -431,7 +433,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
 
     // Block 500_000 is mid-range (range 0 spans [0, 999_999]).
     final long midBlock = 500_000L;
-    setWorldBlockNumber(midBlock - 1);
+    setArchiveProofBlockNumber(midBlock);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
     strategy.advanceIndexProgress(tx, storage);
@@ -454,7 +456,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndexAndProgress(progress);
 
     final long lastBlockInRange0 = ArchiveNodeKey.RANGE_SIZE - 1;
-    setWorldBlockNumber(lastBlockInRange0 - 1);
+    setArchiveProofBlockNumber(lastBlockInRange0);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
     strategy.advanceIndexProgress(tx, storage);
@@ -473,7 +475,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final BonsaiArchiveTrieNodeStrategy strat =
         new BonsaiArchiveTrieNodeStrategy(
             null, new BonsaiTrieNodeStrategy(), true, historyStore, changeIndex, progress);
-    setWorldBlockNumber(41L); // getCurrentBlockNumber returns WORLD_BLOCK_NUMBER_KEY + 1 = 42
+    setArchiveProofBlockNumber(42L);
 
     final var tx = storage.startTransaction();
     strat.advanceIndexProgress(tx, storage); // renamed method
@@ -504,7 +506,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
             progress);
 
     final long targetBlock = 100L;
-    setWorldBlockNumber(targetBlock - 1);
+    setArchiveProofBlockNumber(targetBlock);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION_DEEP, NODE_HASH, SHORT_NODE_V1);
     strategy.advanceIndexProgress(tx, storage);

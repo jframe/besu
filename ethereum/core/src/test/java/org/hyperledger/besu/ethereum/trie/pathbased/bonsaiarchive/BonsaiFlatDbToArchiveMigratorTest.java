@@ -555,13 +555,13 @@ public class BonsaiFlatDbToArchiveMigratorTest {
    * that {@link TrieNodeHistoryReader#nodeAt} returns the root trie node whose keccak256 matches
    * block 1's {@code stateRoot}.
    *
-   * <p>interval=2 triggers a checkpoint at block 1 ({@code (1+1) % 2 == 0}). During {@code
-   * persist(header1)}, {@code putFlatAccountTrieNode} is called for each trie node including the
+   * <p>In the per-block-persist design, every block is persisted in sequence. Block 0 (empty trie)
+   * is persisted first, committing {@code WORLD_BLOCK_NUMBER_KEY=0} to the in-memory layer. When
+   * block 1 is persisted, {@code putFlatAccountTrieNode} is called for each trie node including the
    * root (location = empty bytes). The root node location has size ≤ {@code FULL_ABOVE_DEPTH=2}, so
-   * it is always stored as a FULL codec entry. The strategy reads {@code WORLD_BLOCK_NUMBER_KEY}
-   * before it is written in the same transaction, so the root node is indexed at block 0 (the
-   * "off-by-one" in the write path). {@code nodeAt(Bytes.EMPTY, 1)} still resolves to this entry
-   * because {@code latestChangeBlock(key, 1)} finds block 0 ≤ 1.
+   * it is always stored as a FULL codec entry. The strategy reads {@code WORLD_BLOCK_NUMBER_KEY=0}
+   * from the committed layer (before the transaction commits) and adds 1, indexing the root node at
+   * block 1. {@code nodeAt(Bytes.EMPTY, 1)} resolves directly to this entry.
    */
   @Test
   public void trieMigratorWithIndexEnabled_populatesDiffIndexAtCheckpoint() throws Exception {
@@ -587,15 +587,16 @@ public class BonsaiFlatDbToArchiveMigratorTest {
         createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-    // Due to the WORLD_BLOCK_NUMBER_KEY write-order in persist(), the root node is indexed
-    // at block 0. Querying at target block 1 resolves to the same entry (latestChangeBlock ≤ 1).
+    // In the per-block-persist design every block is persisted, so WORLD_BLOCK_NUMBER_KEY=0 is in
+    // the in-memory layer when block 1's trie nodes are written. getCurrentBlockNumber() reads the
+    // committed layer value (0) and adds 1, indexing block 1's root node at block 1.
 
-    // Structural assertion 1: the raw history entry at block 0 must be present.
+    // Structural assertion: the raw history entry at block 1 must be present.
     // This verifies that MigrationTransaction is actually routing TRIE_NODE_HISTORY_ARCHIVE
     // writes to realTx (persistent storage) rather than silently dropping them.
-    assertThat(historyStore.get(Bytes.EMPTY, 0L))
+    assertThat(historyStore.get(Bytes.EMPTY, 1L))
         .withFailMessage(
-            "History store should contain a diff entry for root key at block 0 after migration")
+            "History store should contain a diff entry for root key at block 1 after migration")
         .isPresent();
 
     // Semantic assertion: the history reader reconstructs the node and its keccak matches
@@ -619,19 +620,20 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   // --- Task 5.2: indexStartBlock / lastIndexedBlock / covers tests ---
 
   /**
-   * Task 5.2 (core): after migrating block 1 with a trie checkpoint at block 1, the migrator must
-   * have advanced {@code migrationIndexProgress} such that:
+   * Task 5.2 (core): after migrating block 1, the migrator must have advanced {@code
+   * migrationIndexProgress} such that:
    *
    * <ul>
    *   <li>{@code lastIndexedBlock() == 1}
    *   <li>{@code indexStartBlock() == 0} (range 0 starts at block 0)
-   *   <li>{@code covers(1)} is false — the range is not yet complete (only 2 of rangeSize=2 blocks
-   *       processed, but block 1 is the *last* block of the range when rangeSize=2, so covers(1) is
-   *       true for rangeSize=2)
+   *   <li>{@code covers(0)} and {@code covers(1)} are true; {@code covers(2)} is false
    * </ul>
    *
-   * <p>Uses {@code rangeSize=2} so a single checkpoint (block 1, interval=2) coincides with the end
-   * of range 0, making {@code covers()} return {@code true} after migration.
+   * <p>In the per-block-persist design both blocks 0 and 1 are persisted. {@code
+   * flushIndexIfEnabled()} advances progress to each block during its {@code persist()} call.
+   * {@code indexStartBlock} is computed using {@code ArchiveNodeKey.RANGE_SIZE} (1 000 000), so
+   * both blocks fall in range 0 and {@code covers()} uses the window [{@code indexStartBlock=0},
+   * {@code lastIndexedBlock=1}].
    */
   @Test
   public void trieMigratorWithIndexEnabled_advancesIndexProgressAtCheckpoint() throws Exception {
@@ -647,10 +649,8 @@ public class BonsaiFlatDbToArchiveMigratorTest {
 
     final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
     final TrieNodeChangeIndex changeIndex = new TrieNodeChangeIndex(storage, 2L);
-    // rangeSize=2 so block 1 is the last block of range 0 ((1+1) % 2 == 0 → complete).
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(2L);
 
-    // interval=2 fires a checkpoint at block 1: (1+1) % 2 == 0.
     final BonsaiFlatDbToArchiveMigrator migrator =
         createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
@@ -680,9 +680,9 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   /**
-   * Task 5.2 (partial range): when block K is a checkpoint block but NOT the last block in its
-   * range, {@code lastIndexedBlock} advances and {@code covers(K)} is true (window-check semantics:
-   * any block in [indexStartBlock, lastIndexedBlock] is serveable, regardless of range boundaries).
+   * Task 5.2 (partial range): after migrating block 1, when block 1 is NOT the last block of its
+   * range (rangeSize=4: blocks 0–3), {@code lastIndexedBlock} is still 1 and {@code covers(1)} is
+   * true (window-check semantics: any block in [indexStartBlock, lastIndexedBlock] is serveable).
    */
   @Test
   public void trieMigratorWithIndexEnabled_indexProgressPartialRange() throws Exception {
@@ -697,17 +697,15 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
 
     final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
-    // rangeSize=4: range 0 covers blocks 0-3. Block 1 is NOT the last block of range 0.
     final TrieNodeChangeIndex changeIndex = new TrieNodeChangeIndex(storage, 4L);
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(4L);
 
-    // interval=2 fires a checkpoint at block 1. Block 1 is NOT the end of range 0 (rangeSize=4).
     final BonsaiFlatDbToArchiveMigrator migrator =
         createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
     assertThat(progress.lastIndexedBlock())
-        .as("lastIndexedBlock should advance to checkpoint block 1")
+        .as("lastIndexedBlock should advance to block 1")
         .isEqualTo(1L);
 
     assertThat(progress.indexStartBlock())

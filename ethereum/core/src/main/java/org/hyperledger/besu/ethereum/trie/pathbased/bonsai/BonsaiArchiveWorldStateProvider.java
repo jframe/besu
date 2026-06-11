@@ -129,20 +129,14 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     this.trieNodeIndexProgress =
         TrieNodeIndexProgress.load(archiveStorage, ArchiveNodeKey.RANGE_SIZE);
 
-    // When the trie-node index is enabled, replace the live storage's plain BonsaiTrieNodeStrategy
-    // with a BonsaiArchiveTrieNodeStrategy that writes diff-codec history entries and advances the
-    // shared trieNodeIndexProgress on every block commit. Without this, flushIndexIfEnabled() is
-    // always a no-op (wrong instanceof type) and lastIndexed stays at -1 indefinitely.
-    if (stateProofsEnabled) {
-      worldStateKeyValueStorage.setTrieNodeStrategy(
-          new BonsaiArchiveTrieNodeStrategy(
-              null,
-              new BonsaiTrieNodeStrategy(),
-              true,
-              trieNodeHistoryStore,
-              trieNodeChangeIndex,
-              trieNodeIndexProgress));
-    }
+    // The trie-node index is written exclusively by BonsaiFlatDbToArchiveMigrator (bulk migration
+    // and ongoing catch-up via migrateTrieBlock). The live block-import path must NOT write index
+    // entries: during bulk migration it would append high offsets (e.g. block 6760) before the
+    // migrator reaches the corresponding low offsets (e.g. block 0 for the same naturalKey),
+    // violating RangeRelativeOffsetList's non-decreasing monotonicity invariant.
+    //
+    // The live worldStateKeyValueStorage therefore retains its default BonsaiTrieNodeStrategy (a
+    // plain pass-through to TRIE_BRANCH_STORAGE that does not touch the index CFs).
   }
 
   @Override
