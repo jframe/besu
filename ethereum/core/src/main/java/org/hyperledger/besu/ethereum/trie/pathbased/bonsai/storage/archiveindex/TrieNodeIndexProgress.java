@@ -152,6 +152,16 @@ public class TrieNodeIndexProgress {
     }
   }
 
+  /**
+   * Resets this progress record to the uninitialised state ({@code lastIndexedBlock = UNSET},
+   * {@code indexStartBlock = MAX}). Used when stale index data is detected and cleared on startup
+   * so that coverage queries return {@code false} until the index is rebuilt.
+   */
+  public void reset() {
+    lastIndexedBlock = UNSET_LAST_INDEXED;
+    indexStartBlock = UNSET_INDEX_START;
+  }
+
   // ---------------------------------------------------------------------------
   // indexStartBlock — monotonic DOWN
   // ---------------------------------------------------------------------------

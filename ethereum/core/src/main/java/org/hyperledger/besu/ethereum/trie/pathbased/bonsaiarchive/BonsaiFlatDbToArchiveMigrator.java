@@ -567,6 +567,31 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private void recoverTrieState() {
     final long progress = getMigrationProgress().orElse(-1L);
     if (progress < 0) {
+      if (migrationIndexProgress != null
+          && migrationIndexProgress.lastIndexedBlock()
+              != TrieNodeIndexProgress.UNSET_LAST_INDEXED) {
+        // Stale trie-node index data was found with no corresponding flat-DB migration progress.
+        // This occurs when a previous build wrote live-import blocks directly into the archive
+        // index CFs (before that behaviour was removed). The index data is incompatible with the
+        // current migrator's sequential assumption (offsets must be non-decreasing). Clear the
+        // stale CFs so the migration can start clean.
+        final long staleBlock = migrationIndexProgress.lastIndexedBlock();
+        LOG.warn(
+            "Stale trie-node index data detected (lastIndexedBlock={}, MIGRATION_PROGRESS_KEY absent). "
+                + "Clearing archive index column families so migration can start from block 0.",
+            staleBlock);
+        final SegmentedKeyValueStorage archiveStorage =
+            worldStateStorage.getComposedWorldStateStorage();
+        archiveStorage.clear(TRIE_NODE_INDEX_ARCHIVE);
+        archiveStorage.clear(TRIE_NODE_HISTORY_ARCHIVE);
+        archiveStorage.clear(TRIE_NODE_SUBBLOCK_ARCHIVE);
+        final SegmentedKeyValueStorageTransaction tx =
+            archiveStorage.startLowPriorityTransaction();
+        migrationIndexProgress.reset();
+        migrationIndexProgress.save(tx);
+        tx.commit();
+        LOG.info("Archive index column families cleared. Migration will restart from block 0.");
+      }
       // Fresh start: leave the migration world state at the default empty-trie root.
       return;
     }
