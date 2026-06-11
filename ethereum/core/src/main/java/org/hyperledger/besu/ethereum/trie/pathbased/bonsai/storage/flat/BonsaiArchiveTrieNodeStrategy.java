@@ -14,11 +14,8 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
-import static org.hyperledger.besu.crypto.Hash.keccak256;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_CHECKPOINT_INTERVAL_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
@@ -28,7 +25,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeDiffCodec;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
@@ -40,15 +36,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Archive trie node strategy. Reads from {@code TRIE_BRANCH_STORAGE_ARCHIVE} using suffix-based
- * nearest-before lookup; writes to both {@code TRIE_BRANCH_STORAGE} (via delegate) and {@code
- * TRIE_BRANCH_STORAGE_ARCHIVE}.
+ * Archive trie node strategy for the Design-5 differential index approach. Reads delegate to the
+ * base strategy (live trie reads); writes capture diff-codec entries in {@code
+ * TRIE_NODE_HISTORY_ARCHIVE} and change-block records in {@code TRIE_NODE_INDEX_ARCHIVE}.
  *
- * <p>When the trie-node differential index is enabled ({@link #trieNodeIndexEnabled}), each write
- * also captures a diff-codec entry in {@code TRIE_NODE_HISTORY_ARCHIVE} and appends a change-block
- * record to the per-node index in {@code TRIE_NODE_INDEX_ARCHIVE}. After each block, callers must
- * invoke {@link #advanceIndexProgress(SegmentedKeyValueStorageTransaction,
- * SegmentedKeyValueStorage)} to persist coverage-progress metadata.
+ * <p>After each block, callers must invoke {@link
+ * #advanceIndexProgress(SegmentedKeyValueStorageTransaction, SegmentedKeyValueStorage)} to persist
+ * coverage-progress metadata.
  */
 public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
@@ -79,9 +73,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    */
   protected final TrieNodeStrategy baseStrategy;
 
-  private final Long trieNodeCheckpointInterval;
   private final BonsaiCachedMerkleTrieLoader trieLoader;
-  private volatile boolean intervalSeeded = false;
 
   // --- Differential-index fields (flag-gated) ---
 
@@ -103,57 +95,41 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    */
   private volatile long cachedCurrentBlockNumber = Long.MIN_VALUE;
 
-  public BonsaiArchiveTrieNodeStrategy(final Long trieNodeCheckpointInterval) {
-    this(trieNodeCheckpointInterval, null);
+  public BonsaiArchiveTrieNodeStrategy() {
+    this(null, new BonsaiTrieNodeStrategy());
   }
 
-  public BonsaiArchiveTrieNodeStrategy(
-      final Long trieNodeCheckpointInterval, final BonsaiCachedMerkleTrieLoader trieLoader) {
-    this(trieNodeCheckpointInterval, trieLoader, new BonsaiTrieNodeStrategy());
+  public BonsaiArchiveTrieNodeStrategy(final BonsaiCachedMerkleTrieLoader trieLoader) {
+    this(trieLoader, new BonsaiTrieNodeStrategy());
   }
 
   protected BonsaiArchiveTrieNodeStrategy(
-      final Long trieNodeCheckpointInterval,
-      final BonsaiCachedMerkleTrieLoader trieLoader,
-      final TrieNodeStrategy baseStrategy) {
-    this(trieNodeCheckpointInterval, trieLoader, baseStrategy, false, null, null);
+      final BonsaiCachedMerkleTrieLoader trieLoader, final TrieNodeStrategy baseStrategy) {
+    this(trieLoader, baseStrategy, false, null, null);
   }
 
   /**
    * Full constructor used when the trie-node differential index is enabled.
    *
-   * @param trieNodeCheckpointInterval suffix-archive checkpoint interval (null = proofs disabled)
    * @param trieLoader optional trie loader for cache warming
    * @param baseStrategy underlying strategy for live-trie reads/writes
    * @param trieNodeIndexEnabled whether to capture diffs to the differential index
    * @param historyStore the diff-entry store; must not be null if {@code trieNodeIndexEnabled}
    * @param changeIndex the change-block index; must not be null if {@code trieNodeIndexEnabled}
-   * @throws IllegalArgumentException if {@code trieNodeIndexEnabled} is {@code true} but {@code
-   *     trieNodeCheckpointInterval} is {@code null} — the index writes are triggered inside the
-   *     suffix-archive write path and cannot function without a valid interval
    */
   public BonsaiArchiveTrieNodeStrategy(
-      final Long trieNodeCheckpointInterval,
       final BonsaiCachedMerkleTrieLoader trieLoader,
       final TrieNodeStrategy baseStrategy,
       final boolean trieNodeIndexEnabled,
       final TrieNodeHistoryStore historyStore,
       final TrieNodeChangeIndex changeIndex) {
-    this(
-        trieNodeCheckpointInterval,
-        trieLoader,
-        baseStrategy,
-        trieNodeIndexEnabled,
-        historyStore,
-        changeIndex,
-        null);
+    this(trieLoader, baseStrategy, trieNodeIndexEnabled, historyStore, changeIndex, null);
   }
 
   /**
    * Full constructor used when the trie-node differential index is enabled and coverage progress
    * tracking is required.
    *
-   * @param trieNodeCheckpointInterval suffix-archive checkpoint interval (null = proofs disabled)
    * @param trieLoader optional trie loader for cache warming
    * @param baseStrategy underlying strategy for live-trie reads/writes
    * @param trieNodeIndexEnabled whether to capture diffs to the differential index
@@ -161,22 +137,14 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    * @param changeIndex the change-block index; must not be null if {@code trieNodeIndexEnabled}
    * @param progress the coverage-progress tracker to advance on each block flush; may be {@code
    *     null} if coverage tracking is not needed (e.g. tests or migrator without progress wiring)
-   * @throws IllegalArgumentException if {@code trieNodeIndexEnabled} is {@code true} but {@code
-   *     trieNodeCheckpointInterval} is {@code null}
    */
   public BonsaiArchiveTrieNodeStrategy(
-      final Long trieNodeCheckpointInterval,
       final BonsaiCachedMerkleTrieLoader trieLoader,
       final TrieNodeStrategy baseStrategy,
       final boolean trieNodeIndexEnabled,
       final TrieNodeHistoryStore historyStore,
       final TrieNodeChangeIndex changeIndex,
       final TrieNodeIndexProgress progress) {
-    if (trieNodeIndexEnabled && trieNodeCheckpointInterval == null) {
-      throw new IllegalArgumentException(
-          "trieNodeCheckpointInterval must not be null when trieNodeIndexEnabled=true");
-    }
-    this.trieNodeCheckpointInterval = trieNodeCheckpointInterval;
     this.trieLoader = trieLoader;
     this.baseStrategy = baseStrategy;
     this.trieNodeIndexEnabled = trieNodeIndexEnabled;
@@ -188,22 +156,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   @Override
   public Optional<Bytes> getFlatAccountTrieNode(
       final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
-    // When the differential index is enabled, historical proof reads go through
-    // ArchiveProofNodeLoader — not this strategy. Live reads only need the current value.
-    if (trieNodeIndexEnabled) {
-      return baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage);
-    }
-    Bytes keyNearest =
-        BonsaiArchiveKeyUtil.calculateArchiveKeyWithMaxSuffix(
-            BonsaiArchiveKeyUtil.getStateArchiveContextForRead(storage), location.toArrayUnsafe());
-    return storage
-        .getNearestBeforeMatchLength(TRIE_BRANCH_STORAGE_ARCHIVE, keyNearest)
-        .filter(
-            found -> found.key().size() == location.size() + BonsaiArchiveKeyUtil.KEY_SUFFIX_LENGTH)
-        .filter(found -> location.commonPrefixLength(found.key()) >= location.size())
-        .flatMap(SegmentedKeyValueStorage.NearestKeyValue::wrapBytes)
-        .filter(bytes -> keccak256(bytes).equals(nodeHash))
-        .or(() -> baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage));
+    return baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage);
   }
 
   @Override
@@ -212,51 +165,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final SegmentedKeyValueStorage storage) {
-    // When the differential index is enabled, historical proof reads go through
-    // ArchiveProofNodeLoader — not this strategy. Live reads only need the current value.
-    if (trieNodeIndexEnabled) {
-      return baseStrategy.getFlatStorageTrieNode(accountHash, location, nodeHash, storage);
-    }
-    Bytes accountHashLocation = Bytes.concatenate(accountHash.getBytes(), location);
-    Bytes keyNearest =
-        BonsaiArchiveKeyUtil.calculateArchiveKeyWithMaxSuffix(
-            BonsaiArchiveKeyUtil.getStateArchiveContextForRead(storage),
-            accountHashLocation.toArrayUnsafe());
-    return storage
-        .getNearestBeforeMatchLength(TRIE_BRANCH_STORAGE_ARCHIVE, keyNearest)
-        .filter(
-            found ->
-                found.key().size()
-                    == accountHash.getBytes().size()
-                        + location.size()
-                        + BonsaiArchiveKeyUtil.KEY_SUFFIX_LENGTH)
-        .filter(
-            found ->
-                accountHashLocation.commonPrefixLength(found.key()) >= accountHashLocation.size())
-        .flatMap(SegmentedKeyValueStorage.NearestKeyValue::wrapBytes)
-        .filter(bytes -> keccak256(bytes).equals(nodeHash))
-        .or(() -> baseStrategy.getFlatStorageTrieNode(accountHash, location, nodeHash, storage));
-  }
-
-  /**
-   * Controls whether this strategy writes suffixed nodes to {@code TRIE_BRANCH_STORAGE_ARCHIVE}.
-   *
-   * <p>When the trie-node differential index is enabled, the suffixed CF is superseded for proofs:
-   * {@link
-   * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveProofNodeLoader}
-   * reconstructs historical state directly from the index without a {@code seekForPrev} scan. The
-   * live block-import path therefore skips suffixed-CF writes to avoid redundant I/O and space.
-   *
-   * <p>The archive migrator (via {@link BonsaiArchiveMigrationTrieNodeStrategy}) relies on the same
-   * logic: when the index is disabled it must write suffixed nodes for its own checkpoint reads;
-   * when the index is enabled the read path bypasses {@code TRIE_BRANCH_STORAGE_ARCHIVE} entirely,
-   * so the writes are skipped.
-   *
-   * @return {@code true} if suffixed nodes should be written to {@code TRIE_BRANCH_STORAGE_ARCHIVE}
-   */
-  protected boolean shouldWriteSuffixedCf() {
-    // Live block-import: skip when the index supersedes the suffixed CF for proofs.
-    return !trieNodeIndexEnabled;
+    return baseStrategy.getFlatStorageTrieNode(accountHash, location, nodeHash, storage);
   }
 
   @Override
@@ -278,28 +187,15 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
     baseStrategy.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
 
-    if (trieNodeCheckpointInterval != null) {
-      if (shouldWriteSuffixedCf()) {
-        ensureIntervalSeeded(storage);
-        final BonsaiContext ctx = getStateTrieArchiveContextForWrite(storage);
-        byte[] keySuffixed =
-            BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix(ctx, location.toArrayUnsafe());
-        transaction.put(TRIE_BRANCH_STORAGE_ARCHIVE, keySuffixed, node.toArrayUnsafe());
-        LOG.trace(
-            "Archive account trie node written: location={} suffix={}",
-            location,
-            ctx.getBlockNumber().orElse(-1L));
-      }
-      if (trieLoader != null) {
-        trieLoader.putAccountNode(nodeHash, node);
-      }
+    if (trieLoader != null) {
+      trieLoader.putAccountNode(nodeHash, node);
+    }
 
-      if (trieNodeIndexEnabled) {
-        final long block = getCurrentBlockNumber(storage);
-        final Bytes naturalKey = ArchiveNodeKey.account(location);
-        captureTrieNodeDiff(
-            transaction, naturalKey, location, block, priorNode.orElse(null), node, storage);
-      }
+    if (trieNodeIndexEnabled) {
+      final long block = getCurrentBlockNumber(storage);
+      final Bytes naturalKey = ArchiveNodeKey.account(location);
+      captureTrieNodeDiff(
+          transaction, naturalKey, location, block, priorNode.orElse(null), node, storage);
     }
   }
 
@@ -326,30 +222,15 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     baseStrategy.putFlatStorageTrieNode(
         storage, transaction, accountHash, location, nodeHash, node);
 
-    if (trieNodeCheckpointInterval != null) {
-      if (shouldWriteSuffixedCf()) {
-        ensureIntervalSeeded(storage);
-        final BonsaiContext ctx = getStateTrieArchiveContextForWrite(storage);
-        byte[] keySuffixed =
-            BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix(
-                ctx, accountHashLocation.toArrayUnsafe());
-        transaction.put(TRIE_BRANCH_STORAGE_ARCHIVE, keySuffixed, node.toArrayUnsafe());
-        LOG.trace(
-            "Archive storage trie node written: account={} location={} suffix={}",
-            accountHash,
-            location,
-            ctx.getBlockNumber().orElse(-1L));
-      }
-      if (trieLoader != null) {
-        trieLoader.putStorageNode(nodeHash, node);
-      }
+    if (trieLoader != null) {
+      trieLoader.putStorageNode(nodeHash, node);
+    }
 
-      if (trieNodeIndexEnabled) {
-        final long block = getCurrentBlockNumber(storage);
-        final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
-        captureTrieNodeDiff(
-            transaction, naturalKey, location, block, priorNode.orElse(null), node, storage);
-      }
+    if (trieNodeIndexEnabled) {
+      final long block = getCurrentBlockNumber(storage);
+      final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
+      captureTrieNodeDiff(
+          transaction, naturalKey, location, block, priorNode.orElse(null), node, storage);
     }
   }
 
@@ -359,54 +240,6 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final Bytes location) {
     baseStrategy.removeFlatAccountStateTrieNode(storage, transaction, location);
-  }
-
-  private BonsaiContext getStateTrieArchiveContextForWrite(final SegmentedKeyValueStorage storage) {
-    Optional<byte[]> proofBlockNumber =
-        storage.get(TRIE_BRANCH_STORAGE, ARCHIVE_PROOF_BLOCK_NUMBER_KEY);
-    if (proofBlockNumber.isPresent()) {
-      return new BonsaiContext(Bytes.wrap(proofBlockNumber.get()).toLong());
-    }
-    return storage
-        .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
-        .map(
-            bytes -> {
-              long blockNumber = Bytes.wrap(bytes).toLong();
-              long windowStart =
-                  ((blockNumber + 1) / trieNodeCheckpointInterval) * trieNodeCheckpointInterval;
-              return new BonsaiContext(windowStart);
-            })
-        .orElse(new BonsaiContext(0L));
-  }
-
-  private void ensureIntervalSeeded(final SegmentedKeyValueStorage storage) {
-    if (intervalSeeded) return;
-    synchronized (this) {
-      if (intervalSeeded) return;
-      storage
-          .get(TRIE_BRANCH_STORAGE_ARCHIVE, ARCHIVE_PROOF_CHECKPOINT_INTERVAL_KEY)
-          .ifPresentOrElse(
-              persistedBytes -> {
-                long persisted = Bytes.wrap(persistedBytes).toLong();
-                if (persisted != trieNodeCheckpointInterval) {
-                  throw new RuntimeException(
-                      "Checkpoint interval mismatch (DB="
-                          + persisted
-                          + ", config="
-                          + trieNodeCheckpointInterval
-                          + ")");
-                }
-              },
-              () -> {
-                SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-                tx.put(
-                    TRIE_BRANCH_STORAGE_ARCHIVE,
-                    ARCHIVE_PROOF_CHECKPOINT_INTERVAL_KEY,
-                    Bytes.ofUnsignedLong(trieNodeCheckpointInterval).toArrayUnsafe());
-                tx.commit();
-              });
-      intervalSeeded = true;
-    }
   }
 
   /**

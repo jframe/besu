@@ -204,15 +204,11 @@ public class BonsaiArchiveWorldStateProviderTest {
   // --- Proofs path tests ---
 
   @Test
-  void proofsEnabled_targetIsCheckpointBlock_returnsProofWorldState() {
-    // With interval=100, targetNumber=99 → nearestCheckpoint = ((99+100)/100)*100 - 1 = 99
-    // so target IS the checkpoint. No trie-log rollback needed; returns immediately.
-    final long interval = 100L;
-    final BonsaiArchiveWorldStateProvider proofsProvider =
-        createProviderWithProofs(true, true, interval);
+  void proofsEnabled_targetIsHistoricalBlock_returnsProofWorldState() {
+    final BonsaiArchiveWorldStateProvider proofsProvider = createProviderWithProofs(true, true);
     proofsProvider.setArchiveMigrationProgressSupplier(() -> CHAIN_HEAD);
 
-    final long targetNumber = interval - 1; // 99
+    final long targetNumber = 99L;
     final BlockHeader targetHeader =
         new BlockHeaderTestFixture().number(targetNumber).buildHeader();
     when(blockchain.getBlockHeader(targetHeader.getHash())).thenReturn(Optional.of(targetHeader));
@@ -232,8 +228,7 @@ public class BonsaiArchiveWorldStateProviderTest {
   void proofsEnabled_headUpdateQuery_bypassesProofPath() {
     // shouldWorldStateUpdateHead=true means isHistoricalQuery returns false; falls through to
     // super.getWorldState() which returns the cached head state normally.
-    final BonsaiArchiveWorldStateProvider proofsProvider =
-        createProviderWithProofs(true, true, 100L);
+    final BonsaiArchiveWorldStateProvider proofsProvider = createProviderWithProofs(true, true);
 
     final var result =
         proofsProvider.getWorldState(
@@ -250,8 +245,7 @@ public class BonsaiArchiveWorldStateProviderTest {
     // Block 50 is far behind the head but isHistoricalQuery requires archiveMigrationProgress
     // to cover the target block. With default progress=-1 the gate fails and super is called,
     // which cannot serve this block → empty result.
-    final BonsaiArchiveWorldStateProvider proofsProvider =
-        createProviderWithProofs(true, true, 100L);
+    final BonsaiArchiveWorldStateProvider proofsProvider = createProviderWithProofs(true, true);
 
     final BlockHeader unknownHeader = new BlockHeaderTestFixture().number(50L).buildHeader();
 
@@ -266,8 +260,7 @@ public class BonsaiArchiveWorldStateProviderTest {
   void proofsDisabled_historicalBlock_usesArchiveFlatDbPath() {
     // When stateProofsEnabled=false the proofs branch is skipped; historical queries
     // use the archive flat-db path as before.
-    final BonsaiArchiveWorldStateProvider archiveProvider =
-        createProviderWithProofs(true, false, 100L);
+    final BonsaiArchiveWorldStateProvider archiveProvider = createProviderWithProofs(true, false);
 
     final BlockHeader historicalHeader =
         new BlockHeaderTestFixture().number(CHAIN_HEAD - MAX_LAYERS - 1).buildHeader();
@@ -446,26 +439,21 @@ public class BonsaiArchiveWorldStateProviderTest {
   }
 
   private BonsaiArchiveWorldStateProvider createProvider(final boolean archiveModeReady) {
-    return createProviderWithProofs(archiveModeReady, false, 100L);
+    return createProviderInternal(archiveModeReady, false);
   }
 
   private BonsaiArchiveWorldStateProvider createProviderWithProofs(
-      final boolean archiveModeReady,
-      final boolean stateProofsEnabled,
-      final long checkpointInterval) {
-    return createProviderInternal(archiveModeReady, stateProofsEnabled, checkpointInterval, false);
+      final boolean archiveModeReady, final boolean stateProofsEnabled) {
+    return createProviderInternal(archiveModeReady, stateProofsEnabled);
   }
 
   private BonsaiArchiveWorldStateProvider createProviderWithTrieNodeIndex(
       final boolean archiveModeReady, final boolean trieNodeIndexEnabled) {
-    return createProviderInternal(archiveModeReady, false, 100L, trieNodeIndexEnabled);
+    return createProviderInternal(archiveModeReady, trieNodeIndexEnabled);
   }
 
   private BonsaiArchiveWorldStateProvider createProviderInternal(
-      final boolean archiveModeReady,
-      final boolean stateProofsEnabled,
-      final long checkpointInterval,
-      final boolean trieNodeIndexEnabled) {
+      final boolean archiveModeReady, final boolean stateProofsEnabled) {
     final var config =
         ImmutableDataStorageConfiguration.builder()
             .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
@@ -475,8 +463,6 @@ public class BonsaiArchiveWorldStateProviderTest {
                     .unstable(
                         ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                             .stateProofsEnabled(stateProofsEnabled)
-                            .archiveTrieNodeCheckpointInterval(checkpointInterval)
-                            .trieNodeIndexEnabled(trieNodeIndexEnabled)
                             .build())
                     .build())
             .build();

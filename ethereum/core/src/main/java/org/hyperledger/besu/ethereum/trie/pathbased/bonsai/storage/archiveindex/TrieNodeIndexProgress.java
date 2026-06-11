@@ -59,16 +59,21 @@ public class TrieNodeIndexProgress {
    * The highest block number that has been forwarded-indexed. Starts at {@link #UNSET_LAST_INDEXED}
    * (-1). Monotonically non-decreasing: {@link #setLastIndexedBlock(long)} is a no-op when the
    * supplied value is less than the current value.
+   *
+   * <p>Declared {@code volatile} so the migration thread's writes are immediately visible to proof
+   * threads calling {@link #covers(long)} without additional synchronisation.
    */
-  private long lastIndexedBlock;
+  private volatile long lastIndexedBlock;
 
   /**
    * The lowest block number from which backfill indexing has started. Starts at {@link
    * #UNSET_INDEX_START} (Long.MAX_VALUE). Monotonically non-increasing: {@link
    * #setIndexStartBlock(long)} is a no-op when the supplied value is greater than the current
    * value.
+   *
+   * <p>Declared {@code volatile} for the same reason as {@link #lastIndexedBlock}.
    */
-  private long indexStartBlock;
+  private volatile long indexStartBlock;
 
   /**
    * Constructs a new, empty progress record.

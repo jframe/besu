@@ -51,10 +51,7 @@ public class BonsaiArchiveProofsIntegrationTest {
   private static final Address ADDRESS =
       Address.fromHexString("0x1111111111111111111111111111111111111111");
   private static final Wei BALANCE = Wei.of(42L);
-  // interval=100 → nearestCheckpoint for block 99 = ((99+100)/100)*100 - 1 = 99
-  // so block 99 is its own checkpoint (no trie-log rollback needed)
-  private static final long INTERVAL = 100L;
-  private static final long TARGET_BLOCK_NUMBER = INTERVAL - 1; // 99
+  private static final long TARGET_BLOCK_NUMBER = 99L;
 
   @Test
   void stateProofsEnabled_getAccountProof_returnsValidProof() {
@@ -67,7 +64,6 @@ public class BonsaiArchiveProofsIntegrationTest {
                     .unstable(
                         ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                             .stateProofsEnabled(true)
-                            .archiveTrieNodeCheckpointInterval(INTERVAL)
                             .build())
                     .build())
             .build();
@@ -93,8 +89,7 @@ public class BonsaiArchiveProofsIntegrationTest {
             new CodeCache(),
             new NoOpMetricsSystem());
 
-    // Seed state: create one account and persist — writes trie nodes to
-    // TRIE_BRANCH_STORAGE_ARCHIVE at suffix=0 (genesis window, interval=100).
+    // Seed state: create one account and persist.
     // Use persist(null) to skip state-root header verification.
     final BonsaiWorldState seedState =
         new BonsaiWorldState(
@@ -109,16 +104,12 @@ public class BonsaiArchiveProofsIntegrationTest {
     seedState.persist(null);
     final Hash actualStateRoot = seedState.rootHash();
 
-    // Block 99: nearestCheckpoint = ((99+100)/100)*100 - 1 = 99, so block 99 IS its own
-    // checkpoint — resetWorldStateToCheckpoint returns immediately, no trie-log rollback.
     final BlockHeader targetHeader =
         new BlockHeaderTestFixture()
             .number(TARGET_BLOCK_NUMBER)
             .stateRoot(actualStateRoot)
             .buildHeader();
 
-    // getCheckpointStateStartBlock: getBlockHeader(targetHash) → targetHeader (number=99),
-    // nearestCheckpoint=99, getBlockHeaderSafe(99) → targetHeader (returned directly).
     when(blockchain.getBlockHeader(targetHeader.getHash())).thenReturn(Optional.of(targetHeader));
     when(blockchain.getBlockHeaderSafe(TARGET_BLOCK_NUMBER)).thenReturn(Optional.of(targetHeader));
 
@@ -130,12 +121,6 @@ public class BonsaiArchiveProofsIntegrationTest {
         targetHeader.getHash().getBytes().toArrayUnsafe());
     tx.commit();
 
-    // getAccountProof enters the proofs branch (stateProofsEnabled=true,
-    // !shouldWorldStateUpdateHead=true), creates a proofWorldState backed by
-    // archiveReadStorage (archiveReadsEnabled=true), resets to the checkpoint (block 99
-    // = target → no rollback), then traverses the archived MPT from actualStateRoot.
-    // Trie nodes written to TRIE_BRANCH_STORAGE_ARCHIVE at suffix=0 during persist(null)
-    // are found via nearest-before lookup at block-number suffix=99.
     final Optional<WorldStateProof> proof =
         provider.getAccountProof(targetHeader, ADDRESS, List.of(), Function.identity());
 

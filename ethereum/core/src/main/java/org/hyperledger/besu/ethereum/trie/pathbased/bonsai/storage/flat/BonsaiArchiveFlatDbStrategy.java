@@ -17,7 +17,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
@@ -42,28 +41,13 @@ import org.bouncycastle.util.Arrays;
 
 public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
 
-  private final Long trieNodeCheckpointInterval;
-
   public BonsaiArchiveFlatDbStrategy(
       final MetricsSystem metricsSystem, final CodeStorageStrategy codeStorageStrategy) {
     super(metricsSystem, codeStorageStrategy);
-    this.trieNodeCheckpointInterval = null;
-  }
-
-  public BonsaiArchiveFlatDbStrategy(
-      final MetricsSystem metricsSystem,
-      final CodeStorageStrategy codeStorageStrategy,
-      final long trieNodeCheckpointInterval) {
-    super(metricsSystem, codeStorageStrategy);
-    this.trieNodeCheckpointInterval = trieNodeCheckpointInterval;
   }
 
   public static final byte[] DELETED_ACCOUNT_VALUE = new byte[0];
   public static final byte[] DELETED_STORAGE_VALUE = new byte[0];
-
-  public Long getTrieNodeCheckpointInterval() {
-    return trieNodeCheckpointInterval;
-  }
 
   private Optional<BonsaiContext> getStateArchiveContextForWrite(
       final SegmentedKeyValueStorage storage) {
@@ -448,8 +432,5 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   private void clearArchiveSegments(final SegmentedKeyValueStorage storage) {
     storage.clear(ACCOUNT_INFO_STATE_ARCHIVE);
     storage.clear(ACCOUNT_STORAGE_ARCHIVE);
-    if (trieNodeCheckpointInterval != null) {
-      storage.clear(TRIE_BRANCH_STORAGE_ARCHIVE);
-    }
   }
 }

@@ -37,7 +37,6 @@ public interface PathBasedExtraStorageConfiguration {
   int DEFAULT_TRIE_LOG_PRUNING_WINDOW_SIZE = 5_000;
   boolean DEFAULT_PARALLEL_TX_PROCESSING = true;
   boolean DEFAULT_PARALLEL_STATE_ROOT_COMPUTATION = true;
-  long DEFAULT_ARCHIVE_CHECKPOINT_INTERVAL = 1024L;
   boolean DEFAULT_STATE_PROOFS_ENABLED = false;
 
   @Value.Default
@@ -92,7 +91,6 @@ public interface PathBasedExtraStorageConfiguration {
     boolean DEFAULT_BONSAI_CROSS_BLOCK_CACHE_ENABLED = false;
     long DEFAULT_BONSAI_CROSS_BLOCK_CACHE_ACCOUNT_SIZE = 100_000L;
     long DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE = 500_000L;
-    boolean DEFAULT_TRIE_NODE_INDEX_ENABLED = false;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -110,11 +108,6 @@ public interface PathBasedExtraStorageConfiguration {
     }
 
     @Value.Default
-    default Long getArchiveTrieNodeCheckpointInterval() {
-      return DEFAULT_ARCHIVE_CHECKPOINT_INTERVAL;
-    }
-
-    @Value.Default
     default boolean getBonsaiCrossBlockCacheEnabled() {
       return DEFAULT_BONSAI_CROSS_BLOCK_CACHE_ENABLED;
     }
@@ -129,9 +122,8 @@ public interface PathBasedExtraStorageConfiguration {
       return DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE;
     }
 
-    @Value.Default
     default boolean getTrieNodeIndexEnabled() {
-      return DEFAULT_TRIE_NODE_INDEX_ENABLED;
+      return getStateProofsEnabled();
     }
   }
 }

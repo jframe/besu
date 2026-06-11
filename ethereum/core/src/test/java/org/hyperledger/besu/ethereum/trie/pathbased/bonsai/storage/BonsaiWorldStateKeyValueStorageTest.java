@@ -1087,8 +1087,6 @@ public class BonsaiWorldStateKeyValueStorageTest {
                     .unstable(
                         ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                             .stateProofsEnabled(true)
-                            .archiveTrieNodeCheckpointInterval(100L)
-                            .trieNodeIndexEnabled(true)
                             .build())
                     .build())
             .build();
@@ -1107,7 +1105,6 @@ public class BonsaiWorldStateKeyValueStorageTest {
 
     final BonsaiArchiveTrieNodeStrategy archiveStrategy =
         new BonsaiArchiveTrieNodeStrategy(
-            100L,
             null,
             new BonsaiTrieNodeStrategy(),
             /* trieNodeIndexEnabled= */ true,

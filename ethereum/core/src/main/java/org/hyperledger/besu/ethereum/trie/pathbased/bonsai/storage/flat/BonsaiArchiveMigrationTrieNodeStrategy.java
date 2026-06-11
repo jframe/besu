@@ -24,62 +24,42 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
  * trie at each checkpoint.
  *
  * <p>When the trie-node differential index is <b>disabled</b> ({@code historyStore} / {@code
- * changeIndex} both null), reads first check {@code TRIE_BRANCH_STORAGE_ARCHIVE} (via the parent's
- * nearest-before lookup) then fall back to {@code TRIE_BRANCH_STORAGE}; writes go to {@code
- * TRIE_BRANCH_STORAGE_ARCHIVE} so that subsequent checkpoint reads can find the prior trie state.
+ * changeIndex} both null), reads and writes go directly to {@code TRIE_BRANCH_STORAGE} — used
+ * during recovery replay to rebuild in-memory trie state without emitting index entries.
  *
  * <p>When the trie-node differential index is <b>enabled</b> (non-null {@code historyStore} /
- * {@code changeIndex}), the read path goes directly to {@code TRIE_BRANCH_STORAGE} (unchanged
- * trie nodes are identical in live and historical storage; changed nodes are accumulated
- * in-memory). Suffix writes to {@code TRIE_BRANCH_STORAGE_ARCHIVE} are skipped — the inherited
- * {@link BonsaiArchiveTrieNodeStrategy#shouldWriteSuffixedCf} returns {@code false} when the index
- * is enabled, and nobody reads those entries during or after migration.
- *
- * <p>In both cases, each {@code put} also captures a diff-codec entry and change-block index entry
- * (when the index is enabled) so that migrated blocks contribute to the historical proof index.
+ * {@code changeIndex}), each {@code put} also captures a diff-codec entry and change-block index
+ * entry so that migrated blocks contribute to the historical proof index.
  */
 public class BonsaiArchiveMigrationTrieNodeStrategy extends BonsaiArchiveTrieNodeStrategy {
 
   /**
-   * Creates a migration strategy without trie-node differential index support.
+   * Creates a migration strategy without trie-node differential index support (used for recovery
+   * replay where writes must not emit index entries).
    *
-   * @param trieNodeCheckpointInterval the archive checkpoint interval
    * @param trieLoader optional trie loader for cache warming
    */
-  public BonsaiArchiveMigrationTrieNodeStrategy(
-      final Long trieNodeCheckpointInterval, final BonsaiCachedMerkleTrieLoader trieLoader) {
-    // Base strategy falls back to TRIE_BRANCH_STORAGE so genesis/unchanged nodes are accessible
-    // before the first checkpoint persist writes them to the archive CF.
-    super(trieNodeCheckpointInterval, trieLoader, new BonsaiTrieNodeStrategy());
+  public BonsaiArchiveMigrationTrieNodeStrategy(final BonsaiCachedMerkleTrieLoader trieLoader) {
+    super(trieLoader, new BonsaiTrieNodeStrategy());
   }
 
   /**
    * Creates a migration strategy with trie-node differential index support enabled.
    *
-   * <p>Each node write during trie-replay checkpoints will also emit a diff-codec entry into {@code
+   * <p>Each node write during trie-replay will also emit a diff-codec entry into {@code
    * historyStore} and a change-block record into {@code changeIndex}, exactly as the live block
    * import path does via {@link BonsaiArchiveTrieNodeStrategy}.
    *
-   * @param trieNodeCheckpointInterval the archive checkpoint interval (must not be null)
    * @param trieLoader optional trie loader for cache warming
    * @param historyStore the diff-entry store to write history entries to
    * @param changeIndex the change-block index to record mutations in
    * @param progress the coverage-progress tracker to advance after each block; may be null
    */
   public BonsaiArchiveMigrationTrieNodeStrategy(
-      final Long trieNodeCheckpointInterval,
       final BonsaiCachedMerkleTrieLoader trieLoader,
       final TrieNodeHistoryStore historyStore,
       final TrieNodeChangeIndex changeIndex,
       final TrieNodeIndexProgress progress) {
-    super(
-        trieNodeCheckpointInterval,
-        trieLoader,
-        new BonsaiTrieNodeStrategy(),
-        true,
-        historyStore,
-        changeIndex,
-        progress);
+    super(trieLoader, new BonsaiTrieNodeStrategy(), true, historyStore, changeIndex, progress);
   }
-
 }

@@ -318,7 +318,6 @@ class FlatDbStrategyProviderTest {
                     .unstable(
                         ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                             .stateProofsEnabled(true)
-                            .archiveTrieNodeCheckpointInterval(100L)
                             .build())
                     .build())
             .build();
@@ -353,16 +352,16 @@ class FlatDbStrategyProviderTest {
   }
 
   @Test
-  void trieNodeIndexFlagDefaultsFalseAndRoundTrips() {
-    final PathBasedExtraStorageConfiguration.PathBasedUnstable defaultUnstable =
+  void trieNodeIndexDerivedFromStateProofsEnabled() {
+    final PathBasedExtraStorageConfiguration.PathBasedUnstable proofsDisabled =
         ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder().build();
-    assertThat(defaultUnstable.getTrieNodeIndexEnabled()).isFalse();
+    assertThat(proofsDisabled.getTrieNodeIndexEnabled()).isFalse();
 
-    final PathBasedExtraStorageConfiguration.PathBasedUnstable withFlagEnabled =
+    final PathBasedExtraStorageConfiguration.PathBasedUnstable proofsEnabled =
         ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
-            .trieNodeIndexEnabled(true)
+            .stateProofsEnabled(true)
             .build();
-    assertThat(withFlagEnabled.getTrieNodeIndexEnabled()).isTrue();
+    assertThat(proofsEnabled.getTrieNodeIndexEnabled()).isTrue();
   }
 
   private void updateFlatDbMode(final FlatDbMode flatDbMode) {

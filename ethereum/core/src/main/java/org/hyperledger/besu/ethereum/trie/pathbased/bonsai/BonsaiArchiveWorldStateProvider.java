@@ -14,19 +14,14 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
-
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
-import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiArchiveWorldStateLayerStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveProofNodeLoader;
@@ -39,11 +34,9 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiAr
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiArchiveWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
@@ -51,11 +44,8 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.ServiceManager;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
-import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
-import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
@@ -76,17 +66,15 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   private final CodeCache codeCache;
   private final WorldStateConfig archiveWorldStateConfig;
   private final boolean stateProofsEnabled;
-  private final long trieNodeCheckpointInterval;
   private volatile LongSupplier archiveMigrationProgressSupplier = () -> -1L;
 
   // Design 5 trie-node differential index — proof routing
-  private final boolean trieNodeIndexEnabled;
   private final TrieNodeChangeIndex trieNodeChangeIndex;
+  private final TrieNodeHistoryStore trieNodeHistoryStore;
   private final TrieNodeHistoryReader trieNodeHistoryReader;
-  // volatile so that setTrieNodeIndexProgress provides a safe immutable-reference swap.
-  // Only full replacement is safe: in-place mutation of the current instance while another thread
-  // calls covers() is a data race. For live updates, create a new TrieNodeIndexProgress and swap
-  // the reference via setTrieNodeIndexProgress — never mutate the shared instance.
+  // volatile so that the migration thread's in-place mutations to lastIndexedBlock /
+  // indexStartBlock (which are themselves volatile) are published consistently. The reference
+  // is shared with the migrator; both sides mutate the same instance in-place.
   private volatile TrieNodeIndexProgress trieNodeIndexProgress;
 
   public BonsaiArchiveWorldStateProvider(
@@ -116,16 +104,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             .getPathBasedExtraStorageConfiguration()
             .getUnstable()
             .getStateProofsEnabled();
-    this.trieNodeCheckpointInterval =
-        dataStorageConfiguration
-            .getPathBasedExtraStorageConfiguration()
-            .getUnstable()
-            .getArchiveTrieNodeCheckpointInterval();
-    this.trieNodeIndexEnabled =
-        dataStorageConfiguration
-            .getPathBasedExtraStorageConfiguration()
-            .getUnstable()
-            .getTrieNodeIndexEnabled();
     final BonsaiArchiveReadFlatDbStrategyProvider archiveProvider =
         new BonsaiArchiveReadFlatDbStrategyProvider(metricsSystem, dataStorageConfiguration);
     archiveProvider.loadFlatDbStrategy(worldStateKeyValueStorage.getComposedWorldStateStorage());
@@ -145,8 +123,9 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final SegmentedKeyValueStorage archiveStorage =
         worldStateKeyValueStorage.getComposedWorldStateStorage();
     this.trieNodeChangeIndex = new TrieNodeChangeIndex(archiveStorage, ArchiveNodeKey.RANGE_SIZE);
-    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(archiveStorage);
-    this.trieNodeHistoryReader = new TrieNodeHistoryReader(historyStore, trieNodeChangeIndex);
+    this.trieNodeHistoryStore = new TrieNodeHistoryStore(archiveStorage);
+    this.trieNodeHistoryReader =
+        new TrieNodeHistoryReader(trieNodeHistoryStore, trieNodeChangeIndex);
     this.trieNodeIndexProgress =
         TrieNodeIndexProgress.load(archiveStorage, ArchiveNodeKey.RANGE_SIZE);
 
@@ -154,14 +133,13 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     // with a BonsaiArchiveTrieNodeStrategy that writes diff-codec history entries and advances the
     // shared trieNodeIndexProgress on every block commit. Without this, flushIndexIfEnabled() is
     // always a no-op (wrong instanceof type) and lastIndexed stays at -1 indefinitely.
-    if (trieNodeIndexEnabled) {
+    if (stateProofsEnabled) {
       worldStateKeyValueStorage.setTrieNodeStrategy(
           new BonsaiArchiveTrieNodeStrategy(
-              trieNodeCheckpointInterval,
               null,
               new BonsaiTrieNodeStrategy(),
               true,
-              historyStore,
+              trieNodeHistoryStore,
               trieNodeChangeIndex,
               trieNodeIndexProgress));
     }
@@ -170,25 +148,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   @Override
   public Optional<MutableWorldState> getWorldState(final WorldStateQueryParams queryParams) {
     if (isHistoricalQuery(queryParams)) {
-      if (stateProofsEnabled) {
-        final Optional<BlockHeader> checkpointBlock =
-            getCheckpointStateStartBlock(queryParams.getBlockHeader().getBlockHash());
-        // Only use the archive proof path if the migration has fully processed the checkpoint
-        // block. If migration is still behind the checkpoint, the archive flat-DB and trie-node
-        // CFs won't have checkpoint data yet, causing spurious "nonces differ" failures.
-        if (checkpointBlock.isPresent()
-            && archiveMigrationProgressSupplier.getAsLong() >= checkpointBlock.get().getNumber()) {
-          LOG.debug(
-              "Returning archive proof state for block {} via checkpoint {}",
-              queryParams.getBlockHeader().getNumber(),
-              checkpointBlock.get().getNumber());
-          return rollArchiveProofWorldStateToBlockHash(
-                  newArchiveProofWorldState(worldStateConfig),
-                  checkpointBlock.get(),
-                  queryParams.getBlockHeader().getBlockHash())
-              .map(MutableWorldState::freezeStorage);
-        }
-      }
       LOG.debug(
           "Returning archive state without verifying state root for block {}",
           queryParams.getBlockHeader().getNumber());
@@ -205,132 +164,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     // Freeze before persisting to ensure the historical block number does not affect the database
     worldState.freezeStorage();
     return worldState;
-  }
-
-  /**
-   * Builds a world state for archive proof generation, backed by an in-memory {@link
-   * BonsaiArchiveWorldStateLayerStorage} layer over the (read-only) archive storage. It is
-   * deliberately NOT frozen: the subsequent {@code rollArchiveProofWorldStateToBlockHash} persist
-   * must be able to write the rolled-back trie nodes into the layer (keyed at the target block's
-   * suffix via {@code ARCHIVE_PROOF_BLOCK_NUMBER_KEY}) so the proof can read the historical state.
-   * The writes land only in the discardable in-memory layer, never the persistent archive CF.
-   */
-  private BonsaiWorldState newArchiveProofWorldState(final WorldStateConfig config) {
-    final BonsaiArchiveWorldStateLayerStorage layerStorage =
-        new BonsaiArchiveWorldStateLayerStorage(archiveReadStorage);
-    return new BonsaiArchiveWorldState(this, layerStorage, evmConfiguration, config, codeCache);
-  }
-
-  private Optional<BlockHeader> getCheckpointStateStartBlock(final Hash targetHash) {
-    return blockchain
-        .getBlockHeader(targetHash)
-        .map(BlockHeader::getNumber)
-        .flatMap(
-            targetNumber -> {
-              long nearestCheckpoint =
-                  (((targetNumber + trieNodeCheckpointInterval) / trieNodeCheckpointInterval)
-                          * trieNodeCheckpointInterval)
-                      - 1;
-              return blockchain
-                  .getBlockHeaderSafe(nearestCheckpoint)
-                  .or(() -> blockchain.getBlockHeaderSafe(blockchain.getChainHeadHash()));
-            });
-  }
-
-  private Optional<MutableWorldState> rollArchiveProofWorldStateToBlockHash(
-      final PathBasedWorldState mutableState,
-      final BlockHeader checkpointBlock,
-      final Hash targetBlockHash) {
-
-    ((BonsaiWorldState) mutableState).resetWorldStateToCheckpoint(checkpointBlock);
-
-    if (targetBlockHash.equals(mutableState.blockHash())) {
-      return Optional.of(mutableState);
-    }
-
-    try {
-      final BlockHeader targetHeader =
-          blockchain
-              .getBlockHeaderSafe(targetBlockHash)
-              .orElseThrow(
-                  () ->
-                      new MerkleTrieException("target block header not found: " + targetBlockHash));
-      final Optional<BlockHeader> maybePersistedHeader =
-          blockchain.getBlockHeaderSafe(mutableState.blockHash()).map(BlockHeader.class::cast);
-
-      final List<TrieLog> rollBacks = new ArrayList<>();
-      if (maybePersistedHeader.isEmpty()) {
-        trieLogManager.getTrieLogLayer(mutableState.blockHash()).ifPresent(rollBacks::add);
-      } else {
-        BlockHeader persistedHeader = maybePersistedHeader.get();
-        Hash persistedBlockHash = persistedHeader.getBlockHash();
-        while (persistedHeader.getNumber() > targetHeader.getNumber()) {
-          LOG.debug("Rollback {}", persistedBlockHash);
-          final Hash blockHashForLog = persistedBlockHash;
-          rollBacks.add(
-              trieLogManager
-                  .getTrieLogLayer(persistedBlockHash)
-                  .orElseThrow(
-                      () -> new MerkleTrieException("missing trie log for " + blockHashForLog)));
-          final Hash parentHash = persistedHeader.getParentHash();
-          persistedHeader =
-              blockchain
-                  .getBlockHeaderSafe(parentHash)
-                  .orElseThrow(
-                      () -> new MerkleTrieException("missing parent header for " + parentHash));
-          persistedBlockHash = persistedHeader.getBlockHash();
-        }
-      }
-
-      final PathBasedWorldStateUpdateAccumulator<?> diffBasedUpdater =
-          (PathBasedWorldStateUpdateAccumulator<?>) mutableState.updater();
-      try {
-        for (final TrieLog rollBack : rollBacks) {
-          LOG.debug("Attempting rollback of {}", rollBack.getBlockHash());
-          diffBasedUpdater.rollBack(rollBack);
-        }
-        // After rolling back N blocks, each account's storageRoot has been updated to the
-        // target block's value. But persist() needs to build the storage trie starting from
-        // a root whose nodes ARE in the archive CF — i.e. the checkpoint root. Reset each
-        // account's storageRoot to its checkpoint value (getPrior().storageRoot) so persist()
-        // uses the checkpoint's archived nodes as the trie base and derives the target
-        // storageRoot from the slot diffs in storagesToUpdate.
-        if (diffBasedUpdater instanceof BonsaiWorldStateUpdateAccumulator bonsaiUpdater) {
-          bonsaiUpdater.resetStorageRootsToCheckpointForArchiveProof();
-        }
-        diffBasedUpdater.commit();
-
-        // overrides suffix selection in putFlatAccountTrieNode/putFlatStorageTrieNode
-        final SegmentedKeyValueStorageTransaction tx =
-            mutableState.getWorldStateStorage().getComposedWorldStateStorage().startTransaction();
-        tx.put(
-            TRIE_BRANCH_STORAGE,
-            ARCHIVE_PROOF_BLOCK_NUMBER_KEY,
-            Bytes.ofUnsignedLong(targetHeader.getNumber()).toArrayUnsafe());
-        tx.commit();
-
-        mutableState.persist(targetHeader);
-
-        return Optional.of(mutableState);
-      } catch (final MerkleTrieException re) {
-        throw re;
-      } catch (final Exception e) {
-        diffBasedUpdater.reset();
-        LOG.atInfo()
-            .setMessage("Archive proof state rolling failed on {} for block hash {}: {}")
-            .addArgument(mutableState.getWorldStateStorage().getClass().getSimpleName())
-            .addArgument(targetBlockHash)
-            .addArgument(e)
-            .log();
-        return Optional.empty();
-      }
-    } catch (final RuntimeException re) {
-      LOG.info("Archive proof rolling failed for block hash {}", targetBlockHash, re);
-      if (re instanceof MerkleTrieException) {
-        throw re;
-      }
-      throw new MerkleTrieException("invalid archive proof rollback for " + targetBlockHash);
-    }
   }
 
   /**
@@ -360,6 +193,18 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     this.trieNodeIndexProgress = java.util.Objects.requireNonNull(progress, "progress");
   }
 
+  public TrieNodeHistoryStore getTrieNodeHistoryStore() {
+    return trieNodeHistoryStore;
+  }
+
+  public TrieNodeChangeIndex getTrieNodeChangeIndex() {
+    return trieNodeChangeIndex;
+  }
+
+  public TrieNodeIndexProgress getTrieNodeIndexProgress() {
+    return trieNodeIndexProgress;
+  }
+
   private boolean isHistoricalQuery(final WorldStateQueryParams queryParams) {
     final long queryBlock = queryParams.getBlockHeader().getNumber();
     return worldStateKeyValueStorage.getFlatDbMode().equals(FlatDbMode.ARCHIVE)
@@ -377,7 +222,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
    *
    * <ol>
    *   <li><strong>Historical + index enabled + covered</strong> — the block is too old for trie-log
-   *       rollback, the flag {@code trieNodeIndexEnabled} is on, and {@link
+   *       rollback, the flag {@code stateProofsEnabled} is on, and {@link
    *       TrieNodeIndexProgress#covers(long)} confirms that the range containing the target block
    *       has been fully indexed. In this case an {@link ArchiveProofNodeLoader} is built and a
    *       {@link WorldStateProofProvider} is driven directly from the stateRoot stored in the block
@@ -422,11 +267,11 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         headBlock,
         maxLayers,
         headBlock - targetBlock,
-        trieNodeIndexEnabled,
+        stateProofsEnabled,
         blockIsIndexed,
         trieNodeIndexProgress.lastIndexedBlock(),
         trieNodeIndexProgress.indexStartBlock());
-    if (trieNodeIndexEnabled && headBlock - targetBlock >= maxLayers && blockIsIndexed) {
+    if (stateProofsEnabled && headBlock - targetBlock >= maxLayers && blockIsIndexed) {
 
       final Hash stateRoot = blockHeader.getStateRoot();
       final SegmentedKeyValueStorage liveStorage =

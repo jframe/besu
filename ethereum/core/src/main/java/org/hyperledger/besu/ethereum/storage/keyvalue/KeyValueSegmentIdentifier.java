@@ -53,25 +53,6 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       true,
       true),
-  TRIE_BRANCH_STORAGE_ARCHIVE(
-      "TRIE_BRANCH_STORAGE_ARCHIVE".getBytes(StandardCharsets.UTF_8),
-      EnumSet.of(X_BONSAI_ARCHIVE),
-      true,
-      false,
-      true,
-      true),
-  // Migration trie: a single-version, plain-key (no block suffix) copy of the archive migrator's
-  // current trie. It is written by the migrator alongside the suffixed TRIE_BRANCH_STORAGE_ARCHIVE
-  // entries and read with point lookups (bloom-accelerated, cache-resident) instead of the
-  // I/O-bound reverse seekForPrev over the multi-version archive CF. Never read by the proof query
-  // path.
-  TRIE_BRANCH_MIGRATION(
-      "TRIE_BRANCH_MIGRATION".getBytes(StandardCharsets.UTF_8),
-      EnumSet.of(X_BONSAI_ARCHIVE),
-      false,
-      true,
-      false,
-      true),
   // Design 5 — Trie-Node Differential Index column families
   TRIE_NODE_HISTORY_ARCHIVE(
       "TRIE_NODE_HISTORY_ARCHIVE".getBytes(StandardCharsets.UTF_8),

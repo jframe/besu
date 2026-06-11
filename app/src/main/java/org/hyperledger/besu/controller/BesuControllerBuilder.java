@@ -1045,15 +1045,21 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             .getUnstable()
             .getStateProofsEnabled();
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
-        stateProofsEnabled
-            ? new BonsaiArchiveFlatDbStrategy(
-                metricsSystem,
-                new CodeHashCodeStorageStrategy(),
-                dataStorageConfiguration
-                    .getPathBasedExtraStorageConfiguration()
-                    .getUnstable()
-                    .getArchiveTrieNodeCheckpointInterval())
-            : new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
+        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
+    if (stateProofsEnabled) {
+      final BonsaiArchiveWorldStateProvider archiveProvider =
+          (BonsaiArchiveWorldStateProvider) worldStateArchive;
+      return new BonsaiFlatDbToArchiveMigrator(
+          worldStateKeyValueStorage,
+          trieLogManager,
+          blockchain,
+          migrationExecutor,
+          metricsSystem,
+          archiveStrategy,
+          archiveProvider.getTrieNodeHistoryStore(),
+          archiveProvider.getTrieNodeChangeIndex(),
+          archiveProvider.getTrieNodeIndexProgress());
+    }
     return new BonsaiFlatDbToArchiveMigrator(
         worldStateKeyValueStorage,
         trieLogManager,

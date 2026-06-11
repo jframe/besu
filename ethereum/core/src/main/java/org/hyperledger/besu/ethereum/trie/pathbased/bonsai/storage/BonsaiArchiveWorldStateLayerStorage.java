@@ -16,9 +16,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
-import org.hyperledger.besu.ethereum.trie.MerkleTrie;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.TrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SnappedKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.LayeredKeyValueStorage;
@@ -27,29 +24,19 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
 
 /**
- * Layered world-state storage used when serving Bonsai-archive state proofs.
+ * Layered world-state storage used when serving Bonsai-archive historical state.
  *
  * <p>It differs from {@link BonsaiWorldStateLayerStorage} only in how flat account and storage
  * reads are dispatched: instead of routing through {@code getWithCache} (which evaluates the flat
  * lookup against the <em>raw parent</em> storage), it passes the {@link LayeredKeyValueStorage}
  * itself to the flat-DB strategy. The archive flat-DB strategy resolves the historical block
- * context from {@code WORLD_BLOCK_NUMBER_KEY}, and that key is written into this layer's in-memory
- * state by {@code resetWorldStateToCheckpoint}. Reading it from the raw parent instead would yield
- * the live HEAD block number, making archive reads return HEAD-era values during rollback (causing
- * "nonces differ" / "Old value of slot does not match expected value").
+ * context from {@code WORLD_BLOCK_NUMBER_KEY} held in this layer's in-memory state, ensuring
+ * archive reads return the correct historical values rather than live HEAD-era values.
  */
 @SuppressWarnings("DoNotReturnNullOptionals")
 public class BonsaiArchiveWorldStateLayerStorage extends BonsaiWorldStateLayerStorage {
-
-  // The snapshot/layer constructor chain resets the trie-node strategy to the default
-  // BonsaiTrieNodeStrategy (which reads HEAD's TRIE_BRANCH_STORAGE). For archive proofs we must
-  // read historical trie nodes from TRIE_BRANCH_STORAGE_ARCHIVE using the layer's checkpoint
-  // block context, so we override the trie-node getters to use the archive strategy. Interval is
-  // null because reads never need it (only writes derive the window suffix from the interval).
-  private final TrieNodeStrategy archiveTrieNodeStrategy = new BonsaiArchiveTrieNodeStrategy(null);
 
   public BonsaiArchiveWorldStateLayerStorage(final BonsaiWorldStateKeyValueStorage parent) {
     super(parent);
@@ -92,38 +79,6 @@ public class BonsaiArchiveWorldStateLayerStorage extends BonsaiWorldStateLayerSt
             accountHash,
             storageSlotKey,
             getComposedWorldStateStorage());
-  }
-
-  @Override
-  public Optional<Bytes> getAccountStateTrieNode(final Bytes location, final Bytes32 nodeHash) {
-    if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
-      return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
-    }
-    // First the in-memory layer's plain TRIE_BRANCH_STORAGE (rolled-back nodes that the proof
-    // persist just wrote at the target block), then the archive CF (historical checkpoint /
-    // unchanged nodes). The Hash.hash filter in each lookup discards stale HEAD nodes that the
-    // layer's parent storage may still hold at the same location.
-    return super.getAccountStateTrieNode(location, nodeHash)
-        .or(
-            () ->
-                archiveTrieNodeStrategy
-                    .getFlatAccountTrieNode(location, nodeHash, getComposedWorldStateStorage())
-                    .filter(b -> Hash.hash(b).getBytes().equals(nodeHash)));
-  }
-
-  @Override
-  public Optional<Bytes> getAccountStorageTrieNode(
-      final Hash accountHash, final Bytes location, final Bytes32 nodeHash) {
-    if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
-      return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
-    }
-    return super.getAccountStorageTrieNode(accountHash, location, nodeHash)
-        .or(
-            () ->
-                archiveTrieNodeStrategy
-                    .getFlatStorageTrieNode(
-                        accountHash, location, nodeHash, getComposedWorldStateStorage())
-                    .filter(b -> Hash.hash(b).getBytes().equals(nodeHash)));
   }
 
   @Override

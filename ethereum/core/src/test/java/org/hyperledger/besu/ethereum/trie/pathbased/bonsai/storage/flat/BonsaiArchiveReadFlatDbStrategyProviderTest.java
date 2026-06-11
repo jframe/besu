@@ -19,8 +19,6 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.CODE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategyProvider.FLAT_DB_MODE;
 
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
@@ -31,7 +29,6 @@ import org.hyperledger.besu.ethereum.worldstate.ImmutablePathBasedExtraStorageCo
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
-import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import java.util.List;
 import java.util.Optional;
@@ -92,46 +89,8 @@ public class BonsaiArchiveReadFlatDbStrategyProviderTest {
   }
 
   // --- Trie-node strategy toggle tests ---
-  // Trie-node reads were moved out of FlatDbStrategy into TrieNodeStrategy.
-  // BonsaiArchiveTrieNodeStrategy handles reads from TRIE_BRANCH_STORAGE_ARCHIVE (proofs enabled).
-  // BonsaiTrieNodeStrategy returns empty (proofs disabled / default).
-
-  @Test
-  void proofsEnabled_getFlatAccountTrieNode_returnsArchivedNode() {
-    // BonsaiArchiveTrieNodeStrategy reads from TRIE_BRANCH_STORAGE_ARCHIVE.
-    final long interval = 100L;
-    final SegmentedKeyValueStorage storage =
-        new InMemoryKeyValueStorageProvider()
-            .getStorageBySegmentIdentifiers(
-                List.of(
-                    TRIE_BRANCH_STORAGE,
-                    ACCOUNT_INFO_STATE,
-                    CODE_STORAGE,
-                    ACCOUNT_STORAGE_STORAGE,
-                    TRIE_BRANCH_STORAGE_ARCHIVE));
-
-    final Bytes location = Bytes.of(1, 2, 3);
-    final Bytes nodeData = Bytes.of(0xAA, 0xBB, 0xCC);
-    final Bytes32 nodeHash = Bytes32.ZERO;
-
-    // Set WORLD_BLOCK_NUMBER_KEY=0 so getStateArchiveContextForRead returns block 0.
-    // Write node to TRIE_BRANCH_STORAGE_ARCHIVE with key = location + suffix(0).
-    // windowStart for block 0, interval 100 = ((0+1)/100)*100 = 0.
-    final byte[] archiveKey = Bytes.concatenate(location, Bytes.ofUnsignedLong(0L)).toArrayUnsafe();
-    final SegmentedKeyValueStorageTransaction setup = storage.startTransaction();
-    setup.put(
-        TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
-    setup.put(TRIE_BRANCH_STORAGE_ARCHIVE, archiveKey, nodeData.toArrayUnsafe());
-    setup.commit();
-
-    final BonsaiArchiveTrieNodeStrategy trieNodeStrategy =
-        new BonsaiArchiveTrieNodeStrategy(interval);
-    final Optional<Bytes> result =
-        trieNodeStrategy.getFlatAccountTrieNode(location, nodeHash, storage);
-
-    assertThat(result).isPresent();
-    assertThat(result.get()).isEqualTo(nodeData);
-  }
+  // BonsaiTrieNodeStrategy (default) returns empty for trie-node reads; proofs are served via
+  // ArchiveProofNodeLoader (Design 5), not via the flat-DB strategy.
 
   @Test
   void proofsDisabled_getFlatAccountTrieNode_returnsEmpty() {

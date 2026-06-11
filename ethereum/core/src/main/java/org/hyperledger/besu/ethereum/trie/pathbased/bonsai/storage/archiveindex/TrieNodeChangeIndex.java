@@ -201,14 +201,14 @@ public final class TrieNodeChangeIndex {
 
   /**
    * Records that {@code naturalKey} changed at {@code block} (like {@link #append}), and returns
-   * the number of prior mutations for this key — i.e. the mutation count as it was
-   * <em>before</em> the current block's write. Combines what was previously two separate reads
-   * ({@code countMutationsUpTo(key, block-1)} + {@code append(tx, key, block)}) into a single
+   * the number of prior mutations for this key — i.e. the mutation count as it was <em>before</em>
+   * the current block's write. Combines what was previously two separate reads ({@code
+   * countMutationsUpTo(key, block-1)} + {@code append(tx, key, block)}) into a single
    * committed-storage read for the current range.
    *
-   * <p>For earlier ranges (when {@code rangeId(block) > 0}) the earlier-range counts are still
-   * read individually; in practice all dev-chain and mainnet blocks fall in range 0 (first 1M
-   * blocks) so this is effectively a single read.
+   * <p>For earlier ranges (when {@code rangeId(block) > 0}) the earlier-range counts are still read
+   * individually; in practice all dev-chain and mainnet blocks fall in range 0 (first 1M blocks) so
+   * this is effectively a single read.
    *
    * @param tx the transaction on which to write the updated index
    * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})

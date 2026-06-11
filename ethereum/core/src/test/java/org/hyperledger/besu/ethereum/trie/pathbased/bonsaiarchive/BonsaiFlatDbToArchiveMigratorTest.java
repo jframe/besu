@@ -18,7 +18,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix;
 import static org.mockito.ArgumentMatchers.any;
@@ -549,148 +548,6 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     secondMigrator.close();
   }
 
-  // --- trie checkpoint tests ---
-
-  @Test
-  public void trieCheckpointWritesNodesToArchiveStorage() throws Exception {
-    // Create block 1 whose stateRoot matches what the migrator computes from createAccountTrieLog.
-    // persist() verifies the state root so the block header must carry the correct value.
-    final Hash stateRoot = computeTestAccountStateRoot();
-    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
-    final Block block1 =
-        blockDataGenerator.block(
-            BlockDataGenerator.BlockOptions.create()
-                .setParentHash(genesis.getHash())
-                .setBlockNumber(1)
-                .setStateRoot(stateRoot));
-    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
-
-    // interval=2 fires a checkpoint at block 1: (1+1) % 2 == 0
-    final BonsaiFlatDbToArchiveMigrator migrator = createMigratorWithRealTrieLogs(2);
-    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-
-    assertThat(storage.streamKeys(TRIE_BRANCH_STORAGE_ARCHIVE).count()).isGreaterThan(0);
-  }
-
-  @Test
-  public void noTrieCheckpointsWithoutInterval() throws Exception {
-    appendBlocks(3);
-    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
-    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-
-    assertThat(storage.streamKeys(TRIE_BRANCH_STORAGE_ARCHIVE).count()).isEqualTo(0);
-  }
-
-  @Test
-  public void trieBlockMigrationCompletesWithIntervalConfigured() throws Exception {
-    // With interval configured, migration must complete and advance flat-DB progress.
-    // Trie archive writes cannot be directly observed in tests: createMigratorWithTrieCheckpoints
-    // uses empty trie logs so no account/storage state is present to hash.
-    appendBlocks(3);
-    final BonsaiFlatDbToArchiveMigrator migrator = createMigratorWithTrieCheckpoints(10);
-    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-
-    assertThat(migrator.getMigrationProgress()).hasValue(3L);
-  }
-
-  @Test
-  public void trieBlockMigratorHasNoTrieCheckpointProgressKey() throws Exception {
-    appendBlocks(4);
-    final BonsaiFlatDbToArchiveMigrator migrator = createMigratorWithTrieCheckpoints(2);
-    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-
-    assertThat(migrator.getMigrationProgress()).hasValue(4L);
-    assertThat(
-            storage.get(
-                TRIE_BRANCH_STORAGE_ARCHIVE,
-                "TRIE_CHECKPOINT_PROGRESS".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
-        .isEmpty();
-  }
-
-  @Test
-  public void secondCheckpointAfterRestart_doesNotMismatchStateRoot() throws Exception {
-    // Regression test for StateRootMismatchException at the second+ checkpoint after restart.
-    //
-    // Root cause: on a fresh JVM start migrationWorldState.worldStateRootHash is initialised to
-    // Hash.EMPTY_TRIE_HASH.  In a single session persist() keeps this field up to date.  But on
-    // restart recoverTrieState() called seedCheckpoint() — which only updated the key-value
-    // metadata layer — without also calling migrationWorldState.resetWorldStateTo().  The in-memory
-    // worldStateRootHash field stayed EMPTY_TRIE_HASH, so the second checkpoint's persist() started
-    // from an empty trie instead of the first checkpoint's state root → wrong root.
-    //
-    // interval=2: checkpoints at blocks 1, 3, 5, ...
-    // Step A: first migrator runs on blocks 1-2, persists checkpoint at block 1 (progress=2).
-    // Step B: block 3 is appended; second migrator (restart simulation) picks up from
-    //         progress=2 and must persist the second checkpoint at block 3 without error.
-    final Hash stateRoot = computeTestAccountStateRoot();
-    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
-    final Block block1 =
-        blockDataGenerator.block(
-            BlockDataGenerator.BlockOptions.create()
-                .setParentHash(genesis.getHash())
-                .setBlockNumber(1)
-                .setStateRoot(stateRoot));
-    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
-    // Block 2: no account changes → same stateRoot.  isTrieCheckpointBlock(2)=(3%2=1)≠0 → no cp.
-    final Block block2 =
-        blockDataGenerator.block(
-            BlockDataGenerator.BlockOptions.create()
-                .setParentHash(block1.getHash())
-                .setBlockNumber(2)
-                .setStateRoot(stateRoot));
-    blockchain.appendBlock(block2, blockDataGenerator.receipts(block2));
-    when(trieLogManager.getTrieLogLayer(hashAt(2L))).thenReturn(Optional.of(new TrieLogLayer()));
-
-    // --- Step A: first migration (blocks 1-2, checkpoint at block 1, progress=2). ---
-    final BonsaiFlatDbToArchiveMigrator firstMigrator = createMigratorWithRealTrieLogs(2);
-    firstMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-    assertThat(firstMigrator.getMigrationProgress()).hasValue(2L);
-    firstMigrator.close();
-
-    // --- Append block 3 (second checkpoint) AFTER first migration completes. ---
-    final Block block3 =
-        blockDataGenerator.block(
-            BlockDataGenerator.BlockOptions.create()
-                .setParentHash(block2.getHash())
-                .setBlockNumber(3)
-                .setStateRoot(stateRoot));
-    blockchain.appendBlock(block3, blockDataGenerator.receipts(block3));
-    when(trieLogManager.getTrieLogLayer(hashAt(3L))).thenReturn(Optional.of(new TrieLogLayer()));
-
-    // --- Step B: simulated restart — new migrator, same storage, progress=2. ---
-    // recoverTrieState() seeds from block-1 checkpoint.  Without the fix worldStateRootHash
-    // stays EMPTY_TRIE_HASH on fresh JVM init; persist() at block 3 then computes
-    // EMPTY_TRIE_HASH ≠ stateRoot → StateRootMismatchException.
-    final BonsaiFlatDbToArchiveMigrator secondMigrator = createMigratorWithRealTrieLogs(2);
-    secondMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-    assertThat(secondMigrator.getMigrationProgress()).hasValue(3L);
-  }
-
-  @Test
-  public void trieBlockRestartResumesCorrectlyWithIntervalConfigured() throws Exception {
-    // First migration: process blocks 1-3, progress saved as 3.
-    appendBlocks(3);
-    final BonsaiFlatDbToArchiveMigrator firstMigrator = createMigratorWithTrieCheckpoints(100);
-    firstMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-    assertThat(firstMigrator.getMigrationProgress()).hasValue(3L);
-    firstMigrator.close();
-
-    // Simulate restart: append more blocks, create a new migrator.
-    appendBlocks(3);
-    final BonsaiFlatDbToArchiveMigrator secondMigrator = createMigratorWithTrieCheckpoints(100);
-    secondMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-
-    // Blocks 4-6 must be processed exactly once by the second migrator.
-    verify(trieLogManager, times(1)).getTrieLogLayer(hashAt(4L));
-    verify(trieLogManager, times(1)).getTrieLogLayer(hashAt(5L));
-    verify(trieLogManager, times(1)).getTrieLogLayer(hashAt(6L));
-    // Blocks 1-3 are fetched once during the first migration and once during
-    // trie recovery re-roll (restoring accumulator state from last checkpoint).
-    verify(trieLogManager, times(2)).getTrieLogLayer(hashAt(1L));
-    verify(trieLogManager, times(2)).getTrieLogLayer(hashAt(2L));
-    verify(trieLogManager, times(2)).getTrieLogLayer(hashAt(3L));
-  }
-
   // --- trie-node index tests ---
 
   /**
@@ -727,7 +584,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
 
     // Run migration with index enabled (interval=2 → checkpoint at block 1).
     final BonsaiFlatDbToArchiveMigrator migrator =
-        createMigratorWithRealTrieLogsAndIndex(2, historyStore, changeIndex, progress);
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
     // Due to the WORLD_BLOCK_NUMBER_KEY write-order in persist(), the root node is indexed
@@ -795,7 +652,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
 
     // interval=2 fires a checkpoint at block 1: (1+1) % 2 == 0.
     final BonsaiFlatDbToArchiveMigrator migrator =
-        createMigratorWithRealTrieLogsAndIndex(2, historyStore, changeIndex, progress);
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
     // lastIndexedBlock advances to the checkpoint block.
@@ -846,7 +703,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
 
     // interval=2 fires a checkpoint at block 1. Block 1 is NOT the end of range 0 (rangeSize=4).
     final BonsaiFlatDbToArchiveMigrator migrator =
-        createMigratorWithRealTrieLogsAndIndex(2, historyStore, changeIndex, progress);
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
     assertThat(progress.lastIndexedBlock())
@@ -964,51 +821,8 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     return createMigrator(BOUNDARY_DISABLED);
   }
 
-  private BonsaiFlatDbToArchiveMigrator createMigratorWithTrieCheckpoints(final long interval) {
-    when(trieLogManager.getMaxLayersToLoad()).thenReturn(BOUNDARY_DISABLED);
-    // Use an empty trie log so rollForward never conflicts on repeated account creations
-    when(trieLogManager.getTrieLogLayer(any())).thenReturn(Optional.of(new TrieLogLayer()));
-    final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
-    final BonsaiArchiveFlatDbStrategy archiveStrategy =
-        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy(), interval);
-    final BonsaiFlatDbToArchiveMigrator migrator =
-        new BonsaiFlatDbToArchiveMigrator(
-            worldStateStorage,
-            trieLogManager,
-            blockchain,
-            Executors.newScheduledThreadPool(1),
-            metricsSystem,
-            archiveStrategy);
-    migrators.add(migrator);
-    return migrator;
-  }
-
-  // Like createMigratorWithTrieCheckpoints but does NOT override the trie-log mock, so the
-  // setup's createAccountTrieLog is used. Genesis is stubbed to an empty TrieLog so the account
-  // creation in block 1 does not conflict with a prior rollForward on the same account.
-  private BonsaiFlatDbToArchiveMigrator createMigratorWithRealTrieLogs(final long interval) {
-    when(trieLogManager.getMaxLayersToLoad()).thenReturn(BOUNDARY_DISABLED);
-    // Genesis has no state changes in real usage; empty TrieLog avoids "account already exists"
-    // when block 1 rolls forward the same creation change.
-    when(trieLogManager.getTrieLogLayer(hashAt(0L))).thenReturn(Optional.of(new TrieLogLayer()));
-    final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
-    final BonsaiArchiveFlatDbStrategy archiveStrategy =
-        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy(), interval);
-    final BonsaiFlatDbToArchiveMigrator migrator =
-        new BonsaiFlatDbToArchiveMigrator(
-            worldStateStorage,
-            trieLogManager,
-            blockchain,
-            Executors.newScheduledThreadPool(1),
-            metricsSystem,
-            archiveStrategy);
-    migrators.add(migrator);
-    return migrator;
-  }
-
-  // Like createMigratorWithRealTrieLogs but also wires the trie-node differential index.
+  // Wires the trie-node differential index for integration tests.
   private BonsaiFlatDbToArchiveMigrator createMigratorWithRealTrieLogsAndIndex(
-      final long interval,
       final TrieNodeHistoryStore historyStore,
       final TrieNodeChangeIndex changeIndex,
       final TrieNodeIndexProgress progress) {
@@ -1016,7 +830,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     when(trieLogManager.getTrieLogLayer(hashAt(0L))).thenReturn(Optional.of(new TrieLogLayer()));
     final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
-        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy(), interval);
+        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
     final BonsaiFlatDbToArchiveMigrator migrator =
         new BonsaiFlatDbToArchiveMigrator(
             worldStateStorage,

@@ -15,9 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
@@ -47,9 +45,6 @@ import org.junit.jupiter.api.Test;
  * flag disabled neither write occurs.
  */
 class BonsaiArchiveTrieNodeStrategyTest {
-
-  /** Checkpoint interval used by the suffix archive. */
-  private static final long INTERVAL = 100L;
 
   /** A trie node location (nibble path bytes, 5 bytes = depth 10 nibbles). */
   private static final Bytes LOCATION_DEEP = Bytes.fromHexString("0x0102030405");
@@ -96,10 +91,9 @@ class BonsaiArchiveTrieNodeStrategyTest {
   // Factory helpers
   // ---------------------------------------------------------------------------
 
-  /** Strategy with trie-node index ENABLED and the suffix archive ENABLED. */
+  /** Strategy with trie-node index ENABLED. */
   private BonsaiArchiveTrieNodeStrategy strategyWithIndex() {
     return new BonsaiArchiveTrieNodeStrategy(
-        INTERVAL,
         null, // no trieLoader
         new BonsaiTrieNodeStrategy(),
         true, // trieNodeIndexEnabled
@@ -107,11 +101,10 @@ class BonsaiArchiveTrieNodeStrategyTest {
         changeIndex);
   }
 
-  /** Strategy with trie-node index ENABLED, suffix archive ENABLED, and progress tracking wired. */
+  /** Strategy with trie-node index ENABLED and progress tracking wired. */
   private BonsaiArchiveTrieNodeStrategy strategyWithIndexAndProgress(
       final TrieNodeIndexProgress progress) {
     return new BonsaiArchiveTrieNodeStrategy(
-        INTERVAL,
         null, // no trieLoader
         new BonsaiTrieNodeStrategy(),
         true, // trieNodeIndexEnabled
@@ -120,9 +113,9 @@ class BonsaiArchiveTrieNodeStrategyTest {
         progress);
   }
 
-  /** Strategy with trie-node index DISABLED (the existing behaviour). */
+  /** Strategy with trie-node index DISABLED. */
   private BonsaiArchiveTrieNodeStrategy strategyWithoutIndex() {
-    return new BonsaiArchiveTrieNodeStrategy(INTERVAL);
+    return new BonsaiArchiveTrieNodeStrategy();
   }
 
   /** Sets WORLD_BLOCK_NUMBER_KEY to {@code blockNumber} in committed storage. */
@@ -356,25 +349,6 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Constructor guard (issue 1)
-  // ---------------------------------------------------------------------------
-
-  @Test
-  void constructor_trieNodeIndexEnabled_withNullInterval_throws() {
-    assertThatThrownBy(
-            () ->
-                new BonsaiArchiveTrieNodeStrategy(
-                    null, // trieNodeCheckpointInterval = null
-                    null,
-                    new BonsaiTrieNodeStrategy(),
-                    true, // trieNodeIndexEnabled = true
-                    historyStore,
-                    changeIndex))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("trieNodeCheckpointInterval must not be null");
-  }
-
-  // ---------------------------------------------------------------------------
   // Storage-trie FULL_ABOVE_DEPTH uses location, not naturalKey (issue 3)
   // ---------------------------------------------------------------------------
 
@@ -493,62 +467,12 @@ class BonsaiArchiveTrieNodeStrategyTest {
     assertThat(loaded.indexStartBlock()).isEqualTo(0L);
   }
 
-  // ---------------------------------------------------------------------------
-  // Task 6.2: Suffixed-CF write suppression when index is enabled
-  // ---------------------------------------------------------------------------
-
-  /**
-   * When {@code trieNodeIndexEnabled=true}, account trie node writes must NOT populate {@code
-   * TRIE_BRANCH_STORAGE_ARCHIVE} — the suffixed CF is superseded by the differential index and
-   * writing it would be redundant I/O.
-   */
-  @Test
-  void flagEnabled_accountTrieNode_doesNotWriteToSuffixedCF() {
-    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
-
-    writeAtBlock(strategy, LOCATION_DEEP, SHORT_NODE_V1, 100L);
-
-    // TRIE_BRANCH_STORAGE_ARCHIVE must be empty when index is enabled.
-    assertThat(storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isEmpty();
-  }
-
-  /**
-   * When {@code trieNodeIndexEnabled=true}, storage trie node writes must NOT populate {@code
-   * TRIE_BRANCH_STORAGE_ARCHIVE} — the suffixed CF is superseded by the differential index.
-   */
-  @Test
-  void flagEnabled_storageTrieNode_doesNotWriteToSuffixedCF() {
-    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
-    final Hash accountHash =
-        Address.fromHexString("0x0000000000000000000000000000000000000099").addressHash();
-
-    writeStorageAtBlock(strategy, accountHash, LOCATION_DEEP, SHORT_NODE_V1, 100L);
-
-    assertThat(storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isEmpty();
-  }
-
-  /**
-   * When {@code trieNodeIndexEnabled=false}, account trie node writes MUST still populate {@code
-   * TRIE_BRANCH_STORAGE_ARCHIVE} so that the legacy proof path can read them via {@code
-   * getNearestBeforeMatchLength}.
-   */
-  @Test
-  void flagDisabled_accountTrieNode_writesToSuffixedCF() {
-    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithoutIndex();
-
-    writeAtBlock(strategy, LOCATION_DEEP, SHORT_NODE_V1, 100L);
-
-    // At least one entry should be present in TRIE_BRANCH_STORAGE_ARCHIVE.
-    assertThat(storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isNotEmpty();
-  }
-
   @Test
   void advanceIndexProgress_setsLastIndexedBlock() {
-    // Use the 7-arg constructor with index enabled and a real progress tracker.
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(1_000_000L);
     final BonsaiArchiveTrieNodeStrategy strat =
         new BonsaiArchiveTrieNodeStrategy(
-            16L, null, new BonsaiTrieNodeStrategy(), true, historyStore, changeIndex, progress);
+            null, new BonsaiTrieNodeStrategy(), true, historyStore, changeIndex, progress);
     setWorldBlockNumber(41L); // getCurrentBlockNumber returns WORLD_BLOCK_NUMBER_KEY + 1 = 42
 
     final var tx = storage.startTransaction();
@@ -572,7 +496,6 @@ class BonsaiArchiveTrieNodeStrategyTest {
     // progress.setLastIndexedBlock, so lastIndexedBlock stays UNSET.
     final BonsaiArchiveTrieNodeStrategy strategy =
         new BonsaiArchiveTrieNodeStrategy(
-            INTERVAL,
             null,
             new BonsaiTrieNodeStrategy(),
             false, // trieNodeIndexEnabled = false

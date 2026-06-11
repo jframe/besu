@@ -16,7 +16,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE;
@@ -217,7 +216,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         "bonsai_archive_migration_block",
         "The current block the Bonsai archive migration has reached",
         migratedBlockNumber::get);
-    if (archiveStrategy.getTrieNodeCheckpointInterval() != null) {
+    if (migrationHistoryStore != null) {
       initMigrationWorldState(metricsSystem);
       recoverTrieState();
     }
@@ -528,28 +527,20 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   private void initMigrationWorldState(final MetricsSystem metricsSystem) {
-    final long interval = archiveStrategy.getTrieNodeCheckpointInterval();
     final BonsaiArchiveFlatDbStrategy readStrategy =
-        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy(), interval);
+        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
     migrationTrieStorage =
         new MigrationTrieStorage(worldStateStorage.getComposedWorldStateStorage());
     final StaticArchiveFlatDbStrategyProvider provider =
         new StaticArchiveFlatDbStrategyProvider(metricsSystem, readStrategy);
     provider.loadFlatDbStrategy(migrationTrieStorage);
     migrationTrieLoader = new NoopBonsaiCachedMerkleTrieLoader();
-    final boolean indexEnabled = migrationHistoryStore != null && migrationChangeIndex != null;
-    if (indexEnabled) {
-      migrationTrieNodeStrategy =
-          new BonsaiArchiveMigrationTrieNodeStrategy(
-              interval,
-              migrationTrieLoader,
-              migrationHistoryStore,
-              migrationChangeIndex,
-              migrationIndexProgress);
-    } else {
-      migrationTrieNodeStrategy =
-          new BonsaiArchiveMigrationTrieNodeStrategy(interval, migrationTrieLoader);
-    }
+    migrationTrieNodeStrategy =
+        new BonsaiArchiveMigrationTrieNodeStrategy(
+            migrationTrieLoader,
+            migrationHistoryStore,
+            migrationChangeIndex,
+            migrationIndexProgress);
     migrationKvStorage =
         new BonsaiWorldStateKeyValueStorage(
             provider,
@@ -576,43 +567,49 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private void recoverTrieState() {
     final long progress = getMigrationProgress().orElse(-1L);
     if (progress < 0) {
-      // Fresh start: leave the migration world state at the default empty-trie root
-      // (WORLD_ROOT_HASH_KEY unset → Hash.EMPTY_TRIE_HASH). migrateBlocks() will roll
-      // forward from block 0, including the genesis trie log, so all accounts end up
-      // in the accumulator. persist() at the first checkpoint then builds the trie
-      // from scratch without needing historical nodes from TRIE_BRANCH_STORAGE.
+      // Fresh start: leave the migration world state at the default empty-trie root.
       return;
     }
-    final long interval = archiveStrategy.getTrieNodeCheckpointInterval();
-    // Derive the last trie checkpoint: largest block B ≤ progress where (B+1) % interval == 0
-    final long lastCheckpoint = ((progress + 1) / interval) * interval - 1;
-    if (lastCheckpoint >= 0) {
-      // A real checkpoint was persisted. Seed the metadata layer and reset the in-memory
-      // worldStateRootHash field so persist() at the next checkpoint starts from this
-      // block's state root, not Hash.EMPTY_TRIE_HASH (which is what initMigrationWorldState
-      // sets on a fresh JVM start before any persist() has been called).
-      blockchain
-          .getBlockHeader(lastCheckpoint)
-          .ifPresent(
-              header -> {
-                migrationTrieStorage.seedCheckpoint(header);
-                // resetWorldStateTo updates the in-memory worldStateRootHash / worldStateBlockHash
-                // fields that persist() reads as the base trie root.  seedCheckpoint only writes
-                // the key-value layer; without this call the field stays EMPTY_TRIE_HASH and the
-                // next checkpoint's persist() produces the wrong state root.
-                migrationWorldState.resetWorldStateTo(header);
-              });
-      final long reRollStart = lastCheckpoint + 1;
-      if (reRollStart <= progress) {
-        reRollTrieFrom(reRollStart, progress);
-      }
-    } else {
-      // No trie checkpoint reached yet. Re-roll from block 0 (the genesis trie log creates all
-      // genesis accounts) so the accumulator has the full account set. persist() at the first
-      // checkpoint builds from the empty-trie root without reading from TRIE_BRANCH_STORAGE,
-      // avoiding stale HEAD nodes that have overwritten the genesis/historical trie.
-      reRollTrieFrom(0, progress);
+    if (migrationHistoryStore != null) {
+      recoverTrieStateIndexMode(progress);
     }
+  }
+
+  /**
+   * Recovery for index mode (per-block persist): rebuilds the in-memory trie to the state at {@code
+   * progress} WITHOUT writing any index entries. This avoids appending duplicate block offsets to
+   * the existing {@code TRIE_NODE_INDEX_ARCHIVE} entries.
+   *
+   * <p>Strategy: accumulate all trie-log changes from block 0 to {@code progress} without calling
+   * persist(), then call a single recovery persist with a non-index strategy to build the in-memory
+   * trie layer. After recovery the real (index-enabled) strategy is restored.
+   *
+   * <p>Time complexity is O({@code progress}) — acceptable for small test chains. For production
+   * chains this recovery is expensive; a persistent trie snapshot would be needed.
+   */
+  private void recoverTrieStateIndexMode(final long progress) {
+    LOG.info("Index-mode trie recovery: rebuilding in-memory trie to block {}", progress);
+    // Swap to a non-index strategy so the recovery persist doesn't write index entries.
+    // Recovery uses a non-index strategy: only trie-node bytes land in the in-memory layer,
+    // which is all we need to rebuild the running trie state without emitting duplicate index
+    // entries.
+    final BonsaiArchiveMigrationTrieNodeStrategy recoveryStrategy =
+        new BonsaiArchiveMigrationTrieNodeStrategy(migrationTrieLoader);
+    migrationKvStorage.setTrieNodeStrategy(recoveryStrategy);
+
+    reRollTrieFrom(0, progress);
+
+    blockchain
+        .getBlockHeader(progress)
+        .ifPresent(
+            header -> {
+              migrationWorldState.persist(header);
+              migrationTrieStorage.seedCheckpoint(header);
+            });
+
+    // Restore the index-enabled strategy for ongoing migration.
+    migrationKvStorage.setTrieNodeStrategy(migrationTrieNodeStrategy);
+    LOG.info("Index-mode trie recovery complete at block {}", progress);
   }
 
   private void reRollTrieFrom(final long startBlock, final long endBlock) {
@@ -630,101 +627,27 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private void migrateTrieBlock(final TrieLog trieLog, final long blockNumber) {
     ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater()).rollForward(trieLog);
-    if (isTrieCheckpointBlock(blockNumber)) {
-      final long interval = archiveStrategy.getTrieNodeCheckpointInterval();
-      final long suffix = (blockNumber / interval) * interval;
-      LOG.info(
-          "Archive trie checkpoint: persisting block {} (window suffix {})", blockNumber, suffix);
+
+    if (migrationHistoryStore != null) {
+      // Index mode: persist every block so the differential index gets per-block entries.
       blockchain
           .getBlockHeader(blockNumber)
           .ifPresent(
               header -> {
                 migrationWorldState.persist(header);
-                // The migration CF is persistent and overwrite-in-place, so trie-node reads in
-                // the next window find this window's nodes immediately — no clearInMemory() wipe
-                // of a read substrate. Only the in-memory metadata keys are refreshed.
+                // advanceIndexProgress uses the block-number cache set during persist(), advances
+                // the shared progress, and clears the cache so the next block reads correctly.
+                final SegmentedKeyValueStorageTransaction progressTx =
+                    worldStateStorage.getComposedWorldStateStorage().startLowPriorityTransaction();
+                migrationTrieNodeStrategy.advanceIndexProgress(progressTx, migrationTrieStorage);
+                progressTx.commit();
+                // Update WORLD_BLOCK_NUMBER_KEY in the in-memory layer AFTER advancing progress
+                // so the cache (cleared by advanceIndexProgress) is re-populated correctly on the
+                // next block's getCurrentBlockNumber call.
                 migrationTrieStorage.seedCheckpoint(header);
-                // Flush the in-memory bloom accumulator populated during persist().
-                //
-                // Atomicity gap: the history and change-index entries were committed inside
-                // persist()'s MigrationTransaction (routed to realTx). The bloom bits are
-                // in-memory only after persist() returns and must be committed here in a separate
-                // transaction. If the process crashes between the two commits the bloom for this
-                // range is absent on restart. This is safe: a bloom miss is a false negative in
-                // TrieNodeChangeIndex.bloomMaybeContains, which triggers a fallback to the
-                // per-range range-marker check — the correct result is returned without the bloom
-                // optimisation. No bloom rebuild is needed on restart.
-                //
-                // Progress tracking uses the known migration blockNumber directly rather than
-                // reading WORLD_BLOCK_NUMBER_KEY from live worldStateStorage (which would reflect
-                // HEAD, not the migration checkpoint block).
-                //
-                // Parallel-range independence: each range worker writes to index CFs keyed by
-                // (naturalKey, rangeId) and bloom CFs keyed by rangeId. Because disjoint ranges
-                // map to different rangeId values, two workers backfilling different ranges never
-                // write to the same CF key. The idempotent-append tail check in
-                // RangeRelativeOffsetList makes re-runs of the same range safe.
-                if (migrationTrieNodeStrategy != null && migrationIndexProgress != null) {
-                  final SegmentedKeyValueStorageTransaction progressTx =
-                      worldStateStorage
-                          .getComposedWorldStateStorage()
-                          .startLowPriorityTransaction();
-                  advanceMigrationIndexProgress(blockNumber, progressTx);
-                  progressTx.commit();
-                }
-                LOG.info(
-                    "Archive trie checkpoint complete: block {} suffix {} stateRoot {}",
-                    blockNumber,
-                    suffix,
-                    header.getStateRoot());
               });
+      return;
     }
-  }
-
-  /**
-   * Advances the migration index-coverage progress after a trie checkpoint at {@code blockNumber}.
-   *
-   * <p>Two updates are made, then progress is persisted into {@code tx}:
-   *
-   * <ol>
-   *   <li>{@link TrieNodeIndexProgress#setLastIndexedBlock(long)} — monotonically advances the
-   *       highest indexed block to {@code blockNumber}.
-   *   <li>{@link TrieNodeIndexProgress#setIndexStartBlock(long)} — extends the backfill frontier
-   *       downward to the start of the range that contains {@code blockNumber}. Because the
-   *       migrator processes blocks in ascending order this call is effectively a no-op after the
-   *       first checkpoint in each range (the start is already recorded), but it remains correct
-   *       and idempotent.
-   * </ol>
-   *
-   * <p><strong>Live-block equivalent:</strong> {@link
-   * BonsaiArchiveTrieNodeStrategy#advanceIndexProgress(SegmentedKeyValueStorageTransaction,
-   * SegmentedKeyValueStorage)} performs the same {@code setLastIndexedBlock} / {@code save}
-   * mutations for the live block-import path. Keep both paths in sync when modifying
-   * progress-advancement logic.
-   *
-   * @param blockNumber the trie checkpoint block that was just persisted
-   * @param tx the transaction on which to write the updated progress bytes
-   */
-  private void advanceMigrationIndexProgress(
-      final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    final long rangeSize = migrationIndexProgress.rangeSize();
-    final long rangeId = blockNumber / rangeSize;
-
-    // Advance the high-water mark for indexed blocks.
-    migrationIndexProgress.setLastIndexedBlock(blockNumber);
-
-    // Extend the backfill frontier downward to the start of this range. Because the migrator
-    // works upward (ascending block numbers), the first checkpoint in a new range triggers this
-    // update; subsequent checkpoints within the same range are no-ops (setIndexStartBlock is
-    // monotonically non-increasing).
-    migrationIndexProgress.setIndexStartBlock(rangeId * rangeSize);
-
-    migrationIndexProgress.save(tx);
-  }
-
-  private boolean isTrieCheckpointBlock(final long blockNumber) {
-    return blockNumber > 0
-        && (blockNumber + 1) % archiveStrategy.getTrieNodeCheckpointInterval() == 0;
   }
 
   private static final class MigrationTrieStorage extends LayeredKeyValueStorage {
@@ -800,11 +723,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         // Metadata keys only (WORLD_*, ARCHIVE_PROOF_BLOCK_NUMBER_KEY) — kept in-memory so they
         // never touch live HEAD's TRIE_BRANCH_STORAGE.
         inMemoryTx.put(segmentId, key, value);
-      } else if (segmentId == TRIE_BRANCH_STORAGE_ARCHIVE
-          || segmentId == TRIE_NODE_HISTORY_ARCHIVE
+      } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
-        // Trie archive and differential-index segments go to real (persistent) storage.
+        // Differential-index segments go to real (persistent) storage.
         realTx.put(segmentId, key, value);
       }
       // flat account/storage writes dropped — processBlock() handles those separately
@@ -814,14 +736,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     public void remove(final SegmentIdentifier segmentId, final byte[] key) {
       if (segmentId == TRIE_BRANCH_STORAGE) {
         inMemoryTx.remove(segmentId, key);
-      } else if (segmentId == TRIE_BRANCH_STORAGE_ARCHIVE
-          || segmentId == TRIE_NODE_HISTORY_ARCHIVE
+      } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
-        // Mirror the put routing: any archive or index CF that can be written can also be removed.
-        // TRIE_BRANCH_STORAGE_ARCHIVE removes do not occur during normal migration (the migrator
-        // only appends archive-suffixed nodes, never deletes them), but the symmetric routing
-        // prevents silent data corruption if a remove were ever issued on this CF.
         realTx.remove(segmentId, key);
       }
       // flat account/storage removes dropped — processBlock() handles those separately
