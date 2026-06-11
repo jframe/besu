@@ -247,10 +247,10 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    * reconstructs historical state directly from the index without a {@code seekForPrev} scan. The
    * live block-import path therefore skips suffixed-CF writes to avoid redundant I/O and space.
    *
-   * <p>The archive migrator (via {@link BonsaiArchiveMigrationTrieNodeStrategy}) overrides this to
-   * return {@code true} unconditionally, because the migrator's checkpoint persist writes are
-   * consumed by the same migrator's subsequent checkpoint reads — the index alone is not sufficient
-   * during migration replay.
+   * <p>The archive migrator (via {@link BonsaiArchiveMigrationTrieNodeStrategy}) relies on the same
+   * logic: when the index is disabled it must write suffixed nodes for its own checkpoint reads;
+   * when the index is enabled the read path bypasses {@code TRIE_BRANCH_STORAGE_ARCHIVE} entirely,
+   * so the writes are skipped.
    *
    * @return {@code true} if suffixed nodes should be written to {@code TRIE_BRANCH_STORAGE_ARCHIVE}
    */

@@ -80,19 +80,22 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       true,
       true),
+  // Index and sub-block CFs are mutable (read-modify-write per block append): blob files cause
+  // massive write amplification from orphaned blob records. SST compaction handles dead versions
+  // correctly. containsStaticData=false disables blob storage for these two CFs.
   TRIE_NODE_INDEX_ARCHIVE(
       "TRIE_NODE_INDEX_ARCHIVE".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
-      true,
       false,
-      true,
+      false,
+      false,
       true),
   TRIE_NODE_SUBBLOCK_ARCHIVE(
       "TRIE_NODE_SUBBLOCK_ARCHIVE".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
-      true,
       false,
-      true,
+      false,
+      false,
       true),
 
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE

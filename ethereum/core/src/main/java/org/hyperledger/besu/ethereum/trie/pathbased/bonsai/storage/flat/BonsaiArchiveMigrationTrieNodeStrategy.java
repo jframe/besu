@@ -23,14 +23,20 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
  * Trie node strategy used by the Bonsai archive flat-DB migrator while it recomputes the historical
  * trie at each checkpoint.
  *
- * <p>Reads first check {@code TRIE_BRANCH_STORAGE_ARCHIVE} (via the parent's nearest-before lookup
- * for previously persisted checkpoint nodes) then fall back to the standard {@code
- * TRIE_BRANCH_STORAGE} for genesis/unchanged nodes that have not yet been written to the archive
- * CF. Writes go only to {@code TRIE_BRANCH_STORAGE_ARCHIVE}.
+ * <p>When the trie-node differential index is <b>disabled</b> ({@code historyStore} / {@code
+ * changeIndex} both null), reads first check {@code TRIE_BRANCH_STORAGE_ARCHIVE} (via the parent's
+ * nearest-before lookup) then fall back to {@code TRIE_BRANCH_STORAGE}; writes go to {@code
+ * TRIE_BRANCH_STORAGE_ARCHIVE} so that subsequent checkpoint reads can find the prior trie state.
  *
- * <p>When the trie-node differential index is enabled (non-null {@code historyStore} / {@code
- * changeIndex}), each {@code put} also captures a diff-codec entry and change-block index entry so
- * that migrated blocks contribute to the historical proof index.
+ * <p>When the trie-node differential index is <b>enabled</b> (non-null {@code historyStore} /
+ * {@code changeIndex}), the read path goes directly to {@code TRIE_BRANCH_STORAGE} (unchanged
+ * trie nodes are identical in live and historical storage; changed nodes are accumulated
+ * in-memory). Suffix writes to {@code TRIE_BRANCH_STORAGE_ARCHIVE} are skipped — the inherited
+ * {@link BonsaiArchiveTrieNodeStrategy#shouldWriteSuffixedCf} returns {@code false} when the index
+ * is enabled, and nobody reads those entries during or after migration.
+ *
+ * <p>In both cases, each {@code put} also captures a diff-codec entry and change-block index entry
+ * (when the index is enabled) so that migrated blocks contribute to the historical proof index.
  */
 public class BonsaiArchiveMigrationTrieNodeStrategy extends BonsaiArchiveTrieNodeStrategy {
 
@@ -76,17 +82,4 @@ public class BonsaiArchiveMigrationTrieNodeStrategy extends BonsaiArchiveTrieNod
         progress);
   }
 
-  /**
-   * The migrator always writes suffixed nodes to {@code TRIE_BRANCH_STORAGE_ARCHIVE}, even when the
-   * trie-node differential index is enabled. The checkpoint trie nodes written during migration
-   * replay are consumed by the migrator's own subsequent checkpoint reads — the index alone is not
-   * sufficient to service those internal reads during replay.
-   *
-   * <p>This overrides the live block-import suppression in {@link BonsaiArchiveTrieNodeStrategy}
-   * which would otherwise skip suffixed-CF writes when the index is on.
-   */
-  @Override
-  protected boolean shouldWriteSuffixedCf() {
-    return true;
-  }
 }
