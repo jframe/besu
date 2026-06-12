@@ -657,6 +657,16 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private static final class MigrationTrieStorage extends LayeredKeyValueStorage {
     private final SegmentedKeyValueStorage real;
 
+    /**
+     * Hash-keyed in-memory layer for TRIE_BRANCH_STORAGE only. The migrator's trie-node reads and
+     * writes are exact-match (no getNearest), so an O(1) hash map replaces the inherited
+     * ConcurrentSkipListMap layer whose O(log N) byte-prefix comparisons dominated migration CPU
+     * (~50% in JFR profiles: skip-list puts on commit plus gets on every node load). Values follow
+     * the layered-storage convention: {@code Optional.empty()} is a tombstone.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Bytes, Optional<byte[]>> trieLayer =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
     MigrationTrieStorage(final SegmentedKeyValueStorage real) {
       super(real);
       this.real = real;
@@ -665,6 +675,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     @Override
     public Optional<byte[]> get(final SegmentIdentifier segmentId, final byte[] key) {
       if (segmentId == TRIE_BRANCH_STORAGE) {
+        final Optional<byte[]> layered = trieLayer.get(Bytes.wrap(key));
         // Metadata keys must stay in-memory (live HEAD values would corrupt migration context).
         // ARCHIVE_PROOF_BLOCK_NUMBER_KEY is also intercepted: the proof-serving code writes this
         // key to TRIE_BRANCH_STORAGE with a live HEAD-adjacent block number, and
@@ -676,57 +687,53 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             || java.util.Arrays.equals(key, WORLD_BLOCK_HASH_KEY)
             || java.util.Arrays.equals(key, WORLD_ROOT_HASH_KEY)
             || java.util.Arrays.equals(key, ARCHIVE_PROOF_BLOCK_NUMBER_KEY)) {
-          return getFromLayerOnly(segmentId, key);
+          return layered == null ? Optional.empty() : layered;
         }
         // Trie node data: check in-memory first, then live storage.
         // Unchanged nodes are identical at any historical state and at HEAD.
-        final Optional<byte[]> inMemory = getFromLayerOnly(segmentId, key);
-        return inMemory.isPresent() ? inMemory : real.get(segmentId, key);
+        return layered != null && layered.isPresent() ? layered : real.get(segmentId, key);
       }
       return real.get(segmentId, key);
     }
 
     @Override
     public SegmentedKeyValueStorageTransaction startTransaction() {
-      return new MigrationTransaction(super.startTransaction(), real.startLowPriorityTransaction());
+      return new MigrationTransaction(trieLayer, real.startLowPriorityTransaction());
     }
 
     void seedCheckpoint(final BlockHeader header) {
       // Write metadata keys to in-memory layer so trie archive context reads are correct
-      final SegmentedKeyValueStorageTransaction tx = super.startTransaction();
-      tx.put(
-          TRIE_BRANCH_STORAGE,
-          WORLD_ROOT_HASH_KEY,
-          header.getStateRoot().getBytes().toArrayUnsafe());
-      tx.put(
-          TRIE_BRANCH_STORAGE,
-          WORLD_BLOCK_HASH_KEY,
-          header.getBlockHash().getBytes().toArrayUnsafe());
-      tx.put(
-          TRIE_BRANCH_STORAGE,
-          WORLD_BLOCK_NUMBER_KEY,
-          Bytes.ofUnsignedLong(header.getNumber()).toArrayUnsafe());
-      tx.commit();
+      trieLayer.put(
+          Bytes.wrap(WORLD_ROOT_HASH_KEY),
+          Optional.of(header.getStateRoot().getBytes().toArrayUnsafe()));
+      trieLayer.put(
+          Bytes.wrap(WORLD_BLOCK_HASH_KEY),
+          Optional.of(header.getBlockHash().getBytes().toArrayUnsafe()));
+      trieLayer.put(
+          Bytes.wrap(WORLD_BLOCK_NUMBER_KEY),
+          Optional.of(Bytes.ofUnsignedLong(header.getNumber()).toArrayUnsafe()));
     }
   }
 
   private static final class MigrationTransaction implements SegmentedKeyValueStorageTransaction {
-    private final SegmentedKeyValueStorageTransaction inMemoryTx;
+    private final java.util.Map<Bytes, Optional<byte[]>> trieLayer;
+    private final java.util.Map<Bytes, Optional<byte[]>> trieBuffer = new java.util.HashMap<>();
     private final SegmentedKeyValueStorageTransaction realTx;
 
     MigrationTransaction(
-        final SegmentedKeyValueStorageTransaction inMemoryTx,
+        final java.util.Map<Bytes, Optional<byte[]>> trieLayer,
         final SegmentedKeyValueStorageTransaction realTx) {
-      this.inMemoryTx = inMemoryTx;
+      this.trieLayer = trieLayer;
       this.realTx = realTx;
     }
 
     @Override
     public void put(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
       if (segmentId == TRIE_BRANCH_STORAGE) {
-        // Metadata keys only (WORLD_*, ARCHIVE_PROOF_BLOCK_NUMBER_KEY) — kept in-memory so they
-        // never touch live HEAD's TRIE_BRANCH_STORAGE.
-        inMemoryTx.put(segmentId, key, value);
+        // Trie nodes and metadata keys (WORLD_*, ARCHIVE_PROOF_BLOCK_NUMBER_KEY) — buffered until
+        // commit, then published to the in-memory trie layer so they never touch live HEAD's
+        // TRIE_BRANCH_STORAGE.
+        trieBuffer.put(Bytes.wrap(key), Optional.of(value));
       } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
@@ -739,7 +746,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     @Override
     public void remove(final SegmentIdentifier segmentId, final byte[] key) {
       if (segmentId == TRIE_BRANCH_STORAGE) {
-        inMemoryTx.remove(segmentId, key);
+        trieBuffer.put(Bytes.wrap(key), Optional.empty());
       } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
@@ -750,19 +757,20 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
     @Override
     public void commit() {
-      inMemoryTx.commit();
+      trieLayer.putAll(trieBuffer);
+      trieBuffer.clear();
       realTx.commit();
     }
 
     @Override
     public void rollback() {
-      inMemoryTx.rollback();
+      trieBuffer.clear();
       realTx.rollback();
     }
 
     @Override
     public void close() {
-      inMemoryTx.close();
+      trieBuffer.clear();
       realTx.close();
     }
   }
