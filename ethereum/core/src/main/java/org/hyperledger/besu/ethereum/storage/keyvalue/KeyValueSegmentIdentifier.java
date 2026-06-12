@@ -78,6 +78,15 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       false,
       true),
+  // Persistent frontier trie CF for migration: holds one plain-key copy of the running trie
+  // during archive migration. Replaces the in-memory ConcurrentHashMap, bounding heap to O(1).
+  TRIE_BRANCH_FRONTIER(
+      "TRIE_BRANCH_FRONTIER".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      false,
+      false,
+      false,
+      true),
 
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE
 
