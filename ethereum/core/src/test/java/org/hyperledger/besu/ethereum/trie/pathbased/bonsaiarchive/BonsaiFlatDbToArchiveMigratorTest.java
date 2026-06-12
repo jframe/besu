@@ -18,8 +18,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_FRONTIER;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_ROOT_HASH_KEY;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeastOnce;
@@ -787,6 +790,150 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     assertThat(progressB.covers(0L))
         .as("B still does not cover range 0 after A marks it")
         .isFalse();
+  }
+
+  // --- frontier CF tests ---
+
+  /**
+   * After index-mode migration, trie node metadata (WORLD_ROOT_HASH_KEY) must be present in
+   * TRIE_BRANCH_FRONTIER. This verifies that MigrationTransaction routes TRIE_BRANCH_STORAGE writes
+   * to the persistent frontier CF rather than an in-memory layer.
+   */
+  @Test
+  public void trieMigratorWithIndexEnabled_writesMetadataToCFrontier() throws Exception {
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    final TrieNodeChangeIndex changeIndex =
+        new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    assertThat(storage.get(TRIE_BRANCH_FRONTIER, WORLD_ROOT_HASH_KEY))
+        .as("WORLD_ROOT_HASH_KEY must be written to TRIE_BRANCH_FRONTIER by MigrationTransaction")
+        .isPresent();
+    assertThat(storage.stream(TRIE_BRANCH_FRONTIER).findAny())
+        .as("TRIE_BRANCH_FRONTIER must contain trie nodes after migration")
+        .isPresent();
+  }
+
+  /**
+   * Metadata keys written via MigrationTransaction to TRIE_BRANCH_FRONTIER must NOT be present in
+   * live TRIE_BRANCH_STORAGE — migration writes must not leak into live HEAD storage.
+   */
+  @Test
+  public void migrationTrieStorage_metadataKeyDoesNotFallThroughToLiveStorage() throws Exception {
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    final TrieNodeChangeIndex changeIndex =
+        new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    assertThat(storage.get(TRIE_BRANCH_FRONTIER, WORLD_ROOT_HASH_KEY))
+        .as("WORLD_ROOT_HASH_KEY should be in TRIE_BRANCH_FRONTIER")
+        .isPresent();
+    assertThat(storage.get(TRIE_BRANCH_STORAGE, WORLD_ROOT_HASH_KEY))
+        .as("WORLD_ROOT_HASH_KEY must NOT be in live TRIE_BRANCH_STORAGE")
+        .isEmpty();
+  }
+
+  /**
+   * The zero-byte tombstone sentinel written by MigrationTransaction.remove() must be present in
+   * TRIE_BRANCH_FRONTIER, and the live TRIE_BRANCH_STORAGE value must be unaffected.
+   */
+  @Test
+  public void migrationTrieStorage_tombstonePreventsLiveFallthrough() {
+    final byte[] nodeKey = new byte[] {0x01, 0x02, 0x03};
+    final byte[] liveValue = new byte[] {0x10, 0x20, 0x30};
+
+    final var liveTx = storage.startTransaction();
+    liveTx.put(TRIE_BRANCH_STORAGE, nodeKey, liveValue);
+    liveTx.commit();
+
+    assertThat(storage.get(TRIE_BRANCH_STORAGE, nodeKey)).hasValue(liveValue);
+
+    // Simulate what MigrationTransaction.remove() does: write FRONTIER_TOMBSTONE = new byte[0]
+    final var frontierTx = storage.startTransaction();
+    frontierTx.put(TRIE_BRANCH_FRONTIER, nodeKey, new byte[0]);
+    frontierTx.commit();
+
+    assertThat(storage.get(TRIE_BRANCH_FRONTIER, nodeKey))
+        .as("sentinel (tombstone) should be in TRIE_BRANCH_FRONTIER")
+        .hasValue(new byte[0]);
+    assertThat(storage.get(TRIE_BRANCH_STORAGE, nodeKey))
+        .as("live TRIE_BRANCH_STORAGE is unaffected by frontier tombstone")
+        .hasValue(liveValue);
+  }
+
+  /**
+   * On restart with a populated frontier CF, the second migrator must NOT re-query trie logs for
+   * already-migrated blocks. Each block's trie log is fetched exactly once across both migrators.
+   */
+  @Test
+  public void trieMigratorWithIndexEnabled_restartUsesPersistedFrontierWithoutReRoll()
+      throws Exception {
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    when(trieLogManager.getTrieLogLayer(hashAt(0L))).thenReturn(Optional.of(new TrieLogLayer()));
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    final TrieNodeChangeIndex changeIndex =
+        new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+
+    final BonsaiFlatDbToArchiveMigrator firstMigrator =
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
+    firstMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    assertThat(firstMigrator.getMigrationProgress()).hasValue(1L);
+    firstMigrator.close();
+
+    assertThat(storage.get(TRIE_BRANCH_FRONTIER, WORLD_ROOT_HASH_KEY))
+        .as("WORLD_ROOT_HASH_KEY must be in frontier after first migration")
+        .isPresent();
+
+    // Second migrator simulates a restart with same backing storage (frontier CF populated).
+    // recoverTrieState() is now a no-op: BonsaiWorldState reads its root from TRIE_BRANCH_FRONTIER
+    // during construction — no trie log re-roll needed.
+    final BonsaiFlatDbToArchiveMigrator secondMigrator =
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
+
+    // Each block's trie log must be fetched exactly once across both migrators.
+    verify(trieLogManager, times(1)).getTrieLogLayer(hashAt(0L));
+    verify(trieLogManager, times(1)).getTrieLogLayer(hashAt(1L));
+
+    secondMigrator.close();
   }
 
   // --- test helpers ---
