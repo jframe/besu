@@ -244,23 +244,28 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   /**
    * Returns the actual block number currently being written (not the window-start used for suffix
-   * keying). If {@code ARCHIVE_PROOF_BLOCK_NUMBER_KEY} is set it is used directly; otherwise it is
-   * {@code WORLD_BLOCK_NUMBER_KEY + 1} (the next block whose trie nodes are being committed).
+   * keying). Falls back in order: cached value → {@code ARCHIVE_PROOF_BLOCK_NUMBER_KEY} → {@code
+   * WORLD_BLOCK_NUMBER_KEY + 1}.
    *
    * <p>The result is cached for the duration of a single block's trie-node writes and invalidated
-   * by {@link #advanceIndexProgress} at the end of each block, avoiding a RocksDB read per node.
+   * by {@link #advanceIndexProgress} at the end of each block, so storage is accessed at most once
+   * per block rather than once per trie-node write.
    */
   private long getCurrentBlockNumber(final SegmentedKeyValueStorage storage) {
-    // Proof-path override: explicitly set per-persist, never cached.
-    final Optional<byte[]> proofBlock =
-        storage.get(TRIE_BRANCH_STORAGE, ARCHIVE_PROOF_BLOCK_NUMBER_KEY);
-    if (proofBlock.isPresent()) {
-      return Bytes.wrap(proofBlock.get()).toLong();
-    }
     // Fast path: reuse cached value for the duration of the current block's writes.
+    // advanceIndexProgress() clears this at the end of each block, so the cache is
+    // accessed at most once per block per storage lookup path.
     final long cached = cachedCurrentBlockNumber;
     if (cached != Long.MIN_VALUE) {
       return cached;
+    }
+    // Per-block override (used by tests and migration checkpoint seeding).
+    // Result is cached: subsequent writes within the same block use the cache.
+    final Optional<byte[]> proofBlock =
+        storage.get(TRIE_BRANCH_STORAGE, ARCHIVE_PROOF_BLOCK_NUMBER_KEY);
+    if (proofBlock.isPresent()) {
+      cachedCurrentBlockNumber = Bytes.wrap(proofBlock.get()).toLong();
+      return cachedCurrentBlockNumber;
     }
     // TODO: block 1's trie nodes are indexed at block 0 because WORLD_BLOCK_NUMBER_KEY
     // is written in the same tx as the trie nodes and hasn't committed yet. Callers

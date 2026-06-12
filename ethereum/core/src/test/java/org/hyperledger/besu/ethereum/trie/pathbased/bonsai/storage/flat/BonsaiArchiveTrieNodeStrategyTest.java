@@ -93,12 +93,15 @@ class BonsaiArchiveTrieNodeStrategyTest {
 
   /** Strategy with trie-node index ENABLED. */
   private BonsaiArchiveTrieNodeStrategy strategyWithIndex() {
+    // Include a real progress object so advanceIndexProgress() (called from writeAtBlock/
+    // writeStorageAtBlock) actually clears the block-number cache between blocks.
     return new BonsaiArchiveTrieNodeStrategy(
         null, // no trieLoader
         new BonsaiTrieNodeStrategy(),
         true, // trieNodeIndexEnabled
         historyStore,
-        changeIndex);
+        changeIndex,
+        new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE));
   }
 
   /** Strategy with trie-node index ENABLED and progress tracking wired. */
@@ -121,9 +124,10 @@ class BonsaiArchiveTrieNodeStrategyTest {
   /**
    * Sets ARCHIVE_PROOF_BLOCK_NUMBER_KEY to {@code blockNumber} in committed storage.
    *
-   * <p>This key is read by {@code getCurrentBlockNumber} before the cache check, so it bypasses
-   * the {@code cachedCurrentBlockNumber} cache and allows sequential writes at different block
-   * numbers within a single test.
+   * <p>Used together with the {@code advanceIndexProgress} call at the end of {@link
+   * #writeAtBlock}/{@link #writeStorageAtBlock} to seed the correct block number for the next
+   * block's first trie-node write (when the cache is cold after being cleared by {@code
+   * advanceIndexProgress}).
    */
   private void setArchiveProofBlockNumber(final long blockNumber) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
@@ -144,6 +148,11 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, location, NODE_HASH, node);
     tx.commit();
+    // Advance index progress to clear the block-number cache, matching production semantics
+    // (flushIndexIfEnabled → advanceIndexProgress runs at the end of each block's persist).
+    final SegmentedKeyValueStorageTransaction progressTx = storage.startTransaction();
+    strategy.advanceIndexProgress(progressTx, storage);
+    progressTx.commit();
   }
 
   /** Writes a storage trie node via the strategy at block {@code targetBlock}. */
@@ -157,6 +166,10 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatStorageTrieNode(storage, tx, accountHash, location, NODE_HASH, node);
     tx.commit();
+    // Advance index progress to clear the block-number cache.
+    final SegmentedKeyValueStorageTransaction progressTx = storage.startTransaction();
+    strategy.advanceIndexProgress(progressTx, storage);
+    progressTx.commit();
   }
 
   // ---------------------------------------------------------------------------
