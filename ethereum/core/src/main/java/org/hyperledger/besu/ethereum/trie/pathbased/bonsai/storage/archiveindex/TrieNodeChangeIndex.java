@@ -19,6 +19,8 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -74,6 +76,32 @@ public final class TrieNodeChangeIndex {
 
   private final int subBlockThreshold;
   private final int subBlockSplitAt;
+
+  /**
+   * Maximum number of entries in the write-through LRU index cache. Each entry is an indexKey →
+   * serialised index value mapping that avoids re-reading committed storage on the next append for
+   * the same key. At ~350 bytes/entry this is roughly 35 MB for a 100 K-entry active trie.
+   */
+  static final int CACHE_MAX_SIZE = 100_000;
+
+  /**
+   * Write-through LRU cache for {@code TRIE_NODE_INDEX_ARCHIVE} entries written during migration.
+   * Keyed by the full index key ({@link ArchiveNodeKey#rangeKey}); value is the serialised {@code
+   * [4B subCount][packed offsets]} bytes. Populated on each successful {@link #append} / {@link
+   * #appendAndGetPreviousCount} write; checked before the committed-storage read on the next call
+   * for the same key.
+   *
+   * <p>Only the write path ({@code append*}) reads from and writes to this cache. The query-only
+   * methods ({@link #latestChangeBlock}, {@link #modifiedAfter}, etc.) bypass it intentionally —
+   * they need committed-storage semantics.
+   */
+  private final LinkedHashMap<Bytes, byte[]> indexCache =
+      new LinkedHashMap<>(CACHE_MAX_SIZE, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(final Map.Entry<Bytes, byte[]> eldest) {
+          return size() > CACHE_MAX_SIZE;
+        }
+      };
 
   /**
    * Constructs a new index backed by the given segmented KV store using the default sub-block
@@ -161,18 +189,26 @@ public final class TrieNodeChangeIndex {
     final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
     final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
 
-    // Read current index value: [4B subCount][packed offsets]
+    // Read current index value: check write-through cache before hitting committed storage.
     final int[] subCountHolder = new int[1];
-    final RangeRelativeOffsetList list =
-        storage
-            .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
-            .map(
-                b -> {
-                  final IndexValue iv = readIndexValue(b);
-                  subCountHolder[0] = iv.subCount;
-                  return iv.list;
-                })
-            .orElse(RangeRelativeOffsetList.empty());
+    final RangeRelativeOffsetList list;
+    final byte[] cached = indexCache.get(indexKey);
+    if (cached != null) {
+      final IndexValue iv = readIndexValue(cached);
+      subCountHolder[0] = iv.subCount;
+      list = iv.list;
+    } else {
+      list =
+          storage
+              .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
+              .map(
+                  b -> {
+                    final IndexValue iv = readIndexValue(b);
+                    subCountHolder[0] = iv.subCount;
+                    return iv.list;
+                  })
+              .orElse(RangeRelativeOffsetList.empty());
+    }
 
     int subCount = subCountHolder[0];
     RangeRelativeOffsetList updated = list.append(offset);
@@ -193,10 +229,9 @@ public final class TrieNodeChangeIndex {
       updated = tail;
     }
 
-    tx.put(
-        KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
-        indexKeyBytes,
-        writeIndexValue(subCount, updated));
+    final byte[] newValue = writeIndexValue(subCount, updated);
+    tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, newValue);
+    indexCache.put(indexKey, newValue);
   }
 
   /**
@@ -242,18 +277,26 @@ public final class TrieNodeChangeIndex {
       }
     }
 
-    // Read the current range once — shared by count and append.
+    // Read the current range once — check write-through cache before hitting committed storage.
     final int[] subCountHolder = new int[1];
-    final RangeRelativeOffsetList list =
-        storage
-            .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
-            .map(
-                b -> {
-                  final IndexValue iv = readIndexValue(b);
-                  subCountHolder[0] = iv.subCount;
-                  return iv.list;
-                })
-            .orElse(RangeRelativeOffsetList.empty());
+    final RangeRelativeOffsetList list;
+    final byte[] cached = indexCache.get(indexKey);
+    if (cached != null) {
+      final IndexValue iv = readIndexValue(cached);
+      subCountHolder[0] = iv.subCount;
+      list = iv.list;
+    } else {
+      list =
+          storage
+              .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
+              .map(
+                  b -> {
+                    final IndexValue iv = readIndexValue(b);
+                    subCountHolder[0] = iv.subCount;
+                    return iv.list;
+                  })
+              .orElse(RangeRelativeOffsetList.empty());
+    }
 
     final int tailEntries = list.size();
     final long previousCount =
@@ -275,10 +318,9 @@ public final class TrieNodeChangeIndex {
       updated = tail;
     }
 
-    tx.put(
-        KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
-        indexKeyBytes,
-        writeIndexValue(subCount, updated));
+    final byte[] newValue = writeIndexValue(subCount, updated);
+    tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, newValue);
+    indexCache.put(indexKey, newValue);
 
     return previousCount;
   }
