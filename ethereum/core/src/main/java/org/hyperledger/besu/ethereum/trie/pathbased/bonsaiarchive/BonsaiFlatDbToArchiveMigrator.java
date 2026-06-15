@@ -567,11 +567,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   private void recoverTrieState() {
-    getMigrationProgress()
-        .ifPresent(
-            progress ->
-                LOG.info(
-                    "Resuming archive migration from block {} (frontier CF available)", progress));
+    final Optional<Long> progress = getMigrationProgress();
+    if (progress.isEmpty()) {
+      migrationChangeIndex.enableFreshMigrationMode();
+    } else {
+      LOG.info("Resuming archive migration from block {} (frontier CF available)", progress.get());
+    }
   }
 
   private void migrateTrieBlock(final TrieLog trieLog, final long blockNumber) {

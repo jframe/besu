@@ -24,6 +24,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
+import com.google.common.hash.BloomFilter;
+import com.google.common.hash.Funnels;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.MutableBytes;
 
@@ -102,6 +104,35 @@ public final class TrieNodeChangeIndex {
           return size() > CACHE_MAX_SIZE;
         }
       };
+
+  /**
+   * In-session Bloom filter for fresh-migration mode. Non-null only when {@link
+   * #enableFreshMigrationMode()} has been called. Tracks every index key written in this session so
+   * that first-time-encounter keys (absent from the DB) can be identified without a {@code
+   * storage.get()} call.
+   *
+   * <p>Sized for 30 M expected unique trie-node paths at 1 % FPP (≈ 36 MB). False positives cause
+   * extra {@code storage.get()} calls (same as the non-optimised path) but never incorrect results.
+   * If more than 30 M unique keys are inserted the FPP degrades gracefully rather than failing.
+   */
+  private BloomFilter<byte[]> sessionWrittenKeys = null;
+
+  /**
+   * Switches the index into <em>fresh-migration mode</em>: when active, a {@link
+   * #appendAndGetPreviousCount} or {@link #append} call for a key that is neither in the LRU cache
+   * nor in the in-session Bloom filter skips the committed-storage read entirely and assumes the
+   * key is absent (previousCount = 0).
+   *
+   * <p>This is safe only on a <em>fresh</em> migration (one that starts from block 0 with an empty
+   * {@code TRIE_NODE_INDEX_ARCHIVE}). On a resumed migration the filter would be empty even for
+   * keys already written in a previous session, producing wrong previousCount values. The migrator
+   * calls this method only when {@link
+   * org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive.BonsaiFlatDbToArchiveMigrator#getMigrationProgress()}
+   * returns empty.
+   */
+  public void enableFreshMigrationMode() {
+    sessionWrittenKeys = BloomFilter.create(Funnels.byteArrayFunnel(), 30_000_000, 0.01);
+  }
 
   /**
    * Constructs a new index backed by the given segmented KV store using the default sub-block
@@ -197,6 +228,9 @@ public final class TrieNodeChangeIndex {
       final IndexValue iv = readIndexValue(cached);
       subCountHolder[0] = iv.subCount;
       list = iv.list;
+    } else if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
+      // Fresh-migration mode: key is definitely absent from the DB (never written this session).
+      list = RangeRelativeOffsetList.empty();
     } else {
       list =
           storage
@@ -232,6 +266,9 @@ public final class TrieNodeChangeIndex {
     final byte[] newValue = writeIndexValue(subCount, updated);
     tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, newValue);
     indexCache.put(indexKey, newValue);
+    if (sessionWrittenKeys != null) {
+      sessionWrittenKeys.put(indexKeyBytes);
+    }
   }
 
   /**
@@ -285,6 +322,9 @@ public final class TrieNodeChangeIndex {
       final IndexValue iv = readIndexValue(cached);
       subCountHolder[0] = iv.subCount;
       list = iv.list;
+    } else if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
+      // Fresh-migration mode: key is definitely absent from the DB (never written this session).
+      list = RangeRelativeOffsetList.empty();
     } else {
       list =
           storage
@@ -321,6 +361,9 @@ public final class TrieNodeChangeIndex {
     final byte[] newValue = writeIndexValue(subCount, updated);
     tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, newValue);
     indexCache.put(indexKey, newValue);
+    if (sessionWrittenKeys != null) {
+      sessionWrittenKeys.put(indexKeyBytes);
+    }
 
     return previousCount;
   }
