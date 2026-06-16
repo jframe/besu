@@ -18,7 +18,6 @@ import static org.hyperledger.besu.crypto.Hash.keccak256;
 
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 
 import java.util.Objects;
@@ -67,8 +66,6 @@ import org.apache.tuweni.bytes.Bytes32;
  * incorrect proof, which is worse than failing loudly.
  */
 public final class ArchiveProofNodeLoader {
-
-  private static final int HASH_PREFIX_BYTES = BonsaiTrieNodeStrategy.HASH_PREFIX_BYTES;
 
   private final TrieNodeChangeIndex index;
   private final TrieNodeHistoryReader historyReader;
@@ -159,18 +156,19 @@ public final class ArchiveProofNodeLoader {
    *     expectedHash} (fail-closed on data inconsistency)
    */
   private Optional<Bytes> resolveNodeAt(final Bytes naturalKey, final Bytes32 expectedHash) {
-    // Step 1: Hash-first fast path — read the live node once and compare stored hash.
+    // Step 1: Hash-first fast path — read the live node once and compare its hash.
+    // TRIE_BRANCH_STORAGE holds bare node bytes (legacy Bonsai format), so recompute
+    // keccak256(node) to test whether the live node is still the T-version. Most nodes are
+    // unchanged between T and HEAD, so this resolves the common case in a single read.
     final byte[] rawLive =
         liveStorage
             .get(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe())
             .orElse(null);
-    if (rawLive != null && rawLive.length >= HASH_PREFIX_BYTES) {
-      final Bytes32 storedHash = Bytes32.wrap(rawLive, 0);
-      if (storedHash.equals(expectedHash)) {
+    if (rawLive != null) {
+      final Bytes liveNode = Bytes.wrap(rawLive);
+      if (keccak256(liveNode).equals(expectedHash)) {
         // Live node's hash matches expectedHash → the live IS the T-version. Return directly.
-        final int nodeLen = rawLive.length - HASH_PREFIX_BYTES;
-        return Optional.of(
-            nodeLen == 0 ? Bytes.EMPTY : Bytes.wrap(rawLive, HASH_PREFIX_BYTES, nodeLen));
+        return Optional.of(liveNode);
       }
     }
 

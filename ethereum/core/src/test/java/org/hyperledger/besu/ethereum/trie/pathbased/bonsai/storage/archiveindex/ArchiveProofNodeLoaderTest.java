@@ -118,16 +118,18 @@ class ArchiveProofNodeLoaderTest {
   }
 
   /**
-   * Write a node directly to the live TRIE_BRANCH_STORAGE in the {@code hash[32] ‖ nodeBytes}
-   * format used by {@link BonsaiTrieNodeStrategy}.
+   * Write a node directly to the live TRIE_BRANCH_STORAGE in the legacy bare {@code nodeBytes}
+   * format used by {@link BonsaiTrieNodeStrategy}. The loader's hash-first fast path recomputes
+   * {@code keccak256(node)} to compare against the expected hash.
    *
    * <p>Key = naturalKey (account trie: location; storage trie: accountHash ‖ location).
    */
   private void putLiveNode(final Bytes naturalKey, final Bytes node) {
-    final Bytes32 hash = keccak(node);
-    final byte[] value = Bytes.concatenate(hash, node).toArrayUnsafe();
     var tx = kv.startTransaction();
-    tx.put(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe(), value);
+    tx.put(
+        KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE,
+        naturalKey.toArrayUnsafe(),
+        node.toArrayUnsafe());
     tx.commit();
   }
 

@@ -31,15 +31,13 @@ import org.apache.tuweni.bytes.Bytes32;
  * (TRIE_BRANCH_STORAGE by default). The target segment is configurable so the archive migrator can
  * reuse the same point-lookup behaviour against its dedicated migration column family.
  *
- * <p><strong>Storage format:</strong> values are stored as {@code nodeHash[32] ‖ nodeBytes}. The
- * 32-byte keccak hash prefix enables a hash-first fast path in {@code ArchiveProofNodeLoader}: if
- * the stored hash matches the expected hash the live node is at the target block and no history
- * lookup is needed (1 read total for cold nodes).
+ * <p><strong>Storage format:</strong> values are stored as bare {@code nodeBytes}, matching the
+ * legacy Bonsai on-disk format. No hash prefix is stored, so an existing Bonsai database can be
+ * opened by an archive node without any data migration. The archive historical-proof fast path in
+ * {@code ArchiveProofNodeLoader} recomputes {@code keccak256(node)} when it needs to compare the
+ * live node against an expected historical hash.
  */
 public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
-
-  /** Number of bytes occupied by the hash prefix stored before each node value. */
-  public static final int HASH_PREFIX_BYTES = 32;
 
   private final SegmentIdentifier trieSegment;
 
@@ -54,10 +52,7 @@ public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
   @Override
   public Optional<Bytes> getFlatAccountTrieNode(
       final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
-    return storage
-        .get(trieSegment, location.toArrayUnsafe())
-        .filter(raw -> raw.length >= HASH_PREFIX_BYTES)
-        .map(raw -> stripHashPrefix(raw));
+    return storage.get(trieSegment, location.toArrayUnsafe()).map(Bytes::wrap);
   }
 
   @Override
@@ -68,13 +63,7 @@ public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorage storage) {
     return storage
         .get(trieSegment, Bytes.concatenate(accountHash.getBytes(), location).toArrayUnsafe())
-        .filter(raw -> raw.length >= HASH_PREFIX_BYTES)
-        .map(raw -> stripHashPrefix(raw));
-  }
-
-  static Bytes stripHashPrefix(final byte[] raw) {
-    final int nodeLen = raw.length - HASH_PREFIX_BYTES;
-    return nodeLen == 0 ? Bytes.EMPTY : Bytes.wrap(raw, HASH_PREFIX_BYTES, nodeLen);
+        .map(Bytes::wrap);
   }
 
   @Override
@@ -84,8 +73,7 @@ public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final Bytes node) {
-    transaction.put(
-        trieSegment, location.toArrayUnsafe(), Bytes.concatenate(nodeHash, node).toArrayUnsafe());
+    transaction.put(trieSegment, location.toArrayUnsafe(), node.toArrayUnsafe());
   }
 
   @Override
@@ -99,7 +87,7 @@ public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
     transaction.put(
         trieSegment,
         Bytes.concatenate(accountHash.getBytes(), location).toArrayUnsafe(),
-        Bytes.concatenate(nodeHash, node).toArrayUnsafe());
+        node.toArrayUnsafe());
   }
 
   @Override

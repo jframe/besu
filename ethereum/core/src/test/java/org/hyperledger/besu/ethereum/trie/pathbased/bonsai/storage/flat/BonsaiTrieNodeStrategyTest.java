@@ -38,7 +38,7 @@ class BonsaiTrieNodeStrategyTest {
   }
 
   @Test
-  void putAccountTrieNode_prependsHash() {
+  void putAccountTrieNode_storesBareNode() {
     final Bytes location = Bytes.of(0x01, 0x02);
     final Bytes node = Bytes.of(0xAA, 0xBB, 0xCC);
     final Bytes32 nodeHash = org.hyperledger.besu.crypto.Hash.keccak256(node);
@@ -47,14 +47,14 @@ class BonsaiTrieNodeStrategyTest {
     strategy.putFlatAccountTrieNode(kv, tx, location, nodeHash, node);
     tx.commit();
 
+    // Legacy Bonsai format: the value is the bare node RLP, with no hash prefix, so an existing
+    // Bonsai database can be opened without migration.
     final byte[] raw = kv.get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe()).orElseThrow();
-    assertThat(raw).hasSize(32 + node.size());
-    assertThat(Bytes32.wrap(raw, 0)).isEqualTo(nodeHash);
-    assertThat(Bytes.wrap(raw, 32, raw.length - 32)).isEqualTo(node);
+    assertThat(Bytes.wrap(raw)).isEqualTo(node);
   }
 
   @Test
-  void getAccountTrieNode_stripsHashPrefix() {
+  void getAccountTrieNode_returnsBareNode() {
     final Bytes location = Bytes.of(0x03);
     final Bytes node = Bytes.of(0xDE, 0xAD, 0xBE, 0xEF);
     final Bytes32 nodeHash = org.hyperledger.besu.crypto.Hash.keccak256(node);
@@ -68,7 +68,23 @@ class BonsaiTrieNodeStrategyTest {
   }
 
   @Test
-  void putStorageTrieNode_prependsHash() {
+  void getAccountTrieNode_readsPreExistingBareValue() {
+    // Simulate a value written by stock Besu (bare node RLP, no hash prefix) and confirm the
+    // archive read path returns it unchanged rather than stripping bytes.
+    final Bytes location = Bytes.of(0x04);
+    final Bytes node = Bytes.of(0x01, 0x02, 0x03, 0x04, 0x05);
+    final Bytes32 nodeHash = org.hyperledger.besu.crypto.Hash.keccak256(node);
+
+    final SegmentedKeyValueStorageTransaction tx = kv.startTransaction();
+    tx.put(TRIE_BRANCH_STORAGE, location.toArrayUnsafe(), node.toArrayUnsafe());
+    tx.commit();
+
+    final Bytes result = strategy.getFlatAccountTrieNode(location, nodeHash, kv).orElseThrow();
+    assertThat(result).isEqualTo(node);
+  }
+
+  @Test
+  void putStorageTrieNode_storesBareNode() {
     final Hash accountHash = Hash.wrap(Bytes32.leftPad(Bytes.of(0x11)));
     final Bytes location = Bytes.of(0x05);
     final Bytes node = Bytes.of(0x99, 0x88, 0x77);
@@ -80,13 +96,11 @@ class BonsaiTrieNodeStrategyTest {
 
     final Bytes storageKey = Bytes.concatenate(accountHash.getBytes(), location);
     final byte[] raw = kv.get(TRIE_BRANCH_STORAGE, storageKey.toArrayUnsafe()).orElseThrow();
-    assertThat(raw).hasSize(32 + node.size());
-    assertThat(Bytes32.wrap(raw, 0)).isEqualTo(nodeHash);
-    assertThat(Bytes.wrap(raw, 32, raw.length - 32)).isEqualTo(node);
+    assertThat(Bytes.wrap(raw)).isEqualTo(node);
   }
 
   @Test
-  void getStorageTrieNode_stripsHashPrefix() {
+  void getStorageTrieNode_returnsBareNode() {
     final Hash accountHash = Hash.wrap(Bytes32.leftPad(Bytes.of(0x22)));
     final Bytes location = Bytes.of(0x06);
     final Bytes node = Bytes.of(0x11, 0x22, 0x33);
@@ -94,6 +108,26 @@ class BonsaiTrieNodeStrategyTest {
 
     final SegmentedKeyValueStorageTransaction tx = kv.startTransaction();
     strategy.putFlatStorageTrieNode(kv, tx, accountHash, location, nodeHash, node);
+    tx.commit();
+
+    final Bytes result =
+        strategy.getFlatStorageTrieNode(accountHash, location, nodeHash, kv).orElseThrow();
+    assertThat(result).isEqualTo(node);
+  }
+
+  @Test
+  void getStorageTrieNode_readsPreExistingBareValue() {
+    // A small storage-trie root (< 32 bytes) written by stock Besu must round-trip; the previous
+    // hash-prefix read path dropped sub-32-byte values via a length filter, which manifested as
+    // "Unable to load trie node value ... location 0x" when an archive node opened a legacy DB.
+    final Hash accountHash = Hash.wrap(Bytes32.leftPad(Bytes.of(0x33)));
+    final Bytes location = Bytes.EMPTY;
+    final Bytes node = Bytes.of(0xC0, 0xDE);
+    final Bytes32 nodeHash = org.hyperledger.besu.crypto.Hash.keccak256(node);
+
+    final Bytes storageKey = Bytes.concatenate(accountHash.getBytes(), location);
+    final SegmentedKeyValueStorageTransaction tx = kv.startTransaction();
+    tx.put(TRIE_BRANCH_STORAGE, storageKey.toArrayUnsafe(), node.toArrayUnsafe());
     tx.commit();
 
     final Bytes result =

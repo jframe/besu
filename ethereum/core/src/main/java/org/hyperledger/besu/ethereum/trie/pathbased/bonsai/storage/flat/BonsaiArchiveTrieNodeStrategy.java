@@ -176,13 +176,9 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final Bytes node) {
     // Capture prior node BEFORE the base write overwrites TRIE_BRANCH_STORAGE.
-    // Strip the 32-byte hash prefix that BonsaiTrieNodeStrategy prepends to stored values.
     final Optional<Bytes> priorNode =
         trieNodeIndexEnabled
-            ? storage
-                .get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe())
-                .filter(raw -> raw.length >= BonsaiTrieNodeStrategy.HASH_PREFIX_BYTES)
-                .map(raw -> BonsaiTrieNodeStrategy.stripHashPrefix(raw))
+            ? storage.get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe()).map(Bytes::wrap)
             : Optional.empty();
 
     baseStrategy.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
@@ -210,13 +206,9 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     final Bytes accountHashLocation = Bytes.concatenate(accountHash.getBytes(), location);
 
     // Capture prior node BEFORE the base write overwrites TRIE_BRANCH_STORAGE.
-    // Strip the 32-byte hash prefix that BonsaiTrieNodeStrategy prepends to stored values.
     final Optional<Bytes> priorNode =
         trieNodeIndexEnabled
-            ? storage
-                .get(TRIE_BRANCH_STORAGE, accountHashLocation.toArrayUnsafe())
-                .filter(raw -> raw.length >= BonsaiTrieNodeStrategy.HASH_PREFIX_BYTES)
-                .map(raw -> BonsaiTrieNodeStrategy.stripHashPrefix(raw))
+            ? storage.get(TRIE_BRANCH_STORAGE, accountHashLocation.toArrayUnsafe()).map(Bytes::wrap)
             : Optional.empty();
 
     baseStrategy.putFlatStorageTrieNode(
