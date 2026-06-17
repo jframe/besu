@@ -167,6 +167,16 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
                   existingColumnFamilies.stream()
                       .noneMatch(existed -> Arrays.equals(existed, ignorableSegment.getId())))
           .forEach(trimmedSegments::remove);
+      // Also open ignorable segments that DO physically exist but are not part of the
+      // active format's segment set, so RocksDB can open every existing column family
+      // (e.g. leftover Bonsai CFs in a database converted to Forest).
+      ignorableSegments.stream()
+          .filter(
+              ignorableSegment ->
+                  existingColumnFamilies.stream()
+                      .anyMatch(existed -> Arrays.equals(existed, ignorableSegment.getId())))
+          .filter(ignorableSegment -> !trimmedSegments.contains(ignorableSegment))
+          .forEach(trimmedSegments::add);
       columnDescriptors =
           trimmedSegments.stream()
               .map(segment -> createColumnDescriptor(segment, configuration))

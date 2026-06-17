@@ -288,6 +288,57 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
   }
 
   @Test
+  public void dbShouldOpenExistingIgnorableSegmentNotInActiveFormat(@TempDir final Path tempDir)
+      throws Exception {
+    final Path testPath = tempDir.resolve("testdb");
+    final byte[] key = bytesFromHexString("0001");
+    final byte[] value = bytesFromHexString("0FFF");
+
+    // Create a db that physically contains DEFAULT, FOO and EXPERIMENTAL, and write to EXPERIMENTAL
+    SegmentedKeyValueStorage store =
+        createSegmentedStore(
+            testPath,
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO, TestSegment.EXPERIMENTAL),
+            List.of());
+    final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
+    tx.put(TestSegment.EXPERIMENTAL, key, value);
+    tx.commit();
+    store.close();
+
+    // Reopen with EXPERIMENTAL absent from the active/default set but listed as ignorable. The CF
+    // still physically exists on disk, so it must be opened, otherwise RocksDB cannot open the db.
+    store =
+        createSegmentedStore(
+            testPath,
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO),
+            List.of(TestSegment.EXPERIMENTAL));
+
+    // The existing CF was opened, so its previously written value is readable
+    assertThat(store.get(TestSegment.EXPERIMENTAL, key)).contains(value);
+    store.close();
+  }
+
+  @Test
+  public void dbShouldStillIgnoreAbsentIgnorableSegmentNotInActiveFormat(
+      @TempDir final Path tempDir) throws Exception {
+    final Path testPath = tempDir.resolve("testdb");
+
+    // Fresh db with EXPERIMENTAL neither in the active/default set nor physically present. As an
+    // absent ignorable segment, it should simply be skipped and the db should open normally.
+    final SegmentedKeyValueStorage store =
+        createSegmentedStore(
+            testPath,
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO),
+            List.of(TestSegment.EXPERIMENTAL));
+
+    // Reading from the not-created segment should fail because its CF was not opened
+    assertThatThrownBy(() -> store.get(TestSegment.EXPERIMENTAL, bytesFromHexString("0001")))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("Column handle not found");
+    store.close();
+  }
+
+  @Test
   public void createStoreMustCreateMetrics() throws Exception {
     // Prepare mocks
     when(labelledMetricOperationTimerMock.labels(any())).thenReturn(operationTimerMock);
