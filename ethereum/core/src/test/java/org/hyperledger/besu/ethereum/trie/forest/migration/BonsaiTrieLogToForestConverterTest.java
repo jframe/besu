@@ -242,20 +242,23 @@ class BonsaiTrieLogToForestConverterTest {
   @Test
   void selfDestructThenRecreateWithFreshStorage() {
     final StorageSlotKey oldSlot = new StorageSlotKey(UInt256.valueOf(1));
+    final StorageSlotKey sideSlot = new StorageSlotKey(UInt256.valueOf(3));
     final StorageSlotKey newSlot = new StorageSlotKey(UInt256.valueOf(9));
 
-    // Oracle: block 1 creates con with oldSlot=5.
+    // Oracle: block 1 creates con with oldSlot=5 and sideSlot=99.
     final ForestMutableWorldState oracle = oracle(forestStorage());
     final WorldUpdater updater1 = oracle.updater();
     final MutableAccount contract1 = updater1.createAccount(CONTRACT);
     contract1.setNonce(1);
     contract1.setStorageValue(UInt256.valueOf(1), UInt256.valueOf(5));
+    contract1.setStorageValue(UInt256.valueOf(3), UInt256.valueOf(99));
     updater1.commit();
     oracle.persist(null);
     final Hash root1 = oracle.rootHash();
-    final Hash sroot1 = storageRootOf(Map.of(oldSlot, UInt256.valueOf(5)));
+    final Hash sroot1 =
+        storageRootOf(Map.of(oldSlot, UInt256.valueOf(5), sideSlot, UInt256.valueOf(99)));
 
-    // Block 2: selfdestruct con, then recreate it with fresh storage newSlot=7.
+    // Block 2: selfdestruct con (wiping oldSlot AND sideSlot), then recreate with ONLY newSlot=7.
     final WorldUpdater destroyUpdater = oracle.updater();
     destroyUpdater.deleteAccount(CONTRACT);
     destroyUpdater.commit();
@@ -274,6 +277,7 @@ class BonsaiTrieLogToForestConverterTest {
     final TrieLogLayer block1 = new TrieLogLayer();
     block1.addAccountChange(CONTRACT, null, acct(1, 0, sroot1, Hash.EMPTY));
     block1.addStorageChange(CONTRACT, oldSlot, null, UInt256.valueOf(5));
+    block1.addStorageChange(CONTRACT, sideSlot, null, UInt256.valueOf(99));
     assertThat(converter.applyTrieLog(block1, root1)).isEqualTo(root1);
 
     final TrieLogLayer block2 = new TrieLogLayer();
@@ -282,6 +286,9 @@ class BonsaiTrieLogToForestConverterTest {
     // The old slot is removed by the destruction.
     block2.addStorageChange(CONTRACT, oldSlot, UInt256.valueOf(5), null);
     // The recreated slot carries the clear flag so the storage trie resets to empty before reapply.
+    // sideSlot is intentionally NOT listed here: only the clear flag can drop it from the trie, so
+    // this slot makes the converter's clear branch load-bearing. Without it, replay would start
+    // from sroot1 (which still contains sideSlot=99) and produce the wrong storage root.
     block2
         .getStorageChanges()
         .computeIfAbsent(CONTRACT, k -> new TreeMap<>())

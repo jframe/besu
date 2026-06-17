@@ -90,7 +90,7 @@ public class BonsaiTrieLogToForestConverter {
     genesisState.writeStateTo(genesisWorldState);
     final Hash genesisRoot = genesisWorldState.rootHash();
     final Hash expected = genesisState.getBlock().getHeader().getStateRoot();
-    if (!genesisRoot.equals(expected)) {
+    if (!genesisRoot.getBytes().equals(expected.getBytes())) {
       throw new IllegalStateException(
           "Genesis state root " + genesisRoot + " does not match header " + expected);
     }
