@@ -44,12 +44,14 @@ import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksD
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfigurationBuilder;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.segmented.OptimisticRocksDBColumnarKeyValueStorage;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
+import org.hyperledger.besu.util.log.LogUtil;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,6 +83,10 @@ import picocli.CommandLine.ParentCommand;
 public class ConvertToForestSubCommand implements Runnable {
 
   private static final Logger LOG = LoggerFactory.getLogger(ConvertToForestSubCommand.class);
+
+  private static final int LOG_INTERVAL_SECONDS = 60;
+
+  private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
 
   @SuppressWarnings("unused")
   @ParentCommand
@@ -162,6 +168,8 @@ public class ConvertToForestSubCommand implements Runnable {
 
       final long head = blockchain.getChainHeadBlockNumber();
 
+      final long startMillis = System.currentTimeMillis();
+
       for (long number = 1; number <= head; number++) {
         final long blockNumber = number;
         final Hash blockHash =
@@ -186,13 +194,28 @@ public class ConvertToForestSubCommand implements Runnable {
                                 + "; trie-log pruning must be disabled for conversion"));
         final TrieLog layer = trieLogFactory.deserialize(raw);
         converter.applyTrieLog(layer, header.getStateRoot());
-        if (number % 5000 == 0) {
-          LOG.info(
-              "Converted through block {} / {} (root={})",
-              number,
-              head,
-              converter.currentRootHash());
-        }
+
+        LogUtil.throttledLog(
+            () -> {
+              final long now = System.currentTimeMillis();
+              final double elapsedSeconds = Math.max((now - startMillis) / 1000.0, 0.001);
+              final double blocksPerSecond = blockNumber / elapsedSeconds;
+              final double percentComplete = head > 0 ? (blockNumber * 100.0 / head) : 100.0;
+              final String eta =
+                  blocksPerSecond > 0
+                      ? formatDuration((long) ((head - blockNumber) / blocksPerSecond))
+                      : "unknown";
+              LOG.info(
+                  "Converted {} / {} blocks ({}%), {} blocks/s, ETA {} (root={})",
+                  blockNumber,
+                  head,
+                  String.format("%.1f", percentComplete),
+                  String.format("%.0f", blocksPerSecond),
+                  eta,
+                  converter.currentRootHash());
+            },
+            shouldLogProgress,
+            LOG_INTERVAL_SECONDS);
       }
       LOG.info("Conversion complete to head {} (root={})", head, converter.currentRootHash());
 
@@ -251,5 +274,21 @@ public class ConvertToForestSubCommand implements Runnable {
     } catch (final IOException e) {
       throw new UncheckedIOException("Failed to write FOREST database metadata to " + dataDir, e);
     }
+  }
+
+  private static String formatDuration(final long totalSeconds) {
+    if (totalSeconds < 0) {
+      return "unknown";
+    }
+    final long hours = totalSeconds / 3600;
+    final long minutes = (totalSeconds % 3600) / 60;
+    final long seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return String.format("%dh %dm %ds", hours, minutes, seconds);
+    }
+    if (minutes > 0) {
+      return String.format("%dm %ds", minutes, seconds);
+    }
+    return String.format("%ds", seconds);
   }
 }
