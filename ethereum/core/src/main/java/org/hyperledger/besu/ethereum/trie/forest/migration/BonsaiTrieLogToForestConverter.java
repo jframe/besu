@@ -42,6 +42,8 @@ import org.apache.tuweni.units.bigints.UInt256;
  * changes for that layer are rolled back.
  */
 public class BonsaiTrieLogToForestConverter {
+  private static final Bytes32 EMPTY_TRIE_ROOT = Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes());
+
   private final ForestWorldStateKeyValueStorage forestStorage;
   private Bytes32 currentRootHash;
 
@@ -52,7 +54,7 @@ public class BonsaiTrieLogToForestConverter {
    */
   public BonsaiTrieLogToForestConverter(final ForestWorldStateKeyValueStorage forestStorage) {
     this.forestStorage = forestStorage;
-    this.currentRootHash = Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes());
+    this.currentRootHash = EMPTY_TRIE_ROOT;
   }
 
   /**
@@ -76,74 +78,75 @@ public class BonsaiTrieLogToForestConverter {
    */
   public Hash applyTrieLog(final TrieLog layer, final Hash expectedStateRoot) {
     final ForestWorldStateKeyValueStorage.Updater updater = forestStorage.updater();
-    final NodeLoader accountLoader =
-        (location, hash) -> forestStorage.getAccountStateTrieNode(hash);
-    final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
-        new StoredMerklePatriciaTrie<>(accountLoader, currentRootHash, b -> b, b -> b);
+    try {
+      final NodeLoader accountLoader =
+          (location, hash) -> forestStorage.getAccountStateTrieNode(hash);
+      final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
+          new StoredMerklePatriciaTrie<>(accountLoader, currentRootHash, b -> b, b -> b);
 
-    final Map<Address, ? extends TrieLog.LogTuple<Bytes>> codeChanges = layer.getCodeChanges();
-    for (final var entry : codeChanges.entrySet()) {
-      final Bytes updatedCode = entry.getValue().getUpdated();
-      if (updatedCode != null && !updatedCode.isEmpty()) {
-        updater.putCode(updatedCode);
-      }
-    }
-
-    final Map<Address, ? extends TrieLog.LogTuple<AccountValue>> accountChanges =
-        layer.getAccountChanges();
-    final Map<Address, ? extends Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>>>
-        storageChangesByAddress = layer.getStorageChanges();
-    for (final var entry : accountChanges.entrySet()) {
-      final Address address = entry.getKey();
-      final TrieLog.LogTuple<AccountValue> change = entry.getValue();
-      final AccountValue updated = change.getUpdated();
-      final Bytes32 addressHash = Bytes32.wrap(address.addressHash().getBytes());
-
-      if (updated == null) {
-        accountTrie.remove(addressHash);
-        continue;
-      }
-
-      final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges =
-          storageChangesByAddress.get(address);
-      if (slotChanges != null && !slotChanges.isEmpty()) {
-        final AccountValue prior = change.getPrior();
-        final Bytes32 priorStorageRoot =
-            prior == null
-                ? Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes())
-                : Bytes32.wrap(prior.getStorageRoot().getBytes());
-        final boolean cleared =
-            prior == null
-                || slotChanges.values().stream().anyMatch(TrieLog.LogTuple::isClearedAtLeastOnce);
-        final Bytes32 storageRoot =
-            rebuildStorageRoot(updater, priorStorageRoot, cleared, slotChanges);
-        if (!storageRoot.equals(Bytes32.wrap(updated.getStorageRoot().getBytes()))) {
-          updater.rollback();
-          throw new IllegalStateException(
-              "Reconstructed storage root for "
-                  + address
-                  + " ("
-                  + Hash.wrap(storageRoot)
-                  + ") does not match account storageRoot "
-                  + updated.getStorageRoot());
+      final Map<Address, ? extends TrieLog.LogTuple<Bytes>> codeChanges = layer.getCodeChanges();
+      for (final var entry : codeChanges.entrySet()) {
+        final Bytes updatedCode = entry.getValue().getUpdated();
+        if (updatedCode != null && !updatedCode.isEmpty()) {
+          updater.putCode(updatedCode);
         }
       }
-      accountTrie.put(addressHash, RLP.encode(updated::writeTo));
-    }
 
-    accountTrie.commit((location, hash, value) -> updater.putAccountStateTrieNode(hash, value));
-    final Bytes32 newRoot = accountTrie.getRootHash();
-    if (!newRoot.equals(Bytes32.wrap(expectedStateRoot.getBytes()))) {
+      final Map<Address, ? extends TrieLog.LogTuple<AccountValue>> accountChanges =
+          layer.getAccountChanges();
+      final Map<Address, ? extends Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>>>
+          storageChangesByAddress = layer.getStorageChanges();
+      for (final var entry : accountChanges.entrySet()) {
+        final Address address = entry.getKey();
+        final TrieLog.LogTuple<AccountValue> change = entry.getValue();
+        final AccountValue updated = change.getUpdated();
+        final Bytes32 addressHash = Bytes32.wrap(address.addressHash().getBytes());
+
+        if (updated == null) {
+          accountTrie.remove(addressHash);
+          continue;
+        }
+
+        final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges =
+            storageChangesByAddress.get(address);
+        if (slotChanges != null && !slotChanges.isEmpty()) {
+          final AccountValue prior = change.getPrior();
+          final Bytes32 priorStorageRoot =
+              prior == null ? EMPTY_TRIE_ROOT : Bytes32.wrap(prior.getStorageRoot().getBytes());
+          final boolean cleared =
+              prior == null
+                  || slotChanges.values().stream().anyMatch(TrieLog.LogTuple::isClearedAtLeastOnce);
+          final Bytes32 storageRoot =
+              rebuildStorageRoot(updater, priorStorageRoot, cleared, slotChanges);
+          if (!storageRoot.equals(Bytes32.wrap(updated.getStorageRoot().getBytes()))) {
+            throw new IllegalStateException(
+                "Reconstructed storage root for "
+                    + address
+                    + " ("
+                    + Hash.wrap(storageRoot)
+                    + ") does not match account storageRoot "
+                    + updated.getStorageRoot());
+          }
+        }
+        accountTrie.put(addressHash, RLP.encode(updated::writeTo));
+      }
+
+      accountTrie.commit((location, hash, value) -> updater.putAccountStateTrieNode(hash, value));
+      final Bytes32 newRoot = accountTrie.getRootHash();
+      if (!newRoot.equals(Bytes32.wrap(expectedStateRoot.getBytes()))) {
+        throw new IllegalStateException(
+            "Reconstructed state root "
+                + Hash.wrap(newRoot)
+                + " does not match expected "
+                + expectedStateRoot);
+      }
+      updater.commit();
+      currentRootHash = newRoot;
+      return Hash.wrap(newRoot);
+    } catch (final RuntimeException e) {
       updater.rollback();
-      throw new IllegalStateException(
-          "Reconstructed state root "
-              + Hash.wrap(newRoot)
-              + " does not match expected "
-              + expectedStateRoot);
+      throw e;
     }
-    updater.commit();
-    currentRootHash = newRoot;
-    return Hash.wrap(newRoot);
   }
 
   private Bytes32 rebuildStorageRoot(
@@ -151,8 +154,7 @@ public class BonsaiTrieLogToForestConverter {
       final Bytes32 priorStorageRoot,
       final boolean cleared,
       final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges) {
-    final Bytes32 startRoot =
-        cleared ? Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes()) : priorStorageRoot;
+    final Bytes32 startRoot = cleared ? EMPTY_TRIE_ROOT : priorStorageRoot;
     final NodeLoader storageLoader =
         (location, hash) -> forestStorage.getAccountStorageTrieNode(hash);
     final StoredMerklePatriciaTrie<Bytes32, Bytes> storageTrie =
