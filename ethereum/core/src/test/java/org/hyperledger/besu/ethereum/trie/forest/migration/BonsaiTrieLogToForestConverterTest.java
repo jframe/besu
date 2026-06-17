@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.WorldStatePreimageKeyValue
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.forest.worldview.ForestMutableWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.PathBasedValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.evm.account.MutableAccount;
@@ -35,6 +36,7 @@ import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -230,6 +232,56 @@ class BonsaiTrieLogToForestConverterTest {
     block2.addAccountChange(
         CONTRACT, acct(1, 0, sroot1, Hash.EMPTY), acct(1, 0, sroot2, Hash.EMPTY));
     block2.addStorageChange(CONTRACT, slot2, UInt256.valueOf(222), null);
+    assertThat(converter.applyTrieLog(block2, root2)).isEqualTo(root2);
+  }
+
+  @Test
+  void selfDestructThenRecreateWithFreshStorage() {
+    final StorageSlotKey oldSlot = new StorageSlotKey(UInt256.valueOf(1));
+    final StorageSlotKey newSlot = new StorageSlotKey(UInt256.valueOf(9));
+
+    // Oracle: block 1 creates con with oldSlot=5.
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater updater1 = oracle.updater();
+    final MutableAccount contract1 = updater1.createAccount(CONTRACT);
+    contract1.setNonce(1);
+    contract1.setStorageValue(UInt256.valueOf(1), UInt256.valueOf(5));
+    updater1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+    final Hash sroot1 = storageRootOf(Map.of(oldSlot, UInt256.valueOf(5)));
+
+    // Block 2: selfdestruct con, then recreate it with fresh storage newSlot=7.
+    final WorldUpdater destroyUpdater = oracle.updater();
+    destroyUpdater.deleteAccount(CONTRACT);
+    destroyUpdater.commit();
+    final WorldUpdater recreateUpdater = oracle.updater();
+    final MutableAccount recreated = recreateUpdater.createAccount(CONTRACT);
+    recreated.setNonce(1);
+    recreated.setStorageValue(UInt256.valueOf(9), UInt256.valueOf(7));
+    recreateUpdater.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+    final Hash sroot2 = storageRootOf(Map.of(newSlot, UInt256.valueOf(7)));
+
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage());
+
+    final TrieLogLayer block1 = new TrieLogLayer();
+    block1.addAccountChange(CONTRACT, null, acct(1, 0, sroot1, Hash.EMPTY));
+    block1.addStorageChange(CONTRACT, oldSlot, null, UInt256.valueOf(5));
+    assertThat(converter.applyTrieLog(block1, root1)).isEqualTo(root1);
+
+    final TrieLogLayer block2 = new TrieLogLayer();
+    block2.addAccountChange(
+        CONTRACT, acct(1, 0, sroot1, Hash.EMPTY), acct(1, 0, sroot2, Hash.EMPTY));
+    // The old slot is removed by the destruction.
+    block2.addStorageChange(CONTRACT, oldSlot, UInt256.valueOf(5), null);
+    // The recreated slot carries the clear flag so the storage trie resets to empty before reapply.
+    block2
+        .getStorageChanges()
+        .computeIfAbsent(CONTRACT, k -> new TreeMap<>())
+        .put(newSlot, new PathBasedValue<>(null, UInt256.valueOf(7), true));
     assertThat(converter.applyTrieLog(block2, root2)).isEqualTo(root2);
   }
 }
