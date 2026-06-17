@@ -2773,6 +2773,14 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
         && !dataStorageConfiguration.getHistoryExpiryPruneEnabled()) {
       rocksDBPlugin.addIgnorableSegmentIdentifier(KeyValueSegmentIdentifier.CHAIN_PRUNER_STATE);
     }
+    // Register cross-format segments as ignorable so a database converted between Bonsai and Forest
+    // (which retains the other format's column families on disk) can still be opened.
+    rocksDBPlugin.addIgnorableSegmentIdentifier(KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE);
+    rocksDBPlugin.addIgnorableSegmentIdentifier(KeyValueSegmentIdentifier.CODE_STORAGE);
+    rocksDBPlugin.addIgnorableSegmentIdentifier(KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE);
+    rocksDBPlugin.addIgnorableSegmentIdentifier(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE);
+    rocksDBPlugin.addIgnorableSegmentIdentifier(KeyValueSegmentIdentifier.TRIE_LOG_STORAGE);
+    rocksDBPlugin.addIgnorableSegmentIdentifier(KeyValueSegmentIdentifier.WORLD_STATE);
   }
 
   private void validatePostMergeCheckpointBlockRequirements() {
