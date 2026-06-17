@@ -2744,6 +2744,16 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
   }
 
   /**
+   * Returns the parsed genesis configuration. Used by offline storage subcommands that need to
+   * reconstruct genesis world state (which has no trie log).
+   *
+   * @return the effective {@link GenesisConfig}
+   */
+  protected GenesisConfig getGenesisConfig() {
+    return readGenesisConfig();
+  }
+
+  /**
    * Return the genesis config options
    *
    * @return the genesis config options
