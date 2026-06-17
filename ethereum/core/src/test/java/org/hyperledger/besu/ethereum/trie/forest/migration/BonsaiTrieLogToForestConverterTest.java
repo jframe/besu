@@ -15,17 +15,42 @@
 package org.hyperledger.besu.ethereum.trie.forest.migration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.storage.keyvalue.WorldStatePreimageKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.forest.worldview.ForestMutableWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
+import org.hyperledger.besu.evm.account.MutableAccount;
+import org.hyperledger.besu.evm.internal.EvmConfiguration;
+import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
 import org.junit.jupiter.api.Test;
 
 class BonsaiTrieLogToForestConverterTest {
 
+  private static final Address ALICE =
+      Address.fromHexString("0x000000000000000000000000000000000000aa01");
+
   private ForestWorldStateKeyValueStorage forestStorage() {
     return new ForestWorldStateKeyValueStorage(new InMemoryKeyValueStorage());
+  }
+
+  private ForestMutableWorldState oracle(final ForestWorldStateKeyValueStorage storage) {
+    return new ForestMutableWorldState(
+        storage,
+        new WorldStatePreimageKeyValueStorage(new InMemoryKeyValueStorage()),
+        EvmConfiguration.DEFAULT);
+  }
+
+  private static PmtStateTrieAccountValue account(final long nonce, final long balanceWei) {
+    return new PmtStateTrieAccountValue(
+        nonce, Wei.of(balanceWei), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
   }
 
   @Test
@@ -33,5 +58,37 @@ class BonsaiTrieLogToForestConverterTest {
     final BonsaiTrieLogToForestConverter converter =
         new BonsaiTrieLogToForestConverter(forestStorage());
     assertThat(converter.currentRootHash()).isEqualTo(Hash.EMPTY_TRIE_HASH);
+  }
+
+  @Test
+  void applyCreatesAccountAndMatchesExpectedStateRoot() {
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater updater = oracle.updater();
+    final MutableAccount alice = updater.createAccount(ALICE);
+    alice.setNonce(7);
+    alice.setBalance(Wei.of(1234));
+    updater.commit();
+    oracle.persist(null);
+    final Hash expectedRoot = oracle.rootHash();
+
+    final TrieLogLayer layer = new TrieLogLayer();
+    layer.addAccountChange(ALICE, null, account(7, 1234));
+
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage());
+    assertThat(converter.applyTrieLog(layer, expectedRoot)).isEqualTo(expectedRoot);
+    assertThat(converter.currentRootHash()).isEqualTo(expectedRoot);
+  }
+
+  @Test
+  void applyThrowsOnStateRootMismatch() {
+    final TrieLogLayer layer = new TrieLogLayer();
+    layer.addAccountChange(ALICE, null, account(7, 1234));
+
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage());
+    assertThatThrownBy(() -> converter.applyTrieLog(layer, Hash.ZERO))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("does not match expected");
   }
 }

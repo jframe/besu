@@ -14,9 +14,18 @@
  */
 package org.hyperledger.besu.ethereum.trie.forest.migration;
 
+import org.hyperledger.besu.datatypes.AccountValue;
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
+import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
+import java.util.Map;
+
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
 /**
@@ -31,12 +40,7 @@ import org.apache.tuweni.bytes.Bytes32;
  * changes for that layer are rolled back.
  */
 public class BonsaiTrieLogToForestConverter {
-  // Retained for use by applyTrieLog (added in subsequent step); not yet read by the skeleton.
-  @SuppressWarnings("UnusedVariable")
   private final ForestWorldStateKeyValueStorage forestStorage;
-
-  // Reassigned by applyTrieLog (added in a subsequent step), so cannot be final.
-  @SuppressWarnings("FieldCanBeFinal")
   private Bytes32 currentRootHash;
 
   /**
@@ -56,5 +60,50 @@ public class BonsaiTrieLogToForestConverter {
    */
   public Hash currentRootHash() {
     return Hash.wrap(currentRootHash);
+  }
+
+  /**
+   * Replays a single Bonsai trie log into the Forest account state trie, persists the resulting
+   * trie nodes, and verifies that the reconstructed state root matches the block's expected state
+   * root.
+   *
+   * @param layer the Bonsai trie log describing the block's state diff
+   * @param expectedStateRoot the canonical post-block state root to verify against
+   * @return the reconstructed (and verified) state root
+   * @throws IllegalStateException if the reconstructed state root does not match the expected root
+   */
+  public Hash applyTrieLog(final TrieLog layer, final Hash expectedStateRoot) {
+    final ForestWorldStateKeyValueStorage.Updater updater = forestStorage.updater();
+    final NodeLoader accountLoader =
+        (location, hash) -> forestStorage.getAccountStateTrieNode(hash);
+    final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
+        new StoredMerklePatriciaTrie<>(accountLoader, currentRootHash, b -> b, b -> b);
+
+    final Map<Address, ? extends TrieLog.LogTuple<AccountValue>> accountChanges =
+        layer.getAccountChanges();
+    for (final var entry : accountChanges.entrySet()) {
+      final Address address = entry.getKey();
+      final AccountValue updated = entry.getValue().getUpdated();
+      final Bytes32 addressHash = Bytes32.wrap(address.addressHash().getBytes());
+      if (updated == null) {
+        accountTrie.remove(addressHash);
+      } else {
+        accountTrie.put(addressHash, RLP.encode(updated::writeTo));
+      }
+    }
+
+    accountTrie.commit((location, hash, value) -> updater.putAccountStateTrieNode(hash, value));
+    final Bytes32 newRoot = accountTrie.getRootHash();
+    if (!newRoot.equals(Bytes32.wrap(expectedStateRoot.getBytes()))) {
+      updater.rollback();
+      throw new IllegalStateException(
+          "Reconstructed state root "
+              + Hash.wrap(newRoot)
+              + " does not match expected "
+              + expectedStateRoot);
+    }
+    updater.commit();
+    currentRootHash = newRoot;
+    return Hash.wrap(newRoot);
   }
 }
