@@ -14,33 +14,50 @@
  */
 package org.hyperledger.besu.cli.subcommands.storage;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 import org.hyperledger.besu.cli.util.VersionProvider;
 import org.hyperledger.besu.controller.BesuController;
+import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.chain.BlockchainStorage;
 import org.hyperledger.besu.ethereum.chain.GenesisState;
-import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
-import org.hyperledger.besu.ethereum.storage.StorageProvider;
+import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
+import org.hyperledger.besu.ethereum.mainnet.ScheduleBasedBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
+import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
+import org.hyperledger.besu.ethereum.storage.keyvalue.WorldStatePreimageKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.forest.migration.BonsaiTrieLogToForestConverter;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogFactoryImpl;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableDataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutablePathBasedExtraStorageConfiguration;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
+import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.WorldStatePreimageStorage;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetricsFactory;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.DatabaseMetadata;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfiguration;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfigurationBuilder;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.segmented.OptimisticRocksDBColumnarKeyValueStorage;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
+import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
+import org.hyperledger.besu.services.kvstore.SegmentedKeyValueStorageAdapter;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
-import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -51,6 +68,11 @@ import picocli.CommandLine.ParentCommand;
  * The {@code x-convert-to-forest} storage subcommand. Converts an existing Bonsai full-sync
  * database into a Forest database by replaying its trie logs block-by-block, reconstructing the
  * Forest world-state trie nodes, and flipping the database metadata to the Forest format.
+ *
+ * <p>The conversion opens a single RocksDB store spanning the union of the Bonsai column families
+ * (read from) and the Forest {@code WORLD_STATE} column family (written to). The controller's
+ * format-gated storage provider cannot be used here because, while the database metadata still says
+ * BONSAI, it only opens BONSAI column families and would never open {@code WORLD_STATE}.
  */
 @Command(
     name = "x-convert-to-forest",
@@ -69,12 +91,6 @@ public class ConvertToForestSubCommand implements Runnable {
   @SuppressWarnings("unused")
   @CommandLine.Spec
   private CommandLine.Model.CommandSpec spec; // Picocli injects reference to command spec
-
-  @CommandLine.Option(
-      names = "--prune-bonsai",
-      description =
-          "After conversion, clear the Bonsai-only column families to reclaim disk space (default: ${DEFAULT-VALUE}).")
-  private boolean pruneBonsai = false;
 
   /** Default Constructor. */
   ConvertToForestSubCommand() {}
@@ -96,80 +112,147 @@ public class ConvertToForestSubCommand implements Runnable {
 
   @Override
   public void run() {
+    // Phase 1: build the controller only to capture the protocol schedule + genesis, then release
+    // the RocksDB lock so we can re-open the database with our own union segment set.
+    final ProtocolSchedule protocolSchedule;
+    final GenesisState genesisState;
+    final Path dataDir;
+    final boolean receiptCompaction;
+
     final BesuController controller = createBesuController();
-    final DataStorageConfiguration config = controller.getDataStorageConfiguration();
-    Preconditions.checkArgument(
-        config.getDataStorageFormat() == DataStorageFormat.BONSAI,
-        "x-convert-to-forest only supports source data-storage-format=BONSAI");
+    try {
+      final DataStorageConfiguration config = controller.getDataStorageConfiguration();
+      checkArgument(
+          config.getDataStorageFormat() == DataStorageFormat.BONSAI,
+          "x-convert-to-forest only supports source data-storage-format=BONSAI");
 
-    final StorageProvider storageProvider = controller.getStorageProvider();
-    final MutableBlockchain blockchain = controller.getProtocolContext().getBlockchain();
-    final BonsaiWorldStateKeyValueStorage bonsai =
-        (BonsaiWorldStateKeyValueStorage) storageProvider.createWorldStateStorage(config);
-    final ForestWorldStateKeyValueStorage forest =
-        new ForestWorldStateKeyValueStorage(
-            storageProvider.getStorageBySegmentIdentifier(KeyValueSegmentIdentifier.WORLD_STATE));
-    final BonsaiTrieLogToForestConverter converter = new BonsaiTrieLogToForestConverter(forest);
+      protocolSchedule = controller.getProtocolSchedule();
+      genesisState =
+          GenesisState.fromConfig(
+              config,
+              parentCommand.besuCommand.getGenesisConfig(),
+              protocolSchedule,
+              new CodeCache());
+      dataDir = parentCommand.besuCommand.dataDir();
+      receiptCompaction = config.getReceiptCompactionEnabled();
+    } finally {
+      controller.close();
+    }
 
-    // Seed genesis so block-1 replay starts from the correct base state.
-    final GenesisState genesisState =
-        GenesisState.fromConfig(
-            config,
-            parentCommand.besuCommand.getGenesisConfig(),
-            controller.getProtocolSchedule(),
-            new CodeCache());
-    final WorldStatePreimageStorage preimage = storageProvider.createWorldStatePreimageStorage();
-    converter.seedGenesis(genesisState, preimage, EvmConfiguration.DEFAULT);
-    LOG.info("Seeded genesis state (root={})", converter.currentRootHash());
+    // Phase 2: open one RocksDB store over the union of every Bonsai column family plus the Forest
+    // WORLD_STATE column family, and drive the conversion against per-segment views of it.
+    final Path databaseDir = dataDir.resolve(BesuController.DATABASE_PATH);
+    final RocksDBConfiguration rocksDBConfiguration =
+        new RocksDBConfigurationBuilder().databaseDir(databaseDir).build();
 
-    final long head = blockchain.getChainHeadBlockNumber();
-    final TrieLogFactoryImpl trieLogFactory = new TrieLogFactoryImpl();
-    for (long number = 1; number <= head; number++) {
-      final BlockHeader header =
-          blockchain
-              .getBlockHeader(blockchain.getBlockHashByNumber(number).orElseThrow())
-              .orElseThrow();
-      final long blockNumber = number;
-      final byte[] raw =
-          bonsai
-              .getTrieLog(header.getBlockHash())
+    final List<SegmentIdentifier> segments = new ArrayList<>();
+    for (final KeyValueSegmentIdentifier segment : KeyValueSegmentIdentifier.values()) {
+      if (segment.includeInDatabaseFormat(DataStorageFormat.BONSAI)) {
+        segments.add(segment);
+      }
+    }
+    // WORLD_STATE is a FOREST-only column family; opening it here creates+opens it for writing.
+    segments.add(KeyValueSegmentIdentifier.WORLD_STATE);
+
+    final OptimisticRocksDBColumnarKeyValueStorage unionStore =
+        new OptimisticRocksDBColumnarKeyValueStorage(
+            rocksDBConfiguration,
+            segments,
+            List.of(),
+            new NoOpMetricsSystem(),
+            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS);
+    try {
+      final ForestWorldStateKeyValueStorage forest =
+          new ForestWorldStateKeyValueStorage(
+              adapter(unionStore, KeyValueSegmentIdentifier.WORLD_STATE));
+
+      final BlockchainStorage blockchainStorage =
+          new KeyValueStoragePrefixedKeyBlockchainStorage(
+              adapter(unionStore, KeyValueSegmentIdentifier.BLOCKCHAIN),
+              new VariablesKeyValueStorage(
+                  adapter(unionStore, KeyValueSegmentIdentifier.VARIABLES)),
+              ScheduleBasedBlockHeaderFunctions.create(protocolSchedule),
+              protocolSchedule,
+              receiptCompaction);
+
+      final KeyValueStorage trieLogStorage =
+          adapter(unionStore, KeyValueSegmentIdentifier.TRIE_LOG_STORAGE);
+
+      final BonsaiTrieLogToForestConverter converter = new BonsaiTrieLogToForestConverter(forest);
+      final TrieLogFactoryImpl trieLogFactory = new TrieLogFactoryImpl();
+
+      // Seed genesis so block-1 replay starts from the correct base state. Slot preimages are not
+      // needed for correctness, so an in-memory preimage store is sufficient.
+      final WorldStatePreimageStorage preimage =
+          new WorldStatePreimageKeyValueStorage(new InMemoryKeyValueStorage());
+      converter.seedGenesis(genesisState, preimage, EvmConfiguration.DEFAULT);
+      LOG.info("Seeded genesis state (root={})", converter.currentRootHash());
+
+      final Hash headHash =
+          blockchainStorage
+              .getChainHead()
               .orElseThrow(
                   () ->
                       new IllegalStateException(
-                          "Missing trie log for block "
-                              + blockNumber
-                              + "; trie-log pruning must be disabled for conversion"));
-      final TrieLog layer = trieLogFactory.deserialize(raw);
-      converter.applyTrieLog(layer, header.getStateRoot());
-      if (number % 5000 == 0) {
-        LOG.info(
-            "Converted through block {} / {} (root={})", number, head, converter.currentRootHash());
-      }
-    }
-    LOG.info("Conversion complete to head {} (root={})", head, converter.currentRootHash());
+                          "No chain head found in database; nothing to convert"));
+      final long head =
+          blockchainStorage
+              .getBlockHeader(headHash)
+              .orElseThrow(
+                  () -> new IllegalStateException("Chain head header missing for hash " + headHash))
+              .getNumber();
 
-    flipMetadataToForest(parentCommand.besuCommand.dataDir());
-    LOG.info("Flipped database metadata to FOREST format");
-
-    if (pruneBonsai) {
-      for (final KeyValueSegmentIdentifier seg :
-          new KeyValueSegmentIdentifier[] {
-            KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE,
-            KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE,
-            KeyValueSegmentIdentifier.CODE_STORAGE,
-            KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE,
-            KeyValueSegmentIdentifier.TRIE_LOG_STORAGE
-          }) {
-        try {
-          storageProvider.getStorageBySegmentIdentifier(seg).clear();
-          LOG.info("Cleared Bonsai-only segment {}", seg);
-        } catch (final RuntimeException e) {
-          throw new IllegalStateException("Failed to clear Bonsai segment " + seg, e);
+      for (long number = 1; number <= head; number++) {
+        final long blockNumber = number;
+        final Hash blockHash =
+            blockchainStorage
+                .getBlockHash(number)
+                .orElseThrow(
+                    () -> new IllegalStateException("Missing block hash for block " + blockNumber));
+        final BlockHeader header =
+            blockchainStorage
+                .getBlockHeader(blockHash)
+                .orElseThrow(
+                    () ->
+                        new IllegalStateException("Missing block header for block " + blockNumber));
+        final Optional<byte[]> rawTrieLog =
+            trieLogStorage.get(blockHash.getBytes().toArrayUnsafe());
+        final byte[] raw =
+            rawTrieLog.orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        "Missing trie log for block "
+                            + blockNumber
+                            + "; trie-log pruning must be disabled for conversion"));
+        final TrieLog layer = trieLogFactory.deserialize(raw);
+        converter.applyTrieLog(layer, header.getStateRoot());
+        if (number % 5000 == 0) {
+          LOG.info(
+              "Converted through block {} / {} (root={})",
+              number,
+              head,
+              converter.currentRootHash());
         }
       }
+      LOG.info("Conversion complete to head {} (root={})", head, converter.currentRootHash());
+    } finally {
+      try {
+        unionStore.close();
+      } catch (final RuntimeException e) {
+        LOG.warn("Failed to close union RocksDB store", e);
+      }
     }
 
+    flipMetadataToForest(dataDir);
+    LOG.info("Flipped database metadata to FOREST format");
+
     spec.commandLine().getOut().println("x-convert-to-forest finished successfully.");
+  }
+
+  private static KeyValueStorage adapter(
+      final OptimisticRocksDBColumnarKeyValueStorage unionStore,
+      final KeyValueSegmentIdentifier segment) {
+    return new SegmentedKeyValueStorageAdapter(segment, unionStore);
   }
 
   /**
