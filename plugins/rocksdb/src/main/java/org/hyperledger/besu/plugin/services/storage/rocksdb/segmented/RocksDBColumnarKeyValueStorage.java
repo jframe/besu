@@ -134,6 +134,9 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   /** Trimmed segments */
   protected List<SegmentIdentifier> trimmedSegments;
 
+  /** Handles for CFs that exist on disk but are not mapped to any segment identifier */
+  protected List<ColumnFamilyHandle> extraColumnHandles = new ArrayList<>();
+
   /**
    * Instantiates a new Rocks db columnar key value storage.
    *
@@ -181,6 +184,18 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
           trimmedSegments.stream()
               .map(segment -> createColumnDescriptor(segment, configuration))
               .collect(Collectors.toList());
+      // For any CF that exists on disk but is not covered by trimmedSegments (e.g. leftover
+      // Bonsai CFs in a database converted to Forest), add a plain descriptor so RocksDB can
+      // open without "Unhandled column families". The handles are tracked in extraColumnHandles.
+      existingColumnFamilies.stream()
+          .filter(
+              cfName -> trimmedSegments.stream().noneMatch(s -> Arrays.equals(s.getId(), cfName)))
+          .forEach(
+              cfName -> {
+                final ColumnFamilyOptions opts = new ColumnFamilyOptions();
+                columnFamilyOptionsList.add(opts);
+                columnDescriptors.add(new ColumnFamilyDescriptor(cfName, opts));
+              });
 
       setGlobalOptions(configuration, stats);
 
@@ -412,6 +427,19 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
                                               + segment.getName()));
                       return new RocksDbSegmentIdentifier(getDB(), columnHandle);
                     }));
+    // Collect handles for CFs that exist on disk but are not mapped to any segment identifier.
+    extraColumnHandles =
+        columnHandles.stream()
+            .filter(
+                h -> {
+                  try {
+                    final byte[] name = h.getName();
+                    return trimmedSegments.stream().noneMatch(s -> Arrays.equals(s.getId(), name));
+                  } catch (RocksDBException e) {
+                    return false;
+                  }
+                })
+            .collect(Collectors.toList());
   }
 
   /**
@@ -545,6 +573,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
       columnHandlesBySegmentIdentifier.values().stream()
           .map(RocksDbSegmentIdentifier::get)
           .forEach(ColumnFamilyHandle::close);
+      extraColumnHandles.forEach(ColumnFamilyHandle::close);
       getDB().close();
       options.close();
       columnFamilyOptionsList.forEach(ColumnFamilyOptions::close);

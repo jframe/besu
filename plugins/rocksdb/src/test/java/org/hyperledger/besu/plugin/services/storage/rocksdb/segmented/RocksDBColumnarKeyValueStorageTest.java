@@ -16,7 +16,6 @@ package org.hyperledger.besu.plugin.services.storage.rocksdb.segmented;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -28,7 +27,6 @@ import org.hyperledger.besu.kvstore.AbstractKeyValueStorageTest;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
-import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
@@ -210,8 +208,7 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
   }
 
   @Test
-  public void dbShouldNotIgnoreExperimentalSegmentsIfExisted(@TempDir final Path tempDir)
-      throws Exception {
+  public void dbOpensWithExtraExistingColumnFamilies(@TempDir final Path tempDir) throws Exception {
     final Path testPath = tempDir.resolve("testdb");
     // Create new db with experimental column family
     SegmentedKeyValueStorage store =
@@ -222,20 +219,16 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
             List.of());
     store.close();
 
-    // new db will not be backward compatible with db without knowledge of experimental column
-    // family
-    try {
-      createSegmentedStore(
-          testPath,
-          Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO, TestSegment.BAR),
-          List.of());
-      fail("DB without knowledge of experimental column family should fail");
-    } catch (StorageException e) {
-      assertThat(e.getMessage()).contains("Unhandled column families");
-    }
+    // Opening without knowledge of EXPERIMENTAL succeeds: the extra CF is silently opened
+    // (not registered in the handle map) so that format-converted databases can be read.
+    store =
+        createSegmentedStore(
+            testPath,
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO, TestSegment.BAR),
+            List.of());
+    store.close();
 
-    // Even if the column family is marked as ignored, as long as it exists, it will not be ignored
-    // and the db opens normally
+    // Opening with EXPERIMENTAL listed as ignorable also works (it is registered in the map)
     store =
         createSegmentedStore(
             testPath,
@@ -246,8 +239,8 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
   }
 
   @Test
-  public void dbWillBeBackwardIncompatibleAfterExperimentalSegmentsAreAdded(
-      @TempDir final Path testPath) throws Exception {
+  public void dbOpensWithExtraCommittedColumnFamilies(@TempDir final Path testPath)
+      throws Exception {
     // Create new db should ignore experimental column family
     SegmentedKeyValueStorage store =
         createSegmentedStore(
@@ -257,7 +250,7 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
             List.of(TestSegment.EXPERIMENTAL));
     store.close();
 
-    // new db will be backward compatible with db without knowledge of experimental column family
+    // Opening without knowledge of EXPERIMENTAL succeeds (absent, not on disk yet)
     store =
         createSegmentedStore(
             testPath,
@@ -274,17 +267,14 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
             List.of());
     store.close();
 
-    // Now, the db will be backward incompatible with db without knowledge of experimental column
-    // family
-    try {
-      createSegmentedStore(
-          testPath,
-          Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO, TestSegment.BAR),
-          List.of());
-      fail("DB without knowledge of experimental column family should fail");
-    } catch (StorageException e) {
-      assertThat(e.getMessage()).contains("Unhandled column families");
-    }
+    // Opening without knowledge of EXPERIMENTAL still succeeds: the extra CF is silently opened
+    // so that format-converted databases (which may have leftover CFs) can restart normally.
+    store =
+        createSegmentedStore(
+            testPath,
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO, TestSegment.BAR),
+            List.of());
+    store.close();
   }
 
   @Test
