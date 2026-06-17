@@ -19,18 +19,25 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.WorldStatePreimageKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.forest.worldview.ForestMutableWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
+import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
+import java.util.Optional;
+
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.Test;
 
 class BonsaiTrieLogToForestConverterTest {
@@ -54,6 +61,26 @@ class BonsaiTrieLogToForestConverterTest {
   private static PmtStateTrieAccountValue account(final long nonce, final long balanceWei) {
     return new PmtStateTrieAccountValue(
         nonce, Wei.of(balanceWei), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+  }
+
+  private static Hash expectedStorageRoot(
+      final StorageSlotKey slot1,
+      final UInt256 value1,
+      final StorageSlotKey slot2,
+      final UInt256 value2) {
+    final StoredMerklePatriciaTrie<Bytes32, Bytes> trie =
+        new StoredMerklePatriciaTrie<>(
+            (location, hash) -> Optional.empty(),
+            Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes()),
+            b -> b,
+            b -> b);
+    trie.put(
+        Bytes32.wrap(slot1.getSlotHash().getBytes()),
+        RLP.encode(o -> o.writeBytes(value1.toMinimalBytes())));
+    trie.put(
+        Bytes32.wrap(slot2.getSlotHash().getBytes()),
+        RLP.encode(o -> o.writeBytes(value2.toMinimalBytes())));
+    return Hash.wrap(trie.getRootHash());
   }
 
   @Test
@@ -119,5 +146,34 @@ class BonsaiTrieLogToForestConverterTest {
     final BonsaiTrieLogToForestConverter converter = new BonsaiTrieLogToForestConverter(storage);
     assertThat(converter.applyTrieLog(layer, expectedRoot)).isEqualTo(expectedRoot);
     assertThat(storage.getCode(codeHash)).contains(code);
+  }
+
+  @Test
+  void applyRebuildsStorageTrieAndMatchesRoot() {
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater updater = oracle.updater();
+    final MutableAccount contract = updater.createAccount(CONTRACT);
+    contract.setNonce(1);
+    contract.setStorageValue(UInt256.valueOf(1), UInt256.valueOf(111));
+    contract.setStorageValue(UInt256.valueOf(2), UInt256.valueOf(222));
+    updater.commit();
+    oracle.persist(null);
+    final Hash expectedRoot = oracle.rootHash();
+    final Hash expectedStorageRoot =
+        expectedStorageRoot(
+            new StorageSlotKey(UInt256.valueOf(1)), UInt256.valueOf(111),
+            new StorageSlotKey(UInt256.valueOf(2)), UInt256.valueOf(222));
+
+    final TrieLogLayer layer = new TrieLogLayer();
+    layer.addAccountChange(
+        CONTRACT, null, new PmtStateTrieAccountValue(1, Wei.ZERO, expectedStorageRoot, Hash.EMPTY));
+    layer.addStorageChange(
+        CONTRACT, new StorageSlotKey(UInt256.valueOf(1)), null, UInt256.valueOf(111));
+    layer.addStorageChange(
+        CONTRACT, new StorageSlotKey(UInt256.valueOf(2)), null, UInt256.valueOf(222));
+
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage());
+    assertThat(converter.applyTrieLog(layer, expectedRoot)).isEqualTo(expectedRoot);
   }
 }

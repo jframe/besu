@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.trie.forest.migration;
 import org.hyperledger.besu.datatypes.AccountValue;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
@@ -27,6 +28,7 @@ import java.util.Map;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 
 /**
  * Rebuilds a Forest world-state node set from Bonsai {@link
@@ -89,15 +91,44 @@ public class BonsaiTrieLogToForestConverter {
 
     final Map<Address, ? extends TrieLog.LogTuple<AccountValue>> accountChanges =
         layer.getAccountChanges();
+    final Map<Address, ? extends Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>>>
+        storageChangesByAddress = layer.getStorageChanges();
     for (final var entry : accountChanges.entrySet()) {
       final Address address = entry.getKey();
-      final AccountValue updated = entry.getValue().getUpdated();
+      final TrieLog.LogTuple<AccountValue> change = entry.getValue();
+      final AccountValue updated = change.getUpdated();
       final Bytes32 addressHash = Bytes32.wrap(address.addressHash().getBytes());
+
       if (updated == null) {
         accountTrie.remove(addressHash);
-      } else {
-        accountTrie.put(addressHash, RLP.encode(updated::writeTo));
+        continue;
       }
+
+      final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges =
+          storageChangesByAddress.get(address);
+      if (slotChanges != null && !slotChanges.isEmpty()) {
+        final AccountValue prior = change.getPrior();
+        final Bytes32 priorStorageRoot =
+            prior == null
+                ? Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes())
+                : Bytes32.wrap(prior.getStorageRoot().getBytes());
+        final boolean cleared =
+            prior == null
+                || slotChanges.values().stream().anyMatch(TrieLog.LogTuple::isClearedAtLeastOnce);
+        final Bytes32 storageRoot =
+            rebuildStorageRoot(updater, priorStorageRoot, cleared, slotChanges);
+        if (!storageRoot.equals(Bytes32.wrap(updated.getStorageRoot().getBytes()))) {
+          updater.rollback();
+          throw new IllegalStateException(
+              "Reconstructed storage root for "
+                  + address
+                  + " ("
+                  + Hash.wrap(storageRoot)
+                  + ") does not match account storageRoot "
+                  + updated.getStorageRoot());
+        }
+      }
+      accountTrie.put(addressHash, RLP.encode(updated::writeTo));
     }
 
     accountTrie.commit((location, hash, value) -> updater.putAccountStateTrieNode(hash, value));
@@ -113,5 +144,29 @@ public class BonsaiTrieLogToForestConverter {
     updater.commit();
     currentRootHash = newRoot;
     return Hash.wrap(newRoot);
+  }
+
+  private Bytes32 rebuildStorageRoot(
+      final ForestWorldStateKeyValueStorage.Updater updater,
+      final Bytes32 priorStorageRoot,
+      final boolean cleared,
+      final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges) {
+    final Bytes32 startRoot =
+        cleared ? Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes()) : priorStorageRoot;
+    final NodeLoader storageLoader =
+        (location, hash) -> forestStorage.getAccountStorageTrieNode(hash);
+    final StoredMerklePatriciaTrie<Bytes32, Bytes> storageTrie =
+        new StoredMerklePatriciaTrie<>(storageLoader, startRoot, b -> b, b -> b);
+    for (final var slot : slotChanges.entrySet()) {
+      final Bytes32 slotHash = Bytes32.wrap(slot.getKey().getSlotHash().getBytes());
+      final UInt256 value = slot.getValue().getUpdated();
+      if (value == null || value.isZero()) {
+        storageTrie.remove(slotHash);
+      } else {
+        storageTrie.put(slotHash, RLP.encode(o -> o.writeBytes(value.toMinimalBytes())));
+      }
+    }
+    storageTrie.commit((location, hash, value) -> updater.putAccountStorageTrieNode(hash, value));
+    return storageTrie.getRootHash();
   }
 }
