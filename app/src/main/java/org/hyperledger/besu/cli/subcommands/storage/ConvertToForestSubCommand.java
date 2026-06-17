@@ -279,9 +279,13 @@ public class ConvertToForestSubCommand implements Runnable {
     if (totalSeconds < 0) {
       return "unknown";
     }
-    final long hours = totalSeconds / 3600;
+    final long days = totalSeconds / 86400;
+    final long hours = (totalSeconds % 86400) / 3600;
     final long minutes = (totalSeconds % 3600) / 60;
     final long seconds = totalSeconds % 60;
+    if (days > 0) {
+      return String.format("%dd %dh %dm %ds", days, hours, minutes, seconds);
+    }
     if (hours > 0) {
       return String.format("%dh %dm %ds", hours, minutes, seconds);
     }
