@@ -33,6 +33,7 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
+import java.util.Map;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -63,23 +64,35 @@ class BonsaiTrieLogToForestConverterTest {
         nonce, Wei.of(balanceWei), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
   }
 
+  private static PmtStateTrieAccountValue acct(
+      final long nonce, final long balanceWei, final Hash storageRoot, final Hash codeHash) {
+    return new PmtStateTrieAccountValue(nonce, Wei.of(balanceWei), storageRoot, codeHash);
+  }
+
   private static Hash expectedStorageRoot(
       final StorageSlotKey slot1,
       final UInt256 value1,
       final StorageSlotKey slot2,
       final UInt256 value2) {
+    return storageRootOf(Map.of(slot1, value1, slot2, value2));
+  }
+
+  /**
+   * Computes the storage trie root for a fresh (empty-start) storage trie populated with the given
+   * non-zero slot values, mirroring how the converter rebuilds storage roots.
+   */
+  private static Hash storageRootOf(final Map<StorageSlotKey, UInt256> slots) {
     final StoredMerklePatriciaTrie<Bytes32, Bytes> trie =
         new StoredMerklePatriciaTrie<>(
             (location, hash) -> Optional.empty(),
             Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes()),
             b -> b,
             b -> b);
-    trie.put(
-        Bytes32.wrap(slot1.getSlotHash().getBytes()),
-        RLP.encode(o -> o.writeBytes(value1.toMinimalBytes())));
-    trie.put(
-        Bytes32.wrap(slot2.getSlotHash().getBytes()),
-        RLP.encode(o -> o.writeBytes(value2.toMinimalBytes())));
+    slots.forEach(
+        (slot, value) ->
+            trie.put(
+                Bytes32.wrap(slot.getSlotHash().getBytes()),
+                RLP.encode(o -> o.writeBytes(value.toMinimalBytes()))));
     return Hash.wrap(trie.getRootHash());
   }
 
@@ -175,5 +188,48 @@ class BonsaiTrieLogToForestConverterTest {
     final BonsaiTrieLogToForestConverter converter =
         new BonsaiTrieLogToForestConverter(forestStorage());
     assertThat(converter.applyTrieLog(layer, expectedRoot)).isEqualTo(expectedRoot);
+  }
+
+  @Test
+  void zeroingSlotInLaterBlockUpdatesRoot() {
+    final StorageSlotKey slot1 = new StorageSlotKey(UInt256.valueOf(1));
+    final StorageSlotKey slot2 = new StorageSlotKey(UInt256.valueOf(2));
+
+    // Oracle: block 1 creates two slots, block 2 zeroes slot2.
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater updater1 = oracle.updater();
+    final MutableAccount contract1 = updater1.createAccount(CONTRACT);
+    contract1.setNonce(1);
+    contract1.setStorageValue(UInt256.valueOf(1), UInt256.valueOf(111));
+    contract1.setStorageValue(UInt256.valueOf(2), UInt256.valueOf(222));
+    updater1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+    final Hash sroot1 =
+        storageRootOf(Map.of(slot1, UInt256.valueOf(111), slot2, UInt256.valueOf(222)));
+
+    final WorldUpdater updater2 = oracle.updater();
+    final MutableAccount contract2 = updater2.getAccount(CONTRACT);
+    contract2.setStorageValue(UInt256.valueOf(2), UInt256.ZERO);
+    updater2.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+    final Hash sroot2 = storageRootOf(Map.of(slot1, UInt256.valueOf(111)));
+
+    // Converter replays both blocks against a fresh storage, exercising running-root continuity.
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage());
+
+    final TrieLogLayer block1 = new TrieLogLayer();
+    block1.addAccountChange(CONTRACT, null, acct(1, 0, sroot1, Hash.EMPTY));
+    block1.addStorageChange(CONTRACT, slot1, null, UInt256.valueOf(111));
+    block1.addStorageChange(CONTRACT, slot2, null, UInt256.valueOf(222));
+    assertThat(converter.applyTrieLog(block1, root1)).isEqualTo(root1);
+
+    final TrieLogLayer block2 = new TrieLogLayer();
+    block2.addAccountChange(
+        CONTRACT, acct(1, 0, sroot1, Hash.EMPTY), acct(1, 0, sroot2, Hash.EMPTY));
+    block2.addStorageChange(CONTRACT, slot2, UInt256.valueOf(222), null);
+    assertThat(converter.applyTrieLog(block2, root2)).isEqualTo(root2);
   }
 }
