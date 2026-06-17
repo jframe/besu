@@ -17,15 +17,19 @@ package org.hyperledger.besu.ethereum.trie.forest.migration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.chain.GenesisState;
+import org.hyperledger.besu.ethereum.core.ProtocolScheduleFixture;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.WorldStatePreimageKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.forest.worldview.ForestMutableWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.PathBasedValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
@@ -283,5 +287,33 @@ class BonsaiTrieLogToForestConverterTest {
         .computeIfAbsent(CONTRACT, k -> new TreeMap<>())
         .put(newSlot, new PathBasedValue<>(null, UInt256.valueOf(7), true));
     assertThat(converter.applyTrieLog(block2, root2)).isEqualTo(root2);
+  }
+
+  @Test
+  void seedGenesisMatchesGenesisStateRoot() {
+    final String genesisJson =
+        "{"
+            + "\"config\": {\"chainId\": 15, \"eip158Block\": 0},"
+            + "\"alloc\": {"
+            + "  \"0x0000000000000000000000000000000000000001\": {\"balance\": \"111111111\"},"
+            + "  \"0x0000000000000000000000000000000000000002\": {\"balance\": \"222222222\"}"
+            + "},"
+            + "\"coinbase\": \"0x0000000000000000000000000000000000000000\","
+            + "\"difficulty\": \"0x0000001\","
+            + "\"gasLimit\": \"0x2fefd8\""
+            + "}";
+    final GenesisConfig genesisConfig = GenesisConfig.fromConfig(genesisJson);
+    final GenesisState genesisState =
+        GenesisState.fromConfig(genesisConfig, ProtocolScheduleFixture.MAINNET, new CodeCache());
+    final Hash genesisRoot = genesisState.getBlock().getHeader().getStateRoot();
+
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage());
+    converter.seedGenesis(
+        genesisState,
+        new WorldStatePreimageKeyValueStorage(new InMemoryKeyValueStorage()),
+        EvmConfiguration.DEFAULT);
+
+    assertThat(converter.currentRootHash()).isEqualTo(genesisRoot);
   }
 }

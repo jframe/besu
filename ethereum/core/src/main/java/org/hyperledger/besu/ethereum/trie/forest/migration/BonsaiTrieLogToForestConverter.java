@@ -18,10 +18,14 @@ import org.hyperledger.besu.datatypes.AccountValue;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
+import org.hyperledger.besu.ethereum.chain.GenesisState;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.forest.worldview.ForestMutableWorldState;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
+import org.hyperledger.besu.evm.internal.EvmConfiguration;
+import org.hyperledger.besu.plugin.services.storage.WorldStatePreimageStorage;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
 import java.util.Map;
@@ -64,6 +68,33 @@ public class BonsaiTrieLogToForestConverter {
    */
   public Hash currentRootHash() {
     return Hash.wrap(currentRootHash);
+  }
+
+  /**
+   * Seeds the Forest storage with the genesis world state and sets the running root to the genesis
+   * state root. This must be called before replaying any trie logs so that block-1 replay starts
+   * from the correct base state.
+   *
+   * @param genesisState the genesis state to write
+   * @param preimageStorage preimage storage used while writing the genesis world state
+   * @param evmConfiguration the EVM configuration to use for the transient world state
+   * @throws IllegalStateException if the written genesis state root does not match the genesis
+   *     block header's state root
+   */
+  public void seedGenesis(
+      final GenesisState genesisState,
+      final WorldStatePreimageStorage preimageStorage,
+      final EvmConfiguration evmConfiguration) {
+    final ForestMutableWorldState genesisWorldState =
+        new ForestMutableWorldState(forestStorage, preimageStorage, evmConfiguration);
+    genesisState.writeStateTo(genesisWorldState);
+    final Hash genesisRoot = genesisWorldState.rootHash();
+    final Hash expected = genesisState.getBlock().getHeader().getStateRoot();
+    if (!genesisRoot.equals(expected)) {
+      throw new IllegalStateException(
+          "Genesis state root " + genesisRoot + " does not match header " + expected);
+    }
+    currentRootHash = Bytes32.wrap(genesisRoot.getBytes());
   }
 
   /**
