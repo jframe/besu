@@ -2749,7 +2749,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
    *
    * @return the effective {@link GenesisConfig}
    */
-  protected GenesisConfig getGenesisConfig() {
+  public GenesisConfig getGenesisConfig() {
     return readGenesisConfig();
   }
 

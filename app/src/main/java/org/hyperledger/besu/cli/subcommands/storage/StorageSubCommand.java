@@ -51,7 +51,8 @@ import picocli.CommandLine.Spec;
       RocksDbSubCommand.class,
       TrieLogSubCommand.class,
       RevertMetadataSubCommand.class,
-      PrunePreMergeBlockDataSubCommand.class
+      PrunePreMergeBlockDataSubCommand.class,
+      ConvertToForestSubCommand.class
     })
 public class StorageSubCommand implements Runnable {
 
