@@ -206,13 +206,12 @@ public class ConvertToForestSubCommand implements Runnable {
                       ? formatDuration((long) ((head - blockNumber) / blocksPerSecond))
                       : "unknown";
               LOG.info(
-                  "Converted {} / {} blocks ({}%), {} blocks/s, ETA {} (root={})",
+                  "Converted {} / {} blocks ({}%), {} blocks/s, ETA {}",
                   blockNumber,
                   head,
                   String.format("%.1f", percentComplete),
                   String.format("%.0f", blocksPerSecond),
-                  eta,
-                  converter.currentRootHash());
+                  eta);
             },
             shouldLogProgress,
             LOG_INTERVAL_SECONDS);
