@@ -30,12 +30,15 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 
 class BonsaiTrieLogToForestConverterTest {
 
   private static final Address ALICE =
       Address.fromHexString("0x000000000000000000000000000000000000aa01");
+  private static final Address CONTRACT =
+      Address.fromHexString("0x000000000000000000000000000000000000cc01");
 
   private ForestWorldStateKeyValueStorage forestStorage() {
     return new ForestWorldStateKeyValueStorage(new InMemoryKeyValueStorage());
@@ -90,5 +93,31 @@ class BonsaiTrieLogToForestConverterTest {
     assertThatThrownBy(() -> converter.applyTrieLog(layer, Hash.ZERO))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("does not match expected");
+  }
+
+  @Test
+  void applyPersistsContractCode() {
+    final Bytes code = Bytes.fromHexString("0x60016002600055");
+    final Hash codeHash = Hash.hash(code);
+
+    final ForestWorldStateKeyValueStorage oracleStorage = forestStorage();
+    final ForestMutableWorldState oracle = oracle(oracleStorage);
+    final WorldUpdater updater = oracle.updater();
+    final MutableAccount contract = updater.createAccount(CONTRACT);
+    contract.setNonce(1);
+    contract.setCode(code);
+    updater.commit();
+    oracle.persist(null);
+    final Hash expectedRoot = oracle.rootHash();
+
+    final TrieLogLayer layer = new TrieLogLayer();
+    layer.addAccountChange(
+        CONTRACT, null, new PmtStateTrieAccountValue(1, Wei.ZERO, Hash.EMPTY_TRIE_HASH, codeHash));
+    layer.addCodeChange(CONTRACT, Bytes.EMPTY, code, Hash.ZERO);
+
+    final ForestWorldStateKeyValueStorage storage = forestStorage();
+    final BonsaiTrieLogToForestConverter converter = new BonsaiTrieLogToForestConverter(storage);
+    assertThat(converter.applyTrieLog(layer, expectedRoot)).isEqualTo(expectedRoot);
+    assertThat(storage.getCode(codeHash)).contains(code);
   }
 }

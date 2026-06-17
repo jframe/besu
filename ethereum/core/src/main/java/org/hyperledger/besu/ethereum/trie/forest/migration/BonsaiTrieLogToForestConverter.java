@@ -79,6 +79,14 @@ public class BonsaiTrieLogToForestConverter {
     final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
         new StoredMerklePatriciaTrie<>(accountLoader, currentRootHash, b -> b, b -> b);
 
+    final Map<Address, ? extends TrieLog.LogTuple<Bytes>> codeChanges = layer.getCodeChanges();
+    for (final var entry : codeChanges.entrySet()) {
+      final Bytes updatedCode = entry.getValue().getUpdated();
+      if (updatedCode != null && !updatedCode.isEmpty()) {
+        updater.putCode(updatedCode);
+      }
+    }
+
     final Map<Address, ? extends TrieLog.LogTuple<AccountValue>> accountChanges =
         layer.getAccountChanges();
     for (final var entry : accountChanges.entrySet()) {
