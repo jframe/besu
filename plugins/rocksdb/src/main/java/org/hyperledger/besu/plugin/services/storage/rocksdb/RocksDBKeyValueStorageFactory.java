@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -152,6 +153,17 @@ public class RocksDBKeyValueStorageFactory implements KeyValueStorageFactory {
                           databaseMetadata.getVersionedStorageFormat().getFormat()))
               .toList();
 
+      // Treat segments from other storage formats as ignorable: opened if they physically
+      // exist (e.g. a database converted between Bonsai and Forest keeps the other format's
+      // column families), skipped if absent. This does NOT affect the active format's own
+      // segments, which remain in segmentsForFormat and are created/opened normally.
+      final List<SegmentIdentifier> crossFormatSegments =
+          configuredSegments.stream().filter(s -> !segmentsForFormat.contains(s)).toList();
+      final List<SegmentIdentifier> effectiveIgnorableSegments =
+          Stream.concat(ignorableSegments.stream(), crossFormatSegments.stream())
+              .distinct()
+              .toList();
+
       // It's probably a good idea for the creation logic to be entirely dependent on the database
       // version. Introducing intermediate booleans that represent database properties and
       // dispatching
@@ -163,7 +175,7 @@ public class RocksDBKeyValueStorageFactory implements KeyValueStorageFactory {
               new TransactionDBRocksDBColumnarKeyValueStorage(
                   rocksDBConfiguration,
                   segmentsForFormat,
-                  ignorableSegments,
+                  effectiveIgnorableSegments,
                   metricsSystem,
                   rocksDBMetricsFactory);
         }
@@ -173,7 +185,7 @@ public class RocksDBKeyValueStorageFactory implements KeyValueStorageFactory {
               new OptimisticRocksDBColumnarKeyValueStorage(
                   rocksDBConfiguration,
                   segmentsForFormat,
-                  ignorableSegments,
+                  effectiveIgnorableSegments,
                   metricsSystem,
                   rocksDBMetricsFactory);
         }

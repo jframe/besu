@@ -31,13 +31,19 @@ import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.DatabaseMetadata;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfigurationBuilder;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBFactoryConfiguration;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.segmented.RocksDBColumnarKeyValueStorageTest.TestSegment;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.segmented.TransactionDBRocksDBColumnarKeyValueStorage;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumSet;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -307,6 +313,106 @@ public class RocksDBKeyValueStorageFactoryTest {
     }
   }
 
+  /**
+   * Regression guard for the fresh-Bonsai startup crash: a Bonsai-only segment (analogous to
+   * TRIE_BRANCH_STORAGE) must be created and usable on a brand new Bonsai database. Under the buggy
+   * state where the active format's own segments were registered as ignorable, this segment would
+   * be removed (absent on a fresh DB) and never created, causing "Column handle not found".
+   */
+  @Test
+  public void shouldCreateAndOpenBonsaiOnlySegmentOnFreshBonsaiDb() throws Exception {
+    final Path tempDataDir = temporaryFolder.resolve("data");
+    final Path tempDatabaseDir = temporaryFolder.resolve("db");
+    mockCommonConfiguration(tempDataDir, tempDatabaseDir, BONSAI);
+
+    final List<SegmentIdentifier> formatSegments =
+        List.of(FormatSegment.DEFAULT, FormatSegment.FOREST_ONLY, FormatSegment.BONSAI_ONLY);
+
+    final RocksDBKeyValueStorageFactory storageFactory =
+        new RocksDBKeyValueStorageFactory(
+            () -> rocksDbConfiguration,
+            formatSegments,
+            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS);
+
+    try (final SegmentedKeyValueStorage storage =
+        storageFactory.create(formatSegments, commonConfiguration, metricsSystem)) {
+      final byte[] key = {0x01};
+      final byte[] value = {0x0f};
+      final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+      tx.put(FormatSegment.BONSAI_ONLY, key, value);
+      tx.commit();
+      assertThat(storage.get(FormatSegment.BONSAI_ONLY, key)).contains(value);
+    }
+  }
+
+  /**
+   * Cross-format open: a database converted from Bonsai to Forest retains the Bonsai column
+   * families on disk. Opening it as Forest must succeed (the leftover Bonsai CF is opened as an
+   * existing ignorable segment) and the Forest world-state segment must remain usable.
+   *
+   * <p>The converted DB is constructed at the lower level (a {@link
+   * TransactionDBRocksDBColumnarKeyValueStorage}, which is what the factory uses for FOREST)
+   * because the factory cannot physically create a Bonsai-only CF while in FOREST mode (its {@code
+   * includeInDatabaseFormat} excludes it), and reopening a Bonsai-metadata DB through the factory
+   * as FOREST would trip the format-mismatch guard. We pre-create DEFAULT + FOREST_ONLY +
+   * BONSAI_ONLY directly, then write FOREST metadata and reopen through the factory to verify the
+   * factory's cross-format ignorable augmentation opens the leftover Bonsai CF.
+   */
+  @Test
+  public void shouldOpenConvertedDbWithLeftoverCrossFormatColumnFamily() throws Exception {
+    final Path tempDataDir = temporaryFolder.resolve("data");
+    final Path tempDatabaseDir = temporaryFolder.resolve("db");
+    Files.createDirectories(tempDataDir);
+    mockCommonConfiguration(tempDataDir, tempDatabaseDir, FOREST);
+
+    final byte[] worldStateKey = {0x01};
+    final byte[] worldStateValue = {0x0a};
+
+    // Build a database that physically contains the Forest world-state CF AND a leftover Bonsai CF,
+    // mirroring a Bonsai->Forest converted database.
+    try (final SegmentedKeyValueStorage seedStore =
+        new TransactionDBRocksDBColumnarKeyValueStorage(
+            new RocksDBConfigurationBuilder().databaseDir(tempDatabaseDir).build(),
+            List.of(FormatSegment.DEFAULT, FormatSegment.FOREST_ONLY, FormatSegment.BONSAI_ONLY),
+            List.of(),
+            metricsSystem,
+            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
+      final SegmentedKeyValueStorageTransaction tx = seedStore.startTransaction();
+      tx.put(FormatSegment.FOREST_ONLY, worldStateKey, worldStateValue);
+      tx.put(FormatSegment.BONSAI_ONLY, new byte[] {0x02}, new byte[] {0x0b});
+      tx.commit();
+    }
+
+    // Mark the database as FOREST so the factory opens it in FOREST mode.
+    Utils.createDatabaseMetadataV2(tempDataDir, FOREST, 2);
+
+    // Reopen through the factory. segmentsForFormat(FOREST) excludes BONSAI_ONLY, so it lands in
+    // the
+    // cross-format ignorable set; since it physically exists it must be opened, otherwise RocksDB
+    // open fails. The factory must not throw.
+    final List<SegmentIdentifier> formatSegments =
+        List.of(FormatSegment.DEFAULT, FormatSegment.FOREST_ONLY, FormatSegment.BONSAI_ONLY);
+    final RocksDBKeyValueStorageFactory storageFactory =
+        new RocksDBKeyValueStorageFactory(
+            () -> rocksDbConfiguration,
+            formatSegments,
+            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS);
+
+    assertThatCode(
+            () -> {
+              try (final SegmentedKeyValueStorage storage =
+                  storageFactory.create(
+                      List.of(FormatSegment.DEFAULT, FormatSegment.FOREST_ONLY),
+                      commonConfiguration,
+                      metricsSystem)) {
+                // The Forest world-state segment is opened normally and its data is readable.
+                assertThat(storage.get(FormatSegment.FOREST_ONLY, worldStateKey))
+                    .contains(worldStateValue);
+              }
+            })
+        .doesNotThrowAnyException();
+  }
+
   private void mockCommonConfiguration(
       final Path tempDataDir, final Path tempDatabaseDir, final DataStorageFormat format) {
     when(commonConfiguration.getStoragePath()).thenReturn(tempDatabaseDir);
@@ -315,5 +421,51 @@ public class RocksDBKeyValueStorageFactoryTest {
     lenient()
         .when(commonConfiguration.getDataStorageConfiguration())
         .thenReturn(dataStorageConfiguration);
+  }
+
+  /**
+   * Format-aware segments used to exercise the factory's cross-format handling. Mirrors the real
+   * {@code KeyValueSegmentIdentifier} restrictions: FOREST_ONLY behaves like WORLD_STATE (FOREST
+   * only) and BONSAI_ONLY behaves like TRIE_BRANCH_STORAGE (Bonsai/archive only).
+   */
+  public enum FormatSegment implements SegmentIdentifier {
+    DEFAULT("default".getBytes(StandardCharsets.UTF_8), EnumSet.allOf(DataStorageFormat.class)),
+    FOREST_ONLY(new byte[] {0x71}, EnumSet.of(FOREST)),
+    BONSAI_ONLY(new byte[] {0x72}, EnumSet.of(BONSAI, X_BONSAI_ARCHIVE));
+
+    private final byte[] id;
+    private final String nameAsUtf8;
+    private final EnumSet<DataStorageFormat> formats;
+
+    FormatSegment(final byte[] id, final EnumSet<DataStorageFormat> formats) {
+      this.id = id;
+      this.nameAsUtf8 = new String(id, StandardCharsets.UTF_8);
+      this.formats = formats;
+    }
+
+    @Override
+    public String getName() {
+      return nameAsUtf8;
+    }
+
+    @Override
+    public byte[] getId() {
+      return id;
+    }
+
+    @Override
+    public boolean containsStaticData() {
+      return false;
+    }
+
+    @Override
+    public boolean isEligibleToHighSpecFlag() {
+      return false;
+    }
+
+    @Override
+    public boolean includeInDatabaseFormat(final DataStorageFormat format) {
+      return formats.contains(format);
+    }
   }
 }
