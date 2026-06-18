@@ -27,8 +27,11 @@ import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.services.storage.WorldStatePreimageStorage;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
+import org.hyperledger.besu.util.cache.MemoryBoundCache;
 
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -49,16 +52,36 @@ public class BonsaiTrieLogToForestConverter {
   private static final Bytes32 EMPTY_TRIE_ROOT = Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes());
 
   private final ForestWorldStateKeyValueStorage forestStorage;
+  // Cross-block node cache (hash -> encoded node). Null when disabled (cacheMaxBytes <= 0).
+  private final MemoryBoundCache<Bytes32, Bytes> nodeCache;
   private Bytes32 currentRootHash;
 
   /**
-   * Creates a converter that writes reconstructed Forest trie nodes into the given storage.
+   * Creates a converter that writes reconstructed Forest trie nodes into the given storage, with no
+   * cross-block node cache.
    *
    * @param forestStorage the Forest world-state storage to populate
    */
   public BonsaiTrieLogToForestConverter(final ForestWorldStateKeyValueStorage forestStorage) {
+    this(forestStorage, 0);
+  }
+
+  /**
+   * Creates a converter that writes reconstructed Forest trie nodes into the given storage and
+   * caches trie nodes across blocks to avoid re-reading hot nodes from disk.
+   *
+   * @param forestStorage the Forest world-state storage to populate
+   * @param cacheMaxBytes maximum on-heap size in bytes of the cross-block node cache; values &lt;=
+   *     0 disable the cache
+   */
+  public BonsaiTrieLogToForestConverter(
+      final ForestWorldStateKeyValueStorage forestStorage, final long cacheMaxBytes) {
     this.forestStorage = forestStorage;
     this.currentRootHash = EMPTY_TRIE_ROOT;
+    this.nodeCache =
+        cacheMaxBytes > 0
+            ? new MemoryBoundCache<>(cacheMaxBytes, (hash, node) -> node.size() + Bytes32.SIZE)
+            : null;
   }
 
   /**
@@ -68,6 +91,49 @@ public class BonsaiTrieLogToForestConverter {
    */
   public Hash currentRootHash() {
     return Hash.wrap(currentRootHash);
+  }
+
+  /**
+   * Sets the running account state trie root hash so replay continues from an already-converted
+   * block instead of from genesis.
+   *
+   * @param root the account state trie root hash to resume from
+   */
+  public void resumeFrom(final Hash root) {
+    this.currentRootHash = Bytes32.wrap(root.getBytes());
+  }
+
+  /**
+   * Returns the cross-block node cache hit rate, or {@code -1.0} if the cache is disabled.
+   *
+   * @return the cache hit rate, or -1.0 when disabled
+   */
+  public double cacheHitRate() {
+    return nodeCache == null ? -1.0 : nodeCache.hitRate();
+  }
+
+  /**
+   * Returns the estimated number of entries in the cross-block node cache, or {@code 0} if the
+   * cache is disabled.
+   *
+   * @return the estimated cache size, or 0 when disabled
+   */
+  public long cacheEstimatedSize() {
+    return nodeCache == null ? 0L : nodeCache.estimatedSize();
+  }
+
+  private Optional<Bytes> cachingLoad(
+      final Bytes32 hash, final Supplier<Optional<Bytes>> storageLoader) {
+    if (nodeCache == null) {
+      return storageLoader.get();
+    }
+    final Bytes cached = nodeCache.getIfPresent(hash);
+    if (cached != null) {
+      return Optional.of(cached);
+    }
+    final Optional<Bytes> fromStorage = storageLoader.get();
+    fromStorage.ifPresent(node -> nodeCache.put(hash, node));
+    return fromStorage;
   }
 
   /**
@@ -111,7 +177,7 @@ public class BonsaiTrieLogToForestConverter {
     final ForestWorldStateKeyValueStorage.Updater updater = forestStorage.updater();
     try {
       final NodeLoader accountLoader =
-          (location, hash) -> forestStorage.getAccountStateTrieNode(hash);
+          (location, hash) -> cachingLoad(hash, () -> forestStorage.getAccountStateTrieNode(hash));
       final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
           new StoredMerklePatriciaTrie<>(accountLoader, currentRootHash, b -> b, b -> b);
 
@@ -162,7 +228,13 @@ public class BonsaiTrieLogToForestConverter {
         accountTrie.put(addressHash, RLP.encode(updated::writeTo));
       }
 
-      accountTrie.commit((location, hash, value) -> updater.putAccountStateTrieNode(hash, value));
+      accountTrie.commit(
+          (location, hash, value) -> {
+            updater.putAccountStateTrieNode(hash, value);
+            if (nodeCache != null) {
+              nodeCache.put(hash, value);
+            }
+          });
       final Bytes32 newRoot = accountTrie.getRootHash();
       if (!newRoot.equals(Bytes32.wrap(expectedStateRoot.getBytes()))) {
         throw new IllegalStateException(
@@ -187,7 +259,7 @@ public class BonsaiTrieLogToForestConverter {
       final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges) {
     final Bytes32 startRoot = cleared ? EMPTY_TRIE_ROOT : priorStorageRoot;
     final NodeLoader storageLoader =
-        (location, hash) -> forestStorage.getAccountStorageTrieNode(hash);
+        (location, hash) -> cachingLoad(hash, () -> forestStorage.getAccountStorageTrieNode(hash));
     final StoredMerklePatriciaTrie<Bytes32, Bytes> storageTrie =
         new StoredMerklePatriciaTrie<>(storageLoader, startRoot, b -> b, b -> b);
     for (final var slot : slotChanges.entrySet()) {
@@ -199,7 +271,13 @@ public class BonsaiTrieLogToForestConverter {
         storageTrie.put(slotHash, RLP.encode(o -> o.writeBytes(value.toMinimalBytes())));
       }
     }
-    storageTrie.commit((location, hash, value) -> updater.putAccountStorageTrieNode(hash, value));
+    storageTrie.commit(
+        (location, hash, value) -> {
+          updater.putAccountStorageTrieNode(hash, value);
+          if (nodeCache != null) {
+            nodeCache.put(hash, value);
+          }
+        });
     return storageTrie.getRootHash();
   }
 }

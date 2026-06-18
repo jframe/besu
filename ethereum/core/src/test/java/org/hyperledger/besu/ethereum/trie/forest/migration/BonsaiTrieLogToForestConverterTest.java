@@ -297,6 +297,95 @@ class BonsaiTrieLogToForestConverterTest {
   }
 
   @Test
+  void cacheEnabledProducesSameRootAcrossTwoBlocksAsOracle() {
+    // Oracle: block 1 creates ALICE, block 2 bumps her nonce.
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater u1 = oracle.updater();
+    final MutableAccount a1 = u1.createAccount(ALICE);
+    a1.setNonce(7);
+    a1.setBalance(Wei.of(1234));
+    u1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+
+    final WorldUpdater u2 = oracle.updater();
+    final MutableAccount a2 = u2.getAccount(ALICE);
+    a2.setNonce(8);
+    u2.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+
+    final TrieLogLayer layer1 = new TrieLogLayer();
+    layer1.addAccountChange(ALICE, null, account(7, 1234));
+    final TrieLogLayer layer2 = new TrieLogLayer();
+    layer2.addAccountChange(ALICE, account(7, 1234), account(8, 1234));
+
+    // cacheMaxBytes = 1 MiB so the cache is active during the test
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024);
+    assertThat(converter.applyTrieLog(layer1, root1)).isEqualTo(root1);
+    assertThat(converter.applyTrieLog(layer2, root2)).isEqualTo(root2);
+  }
+
+  @Test
+  void cacheIsPopulatedAndServesCrossBlockReads() {
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater u1 = oracle.updater();
+    final MutableAccount a1 = u1.createAccount(ALICE);
+    a1.setNonce(7);
+    a1.setBalance(Wei.of(1234));
+    u1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+
+    final WorldUpdater u2 = oracle.updater();
+    final MutableAccount a2 = u2.getAccount(ALICE);
+    a2.setNonce(8);
+    u2.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+
+    final TrieLogLayer layer1 = new TrieLogLayer();
+    layer1.addAccountChange(ALICE, null, account(7, 1234));
+    final TrieLogLayer layer2 = new TrieLogLayer();
+    layer2.addAccountChange(ALICE, account(7, 1234), account(8, 1234));
+
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024);
+    converter.applyTrieLog(layer1, root1);
+    assertThat(converter.cacheEstimatedSize()).isGreaterThan(0L);
+
+    // Block 2 re-traverses block-1 nodes; they must be served from the cache.
+    converter.applyTrieLog(layer2, root2);
+    assertThat(converter.cacheHitRate()).isGreaterThan(0.0);
+  }
+
+  @Test
+  void disabledCacheReportsSentinels() {
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 0);
+    assertThat(converter.cacheHitRate()).isEqualTo(-1.0);
+    assertThat(converter.cacheEstimatedSize()).isEqualTo(0L);
+  }
+
+  @Test
+  void resumeFromSetsRunningRoot() {
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater u1 = oracle.updater();
+    final MutableAccount a1 = u1.createAccount(ALICE);
+    a1.setNonce(7);
+    a1.setBalance(Wei.of(1234));
+    u1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 0);
+    converter.resumeFrom(root1);
+    assertThat(converter.currentRootHash()).isEqualTo(root1);
+  }
+
+  @Test
   void seedGenesisMatchesGenesisStateRoot() {
     final String genesisJson =
         "{"
