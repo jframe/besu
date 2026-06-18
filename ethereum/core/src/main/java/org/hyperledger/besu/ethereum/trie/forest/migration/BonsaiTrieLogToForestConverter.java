@@ -21,6 +21,7 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.chain.GenesisState;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
+import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.forest.worldview.ForestMutableWorldState;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
@@ -29,8 +30,16 @@ import org.hyperledger.besu.plugin.services.storage.WorldStatePreimageStorage;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.util.cache.MemoryBoundCache;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -54,6 +63,9 @@ public class BonsaiTrieLogToForestConverter {
   private final ForestWorldStateKeyValueStorage forestStorage;
   // Cross-block node cache (hash -> encoded node). Null when disabled (cacheMaxBytes <= 0).
   private final MemoryBoundCache<Bytes32, Bytes> nodeCache;
+  // Pool of reader threads used to warm the node cache ahead of replay; null when prefetch is
+  // disabled (no cache, or prefetchThreads <= 0).
+  private final ExecutorService prefetchExecutor;
   private Bytes32 currentRootHash;
 
   /**
@@ -63,7 +75,7 @@ public class BonsaiTrieLogToForestConverter {
    * @param forestStorage the Forest world-state storage to populate
    */
   public BonsaiTrieLogToForestConverter(final ForestWorldStateKeyValueStorage forestStorage) {
-    this(forestStorage, 0);
+    this(forestStorage, 0, 0);
   }
 
   /**
@@ -76,12 +88,52 @@ public class BonsaiTrieLogToForestConverter {
    */
   public BonsaiTrieLogToForestConverter(
       final ForestWorldStateKeyValueStorage forestStorage, final long cacheMaxBytes) {
+    this(forestStorage, cacheMaxBytes, 0);
+  }
+
+  /**
+   * Creates a converter that writes reconstructed Forest trie nodes into the given storage, caches
+   * trie nodes across blocks, and optionally warms that cache using a pool of parallel reader
+   * threads ahead of replay.
+   *
+   * <p>The trie traversal is inherently pointer-chasing, so a single replay thread can never have
+   * more than one disk read outstanding, leaving the NVMe's parallelism idle. The prefetch pool
+   * issues the path reads for an upcoming window of blocks concurrently, raising the disk queue
+   * depth so reads are served in parallel rather than serially.
+   *
+   * @param forestStorage the Forest world-state storage to populate
+   * @param cacheMaxBytes maximum on-heap size in bytes of the cross-block node cache; values &lt;=
+   *     0 disable the cache
+   * @param prefetchThreads number of parallel reader threads used to warm the cache ahead of
+   *     replay; values &lt;= 0 (or a disabled cache) disable prefetch
+   */
+  public BonsaiTrieLogToForestConverter(
+      final ForestWorldStateKeyValueStorage forestStorage,
+      final long cacheMaxBytes,
+      final int prefetchThreads) {
     this.forestStorage = forestStorage;
     this.currentRootHash = EMPTY_TRIE_ROOT;
     this.nodeCache =
         cacheMaxBytes > 0
             ? new MemoryBoundCache<>(cacheMaxBytes, (hash, node) -> node.size() + Bytes32.SIZE)
             : null;
+    this.prefetchExecutor =
+        (this.nodeCache != null && prefetchThreads > 0)
+            ? Executors.newFixedThreadPool(
+                prefetchThreads,
+                runnable -> {
+                  final Thread thread = new Thread(runnable, "forest-convert-prefetch");
+                  thread.setDaemon(true);
+                  return thread;
+                })
+            : null;
+  }
+
+  /** Releases the prefetch thread pool, if any. Safe to call more than once. */
+  public void close() {
+    if (prefetchExecutor != null) {
+      prefetchExecutor.shutdownNow();
+    }
   }
 
   /**
@@ -136,6 +188,105 @@ public class BonsaiTrieLogToForestConverter {
     return fromStorage;
   }
 
+  private NodeLoader accountNodeLoader() {
+    return (location, hash) -> cachingLoad(hash, () -> forestStorage.getAccountStateTrieNode(hash));
+  }
+
+  private NodeLoader storageNodeLoader() {
+    return (location, hash) ->
+        cachingLoad(hash, () -> forestStorage.getAccountStorageTrieNode(hash));
+  }
+
+  /**
+   * Warms the cross-block node cache for the keys changed across a window of upcoming trie logs, by
+   * traversing their root&rarr;leaf paths concurrently from the current (already-converted) state
+   * root. This raises the disk queue depth so the otherwise-serialized path reads are issued in
+   * parallel; the subsequent single-threaded {@link #applyTrieLog} then finds the nodes resident in
+   * the cache.
+   *
+   * <p>All traversals start from the converter's current root (the window base), which is the only
+   * root guaranteed to be present on disk before the window is applied. For a key whose path is not
+   * modified earlier in the window, the path nodes under the base root are byte-identical to those
+   * under the key's true pre-state root, so warming from the base root warms exactly the right
+   * nodes; for a key whose path is modified earlier in the window, the earlier block's
+   * write-through keeps those nodes cached. Prefetch only populates the cache (keyed by node hash)
+   * and can never change replay output; the per-block state-root verification in {@link
+   * #applyTrieLog} remains the correctness net. Read failures are swallowed: a prefetch miss is
+   * never fatal, as replay reads the authoritative node by hash anyway.
+   *
+   * <p>No-op when prefetch is disabled or the window is empty.
+   *
+   * @param layers the upcoming trie logs whose changed keys should be warmed
+   */
+  public void prefetch(final List<TrieLog> layers) {
+    if (prefetchExecutor == null || layers.isEmpty()) {
+      return;
+    }
+    final Bytes32 baseRoot = currentRootHash;
+
+    // Union the changed accounts (and their changed storage slot hashes) across the whole window.
+    final Map<Address, Set<Bytes32>> slotHashesByAccount = new HashMap<>();
+    for (final TrieLog layer : layers) {
+      for (final Address address : layer.getAccountChanges().keySet()) {
+        slotHashesByAccount.computeIfAbsent(address, a -> new HashSet<>());
+      }
+      for (final var storageEntry : layer.getStorageChanges().entrySet()) {
+        final Set<Bytes32> slotHashes =
+            slotHashesByAccount.computeIfAbsent(storageEntry.getKey(), a -> new HashSet<>());
+        for (final StorageSlotKey slotKey : storageEntry.getValue().keySet()) {
+          slotHashes.add(Bytes32.wrap(slotKey.getSlotHash().getBytes()));
+        }
+      }
+    }
+
+    final List<Callable<Void>> tasks = new ArrayList<>(slotHashesByAccount.size());
+    for (final var entry : slotHashesByAccount.entrySet()) {
+      final Address address = entry.getKey();
+      final Set<Bytes32> slotHashes = entry.getValue();
+      tasks.add(
+          () -> {
+            warmAccount(baseRoot, address, slotHashes);
+            return null;
+          });
+    }
+    try {
+      prefetchExecutor.invokeAll(tasks);
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  /**
+   * Warms the account-trie path to {@code address} from {@code baseRoot}, and (if the account
+   * exists and has changed slots) the storage-trie paths to those slots. Best-effort: any read
+   * failure is swallowed so prefetch never aborts the conversion.
+   */
+  private void warmAccount(
+      final Bytes32 baseRoot, final Address address, final Set<Bytes32> slotHashes) {
+    try {
+      final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
+          new StoredMerklePatriciaTrie<>(accountNodeLoader(), baseRoot, b -> b, b -> b);
+      final Bytes32 addressHash = Bytes32.wrap(address.addressHash().getBytes());
+      final Optional<Bytes> accountRlp = accountTrie.get(addressHash);
+      if (slotHashes.isEmpty() || accountRlp.isEmpty()) {
+        return;
+      }
+      final PmtStateTrieAccountValue account =
+          PmtStateTrieAccountValue.readFrom(RLP.input(accountRlp.get()));
+      final Bytes32 storageRoot = Bytes32.wrap(account.getStorageRoot().getBytes());
+      if (storageRoot.equals(EMPTY_TRIE_ROOT)) {
+        return;
+      }
+      final StoredMerklePatriciaTrie<Bytes32, Bytes> storageTrie =
+          new StoredMerklePatriciaTrie<>(storageNodeLoader(), storageRoot, b -> b, b -> b);
+      for (final Bytes32 slotHash : slotHashes) {
+        storageTrie.get(slotHash);
+      }
+    } catch (final RuntimeException e) {
+      // Best-effort warming; a failed read must never abort the conversion.
+    }
+  }
+
   /**
    * Seeds the Forest storage with the genesis world state and sets the running root to the genesis
    * state root. This must be called before replaying any trie logs so that block-1 replay starts
@@ -176,10 +327,8 @@ public class BonsaiTrieLogToForestConverter {
   public Hash applyTrieLog(final TrieLog layer, final Hash expectedStateRoot) {
     final ForestWorldStateKeyValueStorage.Updater updater = forestStorage.updater();
     try {
-      final NodeLoader accountLoader =
-          (location, hash) -> cachingLoad(hash, () -> forestStorage.getAccountStateTrieNode(hash));
       final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
-          new StoredMerklePatriciaTrie<>(accountLoader, currentRootHash, b -> b, b -> b);
+          new StoredMerklePatriciaTrie<>(accountNodeLoader(), currentRootHash, b -> b, b -> b);
 
       final Map<Address, ? extends TrieLog.LogTuple<Bytes>> codeChanges = layer.getCodeChanges();
       for (final var entry : codeChanges.entrySet()) {
@@ -258,10 +407,8 @@ public class BonsaiTrieLogToForestConverter {
       final boolean cleared,
       final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges) {
     final Bytes32 startRoot = cleared ? EMPTY_TRIE_ROOT : priorStorageRoot;
-    final NodeLoader storageLoader =
-        (location, hash) -> cachingLoad(hash, () -> forestStorage.getAccountStorageTrieNode(hash));
     final StoredMerklePatriciaTrie<Bytes32, Bytes> storageTrie =
-        new StoredMerklePatriciaTrie<>(storageLoader, startRoot, b -> b, b -> b);
+        new StoredMerklePatriciaTrie<>(storageNodeLoader(), startRoot, b -> b, b -> b);
     for (final var slot : slotChanges.entrySet()) {
       final Bytes32 slotHash = Bytes32.wrap(slot.getKey().getSlotHash().getBytes());
       final UInt256 value = slot.getValue().getUpdated();

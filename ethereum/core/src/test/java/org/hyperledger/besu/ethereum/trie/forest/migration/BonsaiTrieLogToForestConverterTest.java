@@ -38,6 +38,7 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
@@ -383,6 +384,118 @@ class BonsaiTrieLogToForestConverterTest {
         new BonsaiTrieLogToForestConverter(forestStorage(), 0);
     converter.resumeFrom(root1);
     assertThat(converter.currentRootHash()).isEqualTo(root1);
+  }
+
+  @Test
+  void prefetchWarmsExistingStateAndReplayMatches() {
+    final StorageSlotKey slot1 = new StorageSlotKey(UInt256.valueOf(1));
+    final StorageSlotKey slot2 = new StorageSlotKey(UInt256.valueOf(2));
+
+    // Oracle: block 1 creates two slots, block 2 zeroes slot2.
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater updater1 = oracle.updater();
+    final MutableAccount contract1 = updater1.createAccount(CONTRACT);
+    contract1.setNonce(1);
+    contract1.setStorageValue(UInt256.valueOf(1), UInt256.valueOf(111));
+    contract1.setStorageValue(UInt256.valueOf(2), UInt256.valueOf(222));
+    updater1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+    final Hash sroot1 =
+        storageRootOf(Map.of(slot1, UInt256.valueOf(111), slot2, UInt256.valueOf(222)));
+
+    final WorldUpdater updater2 = oracle.updater();
+    final MutableAccount contract2 = updater2.getAccount(CONTRACT);
+    contract2.setStorageValue(UInt256.valueOf(2), UInt256.ZERO);
+    updater2.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+    final Hash sroot2 = storageRootOf(Map.of(slot1, UInt256.valueOf(111)));
+
+    final TrieLogLayer block1 = new TrieLogLayer();
+    block1.addAccountChange(CONTRACT, null, acct(1, 0, sroot1, Hash.EMPTY));
+    block1.addStorageChange(CONTRACT, slot1, null, UInt256.valueOf(111));
+    block1.addStorageChange(CONTRACT, slot2, null, UInt256.valueOf(222));
+
+    final TrieLogLayer block2 = new TrieLogLayer();
+    block2.addAccountChange(
+        CONTRACT, acct(1, 0, sroot1, Hash.EMPTY), acct(1, 0, sroot2, Hash.EMPTY));
+    block2.addStorageChange(CONTRACT, slot2, UInt256.valueOf(222), null);
+
+    // Cache enabled + 2 prefetch threads. Apply block 1 first so block 2's base state exists, then
+    // prefetch block 2 (warming the CONTRACT account path and its storage path from root1) and
+    // replay it; the reconstructed roots must still match the oracle exactly.
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024, 2);
+    try {
+      assertThat(converter.applyTrieLog(block1, root1)).isEqualTo(root1);
+      converter.prefetch(List.of(block2));
+      assertThat(converter.applyTrieLog(block2, root2)).isEqualTo(root2);
+    } finally {
+      converter.close();
+    }
+  }
+
+  @Test
+  void prefetchAcrossWholeWindowProducesSameRootsAsOracle() {
+    // Oracle: block 1 creates ALICE, block 2 bumps her nonce.
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater u1 = oracle.updater();
+    final MutableAccount a1 = u1.createAccount(ALICE);
+    a1.setNonce(7);
+    a1.setBalance(Wei.of(1234));
+    u1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+
+    final WorldUpdater u2 = oracle.updater();
+    final MutableAccount a2 = u2.getAccount(ALICE);
+    a2.setNonce(8);
+    u2.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+
+    final TrieLogLayer layer1 = new TrieLogLayer();
+    layer1.addAccountChange(ALICE, null, account(7, 1234));
+    final TrieLogLayer layer2 = new TrieLogLayer();
+    layer2.addAccountChange(ALICE, account(7, 1234), account(8, 1234));
+
+    // Prefetch the whole window from the empty base root (as the subcommand does at window start),
+    // then replay. Warming from a base root that predates the keys must be harmless.
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024, 4);
+    try {
+      converter.prefetch(List.of(layer1, layer2));
+      assertThat(converter.applyTrieLog(layer1, root1)).isEqualTo(root1);
+      assertThat(converter.applyTrieLog(layer2, root2)).isEqualTo(root2);
+    } finally {
+      converter.close();
+    }
+  }
+
+  @Test
+  void prefetchIsNoOpWhenCacheDisabled() {
+    final TrieLogLayer layer = new TrieLogLayer();
+    layer.addAccountChange(ALICE, null, account(7, 1234));
+
+    // Cache disabled => no prefetch pool; prefetch must be a harmless no-op.
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 0, 32);
+    converter.prefetch(List.of(layer));
+    converter.close();
+    assertThat(converter.cacheHitRate()).isEqualTo(-1.0);
+  }
+
+  @Test
+  void prefetchIsNoOpWhenThreadsZero() {
+    final TrieLogLayer layer = new TrieLogLayer();
+    layer.addAccountChange(ALICE, null, account(7, 1234));
+
+    // Cache enabled but zero prefetch threads => no prefetch pool; prefetch must be a no-op.
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024, 0);
+    converter.prefetch(List.of(layer));
+    converter.close();
   }
 
   @Test

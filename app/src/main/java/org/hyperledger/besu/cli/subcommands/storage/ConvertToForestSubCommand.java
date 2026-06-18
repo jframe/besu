@@ -98,6 +98,20 @@ public class ConvertToForestSubCommand implements Runnable {
       hidden = true)
   private long convertCacheSizeMb = 1024;
 
+  @CommandLine.Option(
+      names = {"--Xx-convert-prefetch-threads"},
+      description =
+          "EXPERIMENTAL: number of parallel reader threads used to warm the node cache ahead of replay, raising disk queue depth; 0 disables prefetch (default: ${DEFAULT-VALUE})",
+      hidden = true)
+  private int convertPrefetchThreads = 32;
+
+  @CommandLine.Option(
+      names = {"--Xx-convert-prefetch-window"},
+      description =
+          "EXPERIMENTAL: number of upcoming blocks whose changed keys are prefetched together before replay (default: ${DEFAULT-VALUE})",
+      hidden = true)
+  private int convertPrefetchWindow = 64;
+
   @SuppressWarnings("unused")
   @ParentCommand
   private StorageSubCommand parentCommand;
@@ -167,110 +181,137 @@ public class ConvertToForestSubCommand implements Runnable {
                   .getStorageBySegmentIdentifier(KeyValueSegmentIdentifier.WORLD_STATE));
 
       final BonsaiTrieLogToForestConverter converter =
-          new BonsaiTrieLogToForestConverter(forest, convertCacheSizeMb * 1024L * 1024L);
+          new BonsaiTrieLogToForestConverter(
+              forest, convertCacheSizeMb * 1024L * 1024L, convertPrefetchThreads);
       final TrieLogFactoryImpl trieLogFactory = new TrieLogFactoryImpl();
 
-      // Seed genesis so block-1 replay starts from the correct base state. Slot preimages are not
-      // needed for correctness, so the controller's preimage storage is sufficient.
-      final WorldStatePreimageStorage preimage =
-          controller.getStorageProvider().createWorldStatePreimageStorage();
-      converter.seedGenesis(genesisState, preimage, EvmConfiguration.DEFAULT);
-      LOG.info("Seeded genesis state (root={})", converter.currentRootHash());
+      try {
+        // Seed genesis so block-1 replay starts from the correct base state. Slot preimages are not
+        // needed for correctness, so the controller's preimage storage is sufficient.
+        final WorldStatePreimageStorage preimage =
+            controller.getStorageProvider().createWorldStatePreimageStorage();
+        converter.seedGenesis(genesisState, preimage, EvmConfiguration.DEFAULT);
+        LOG.info("Seeded genesis state (root={})", converter.currentRootHash());
 
-      final long head = blockchain.getChainHeadBlockNumber();
+        final long head = blockchain.getChainHeadBlockNumber();
 
-      final Hash genesisStateRoot = genesisState.getBlock().getHeader().getStateRoot();
-      final LongFunction<Hash> stateRootByBlock =
-          number ->
-              number == 0
-                  ? genesisStateRoot
-                  : blockchain
-                      .getBlockHeader(
-                          blockchain
-                              .getBlockHashByNumber(number)
-                              .orElseThrow(
-                                  () ->
-                                      new IllegalStateException(
-                                          "Missing block hash for block " + number)))
-                      .orElseThrow(
-                          () ->
-                              new IllegalStateException("Missing block header for block " + number))
-                      .getStateRoot();
+        final Hash genesisStateRoot = genesisState.getBlock().getHeader().getStateRoot();
+        final LongFunction<Hash> stateRootByBlock =
+            number ->
+                number == 0
+                    ? genesisStateRoot
+                    : blockchain
+                        .getBlockHeader(
+                            blockchain
+                                .getBlockHashByNumber(number)
+                                .orElseThrow(
+                                    () ->
+                                        new IllegalStateException(
+                                            "Missing block hash for block " + number)))
+                        .orElseThrow(
+                            () ->
+                                new IllegalStateException(
+                                    "Missing block header for block " + number))
+                        .getStateRoot();
 
-      final long resumeBlock =
-          ForestConversionResume.findResumeBlock(
-              head,
-              stateRootByBlock,
-              root -> forest.isWorldStateAvailable(Bytes32.wrap(root.getBytes())));
-      if (resumeBlock > 0) {
-        final Hash resumeRoot = stateRootByBlock.apply(resumeBlock);
-        converter.resumeFrom(resumeRoot);
-        LOG.info("Resuming conversion from block {} (root={})", resumeBlock, resumeRoot);
-      }
-      if (resumeBlock >= head) {
-        LOG.info("Conversion already complete to head {}", head);
+        final long resumeBlock =
+            ForestConversionResume.findResumeBlock(
+                head,
+                stateRootByBlock,
+                root -> forest.isWorldStateAvailable(Bytes32.wrap(root.getBytes())));
+        if (resumeBlock > 0) {
+          final Hash resumeRoot = stateRootByBlock.apply(resumeBlock);
+          converter.resumeFrom(resumeRoot);
+          LOG.info("Resuming conversion from block {} (root={})", resumeBlock, resumeRoot);
+        }
+        if (resumeBlock >= head) {
+          LOG.info("Conversion already complete to head {}", head);
+          flipMetadataToForest(dataDir);
+          LOG.info("Flipped database metadata to FOREST format");
+          return;
+        }
+
+        final long startMillis = System.currentTimeMillis();
+        final long loopStartBlock = resumeBlock;
+
+        // Process the chain in windows. For each window we first warm the node cache for the whole
+        // window's changed keys using parallel reader threads (raising disk queue depth), then
+        // replay the window's blocks single-threaded against the now-warm cache.
+        for (long windowStart = resumeBlock + 1;
+            windowStart <= head;
+            windowStart += convertPrefetchWindow) {
+          final long windowEnd = Math.min(windowStart + convertPrefetchWindow - 1, head);
+
+          final List<TrieLog> layers = new ArrayList<>();
+          final List<Hash> expectedRoots = new ArrayList<>();
+          for (long number = windowStart; number <= windowEnd; number++) {
+            final long blockNumber = number;
+            final Hash blockHash =
+                blockchain
+                    .getBlockHashByNumber(number)
+                    .orElseThrow(
+                        () ->
+                            new IllegalStateException(
+                                "Missing block hash for block " + blockNumber));
+            final BlockHeader header =
+                blockchain
+                    .getBlockHeader(blockHash)
+                    .orElseThrow(
+                        () ->
+                            new IllegalStateException(
+                                "Missing block header for block " + blockNumber));
+            final byte[] raw =
+                bonsai
+                    .getTrieLog(blockHash)
+                    .orElseThrow(
+                        () ->
+                            new IllegalStateException(
+                                "Missing trie log for block "
+                                    + blockNumber
+                                    + "; trie-log pruning must be disabled for conversion"));
+            layers.add(trieLogFactory.deserialize(raw));
+            expectedRoots.add(header.getStateRoot());
+          }
+
+          converter.prefetch(layers);
+
+          for (int i = 0; i < layers.size(); i++) {
+            final long blockNumber = windowStart + i;
+            converter.applyTrieLog(layers.get(i), expectedRoots.get(i));
+
+            LogUtil.throttledLog(
+                () -> {
+                  final long now = System.currentTimeMillis();
+                  final double elapsedSeconds = Math.max((now - startMillis) / 1000.0, 0.001);
+                  final double blocksPerSecond = (blockNumber - loopStartBlock) / elapsedSeconds;
+                  final double percentComplete = head > 0 ? (blockNumber * 100.0 / head) : 100.0;
+                  final String eta =
+                      blocksPerSecond > 0
+                          ? formatDuration((long) ((head - blockNumber) / blocksPerSecond))
+                          : "unknown";
+                  LOG.info(
+                      "Converted {} / {} blocks ({}%), {} blocks/s, ETA {}, cache hit-rate {} ({} entries)",
+                      blockNumber,
+                      head,
+                      String.format("%.1f", percentComplete),
+                      String.format("%.2f", blocksPerSecond),
+                      eta,
+                      converter.cacheHitRate() < 0
+                          ? "disabled"
+                          : String.format("%.1f%%", converter.cacheHitRate() * 100),
+                      converter.cacheEstimatedSize());
+                },
+                shouldLogProgress,
+                LOG_INTERVAL_SECONDS);
+          }
+        }
+        LOG.info("Conversion complete to head {} (root={})", head, converter.currentRootHash());
+
         flipMetadataToForest(dataDir);
         LOG.info("Flipped database metadata to FOREST format");
-        return;
+      } finally {
+        converter.close();
       }
-
-      final long startMillis = System.currentTimeMillis();
-      final long loopStartBlock = resumeBlock;
-
-      for (long number = resumeBlock + 1; number <= head; number++) {
-        final long blockNumber = number;
-        final Hash blockHash =
-            blockchain
-                .getBlockHashByNumber(number)
-                .orElseThrow(
-                    () -> new IllegalStateException("Missing block hash for block " + blockNumber));
-        final BlockHeader header =
-            blockchain
-                .getBlockHeader(blockHash)
-                .orElseThrow(
-                    () ->
-                        new IllegalStateException("Missing block header for block " + blockNumber));
-        final byte[] raw =
-            bonsai
-                .getTrieLog(blockHash)
-                .orElseThrow(
-                    () ->
-                        new IllegalStateException(
-                            "Missing trie log for block "
-                                + blockNumber
-                                + "; trie-log pruning must be disabled for conversion"));
-        final TrieLog layer = trieLogFactory.deserialize(raw);
-        converter.applyTrieLog(layer, header.getStateRoot());
-
-        LogUtil.throttledLog(
-            () -> {
-              final long now = System.currentTimeMillis();
-              final double elapsedSeconds = Math.max((now - startMillis) / 1000.0, 0.001);
-              final double blocksPerSecond = (blockNumber - loopStartBlock) / elapsedSeconds;
-              final double percentComplete = head > 0 ? (blockNumber * 100.0 / head) : 100.0;
-              final String eta =
-                  blocksPerSecond > 0
-                      ? formatDuration((long) ((head - blockNumber) / blocksPerSecond))
-                      : "unknown";
-              LOG.info(
-                  "Converted {} / {} blocks ({}%), {} blocks/s, ETA {}, cache hit-rate {} ({} entries)",
-                  blockNumber,
-                  head,
-                  String.format("%.1f", percentComplete),
-                  String.format("%.2f", blocksPerSecond),
-                  eta,
-                  converter.cacheHitRate() < 0
-                      ? "disabled"
-                      : String.format("%.1f%%", converter.cacheHitRate() * 100),
-                  converter.cacheEstimatedSize());
-            },
-            shouldLogProgress,
-            LOG_INTERVAL_SECONDS);
-      }
-      LOG.info("Conversion complete to head {} (root={})", head, converter.currentRootHash());
-
-      flipMetadataToForest(dataDir);
-      LOG.info("Flipped database metadata to FOREST format");
     } finally {
       controller.close();
     }
