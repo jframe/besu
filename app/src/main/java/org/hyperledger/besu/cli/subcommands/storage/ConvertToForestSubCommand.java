@@ -258,7 +258,9 @@ public class ConvertToForestSubCommand implements Runnable {
                   String.format("%.1f", percentComplete),
                   String.format("%.0f", blocksPerSecond),
                   eta,
-                  String.format("%.3f", converter.cacheHitRate()),
+                  converter.cacheHitRate() < 0
+                      ? "disabled"
+                      : String.format("%.3f", converter.cacheHitRate()),
                   converter.cacheEstimatedSize());
             },
             shouldLogProgress,
