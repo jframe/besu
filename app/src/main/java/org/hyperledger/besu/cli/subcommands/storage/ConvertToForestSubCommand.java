@@ -215,6 +215,7 @@ public class ConvertToForestSubCommand implements Runnable {
       }
 
       final long startMillis = System.currentTimeMillis();
+      final long loopStartBlock = resumeBlock;
 
       for (long number = resumeBlock + 1; number <= head; number++) {
         final long blockNumber = number;
@@ -245,7 +246,7 @@ public class ConvertToForestSubCommand implements Runnable {
             () -> {
               final long now = System.currentTimeMillis();
               final double elapsedSeconds = Math.max((now - startMillis) / 1000.0, 0.001);
-              final double blocksPerSecond = blockNumber / elapsedSeconds;
+              final double blocksPerSecond = (blockNumber - loopStartBlock) / elapsedSeconds;
               final double percentComplete = head > 0 ? (blockNumber * 100.0 / head) : 100.0;
               final String eta =
                   blocksPerSecond > 0
