@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.forest.migration.BonsaiTrieLogToForestConverter;
+import org.hyperledger.besu.ethereum.trie.forest.migration.ForestConversionResume;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
@@ -52,7 +53,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongFunction;
 
+import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -87,6 +90,13 @@ public class ConvertToForestSubCommand implements Runnable {
   private static final int LOG_INTERVAL_SECONDS = 60;
 
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
+
+  @CommandLine.Option(
+      names = {"--Xx-convert-cache-size-mb"},
+      description =
+          "EXPERIMENTAL: on-heap size (MB) of the cross-block trie-node cache used during conversion; 0 disables it (default: ${DEFAULT-VALUE})",
+      hidden = true)
+  private long convertCacheSizeMb = 1024;
 
   @SuppressWarnings("unused")
   @ParentCommand
@@ -156,7 +166,8 @@ public class ConvertToForestSubCommand implements Runnable {
                   .getStorageProvider()
                   .getStorageBySegmentIdentifier(KeyValueSegmentIdentifier.WORLD_STATE));
 
-      final BonsaiTrieLogToForestConverter converter = new BonsaiTrieLogToForestConverter(forest);
+      final BonsaiTrieLogToForestConverter converter =
+          new BonsaiTrieLogToForestConverter(forest, convertCacheSizeMb * 1024L * 1024L);
       final TrieLogFactoryImpl trieLogFactory = new TrieLogFactoryImpl();
 
       // Seed genesis so block-1 replay starts from the correct base state. Slot preimages are not
@@ -168,9 +179,44 @@ public class ConvertToForestSubCommand implements Runnable {
 
       final long head = blockchain.getChainHeadBlockNumber();
 
+      final Hash genesisStateRoot = genesisState.getBlock().getHeader().getStateRoot();
+      final LongFunction<Hash> stateRootByBlock =
+          number ->
+              number == 0
+                  ? genesisStateRoot
+                  : blockchain
+                      .getBlockHeader(
+                          blockchain
+                              .getBlockHashByNumber(number)
+                              .orElseThrow(
+                                  () ->
+                                      new IllegalStateException(
+                                          "Missing block hash for block " + number)))
+                      .orElseThrow(
+                          () ->
+                              new IllegalStateException("Missing block header for block " + number))
+                      .getStateRoot();
+
+      final long resumeBlock =
+          ForestConversionResume.findResumeBlock(
+              head,
+              stateRootByBlock,
+              root -> forest.isWorldStateAvailable(Bytes32.wrap(root.getBytes())));
+      if (resumeBlock > 0) {
+        final Hash resumeRoot = stateRootByBlock.apply(resumeBlock);
+        converter.resumeFrom(resumeRoot);
+        LOG.info("Resuming conversion from block {} (root={})", resumeBlock, resumeRoot);
+      }
+      if (resumeBlock >= head) {
+        LOG.info("Conversion already complete to head {}", head);
+        flipMetadataToForest(dataDir);
+        LOG.info("Flipped database metadata to FOREST format");
+        return;
+      }
+
       final long startMillis = System.currentTimeMillis();
 
-      for (long number = 1; number <= head; number++) {
+      for (long number = resumeBlock + 1; number <= head; number++) {
         final long blockNumber = number;
         final Hash blockHash =
             blockchain
@@ -206,12 +252,14 @@ public class ConvertToForestSubCommand implements Runnable {
                       ? formatDuration((long) ((head - blockNumber) / blocksPerSecond))
                       : "unknown";
               LOG.info(
-                  "Converted {} / {} blocks ({}%), {} blocks/s, ETA {}",
+                  "Converted {} / {} blocks ({}%), {} blocks/s, ETA {}, cache hit-rate {} ({} entries)",
                   blockNumber,
                   head,
                   String.format("%.1f", percentComplete),
                   String.format("%.0f", blocksPerSecond),
-                  eta);
+                  eta,
+                  String.format("%.3f", converter.cacheHitRate()),
+                  converter.cacheEstimatedSize());
             },
             shouldLogProgress,
             LOG_INTERVAL_SECONDS);
