@@ -44,8 +44,29 @@ RAM, no on-disk schema change, and **complete history preserved exactly**.
 
 - No change to the on-disk Forest format or persisted schema.
 - No change to *what* nodes are written per block (history stays complete).
-- No pipelining of prefetch with apply in this change (possible follow-up; see
-  "Future work").
+
+## Update — pipelining implemented
+
+The initial windowed prefetch-then-apply (below) serialized the phases: thread
+dumps of the running conversion showed all 32 prefetch threads parked during the
+single-threaded apply, with disk queue depth collapsing back to ~1 and the apply
+thread CPU-bound on trie mutation (`RemoveVisitor`/`BranchNode.accept`) plus
+serial cache-miss reads. To keep the disk busy continuously, the warming of
+window N+1 is now **pipelined** with the replay of window N:
+
+- The converter gained `prefetchAsync(List<TrieLog>, Hash baseRoot)`, returning a
+  `Future`. A single-thread coordinator (`forest-convert-prefetch-coord`) drives
+  the parallel warming off the apply thread; the 32-thread pool does the reads.
+- The caller passes an explicit `baseRoot` captured **before** mutating the
+  running root, so background warming never races the apply thread on
+  `currentRootHash`. That base is the root at the start of the window being
+  applied — a window or two behind the warmed window's true pre-state root, which
+  is harmless: warming is best-effort and write-through during the intervening
+  apply keeps modified paths cached.
+- The subcommand loop double-buffers: gather window N+1, kick off its async warm,
+  replay window N, then await the warm before replaying N+1.
+
+The first window is still warmed synchronously from the resume root.
 
 ## Design
 

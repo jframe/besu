@@ -52,6 +52,8 @@ import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongFunction;
 
@@ -234,50 +236,40 @@ public class ConvertToForestSubCommand implements Runnable {
         final long startMillis = System.currentTimeMillis();
         final long loopStartBlock = resumeBlock;
 
-        // Process the chain in windows. For each window we first warm the node cache for the whole
-        // window's changed keys using parallel reader threads (raising disk queue depth), then
-        // replay the window's blocks single-threaded against the now-warm cache.
-        for (long windowStart = resumeBlock + 1;
-            windowStart <= head;
-            windowStart += convertPrefetchWindow) {
-          final long windowEnd = Math.min(windowStart + convertPrefetchWindow - 1, head);
+        // Process the chain in windows, pipelining the parallel cache-warming of the next window
+        // with the single-threaded replay of the current one so the disk stays busy continuously
+        // (instead of alternating disk-saturated prefetch with disk-idle apply).
+        WindowData current =
+            gatherWindow(
+                blockchain,
+                bonsai,
+                trieLogFactory,
+                resumeBlock + 1,
+                Math.min(resumeBlock + convertPrefetchWindow, head));
+        // Warm the first window synchronously from the (on-disk) resume root before replaying it.
+        converter.prefetch(current.layers());
 
-          final List<TrieLog> layers = new ArrayList<>();
-          final List<Hash> expectedRoots = new ArrayList<>();
-          for (long number = windowStart; number <= windowEnd; number++) {
-            final long blockNumber = number;
-            final Hash blockHash =
-                blockchain
-                    .getBlockHashByNumber(number)
-                    .orElseThrow(
-                        () ->
-                            new IllegalStateException(
-                                "Missing block hash for block " + blockNumber));
-            final BlockHeader header =
-                blockchain
-                    .getBlockHeader(blockHash)
-                    .orElseThrow(
-                        () ->
-                            new IllegalStateException(
-                                "Missing block header for block " + blockNumber));
-            final byte[] raw =
-                bonsai
-                    .getTrieLog(blockHash)
-                    .orElseThrow(
-                        () ->
-                            new IllegalStateException(
-                                "Missing trie log for block "
-                                    + blockNumber
-                                    + "; trie-log pruning must be disabled for conversion"));
-            layers.add(trieLogFactory.deserialize(raw));
-            expectedRoots.add(header.getStateRoot());
+        while (current != null) {
+          final long nextStart = current.startBlock() + current.layers().size();
+          // Capture the on-disk base root before mutating the running root, so the background
+          // warming of the next window never races the apply thread on it.
+          final Hash baseForNext = converter.currentRootHash();
+          WindowData next = null;
+          Future<?> nextWarm = null;
+          if (nextStart <= head) {
+            next =
+                gatherWindow(
+                    blockchain,
+                    bonsai,
+                    trieLogFactory,
+                    nextStart,
+                    Math.min(nextStart + convertPrefetchWindow - 1, head));
+            nextWarm = converter.prefetchAsync(next.layers(), baseForNext);
           }
 
-          converter.prefetch(layers);
-
-          for (int i = 0; i < layers.size(); i++) {
-            final long blockNumber = windowStart + i;
-            converter.applyTrieLog(layers.get(i), expectedRoots.get(i));
+          for (int i = 0; i < current.layers().size(); i++) {
+            final long blockNumber = current.startBlock() + i;
+            converter.applyTrieLog(current.layers().get(i), current.expectedRoots().get(i));
 
             LogUtil.throttledLog(
                 () -> {
@@ -304,6 +296,18 @@ public class ConvertToForestSubCommand implements Runnable {
                 shouldLogProgress,
                 LOG_INTERVAL_SECONDS);
           }
+
+          if (nextWarm != null) {
+            try {
+              nextWarm.get();
+            } catch (final InterruptedException e) {
+              Thread.currentThread().interrupt();
+            } catch (final ExecutionException e) {
+              // Warming is best-effort; replay re-reads the authoritative node by hash on a miss.
+              LOG.debug("Prefetch of window starting at block {} failed", nextStart, e);
+            }
+          }
+          current = next;
         }
         LOG.info("Conversion complete to head {} (root={})", head, converter.currentRootHash());
 
@@ -317,6 +321,55 @@ public class ConvertToForestSubCommand implements Runnable {
     }
 
     spec.commandLine().getOut().println("x-convert-to-forest finished successfully.");
+  }
+
+  /** A window of consecutive blocks' deserialized trie logs and their expected post-state roots. */
+  private record WindowData(long startBlock, List<TrieLog> layers, List<Hash> expectedRoots) {}
+
+  /**
+   * Reads and deserializes the trie logs for blocks {@code [start, end]} (inclusive), along with
+   * their expected post-state roots, into an in-memory {@link WindowData}.
+   *
+   * @param blockchain the source blockchain
+   * @param bonsai the Bonsai storage holding the trie logs
+   * @param trieLogFactory factory used to deserialize trie logs
+   * @param start the first block number in the window
+   * @param end the last block number in the window
+   * @return the gathered window
+   */
+  private WindowData gatherWindow(
+      final Blockchain blockchain,
+      final BonsaiWorldStateKeyValueStorage bonsai,
+      final TrieLogFactoryImpl trieLogFactory,
+      final long start,
+      final long end) {
+    final List<TrieLog> layers = new ArrayList<>();
+    final List<Hash> expectedRoots = new ArrayList<>();
+    for (long number = start; number <= end; number++) {
+      final long blockNumber = number;
+      final Hash blockHash =
+          blockchain
+              .getBlockHashByNumber(number)
+              .orElseThrow(
+                  () -> new IllegalStateException("Missing block hash for block " + blockNumber));
+      final BlockHeader header =
+          blockchain
+              .getBlockHeader(blockHash)
+              .orElseThrow(
+                  () -> new IllegalStateException("Missing block header for block " + blockNumber));
+      final byte[] raw =
+          bonsai
+              .getTrieLog(blockHash)
+              .orElseThrow(
+                  () ->
+                      new IllegalStateException(
+                          "Missing trie log for block "
+                              + blockNumber
+                              + "; trie-log pruning must be disabled for conversion"));
+      layers.add(trieLogFactory.deserialize(raw));
+      expectedRoots.add(header.getStateRoot());
+    }
+    return new WindowData(start, layers, expectedRoots);
   }
 
   /**

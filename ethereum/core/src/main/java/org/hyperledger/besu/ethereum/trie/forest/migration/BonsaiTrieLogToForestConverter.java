@@ -38,8 +38,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -66,6 +68,9 @@ public class BonsaiTrieLogToForestConverter {
   // Pool of reader threads used to warm the node cache ahead of replay; null when prefetch is
   // disabled (no cache, or prefetchThreads <= 0).
   private final ExecutorService prefetchExecutor;
+  // Single-thread coordinator that drives a window's parallel warming off the apply thread, so the
+  // next window warms while the current one is replayed. Null when prefetch is disabled.
+  private final ExecutorService prefetchCoordinator;
   private Bytes32 currentRootHash;
 
   /**
@@ -117,8 +122,9 @@ public class BonsaiTrieLogToForestConverter {
         cacheMaxBytes > 0
             ? new MemoryBoundCache<>(cacheMaxBytes, (hash, node) -> node.size() + Bytes32.SIZE)
             : null;
+    final boolean prefetchEnabled = this.nodeCache != null && prefetchThreads > 0;
     this.prefetchExecutor =
-        (this.nodeCache != null && prefetchThreads > 0)
+        prefetchEnabled
             ? Executors.newFixedThreadPool(
                 prefetchThreads,
                 runnable -> {
@@ -127,10 +133,22 @@ public class BonsaiTrieLogToForestConverter {
                   return thread;
                 })
             : null;
+    this.prefetchCoordinator =
+        prefetchEnabled
+            ? Executors.newSingleThreadExecutor(
+                runnable -> {
+                  final Thread thread = new Thread(runnable, "forest-convert-prefetch-coord");
+                  thread.setDaemon(true);
+                  return thread;
+                })
+            : null;
   }
 
-  /** Releases the prefetch thread pool, if any. Safe to call more than once. */
+  /** Releases the prefetch thread pools, if any. Safe to call more than once. */
   public void close() {
+    if (prefetchCoordinator != null) {
+      prefetchCoordinator.shutdownNow();
+    }
     if (prefetchExecutor != null) {
       prefetchExecutor.shutdownNow();
     }
@@ -219,10 +237,39 @@ public class BonsaiTrieLogToForestConverter {
    * @param layers the upcoming trie logs whose changed keys should be warmed
    */
   public void prefetch(final List<TrieLog> layers) {
+    prefetchFrom(layers, currentRootHash);
+  }
+
+  /**
+   * Submits the warming of {@code layers} (from an explicit, already-on-disk {@code baseRoot}) to
+   * run on the prefetch coordinator, returning immediately so the caller can replay an earlier
+   * window while this window warms. This pipelines the parallel reads of the next window with the
+   * single-threaded apply of the current one, keeping the disk busy continuously instead of
+   * alternating disk-saturated prefetch with disk-idle apply.
+   *
+   * <p>The caller passes a base root captured before mutating {@link #currentRootHash}, so the
+   * background warming never races the apply thread on that field. The base root is the root at the
+   * start of the window currently being applied, a window or two behind the warmed window's true
+   * pre-state root; this is harmless, as warming is best-effort and write-through during the
+   * intervening apply keeps the modified paths cached.
+   *
+   * @param layers the upcoming trie logs whose changed keys should be warmed
+   * @param baseRoot the (on-disk) state root to traverse from while warming
+   * @return a future that completes when warming finishes; an already-complete future when prefetch
+   *     is disabled or the window is empty
+   */
+  public Future<?> prefetchAsync(final List<TrieLog> layers, final Hash baseRoot) {
+    if (prefetchCoordinator == null || layers.isEmpty()) {
+      return CompletableFuture.completedFuture(null);
+    }
+    final Bytes32 base = Bytes32.wrap(baseRoot.getBytes());
+    return prefetchCoordinator.submit(() -> prefetchFrom(layers, base));
+  }
+
+  private void prefetchFrom(final List<TrieLog> layers, final Bytes32 baseRoot) {
     if (prefetchExecutor == null || layers.isEmpty()) {
       return;
     }
-    final Bytes32 baseRoot = currentRootHash;
 
     // Union the changed accounts (and their changed storage slot hashes) across the whole window.
     final Map<Address, Set<Bytes32>> slotHashesByAccount = new HashMap<>();
