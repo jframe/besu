@@ -27,6 +27,12 @@ public class RocksDBFactoryConfiguration {
   private final boolean isBlockchainGarbageCollectionEnabled;
   private final Optional<Double> blobGarbageCollectionAgeCutoff;
   private final Optional<Double> blobGarbageCollectionForceThreshold;
+  private final long writeBufferSize;
+  private final int maxWriteBufferNumber;
+  private final long softPendingCompactionBytesLimit;
+  private final long hardPendingCompactionBytesLimit;
+  private final int maxBackgroundJobs;
+  private final int maxSubcompactions;
 
   /**
    * Instantiates a new RocksDb factory configuration.
@@ -50,6 +56,60 @@ public class RocksDBFactoryConfiguration {
       final boolean isBlockchainGarbageCollectionEnabled,
       final Optional<Double> blobGarbageCollectionAgeCutoff,
       final Optional<Double> blobGarbageCollectionForceThreshold) {
+    this(
+        maxOpenFiles,
+        backgroundThreadCount,
+        cacheCapacity,
+        isHighSpec,
+        enableReadCacheForSnapshots,
+        isBlockchainGarbageCollectionEnabled,
+        blobGarbageCollectionAgeCutoff,
+        blobGarbageCollectionForceThreshold,
+        0L,
+        0,
+        0L,
+        0L,
+        0,
+        0);
+  }
+
+  /**
+   * Instantiates a new RocksDb factory configuration with bulk-load tuning options.
+   *
+   * @param maxOpenFiles the max open files
+   * @param backgroundThreadCount the background thread count
+   * @param cacheCapacity the cache capacity
+   * @param isHighSpec the is high spec
+   * @param enableReadCacheForSnapshots whether read caching is enabled for snapshots
+   * @param isBlockchainGarbageCollectionEnabled is garbage collection enabled for the BLOCKCHAIN
+   *     column family
+   * @param blobGarbageCollectionAgeCutoff the blob garbage collection age cutoff
+   * @param blobGarbageCollectionForceThreshold the blob garbage collection force threshold
+   * @param writeBufferSize write buffer size per column family in bytes (0 = use RocksDB default)
+   * @param maxWriteBufferNumber max write buffers per column family (0 = use RocksDB default)
+   * @param softPendingCompactionBytesLimit soft pending compaction bytes limit per CF in bytes (0 =
+   *     use RocksDB default)
+   * @param hardPendingCompactionBytesLimit hard pending compaction bytes limit per CF in bytes (0 =
+   *     use RocksDB default)
+   * @param maxBackgroundJobs maximum number of background jobs (0 = use RocksDB default)
+   * @param maxSubcompactions maximum number of subcompactions per compaction job (0 = use RocksDB
+   *     default)
+   */
+  public RocksDBFactoryConfiguration(
+      final int maxOpenFiles,
+      final int backgroundThreadCount,
+      final long cacheCapacity,
+      final boolean isHighSpec,
+      final boolean enableReadCacheForSnapshots,
+      final boolean isBlockchainGarbageCollectionEnabled,
+      final Optional<Double> blobGarbageCollectionAgeCutoff,
+      final Optional<Double> blobGarbageCollectionForceThreshold,
+      final long writeBufferSize,
+      final int maxWriteBufferNumber,
+      final long softPendingCompactionBytesLimit,
+      final long hardPendingCompactionBytesLimit,
+      final int maxBackgroundJobs,
+      final int maxSubcompactions) {
     this.backgroundThreadCount = backgroundThreadCount;
     this.maxOpenFiles = maxOpenFiles;
     this.cacheCapacity = cacheCapacity;
@@ -58,6 +118,12 @@ public class RocksDBFactoryConfiguration {
     this.isBlockchainGarbageCollectionEnabled = isBlockchainGarbageCollectionEnabled;
     this.blobGarbageCollectionAgeCutoff = blobGarbageCollectionAgeCutoff;
     this.blobGarbageCollectionForceThreshold = blobGarbageCollectionForceThreshold;
+    this.writeBufferSize = writeBufferSize;
+    this.maxWriteBufferNumber = maxWriteBufferNumber;
+    this.softPendingCompactionBytesLimit = softPendingCompactionBytesLimit;
+    this.hardPendingCompactionBytesLimit = hardPendingCompactionBytesLimit;
+    this.maxBackgroundJobs = maxBackgroundJobs;
+    this.maxSubcompactions = maxSubcompactions;
   }
 
   /**
@@ -130,5 +196,59 @@ public class RocksDBFactoryConfiguration {
    */
   public Optional<Double> getBlobGarbageCollectionForceThreshold() {
     return blobGarbageCollectionForceThreshold;
+  }
+
+  /**
+   * Gets write buffer size per column family in bytes.
+   *
+   * @return the write buffer size (0 = use RocksDB default)
+   */
+  public long getWriteBufferSize() {
+    return writeBufferSize;
+  }
+
+  /**
+   * Gets max write buffer number per column family.
+   *
+   * @return the max write buffer number (0 = use RocksDB default)
+   */
+  public int getMaxWriteBufferNumber() {
+    return maxWriteBufferNumber;
+  }
+
+  /**
+   * Gets soft pending compaction bytes limit per column family in bytes.
+   *
+   * @return the soft pending compaction bytes limit (0 = use RocksDB default)
+   */
+  public long getSoftPendingCompactionBytesLimit() {
+    return softPendingCompactionBytesLimit;
+  }
+
+  /**
+   * Gets hard pending compaction bytes limit per column family in bytes.
+   *
+   * @return the hard pending compaction bytes limit (0 = use RocksDB default)
+   */
+  public long getHardPendingCompactionBytesLimit() {
+    return hardPendingCompactionBytesLimit;
+  }
+
+  /**
+   * Gets maximum number of background jobs.
+   *
+   * @return the max background jobs (0 = use RocksDB default)
+   */
+  public int getMaxBackgroundJobs() {
+    return maxBackgroundJobs;
+  }
+
+  /**
+   * Gets maximum number of subcompactions per compaction job.
+   *
+   * @return the max subcompactions (0 = use RocksDB default)
+   */
+  public int getMaxSubcompactions() {
+    return maxSubcompactions;
   }
 }

@@ -30,6 +30,12 @@ public class RocksDBConfiguration {
   private final boolean isBlockchainGarbageCollectionEnabled;
   private final Optional<Double> blobGarbageCollectionAgeCutoff;
   private final Optional<Double> blobGarbageCollectionForceThreshold;
+  private final long writeBufferSize;
+  private final int maxWriteBufferNumber;
+  private final long softPendingCompactionBytesLimit;
+  private final long hardPendingCompactionBytesLimit;
+  private final int maxBackgroundJobs;
+  private final int maxSubcompactions;
 
   /**
    * Instantiates a new RocksDb configuration.
@@ -45,6 +51,15 @@ public class RocksDBConfiguration {
    *     column family
    * @param blobGarbageCollectionAgeCutoff the blob garbage collection age cutoff
    * @param blobGarbageCollectionForceThreshold the blob garbage collection force threshold
+   * @param writeBufferSize write buffer size per column family in bytes (0 = use RocksDB default)
+   * @param maxWriteBufferNumber max write buffers per column family (0 = use RocksDB default)
+   * @param softPendingCompactionBytesLimit soft pending compaction bytes limit per CF in bytes (0 =
+   *     use RocksDB default)
+   * @param hardPendingCompactionBytesLimit hard pending compaction bytes limit per CF in bytes (0 =
+   *     use RocksDB default)
+   * @param maxBackgroundJobs maximum number of background jobs (0 = use RocksDB default)
+   * @param maxSubcompactions maximum number of subcompactions per compaction job (0 = use RocksDB
+   *     default)
    */
   public RocksDBConfiguration(
       final Path databaseDir,
@@ -56,7 +71,13 @@ public class RocksDBConfiguration {
       final boolean enableReadCacheForSnapshots,
       final boolean isBlockchainGarbageCollectionEnabled,
       final Optional<Double> blobGarbageCollectionAgeCutoff,
-      final Optional<Double> blobGarbageCollectionForceThreshold) {
+      final Optional<Double> blobGarbageCollectionForceThreshold,
+      final long writeBufferSize,
+      final int maxWriteBufferNumber,
+      final long softPendingCompactionBytesLimit,
+      final long hardPendingCompactionBytesLimit,
+      final int maxBackgroundJobs,
+      final int maxSubcompactions) {
     this.backgroundThreadCount = backgroundThreadCount;
     this.databaseDir = databaseDir;
     this.maxOpenFiles = maxOpenFiles;
@@ -67,6 +88,12 @@ public class RocksDBConfiguration {
     this.isBlockchainGarbageCollectionEnabled = isBlockchainGarbageCollectionEnabled;
     this.blobGarbageCollectionAgeCutoff = blobGarbageCollectionAgeCutoff;
     this.blobGarbageCollectionForceThreshold = blobGarbageCollectionForceThreshold;
+    this.writeBufferSize = writeBufferSize;
+    this.maxWriteBufferNumber = maxWriteBufferNumber;
+    this.softPendingCompactionBytesLimit = softPendingCompactionBytesLimit;
+    this.hardPendingCompactionBytesLimit = hardPendingCompactionBytesLimit;
+    this.maxBackgroundJobs = maxBackgroundJobs;
+    this.maxSubcompactions = maxSubcompactions;
   }
 
   /**
@@ -157,5 +184,59 @@ public class RocksDBConfiguration {
    */
   public Optional<Double> getBlobGarbageCollectionForceThreshold() {
     return blobGarbageCollectionForceThreshold;
+  }
+
+  /**
+   * Gets write buffer size per column family in bytes.
+   *
+   * @return the write buffer size (0 = use RocksDB default)
+   */
+  public long getWriteBufferSize() {
+    return writeBufferSize;
+  }
+
+  /**
+   * Gets max write buffer number per column family.
+   *
+   * @return the max write buffer number (0 = use RocksDB default)
+   */
+  public int getMaxWriteBufferNumber() {
+    return maxWriteBufferNumber;
+  }
+
+  /**
+   * Gets soft pending compaction bytes limit per column family in bytes.
+   *
+   * @return the soft pending compaction bytes limit (0 = use RocksDB default)
+   */
+  public long getSoftPendingCompactionBytesLimit() {
+    return softPendingCompactionBytesLimit;
+  }
+
+  /**
+   * Gets hard pending compaction bytes limit per column family in bytes.
+   *
+   * @return the hard pending compaction bytes limit (0 = use RocksDB default)
+   */
+  public long getHardPendingCompactionBytesLimit() {
+    return hardPendingCompactionBytesLimit;
+  }
+
+  /**
+   * Gets maximum number of background jobs.
+   *
+   * @return the max background jobs (0 = use RocksDB default)
+   */
+  public int getMaxBackgroundJobs() {
+    return maxBackgroundJobs;
+  }
+
+  /**
+   * Gets maximum number of subcompactions per compaction job.
+   *
+   * @return the max subcompactions (0 = use RocksDB default)
+   */
+  public int getMaxSubcompactions() {
+    return maxSubcompactions;
   }
 }

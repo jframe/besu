@@ -37,6 +37,45 @@ public class RocksDBCLIOptions {
   /** The default value indicating whether read caching is enabled for snapshot access. */
   public static final boolean DEFAULT_ENABLE_READ_CACHE_FOR_SNAPSHOTS = false;
 
+  /** The constant DEFAULT_WRITE_BUFFER_SIZE (0 = unset, use RocksDB default). */
+  public static final long DEFAULT_WRITE_BUFFER_SIZE = 0;
+
+  /** The constant DEFAULT_MAX_WRITE_BUFFER_NUMBER (0 = unset, use RocksDB default). */
+  public static final int DEFAULT_MAX_WRITE_BUFFER_NUMBER = 0;
+
+  /** The constant DEFAULT_SOFT_PENDING_COMPACTION_BYTES_LIMIT (0 = unset, use RocksDB default). */
+  public static final long DEFAULT_SOFT_PENDING_COMPACTION_BYTES_LIMIT = 0;
+
+  /** The constant DEFAULT_HARD_PENDING_COMPACTION_BYTES_LIMIT (0 = unset, use RocksDB default). */
+  public static final long DEFAULT_HARD_PENDING_COMPACTION_BYTES_LIMIT = 0;
+
+  /** The constant DEFAULT_MAX_BACKGROUND_JOBS (0 = unset, use RocksDB default). */
+  public static final int DEFAULT_MAX_BACKGROUND_JOBS = 0;
+
+  /** The constant DEFAULT_MAX_SUBCOMPACTIONS (0 = unset, use RocksDB default). */
+  public static final int DEFAULT_MAX_SUBCOMPACTIONS = 0;
+
+  /** The constant WRITE_BUFFER_SIZE_FLAG. */
+  public static final String WRITE_BUFFER_SIZE_FLAG = "--Xplugin-rocksdb-write-buffer-size";
+
+  /** The constant MAX_WRITE_BUFFER_NUMBER_FLAG. */
+  public static final String MAX_WRITE_BUFFER_NUMBER_FLAG =
+      "--Xplugin-rocksdb-max-write-buffer-number";
+
+  /** The constant SOFT_PENDING_COMPACTION_BYTES_LIMIT_FLAG. */
+  public static final String SOFT_PENDING_COMPACTION_BYTES_LIMIT_FLAG =
+      "--Xplugin-rocksdb-soft-pending-compaction-bytes-limit";
+
+  /** The constant HARD_PENDING_COMPACTION_BYTES_LIMIT_FLAG. */
+  public static final String HARD_PENDING_COMPACTION_BYTES_LIMIT_FLAG =
+      "--Xplugin-rocksdb-hard-pending-compaction-bytes-limit";
+
+  /** The constant MAX_BACKGROUND_JOBS_FLAG. */
+  public static final String MAX_BACKGROUND_JOBS_FLAG = "--Xplugin-rocksdb-max-background-jobs";
+
+  /** The constant MAX_SUBCOMPACTIONS_FLAG. */
+  public static final String MAX_SUBCOMPACTIONS_FLAG = "--Xplugin-rocksdb-max-subcompactions";
+
   /** The constant MAX_OPEN_FILES_FLAG. */
   public static final String MAX_OPEN_FILES_FLAG = "--Xplugin-rocksdb-max-open-files";
 
@@ -144,6 +183,65 @@ public class RocksDBCLIOptions {
       description = "Blob garbage collection force threshold (default: ${DEFAULT-VALUE})")
   Optional<Double> blobGarbageCollectionForceThreshold = Optional.empty();
 
+  /** Write buffer size per column family in bytes (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {WRITE_BUFFER_SIZE_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<LONG>",
+      description =
+          "RocksDB write buffer size per column family in bytes (default: ${DEFAULT-VALUE})")
+  long writeBufferSize;
+
+  /** Maximum number of write buffers per column family (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {MAX_WRITE_BUFFER_NUMBER_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<INTEGER>",
+      description =
+          "RocksDB maximum number of write buffers per column family (default: ${DEFAULT-VALUE})")
+  int maxWriteBufferNumber;
+
+  /** Soft pending compaction bytes limit per column family in bytes (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {SOFT_PENDING_COMPACTION_BYTES_LIMIT_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<LONG>",
+      description =
+          "RocksDB soft pending compaction bytes limit per column family in bytes (default: ${DEFAULT-VALUE})")
+  long softPendingCompactionBytesLimit;
+
+  /** Hard pending compaction bytes limit per column family in bytes (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {HARD_PENDING_COMPACTION_BYTES_LIMIT_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<LONG>",
+      description =
+          "RocksDB hard pending compaction bytes limit per column family in bytes (default: ${DEFAULT-VALUE})")
+  long hardPendingCompactionBytesLimit;
+
+  /** Maximum number of background jobs for the DB (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {MAX_BACKGROUND_JOBS_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<INTEGER>",
+      description = "RocksDB maximum number of background jobs (default: ${DEFAULT-VALUE})")
+  int maxBackgroundJobs;
+
+  /** Maximum number of subcompactions per compaction job (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {MAX_SUBCOMPACTIONS_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<INTEGER>",
+      description =
+          "RocksDB maximum number of subcompactions per compaction job (default: ${DEFAULT-VALUE})")
+  int maxSubcompactions;
+
   private RocksDBCLIOptions() {}
 
   /**
@@ -171,6 +269,12 @@ public class RocksDBCLIOptions {
     options.isBlockchainGarbageCollectionEnabled = config.isBlockchainGarbageCollectionEnabled();
     options.blobGarbageCollectionAgeCutoff = config.getBlobGarbageCollectionAgeCutoff();
     options.blobGarbageCollectionForceThreshold = config.getBlobGarbageCollectionForceThreshold();
+    options.writeBufferSize = config.getWriteBufferSize();
+    options.maxWriteBufferNumber = config.getMaxWriteBufferNumber();
+    options.softPendingCompactionBytesLimit = config.getSoftPendingCompactionBytesLimit();
+    options.hardPendingCompactionBytesLimit = config.getHardPendingCompactionBytesLimit();
+    options.maxBackgroundJobs = config.getMaxBackgroundJobs();
+    options.maxSubcompactions = config.getMaxSubcompactions();
     return options;
   }
 
@@ -188,7 +292,13 @@ public class RocksDBCLIOptions {
         enableReadCacheForSnapshots,
         isBlockchainGarbageCollectionEnabled,
         blobGarbageCollectionAgeCutoff,
-        blobGarbageCollectionForceThreshold);
+        blobGarbageCollectionForceThreshold,
+        writeBufferSize,
+        maxWriteBufferNumber,
+        softPendingCompactionBytesLimit,
+        hardPendingCompactionBytesLimit,
+        maxBackgroundJobs,
+        maxSubcompactions);
   }
 
   /**
@@ -223,6 +333,12 @@ public class RocksDBCLIOptions {
         .add("isBlockchainGarbageCollectionEnabled", isBlockchainGarbageCollectionEnabled)
         .add("blobGarbageCollectionAgeCutoff", blobGarbageCollectionAgeCutoff)
         .add("blobGarbageCollectionForceThreshold", blobGarbageCollectionForceThreshold)
+        .add("writeBufferSize", writeBufferSize)
+        .add("maxWriteBufferNumber", maxWriteBufferNumber)
+        .add("softPendingCompactionBytesLimit", softPendingCompactionBytesLimit)
+        .add("hardPendingCompactionBytesLimit", hardPendingCompactionBytesLimit)
+        .add("maxBackgroundJobs", maxBackgroundJobs)
+        .add("maxSubcompactions", maxSubcompactions)
         .toString();
   }
 

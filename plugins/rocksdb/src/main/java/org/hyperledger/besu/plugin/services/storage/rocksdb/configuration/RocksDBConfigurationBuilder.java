@@ -17,8 +17,14 @@ package org.hyperledger.besu.plugin.services.storage.rocksdb.configuration;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_BACKGROUND_THREAD_COUNT;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_CACHE_CAPACITY;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_ENABLE_READ_CACHE_FOR_SNAPSHOTS;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_HARD_PENDING_COMPACTION_BYTES_LIMIT;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_IS_HIGH_SPEC;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_BACKGROUND_JOBS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_OPEN_FILES;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_SUBCOMPACTIONS;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_WRITE_BUFFER_NUMBER;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_SOFT_PENDING_COMPACTION_BYTES_LIMIT;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_WRITE_BUFFER_SIZE;
 
 import java.nio.file.Path;
 import java.util.Optional;
@@ -36,6 +42,12 @@ public class RocksDBConfigurationBuilder {
   private boolean isBlockchainGarbageCollectionEnabled = false;
   private Optional<Double> blobGarbageCollectionAgeCutoff = Optional.empty();
   private Optional<Double> blobGarbageCollectionForceThreshold = Optional.empty();
+  private long writeBufferSize = DEFAULT_WRITE_BUFFER_SIZE;
+  private int maxWriteBufferNumber = DEFAULT_MAX_WRITE_BUFFER_NUMBER;
+  private long softPendingCompactionBytesLimit = DEFAULT_SOFT_PENDING_COMPACTION_BYTES_LIMIT;
+  private long hardPendingCompactionBytesLimit = DEFAULT_HARD_PENDING_COMPACTION_BYTES_LIMIT;
+  private int maxBackgroundJobs = DEFAULT_MAX_BACKGROUND_JOBS;
+  private int maxSubcompactions = DEFAULT_MAX_SUBCOMPACTIONS;
 
   /** Instantiates a new Rocks db configuration builder. */
   public RocksDBConfigurationBuilder() {}
@@ -155,6 +167,77 @@ public class RocksDBConfigurationBuilder {
   }
 
   /**
+   * Write buffer size.
+   *
+   * @param writeBufferSize write buffer size per column family in bytes (0 = use RocksDB default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder writeBufferSize(final long writeBufferSize) {
+    this.writeBufferSize = writeBufferSize;
+    return this;
+  }
+
+  /**
+   * Max write buffer number.
+   *
+   * @param maxWriteBufferNumber max write buffers per column family (0 = use RocksDB default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder maxWriteBufferNumber(final int maxWriteBufferNumber) {
+    this.maxWriteBufferNumber = maxWriteBufferNumber;
+    return this;
+  }
+
+  /**
+   * Soft pending compaction bytes limit.
+   *
+   * @param softPendingCompactionBytesLimit soft pending compaction bytes limit per CF in bytes (0 =
+   *     use RocksDB default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder softPendingCompactionBytesLimit(
+      final long softPendingCompactionBytesLimit) {
+    this.softPendingCompactionBytesLimit = softPendingCompactionBytesLimit;
+    return this;
+  }
+
+  /**
+   * Hard pending compaction bytes limit.
+   *
+   * @param hardPendingCompactionBytesLimit hard pending compaction bytes limit per CF in bytes (0 =
+   *     use RocksDB default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder hardPendingCompactionBytesLimit(
+      final long hardPendingCompactionBytesLimit) {
+    this.hardPendingCompactionBytesLimit = hardPendingCompactionBytesLimit;
+    return this;
+  }
+
+  /**
+   * Max background jobs.
+   *
+   * @param maxBackgroundJobs maximum number of background jobs (0 = use RocksDB default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder maxBackgroundJobs(final int maxBackgroundJobs) {
+    this.maxBackgroundJobs = maxBackgroundJobs;
+    return this;
+  }
+
+  /**
+   * Max subcompactions.
+   *
+   * @param maxSubcompactions maximum number of subcompactions per compaction job (0 = use RocksDB
+   *     default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder maxSubcompactions(final int maxSubcompactions) {
+    this.maxSubcompactions = maxSubcompactions;
+    return this;
+  }
+
+  /**
    * From.
    *
    * @param configuration the configuration
@@ -169,8 +252,13 @@ public class RocksDBConfigurationBuilder {
         .enableReadCacheForSnapshots(configuration.isReadCacheEnabledForSnapshots())
         .isBlockchainGarbageCollectionEnabled(configuration.isBlockchainGarbageCollectionEnabled())
         .blobGarbageCollectionAgeCutoff(configuration.getBlobGarbageCollectionAgeCutoff())
-        .blobGarbageCollectionForceThreshold(
-            configuration.getBlobGarbageCollectionForceThreshold());
+        .blobGarbageCollectionForceThreshold(configuration.getBlobGarbageCollectionForceThreshold())
+        .writeBufferSize(configuration.getWriteBufferSize())
+        .maxWriteBufferNumber(configuration.getMaxWriteBufferNumber())
+        .softPendingCompactionBytesLimit(configuration.getSoftPendingCompactionBytesLimit())
+        .hardPendingCompactionBytesLimit(configuration.getHardPendingCompactionBytesLimit())
+        .maxBackgroundJobs(configuration.getMaxBackgroundJobs())
+        .maxSubcompactions(configuration.getMaxSubcompactions());
   }
 
   /**
@@ -189,6 +277,12 @@ public class RocksDBConfigurationBuilder {
         enableReadCacheForSnapshots,
         isBlockchainGarbageCollectionEnabled,
         blobGarbageCollectionAgeCutoff,
-        blobGarbageCollectionForceThreshold);
+        blobGarbageCollectionForceThreshold,
+        writeBufferSize,
+        maxWriteBufferNumber,
+        softPendingCompactionBytesLimit,
+        hardPendingCompactionBytesLimit,
+        maxBackgroundJobs,
+        maxSubcompactions);
   }
 }

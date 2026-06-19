@@ -259,6 +259,20 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
             .setCompressionType(CompressionType.LZ4_COMPRESSION)
             .setTableFormatConfig(basedTableConfig)
             .setLevelCompactionDynamicLevelBytes(dynamicLevelBytes);
+    if (configuration.getWriteBufferSize() > 0) {
+      cfOptions.setWriteBufferSize(configuration.getWriteBufferSize());
+    }
+    if (configuration.getMaxWriteBufferNumber() > 0) {
+      cfOptions.setMaxWriteBufferNumber(configuration.getMaxWriteBufferNumber());
+    }
+    if (configuration.getSoftPendingCompactionBytesLimit() > 0) {
+      cfOptions.setSoftPendingCompactionBytesLimit(
+          configuration.getSoftPendingCompactionBytesLimit());
+    }
+    if (configuration.getHardPendingCompactionBytesLimit() > 0) {
+      cfOptions.setHardPendingCompactionBytesLimit(
+          configuration.getHardPendingCompactionBytesLimit());
+    }
     columnFamilyOptionsList.add(cfOptions);
     if (segment.containsStaticData()) {
       configureBlobDBForSegment(segment, configuration, cfOptions);
@@ -350,6 +364,12 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setEnv(Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()))
         .setMaxTotalWalSize(WAL_MAX_TOTAL_SIZE)
         .setRecycleLogFileNum(WAL_MAX_TOTAL_SIZE / EXPECTED_WAL_FILE_SIZE);
+    if (configuration.getMaxBackgroundJobs() > 0) {
+      options.setMaxBackgroundJobs(configuration.getMaxBackgroundJobs());
+    }
+    if (configuration.getMaxSubcompactions() > 0) {
+      options.setMaxSubcompactions(configuration.getMaxSubcompactions());
+    }
   }
 
   /**
