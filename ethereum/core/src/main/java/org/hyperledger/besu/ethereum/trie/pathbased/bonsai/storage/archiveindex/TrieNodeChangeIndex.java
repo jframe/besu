@@ -20,6 +20,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -133,6 +134,112 @@ public final class TrieNodeChangeIndex {
           return size() > EARLIER_RANGE_COUNT_CACHE_MAX_SIZE;
         }
       };
+
+  /**
+   * Buffered per-(naturalKey,rangeId) index state for batch migration. Non-null only between a
+   * {@link #beginBuffered()} and {@link #flushBuffer}/{@link #discardBuffer} call pair. Keyed by
+   * the range key ({@link ArchiveNodeKey#rangeKey}); value holds the committed-storage base (read
+   * once on first touch) and the in-memory pending offset list.
+   */
+  private LinkedHashMap<Bytes, BufferedEntry> buffer = null;
+
+  /** Accumulated index state for a single {@code (naturalKey, rangeId)} within a batch. */
+  private static final class BufferedEntry {
+    final Bytes naturalKey;
+    final long rangeId;
+    int baseSubCount;
+    RangeRelativeOffsetList baseTail;
+    final List<Integer> pending = new ArrayList<>();
+
+    BufferedEntry(final Bytes naturalKey, final long rangeId) {
+      this.naturalKey = naturalKey;
+      this.rangeId = rangeId;
+      this.baseTail = RangeRelativeOffsetList.empty();
+    }
+  }
+
+  /**
+   * Starts buffering mode. Subsequent {@link #append} and {@link #appendAndGetPreviousCount} calls
+   * accumulate offsets in memory and perform no storage writes; the {@code tx} argument is unused
+   * for the index value (only the running count is served from memory). Call {@link
+   * #flushBuffer(SegmentedKeyValueStorageTransaction)} to write all buffered entries atomically, or
+   * {@link #discardBuffer()} to abandon them (crash/rollback path).
+   */
+  public void beginBuffered() {
+    buffer = new LinkedHashMap<>();
+  }
+
+  /**
+   * Drops all buffered entries without writing to storage. Safe to call when not buffering (no-op).
+   */
+  public void discardBuffer() {
+    buffer = null;
+  }
+
+  /**
+   * Writes all buffered per-node offset lists into {@code tx} using the existing packed format,
+   * applying the sub-block split logic incrementally as pending offsets are folded in. Updates the
+   * LRU index cache with the final committed values. Safe to call when not buffering (no-op).
+   *
+   * @param tx the transaction into which all buffered index values are written
+   */
+  public void flushBuffer(final SegmentedKeyValueStorageTransaction tx) {
+    if (buffer == null) {
+      return;
+    }
+    for (final Map.Entry<Bytes, BufferedEntry> entry : buffer.entrySet()) {
+      final Bytes indexKey = entry.getKey();
+      final BufferedEntry be = entry.getValue();
+      if (be.pending.isEmpty()) {
+        continue;
+      }
+      int subCount = be.baseSubCount;
+      RangeRelativeOffsetList current = be.baseTail;
+      for (final int offset : be.pending) {
+        current = current.append(offset);
+        if (current.size() > subBlockThreshold) {
+          final RangeRelativeOffsetList head = sliceHead(current, subBlockSplitAt);
+          final RangeRelativeOffsetList tail = sliceTail(current, subBlockSplitAt);
+          final Bytes subKey = ArchiveNodeKey.subBlockKey(be.naturalKey, be.rangeId, subCount);
+          tx.put(
+              KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE,
+              subKey.toArrayUnsafe(),
+              head.toBytes().toArrayUnsafe());
+          subCount++;
+          current = tail;
+        }
+      }
+      final byte[] newValue = writeIndexValue(subCount, current);
+      tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe(), newValue);
+      indexCache.put(indexKey, newValue);
+    }
+    buffer = null;
+  }
+
+  private BufferedEntry initBufferedEntry(
+      final Bytes indexKey,
+      final byte[] indexKeyBytes,
+      final Bytes naturalKey,
+      final long rangeId) {
+    final BufferedEntry e = new BufferedEntry(naturalKey, rangeId);
+    final byte[] cached = indexCache.get(indexKey);
+    if (cached != null) {
+      final IndexValue iv = readIndexValue(cached);
+      e.baseSubCount = iv.subCount;
+      e.baseTail = iv.list;
+    } else if (sessionWrittenKeys == null || sessionWrittenKeys.mightContain(indexKeyBytes)) {
+      storage
+          .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
+          .ifPresent(
+              raw -> {
+                final IndexValue iv = readIndexValue(raw);
+                e.baseSubCount = iv.subCount;
+                e.baseTail = iv.list;
+              });
+    }
+    // If neither cache nor storage has it, baseTail stays as RangeRelativeOffsetList.empty().
+    return e;
+  }
 
   /**
    * In-session Bloom filter for fresh-migration mode. Non-null only when {@link
@@ -249,6 +356,20 @@ public final class TrieNodeChangeIndex {
     final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
     final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
 
+    if (buffer != null) {
+      // Buffered path: accumulate offset in memory; no storage read or write.
+      BufferedEntry e = buffer.get(indexKey);
+      if (e == null) {
+        e = initBufferedEntry(indexKey, indexKeyBytes, naturalKey, rangeId);
+        buffer.put(indexKey, e);
+      }
+      if (sessionWrittenKeys != null) {
+        sessionWrittenKeys.put(indexKeyBytes);
+      }
+      e.pending.add(offset);
+      return;
+    }
+
     // Read current index value: check write-through cache before hitting committed storage.
     final int[] subCountHolder = new int[1];
     final RangeRelativeOffsetList list;
@@ -330,6 +451,25 @@ public final class TrieNodeChangeIndex {
     // ranges are complete and immutable once block ≥ rangeSize, so the sum is memoised per
     // (naturalKey, rangeId) to avoid re-reading them on every deep-node append.
     final long earlierCount = earlierRangeCount(naturalKey, rangeId, indexKey);
+
+    if (buffer != null) {
+      // Buffered path: serve the count from in-memory state; no storage read or write.
+      BufferedEntry e = buffer.get(indexKey);
+      if (e == null) {
+        e = initBufferedEntry(indexKey, indexKeyBytes, naturalKey, rangeId);
+        buffer.put(indexKey, e);
+      }
+      if (sessionWrittenKeys != null) {
+        sessionWrittenKeys.put(indexKeyBytes);
+      }
+      final long previousCount =
+          earlierCount
+              + (long) e.baseSubCount * DEFAULT_SUBBLOCK_SPLIT_AT
+              + e.baseTail.size()
+              + e.pending.size();
+      e.pending.add(offset);
+      return previousCount;
+    }
 
     // Read the current range once — check write-through cache before hitting committed storage.
     final int[] subCountHolder = new int[1];

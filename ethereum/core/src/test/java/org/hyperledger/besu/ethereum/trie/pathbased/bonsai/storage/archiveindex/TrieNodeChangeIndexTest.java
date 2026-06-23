@@ -1103,4 +1103,58 @@ class TrieNodeChangeIndexTest {
     assertThat(list.last()).hasValue(1000);
     assertThat(list.latestLeq(350)).hasValue(300);
   }
+
+  // ===========================================================================
+  // Task 1 (batch): In-memory index write buffer with running counts
+  // ===========================================================================
+
+  @Test
+  void bufferedAppendComputesPreviousCountInMemoryAndDefersWrite() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    final TrieNodeChangeIndex idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    // Seed one committed change at block 5 (range 0) via the normal path.
+    var seed = kv.startTransaction();
+    idx.append(seed, KEY, 5);
+    seed.commit();
+
+    idx.beginBuffered();
+    // Two buffered appends in the same range; previousCount must reflect the seed + buffered count.
+    var t1 = kv.startTransaction();
+    final long p1 = idx.appendAndGetPreviousCount(t1, KEY, 10); // prior = 1 (seed)
+    final long p2 = idx.appendAndGetPreviousCount(t1, KEY, 20); // prior = 2 (seed + first buffered)
+    // Buffered: nothing new committed yet — committed list still only has block 5's offset.
+    assertThat(idx.countMutationsUpTo(KEY, 999_999)).isEqualTo(1L);
+    t1.commit(); // committing the (unused-for-index) tx must not change the index
+
+    assertThat(p1).isEqualTo(1L);
+    assertThat(p2).isEqualTo(2L);
+
+    // Flush writes the buffered offsets; now committed count includes all three.
+    var flushTx = kv.startTransaction();
+    idx.flushBuffer(flushTx);
+    flushTx.commit();
+    assertThat(idx.countMutationsUpTo(KEY, 999_999)).isEqualTo(3L);
+  }
+
+  @Test
+  void bufferedFlushAppliesSubBlockSplit() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    // small thresholds so a split happens quickly
+    final TrieNodeChangeIndex idx =
+        new TrieNodeChangeIndex(kv, SMALL_RANGE, TEST_THRESHOLD, TEST_SPLIT_AT);
+    idx.beginBuffered();
+    var tx = kv.startTransaction();
+    for (int b = 1; b <= TEST_THRESHOLD + 2; b++) {
+      idx.append(tx, KEY, b);
+    }
+    tx.commit();
+    var flushTx = kv.startTransaction();
+    idx.flushBuffer(flushTx);
+    flushTx.commit();
+    // After flush, the assembled list must contain every appended offset in order.
+    final var list = idx.readRangeList(KEY, 0);
+    assertThat(list).isPresent();
+    assertThat(list.get().size()).isEqualTo(TEST_THRESHOLD + 2);
+  }
 }
