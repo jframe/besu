@@ -28,6 +28,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.atMost;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -1073,6 +1075,21 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     verify(trieLogManager, times(1)).getTrieLogLayer(hashAt(1L));
 
     secondMigrator.close();
+  }
+
+  @Test
+  public void migratesMultipleBlocksInASingleBatchTransaction() throws Exception {
+    appendBlocks(3);
+    final SegmentedInMemoryKeyValueStorage spyStorage = spy(new SegmentedInMemoryKeyValueStorage());
+    when(worldStateStorage.getComposedWorldStateStorage()).thenReturn(spyStorage);
+
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
+    clearInvocations(spyStorage);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    // All 3 blocks fit in one batch → at most one low-priority transaction is opened for the bulk
+    // loop (completion may open one more for upgradeToArchiveFlatDbMode).
+    verify(spyStorage, atMost(2)).startLowPriorityTransaction();
   }
 
   // --- test helpers ---

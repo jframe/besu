@@ -107,6 +107,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private static final byte[] FRONTIER_TOMBSTONE = new byte[0];
 
+  @VisibleForTesting static final int MAX_BLOCKS_PER_BATCH = 256;
+  @VisibleForTesting static final long MAX_BATCH_BYTES = 256L * 1024 * 1024;
+
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final TrieLogManager trieLogManager;
   private final Blockchain blockchain;
@@ -294,31 +297,61 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private void migrateBlocks(
       final long startBlock, final AtomicLong target, final boolean shouldLog) {
     CompletableFuture<Optional<TrieLog>> prefetched = prefetchTrieLog(startBlock);
-    for (long blockNumber = startBlock; blockNumber <= target.get(); blockNumber++) {
-      final Optional<TrieLog> maybeTrieLog = prefetched.join();
-      prefetched = prefetchTrieLog(blockNumber + 1);
-      if (maybeTrieLog.isPresent()) {
-        final SegmentedKeyValueStorageTransaction tx =
-            worldStateStorage.getComposedWorldStateStorage().startLowPriorityTransaction();
+    long blockNumber = startBlock;
+    while (blockNumber <= target.get()) {
+      final SegmentedKeyValueStorageTransaction tx =
+          worldStateStorage.getComposedWorldStateStorage().startLowPriorityTransaction();
+      long lastInBatch = -1;
+      boolean committed = false;
+      try {
         if (migrationWorldState != null) {
-          // Route persist()'s frontier + diff-index writes into this same transaction so the whole
-          // block (frontier, index, flat state, progress) commits atomically — crash-safe resume.
           migrationTrieStorage.beginBatch(tx);
-          try {
+          migrationChangeIndex.beginBuffered();
+        }
+        int blocksInBatch = 0;
+        for (; blockNumber <= target.get() && blocksInBatch < MAX_BLOCKS_PER_BATCH; blockNumber++) {
+          final Optional<TrieLog> maybeTrieLog = prefetched.join();
+          prefetched = prefetchTrieLog(blockNumber + 1);
+          if (maybeTrieLog.isEmpty()) {
+            if (blockNumber > 0) {
+              throw new IllegalStateException("No trie log found for block " + blockNumber);
+            }
+            continue;
+          }
+          if (migrationWorldState != null) {
             migrateTrieBlock(maybeTrieLog.get(), blockNumber, tx);
-          } finally {
-            migrationTrieStorage.endBatch();
+          }
+          processBlock(maybeTrieLog.get(), blockNumber, tx);
+          lastInBatch = blockNumber;
+          blocksInBatch++;
+          if (migrationTrieStorage != null
+              && migrationTrieStorage.batchByteSize() >= MAX_BATCH_BYTES) {
+            blockNumber++;
+            break;
           }
         }
-        processBlock(maybeTrieLog.get(), blockNumber, tx);
-        saveProgress(blockNumber, tx);
-        tx.commit();
-        migratedBlockNumber.set(blockNumber);
-        if (shouldLog) {
-          logProgress(blockNumber, target.get());
+        if (lastInBatch >= 0) {
+          if (migrationChangeIndex != null) {
+            migrationChangeIndex.flushBuffer(tx);
+          }
+          saveProgress(lastInBatch, tx);
+          tx.commit();
+          committed = true;
+          migratedBlockNumber.set(lastInBatch);
+          if (shouldLog) {
+            logProgress(lastInBatch, target.get());
+          }
         }
-      } else if (blockNumber > 0) {
-        throw new IllegalStateException("No trie log found for block " + blockNumber);
+      } finally {
+        if (migrationWorldState != null) {
+          if (!committed && migrationChangeIndex != null) {
+            migrationChangeIndex.discardBuffer();
+          }
+          migrationTrieStorage.endBatch();
+        }
+        if (!committed) {
+          tx.rollback();
+        }
       }
     }
   }
@@ -586,10 +619,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private void migrateTrieBlock(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    // Start a fresh per-block trie-node read cache. Nodes read during the trie put/commit walk are
-    // re-read by the diff-index prior-node capture for the same key in the same block; the cache
-    // collapses those redundant TRIE_BRANCH reads to a single underlying read per key per block.
-    migrationTrieStorage.resetBlockCache();
     ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater()).rollForward(trieLog);
 
     if (migrationHistoryStore != null) {
