@@ -110,6 +110,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   @VisibleForTesting static final int MAX_BLOCKS_PER_BATCH = 256;
   @VisibleForTesting static final long MAX_BATCH_BYTES = 256L * 1024 * 1024;
 
+  private int maxBlocksPerBatch = MAX_BLOCKS_PER_BATCH;
+
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final TrieLogManager trieLogManager;
   private final Blockchain blockchain;
@@ -229,6 +231,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
   }
 
+  @VisibleForTesting
+  void setMaxBlocksPerBatchForTesting(final int n) {
+    maxBlocksPerBatch = n;
+  }
+
   /**
    * Migrates Bonsai flat DB to Bonsai archive format.
    *
@@ -309,7 +316,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           migrationChangeIndex.beginBuffered();
         }
         int blocksInBatch = 0;
-        for (; blockNumber <= target.get() && blocksInBatch < MAX_BLOCKS_PER_BATCH; blockNumber++) {
+        for (; blockNumber <= target.get() && blocksInBatch < maxBlocksPerBatch; blockNumber++) {
           final Optional<TrieLog> maybeTrieLog = prefetched.join();
           prefetched = prefetchTrieLog(blockNumber + 1);
           if (maybeTrieLog.isEmpty()) {

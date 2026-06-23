@@ -31,6 +31,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -1075,6 +1076,56 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     verify(trieLogManager, times(1)).getTrieLogLayer(hashAt(1L));
 
     secondMigrator.close();
+  }
+
+  @Test
+  public void resumeAfterMidBatchCrashReplaysPartialBatchWithoutCorruption() throws Exception {
+    appendBlocks(4);
+
+    // Pause when block 3's trie log is fetched so we can stop after batch 1 commits.
+    final PausedMigration paused = pauseAtTrieLogLookup(hashAt(3));
+    final BonsaiFlatDbToArchiveMigrator first = createMigrator();
+    first.setMaxBlocksPerBatchForTesting(2); // batch1=blocks1-2, batch2=blocks3-4
+    final CompletableFuture<Void> firstFuture = first.migrate();
+
+    // Block-3 prefetch is in-flight — wait for batch 1 to commit.
+    // Batch 1 covers blocks 0-1 (genesis + block 1); progress is saved as the last block in the
+    // batch. The block-3 prefetch fires during batch 2 processing of block 2, so progress=1 in
+    // committed storage when we check.
+    paused.awaitStart();
+    Awaitility.await()
+        .atMost(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .until(() -> first.getMigratedBlockNumber() >= 1L);
+
+    // Simulate crash: close() aborts the migration; paused prefetch times out and fails batch 2.
+    first.close();
+    assertThatThrownBy(() -> firstFuture.get(AWAIT_TIMEOUT_SECONDS + 2, TimeUnit.SECONDS))
+        .isInstanceOf(ExecutionException.class);
+
+    // Restore block-3 mock for the second migrator using doReturn to avoid invoking the
+    // still-active pause stub (which would block again for AWAIT_TIMEOUT_SECONDS).
+    doReturn(Optional.of(createAccountTrieLog(Wei.ONE)))
+        .when(trieLogManager)
+        .getTrieLogLayer(hashAt(3));
+
+    // Second migrator resumes from block 3 (progress=2 → startBlock=3).
+    final BonsaiFlatDbToArchiveMigrator second = createMigrator();
+    second.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    // All 4 blocks must be present; no corruption from the partial batch 2.
+    assertThat(getArchivedAccountKey(1L)).isPresent();
+    assertThat(getArchivedAccountKey(2L)).isPresent();
+    assertThat(getArchivedAccountKey(3L)).isPresent();
+    assertThat(getArchivedAccountKey(4L)).isPresent();
+  }
+
+  @Test
+  public void progressAdvancesOnlyAtCommittedBatchBoundaries() throws Exception {
+    appendBlocks(5);
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    // After a full migration, progress == last migrated block.
+    assertThat(migrator.getMigrationProgress()).hasValue(migrator.getMigratedBlockNumber());
   }
 
   @Test
