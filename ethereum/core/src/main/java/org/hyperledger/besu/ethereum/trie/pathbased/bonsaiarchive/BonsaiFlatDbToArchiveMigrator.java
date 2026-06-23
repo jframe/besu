@@ -65,6 +65,8 @@ import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
@@ -576,6 +578,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   private void migrateTrieBlock(final TrieLog trieLog, final long blockNumber) {
+    // Start a fresh per-block trie-node read cache. Nodes read during the trie put/commit walk are
+    // re-read by the diff-index prior-node capture for the same key in the same block; the cache
+    // collapses those redundant TRIE_BRANCH reads to a single underlying read per key per block.
+    migrationTrieStorage.resetBlockCache();
     ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater()).rollForward(trieLog);
 
     if (migrationHistoryStore != null) {
@@ -603,32 +609,60 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
   }
 
-  private static final class MigrationTrieStorage extends LayeredKeyValueStorage {
+  static final class MigrationTrieStorage extends LayeredKeyValueStorage {
     private final SegmentedKeyValueStorage real;
+
+    /**
+     * Per-block cache of resolved TRIE_BRANCH_STORAGE reads, keyed by node location. The migration
+     * runs single-threaded on archive-migrator-0 with parallel state-root computation disabled, so
+     * a plain {@link HashMap} is safe. Cleared at each block boundary via {@link
+     * #resetBlockCache()}.
+     *
+     * <p>Reads only ever observe committed (pre-block) state — block writes go to the block
+     * transaction, not {@code real} — so a node's value is stable for the duration of a block and
+     * safe to memoise. This collapses the redundant read the diff-index prior-node capture issues
+     * for a key the put/commit walk has already read in the same block.
+     */
+    private final Map<Bytes, Optional<byte[]>> blockReadCache = new HashMap<>();
 
     MigrationTrieStorage(final SegmentedKeyValueStorage real) {
       super(real);
       this.real = real;
     }
 
+    /** Clears the per-block read cache. Called at the start of each migrated block. */
+    void resetBlockCache() {
+      blockReadCache.clear();
+    }
+
     @Override
     public Optional<byte[]> get(final SegmentIdentifier segmentId, final byte[] key) {
       if (segmentId == TRIE_BRANCH_STORAGE) {
-        final Optional<byte[]> frontier = real.get(TRIE_BRANCH_FRONTIER, key);
         // Metadata keys (WORLD_*, ARCHIVE_PROOF_BLOCK_NUMBER_KEY) must not fall through to live
         // TRIE_BRANCH_STORAGE — live HEAD values would corrupt the migration context. These keys
-        // are written to TRIE_BRANCH_FRONTIER via MigrationTransaction.
+        // are written to TRIE_BRANCH_FRONTIER via MigrationTransaction. They are read at most once
+        // per block, so they bypass the cache.
         if (isMetadataKey(key)) {
-          return frontier;
+          return real.get(TRIE_BRANCH_FRONTIER, key);
         }
+        final Bytes cacheKey = Bytes.wrap(key);
+        final Optional<byte[]> cached = blockReadCache.get(cacheKey);
+        if (cached != null) {
+          return cached;
+        }
+        final Optional<byte[]> result;
+        final Optional<byte[]> frontier = real.get(TRIE_BRANCH_FRONTIER, key);
         if (frontier.isPresent()) {
           final byte[] val = frontier.get();
           // Zero-length sentinel means the node was explicitly deleted — no fallthrough.
-          return val.length == 0 ? Optional.empty() : frontier;
+          result = val.length == 0 ? Optional.empty() : frontier;
+        } else {
+          // Frontier miss: fall through to live storage.
+          // Unchanged trie nodes are byte-identical at any historical state and at live HEAD.
+          result = real.get(segmentId, key);
         }
-        // Frontier miss: fall through to live storage.
-        // Unchanged trie nodes are byte-identical at any historical state and at live HEAD.
-        return real.get(segmentId, key);
+        blockReadCache.put(cacheKey, result);
+        return result;
       }
       return real.get(segmentId, key);
     }

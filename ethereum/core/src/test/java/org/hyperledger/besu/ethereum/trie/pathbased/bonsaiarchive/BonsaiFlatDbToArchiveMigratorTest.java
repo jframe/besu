@@ -25,8 +25,10 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.B
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_ROOT_HASH_KEY;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -292,6 +294,58 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
     verify(spyStorage, atLeastOnce()).startLowPriorityTransaction();
+  }
+
+  @Test
+  public void migrationTrieStorageServesRepeatedTrieBranchReadsFromPerBlockCache() {
+    // Within a block the put/commit walk and the diff-index prior-node capture read the same trie
+    // node location from TRIE_BRANCH_STORAGE. The per-block read cache must collapse these to a
+    // single underlying read, and a block boundary (resetBlockCache) must re-read.
+    final SegmentedKeyValueStorage real = mock(SegmentedKeyValueStorage.class);
+    final byte[] key = Bytes.fromHexString("0x0102").toArrayUnsafe();
+    final byte[] value = Bytes.fromHexString("0xdeadbeef").toArrayUnsafe();
+    when(real.get(eq(TRIE_BRANCH_FRONTIER), any())).thenReturn(Optional.empty());
+    when(real.get(eq(TRIE_BRANCH_STORAGE), any())).thenReturn(Optional.of(value));
+
+    final BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage trieStorage =
+        new BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage(real);
+
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, key)).contains(value);
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, key)).contains(value);
+
+    // Both the frontier probe and the storage fallthrough happen exactly once for the two reads.
+    verify(real, times(1)).get(eq(TRIE_BRANCH_FRONTIER), any());
+    verify(real, times(1)).get(eq(TRIE_BRANCH_STORAGE), any());
+
+    // New block: cache cleared, so the next read goes back to the underlying storage.
+    trieStorage.resetBlockCache();
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, key)).contains(value);
+    verify(real, times(2)).get(eq(TRIE_BRANCH_FRONTIER), any());
+    verify(real, times(2)).get(eq(TRIE_BRANCH_STORAGE), any());
+  }
+
+  @Test
+  public void migrationTrieStorageCachesFrontierHitsAndTombstonesWithinBlock() {
+    final SegmentedKeyValueStorage real = mock(SegmentedKeyValueStorage.class);
+    final byte[] presentKey = Bytes.fromHexString("0x0a").toArrayUnsafe();
+    final byte[] presentVal = Bytes.fromHexString("0xc0ffee").toArrayUnsafe();
+    final byte[] deletedKey = Bytes.fromHexString("0x0b").toArrayUnsafe();
+    when(real.get(eq(TRIE_BRANCH_FRONTIER), eq(presentKey))).thenReturn(Optional.of(presentVal));
+    // Zero-length frontier sentinel = explicitly deleted node -> resolves to empty, no fallthrough.
+    when(real.get(eq(TRIE_BRANCH_FRONTIER), eq(deletedKey))).thenReturn(Optional.of(new byte[0]));
+
+    final BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage trieStorage =
+        new BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage(real);
+
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, presentKey)).contains(presentVal);
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, presentKey)).contains(presentVal);
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, deletedKey)).isEmpty();
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, deletedKey)).isEmpty();
+
+    // One frontier read per distinct key; the deleted sentinel never falls through to storage.
+    verify(real, times(1)).get(eq(TRIE_BRANCH_FRONTIER), eq(presentKey));
+    verify(real, times(1)).get(eq(TRIE_BRANCH_FRONTIER), eq(deletedKey));
+    verify(real, never()).get(eq(TRIE_BRANCH_STORAGE), any());
   }
 
   @Test
