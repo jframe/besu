@@ -87,6 +87,21 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     return new Updater(lock, keyValueStorage.startTransaction(), nodeAddedListeners);
   }
 
+  /**
+   * Returns an updater whose writes optionally bypass the write-ahead log. A WAL-bypassing updater
+   * is only safe for idempotent, resumable bulk loads (e.g. the Bonsai-to-Forest conversion), where
+   * data lost on a crash is simply re-derived on resume and skipping the WAL frees write bandwidth.
+   *
+   * @param disableWAL when true, the updater's transaction bypasses the WAL
+   * @return the updater
+   */
+  public Updater updater(final boolean disableWAL) {
+    return new Updater(
+        lock,
+        disableWAL ? keyValueStorage.startNoWALTransaction() : keyValueStorage.startTransaction(),
+        nodeAddedListeners);
+  }
+
   public long prune(final Predicate<byte[]> inUseCheck) {
     final AtomicInteger prunedKeys = new AtomicInteger(0);
     try (final Stream<byte[]> entry = keyValueStorage.streamKeys()) {

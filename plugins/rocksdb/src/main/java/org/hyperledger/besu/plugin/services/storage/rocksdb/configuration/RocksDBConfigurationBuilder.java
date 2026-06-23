@@ -15,6 +15,7 @@
 package org.hyperledger.besu.plugin.services.storage.rocksdb.configuration;
 
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_BACKGROUND_THREAD_COUNT;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_BLOCK_SIZE;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_CACHE_CAPACITY;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_ENABLE_READ_CACHE_FOR_SNAPSHOTS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_HARD_PENDING_COMPACTION_BYTES_LIMIT;
@@ -23,6 +24,7 @@ import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_OPEN_FILES;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_SUBCOMPACTIONS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_WRITE_BUFFER_NUMBER;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_RECYCLE_LOG_FILE_NUM;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_SOFT_PENDING_COMPACTION_BYTES_LIMIT;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_WRITE_BUFFER_SIZE;
 
@@ -43,11 +45,13 @@ public class RocksDBConfigurationBuilder {
   private Optional<Double> blobGarbageCollectionAgeCutoff = Optional.empty();
   private Optional<Double> blobGarbageCollectionForceThreshold = Optional.empty();
   private long writeBufferSize = DEFAULT_WRITE_BUFFER_SIZE;
+  private long blockSize = DEFAULT_BLOCK_SIZE;
   private int maxWriteBufferNumber = DEFAULT_MAX_WRITE_BUFFER_NUMBER;
   private long softPendingCompactionBytesLimit = DEFAULT_SOFT_PENDING_COMPACTION_BYTES_LIMIT;
   private long hardPendingCompactionBytesLimit = DEFAULT_HARD_PENDING_COMPACTION_BYTES_LIMIT;
   private int maxBackgroundJobs = DEFAULT_MAX_BACKGROUND_JOBS;
   private int maxSubcompactions = DEFAULT_MAX_SUBCOMPACTIONS;
+  private long recycleLogFileNum = DEFAULT_RECYCLE_LOG_FILE_NUM;
 
   /** Instantiates a new Rocks db configuration builder. */
   public RocksDBConfigurationBuilder() {}
@@ -178,6 +182,17 @@ public class RocksDBConfigurationBuilder {
   }
 
   /**
+   * Block size.
+   *
+   * @param blockSize SST block size in bytes for all column families (0 = use RocksDB default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder blockSize(final long blockSize) {
+    this.blockSize = blockSize;
+    return this;
+  }
+
+  /**
    * Max write buffer number.
    *
    * @param maxWriteBufferNumber max write buffers per column family (0 = use RocksDB default)
@@ -238,6 +253,17 @@ public class RocksDBConfigurationBuilder {
   }
 
   /**
+   * Recycle log file num.
+   *
+   * @param recycleLogFileNum RocksDB recycle_log_file_num (-1 = leave Besu default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder recycleLogFileNum(final long recycleLogFileNum) {
+    this.recycleLogFileNum = recycleLogFileNum;
+    return this;
+  }
+
+  /**
    * From.
    *
    * @param configuration the configuration
@@ -254,11 +280,13 @@ public class RocksDBConfigurationBuilder {
         .blobGarbageCollectionAgeCutoff(configuration.getBlobGarbageCollectionAgeCutoff())
         .blobGarbageCollectionForceThreshold(configuration.getBlobGarbageCollectionForceThreshold())
         .writeBufferSize(configuration.getWriteBufferSize())
+        .blockSize(configuration.getBlockSize())
         .maxWriteBufferNumber(configuration.getMaxWriteBufferNumber())
         .softPendingCompactionBytesLimit(configuration.getSoftPendingCompactionBytesLimit())
         .hardPendingCompactionBytesLimit(configuration.getHardPendingCompactionBytesLimit())
         .maxBackgroundJobs(configuration.getMaxBackgroundJobs())
-        .maxSubcompactions(configuration.getMaxSubcompactions());
+        .maxSubcompactions(configuration.getMaxSubcompactions())
+        .recycleLogFileNum(configuration.getRecycleLogFileNum());
   }
 
   /**
@@ -279,10 +307,12 @@ public class RocksDBConfigurationBuilder {
         blobGarbageCollectionAgeCutoff,
         blobGarbageCollectionForceThreshold,
         writeBufferSize,
+        blockSize,
         maxWriteBufferNumber,
         softPendingCompactionBytesLimit,
         hardPendingCompactionBytesLimit,
         maxBackgroundJobs,
-        maxSubcompactions);
+        maxSubcompactions,
+        recycleLogFileNum);
   }
 }

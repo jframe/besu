@@ -126,6 +126,11 @@ public class SegmentedKeyValueStorageAdapter implements KeyValueStorage {
   }
 
   @Override
+  public KeyValueStorageTransaction startNoWALTransaction() throws StorageException {
+    return new KeyValueStorageTransactionAdapter(segmentIdentifier, storage, true);
+  }
+
+  @Override
   public boolean isClosed() {
     return storage.isClosed();
   }
@@ -150,7 +155,23 @@ public class SegmentedKeyValueStorageAdapter implements KeyValueStorage {
      */
     public KeyValueStorageTransactionAdapter(
         final SegmentIdentifier segmentIdentifier, final SegmentedKeyValueStorage storage) {
-      this.segmentedTransaction = storage.startTransaction();
+      this(segmentIdentifier, storage, false);
+    }
+
+    /**
+     * Instantiates a new Key value storage transaction adapter, optionally bypassing the WAL.
+     *
+     * @param segmentIdentifier the segmentIdentifier to use for the wrapped transaction
+     * @param storage the storage
+     * @param noWAL when true, start a WAL-bypassing transaction (see {@link
+     *     KeyValueStorage#startNoWALTransaction()})
+     */
+    public KeyValueStorageTransactionAdapter(
+        final SegmentIdentifier segmentIdentifier,
+        final SegmentedKeyValueStorage storage,
+        final boolean noWAL) {
+      this.segmentedTransaction =
+          noWAL ? storage.startNoWALTransaction() : storage.startTransaction();
       this.segmentIdentifier = segmentIdentifier;
     }
 

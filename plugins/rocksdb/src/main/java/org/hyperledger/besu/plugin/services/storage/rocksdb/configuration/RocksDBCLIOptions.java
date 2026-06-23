@@ -40,6 +40,9 @@ public class RocksDBCLIOptions {
   /** The constant DEFAULT_WRITE_BUFFER_SIZE (0 = unset, use RocksDB default). */
   public static final long DEFAULT_WRITE_BUFFER_SIZE = 0;
 
+  /** The constant DEFAULT_BLOCK_SIZE (0 = unset, use RocksDB default). */
+  public static final long DEFAULT_BLOCK_SIZE = 0;
+
   /** The constant DEFAULT_MAX_WRITE_BUFFER_NUMBER (0 = unset, use RocksDB default). */
   public static final int DEFAULT_MAX_WRITE_BUFFER_NUMBER = 0;
 
@@ -55,8 +58,14 @@ public class RocksDBCLIOptions {
   /** The constant DEFAULT_MAX_SUBCOMPACTIONS (0 = unset, use RocksDB default). */
   public static final int DEFAULT_MAX_SUBCOMPACTIONS = 0;
 
+  /** The constant DEFAULT_RECYCLE_LOG_FILE_NUM (-1 = unset, leave Besu default). */
+  public static final long DEFAULT_RECYCLE_LOG_FILE_NUM = -1;
+
   /** The constant WRITE_BUFFER_SIZE_FLAG. */
   public static final String WRITE_BUFFER_SIZE_FLAG = "--Xplugin-rocksdb-write-buffer-size";
+
+  /** The constant BLOCK_SIZE_FLAG. */
+  public static final String BLOCK_SIZE_FLAG = "--Xplugin-rocksdb-block-size";
 
   /** The constant MAX_WRITE_BUFFER_NUMBER_FLAG. */
   public static final String MAX_WRITE_BUFFER_NUMBER_FLAG =
@@ -75,6 +84,9 @@ public class RocksDBCLIOptions {
 
   /** The constant MAX_SUBCOMPACTIONS_FLAG. */
   public static final String MAX_SUBCOMPACTIONS_FLAG = "--Xplugin-rocksdb-max-subcompactions";
+
+  /** The constant RECYCLE_LOG_FILE_NUM_FLAG. */
+  public static final String RECYCLE_LOG_FILE_NUM_FLAG = "--Xplugin-rocksdb-recycle-log-file-num";
 
   /** The constant MAX_OPEN_FILES_FLAG. */
   public static final String MAX_OPEN_FILES_FLAG = "--Xplugin-rocksdb-max-open-files";
@@ -193,6 +205,16 @@ public class RocksDBCLIOptions {
           "RocksDB write buffer size per column family in bytes (default: ${DEFAULT-VALUE})")
   long writeBufferSize;
 
+  /** SST block size in bytes for all column families (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {BLOCK_SIZE_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<LONG>",
+      description =
+          "EXPERIMENTAL: RocksDB SST block size in bytes for all column families; 0 leaves the RocksDB default (default: ${DEFAULT-VALUE})")
+  long blockSize;
+
   /** Maximum number of write buffers per column family (0 = use RocksDB default). */
   @CommandLine.Option(
       names = {MAX_WRITE_BUFFER_NUMBER_FLAG},
@@ -242,6 +264,16 @@ public class RocksDBCLIOptions {
           "RocksDB maximum number of subcompactions per compaction job (default: ${DEFAULT-VALUE})")
   int maxSubcompactions;
 
+  /** RocksDB recycle_log_file_num (-1 = leave Besu default). */
+  @CommandLine.Option(
+      names = {RECYCLE_LOG_FILE_NUM_FLAG},
+      hidden = true,
+      defaultValue = "-1",
+      paramLabel = "<LONG>",
+      description =
+          "EXPERIMENTAL: RocksDB recycle_log_file_num; -1 leaves the Besu default. Set to 0 to disable WAL log recycling, which is REQUIRED to use WAL-bypassing (disableWAL) bulk-load transactions (default: ${DEFAULT-VALUE})")
+  long recycleLogFileNum;
+
   private RocksDBCLIOptions() {}
 
   /**
@@ -270,11 +302,13 @@ public class RocksDBCLIOptions {
     options.blobGarbageCollectionAgeCutoff = config.getBlobGarbageCollectionAgeCutoff();
     options.blobGarbageCollectionForceThreshold = config.getBlobGarbageCollectionForceThreshold();
     options.writeBufferSize = config.getWriteBufferSize();
+    options.blockSize = config.getBlockSize();
     options.maxWriteBufferNumber = config.getMaxWriteBufferNumber();
     options.softPendingCompactionBytesLimit = config.getSoftPendingCompactionBytesLimit();
     options.hardPendingCompactionBytesLimit = config.getHardPendingCompactionBytesLimit();
     options.maxBackgroundJobs = config.getMaxBackgroundJobs();
     options.maxSubcompactions = config.getMaxSubcompactions();
+    options.recycleLogFileNum = config.getRecycleLogFileNum();
     return options;
   }
 
@@ -294,11 +328,13 @@ public class RocksDBCLIOptions {
         blobGarbageCollectionAgeCutoff,
         blobGarbageCollectionForceThreshold,
         writeBufferSize,
+        blockSize,
         maxWriteBufferNumber,
         softPendingCompactionBytesLimit,
         hardPendingCompactionBytesLimit,
         maxBackgroundJobs,
-        maxSubcompactions);
+        maxSubcompactions,
+        recycleLogFileNum);
   }
 
   /**
@@ -334,11 +370,13 @@ public class RocksDBCLIOptions {
         .add("blobGarbageCollectionAgeCutoff", blobGarbageCollectionAgeCutoff)
         .add("blobGarbageCollectionForceThreshold", blobGarbageCollectionForceThreshold)
         .add("writeBufferSize", writeBufferSize)
+        .add("blockSize", blockSize)
         .add("maxWriteBufferNumber", maxWriteBufferNumber)
         .add("softPendingCompactionBytesLimit", softPendingCompactionBytesLimit)
         .add("hardPendingCompactionBytesLimit", hardPendingCompactionBytesLimit)
         .add("maxBackgroundJobs", maxBackgroundJobs)
         .add("maxSubcompactions", maxSubcompactions)
+        .add("recycleLogFileNum", recycleLogFileNum)
         .toString();
   }
 

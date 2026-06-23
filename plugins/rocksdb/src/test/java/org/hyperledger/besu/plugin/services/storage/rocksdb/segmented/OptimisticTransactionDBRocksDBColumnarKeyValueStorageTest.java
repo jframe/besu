@@ -14,10 +14,13 @@
  */
 package org.hyperledger.besu.plugin.services.storage.rocksdb.segmented;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetricsFactory;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfigurationBuilder;
 
@@ -26,6 +29,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -70,5 +74,33 @@ public class OptimisticTransactionDBRocksDBColumnarKeyValueStorageTest
         ignorableSegments,
         metricsSystem,
         RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS);
+  }
+
+  /**
+   * A WAL-bypassing transaction is rejected by RocksDB unless log recycling is disabled
+   * (recycle_log_file_num=0). Open a store with recycling off and verify a no-WAL transaction
+   * commits and its values are visible to subsequent reads.
+   */
+  @Test
+  public void noWALTransactionCommitPersistsValuesWhenLogRecyclingDisabled() throws Exception {
+    final SegmentedKeyValueStorage store =
+        new OptimisticRocksDBColumnarKeyValueStorage(
+            new RocksDBConfigurationBuilder()
+                .databaseDir(Files.createTempDirectory("noWalStore"))
+                .recycleLogFileNum(0)
+                .build(),
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO, TestSegment.BAR),
+            List.of(),
+            new NoOpMetricsSystem(),
+            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS);
+    final byte[] key = new byte[] {0x00, 0x01};
+    final byte[] value = new byte[] {0x0F, (byte) 0xFF};
+
+    final SegmentedKeyValueStorageTransaction tx = store.startNoWALTransaction();
+    tx.put(TestSegment.FOO, key, value);
+    tx.commit();
+
+    assertThat(store.get(TestSegment.FOO, key)).contains(value);
+    store.close();
   }
 }

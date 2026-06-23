@@ -333,13 +333,14 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
                 ? ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC
                 : config.getCacheCapacity());
     blockCaches.add(cache);
+    final long blockSize = config.getBlockSize() > 0 ? config.getBlockSize() : ROCKSDB_BLOCK_SIZE;
     return new BlockBasedTableConfig()
         .setFormatVersion(ROCKSDB_FORMAT_VERSION)
         .setBlockCache(cache)
         .setFilterPolicy(new BloomFilter(10, false))
         .setPartitionFilters(true)
         .setCacheIndexAndFilterBlocks(segment.isCacheIndexAndFilterBlocks())
-        .setBlockSize(ROCKSDB_BLOCK_SIZE);
+        .setBlockSize(blockSize);
   }
 
   /***
@@ -362,8 +363,12 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setLogFileTimeToRoll(TIME_TO_ROLL_LOG_FILE)
         .setKeepLogFileNum(NUMBER_OF_LOG_FILES_TO_KEEP)
         .setEnv(Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()))
-        .setMaxTotalWalSize(WAL_MAX_TOTAL_SIZE)
-        .setRecycleLogFileNum(WAL_MAX_TOTAL_SIZE / EXPECTED_WAL_FILE_SIZE);
+        .setMaxTotalWalSize(WAL_MAX_TOTAL_SIZE);
+    final long recycleLogFileNum =
+        configuration.getRecycleLogFileNum() >= 0
+            ? configuration.getRecycleLogFileNum()
+            : (WAL_MAX_TOTAL_SIZE / EXPECTED_WAL_FILE_SIZE);
+    options.setRecycleLogFileNum(recycleLogFileNum);
     if (configuration.getMaxBackgroundJobs() > 0) {
       options.setMaxBackgroundJobs(configuration.getMaxBackgroundJobs());
     }

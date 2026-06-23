@@ -372,7 +372,10 @@ public class BonsaiTrieLogToForestConverter {
    * @throws IllegalStateException if the reconstructed state root does not match the expected root
    */
   public Hash applyTrieLog(final TrieLog layer, final Hash expectedStateRoot) {
-    final ForestWorldStateKeyValueStorage.Updater updater = forestStorage.updater();
+    // Conversion writes bypass the WAL: the replay is idempotent and resumes from the last
+    // persisted state root, so memtable data lost on a crash is simply re-derived. Skipping the
+    // WAL frees write bandwidth, which is scarce on throughput-capped volumes during the bulk load.
+    final ForestWorldStateKeyValueStorage.Updater updater = forestStorage.updater(true);
     try {
       final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
           new StoredMerklePatriciaTrie<>(accountNodeLoader(), currentRootHash, b -> b, b -> b);

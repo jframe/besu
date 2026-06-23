@@ -27,7 +27,10 @@ import java.util.EnumSet;
 public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   DEFAULT("default".getBytes(StandardCharsets.UTF_8)),
   BLOCKCHAIN(new byte[] {1}, EnumSet.allOf(DataStorageFormat.class), true, true, false),
-  WORLD_STATE(new byte[] {2}, EnumSet.of(FOREST), false, true, false),
+  // cacheIndexAndFilterBlocks=true keeps index/filter blocks in the (bounded) block cache rather
+  // than pinned per open file, so a reduced block size during the Bonsai-to-Forest bulk load does
+  // not balloon pinned index memory; partitioned filters (set globally) bound it further.
+  WORLD_STATE(new byte[] {2}, EnumSet.of(FOREST), false, true, false, true),
 
   // No longer used but retained for DB backwards compatibility
   PRIVATE_TRANSACTIONS(new byte[] {3}),

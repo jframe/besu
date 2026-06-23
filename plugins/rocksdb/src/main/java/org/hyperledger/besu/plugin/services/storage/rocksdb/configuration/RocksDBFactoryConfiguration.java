@@ -28,11 +28,13 @@ public class RocksDBFactoryConfiguration {
   private final Optional<Double> blobGarbageCollectionAgeCutoff;
   private final Optional<Double> blobGarbageCollectionForceThreshold;
   private final long writeBufferSize;
+  private final long blockSize;
   private final int maxWriteBufferNumber;
   private final long softPendingCompactionBytesLimit;
   private final long hardPendingCompactionBytesLimit;
   private final int maxBackgroundJobs;
   private final int maxSubcompactions;
+  private final long recycleLogFileNum;
 
   /**
    * Instantiates a new RocksDb factory configuration.
@@ -66,11 +68,13 @@ public class RocksDBFactoryConfiguration {
         blobGarbageCollectionAgeCutoff,
         blobGarbageCollectionForceThreshold,
         0L,
+        0L,
         0,
         0L,
         0L,
         0,
-        0);
+        0,
+        -1L);
   }
 
   /**
@@ -86,6 +90,7 @@ public class RocksDBFactoryConfiguration {
    * @param blobGarbageCollectionAgeCutoff the blob garbage collection age cutoff
    * @param blobGarbageCollectionForceThreshold the blob garbage collection force threshold
    * @param writeBufferSize write buffer size per column family in bytes (0 = use RocksDB default)
+   * @param blockSize SST block size in bytes for all column families (0 = use RocksDB default)
    * @param maxWriteBufferNumber max write buffers per column family (0 = use RocksDB default)
    * @param softPendingCompactionBytesLimit soft pending compaction bytes limit per CF in bytes (0 =
    *     use RocksDB default)
@@ -94,6 +99,7 @@ public class RocksDBFactoryConfiguration {
    * @param maxBackgroundJobs maximum number of background jobs (0 = use RocksDB default)
    * @param maxSubcompactions maximum number of subcompactions per compaction job (0 = use RocksDB
    *     default)
+   * @param recycleLogFileNum RocksDB recycle_log_file_num (-1 = leave Besu default)
    */
   public RocksDBFactoryConfiguration(
       final int maxOpenFiles,
@@ -105,11 +111,13 @@ public class RocksDBFactoryConfiguration {
       final Optional<Double> blobGarbageCollectionAgeCutoff,
       final Optional<Double> blobGarbageCollectionForceThreshold,
       final long writeBufferSize,
+      final long blockSize,
       final int maxWriteBufferNumber,
       final long softPendingCompactionBytesLimit,
       final long hardPendingCompactionBytesLimit,
       final int maxBackgroundJobs,
-      final int maxSubcompactions) {
+      final int maxSubcompactions,
+      final long recycleLogFileNum) {
     this.backgroundThreadCount = backgroundThreadCount;
     this.maxOpenFiles = maxOpenFiles;
     this.cacheCapacity = cacheCapacity;
@@ -119,11 +127,13 @@ public class RocksDBFactoryConfiguration {
     this.blobGarbageCollectionAgeCutoff = blobGarbageCollectionAgeCutoff;
     this.blobGarbageCollectionForceThreshold = blobGarbageCollectionForceThreshold;
     this.writeBufferSize = writeBufferSize;
+    this.blockSize = blockSize;
     this.maxWriteBufferNumber = maxWriteBufferNumber;
     this.softPendingCompactionBytesLimit = softPendingCompactionBytesLimit;
     this.hardPendingCompactionBytesLimit = hardPendingCompactionBytesLimit;
     this.maxBackgroundJobs = maxBackgroundJobs;
     this.maxSubcompactions = maxSubcompactions;
+    this.recycleLogFileNum = recycleLogFileNum;
   }
 
   /**
@@ -208,6 +218,15 @@ public class RocksDBFactoryConfiguration {
   }
 
   /**
+   * Gets SST block size in bytes for all column families.
+   *
+   * @return the block size (0 = use RocksDB default)
+   */
+  public long getBlockSize() {
+    return blockSize;
+  }
+
+  /**
    * Gets max write buffer number per column family.
    *
    * @return the max write buffer number (0 = use RocksDB default)
@@ -250,5 +269,14 @@ public class RocksDBFactoryConfiguration {
    */
   public int getMaxSubcompactions() {
     return maxSubcompactions;
+  }
+
+  /**
+   * Gets RocksDB recycle_log_file_num.
+   *
+   * @return the recycle log file num (-1 = leave Besu default)
+   */
+  public long getRecycleLogFileNum() {
+    return recycleLogFileNum;
   }
 }

@@ -107,6 +107,22 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Begins a transaction whose writes bypass the write-ahead log. On RocksDB-backed storage this
+   * sets {@code WriteOptions.disableWAL = true}, so commits are not durably logged and may be lost
+   * on a crash; the data still enters the memtable and is visible to subsequent reads. This is only
+   * appropriate for idempotent bulk loads that can be safely resumed after a crash (e.g. the
+   * Bonsai-to-Forest conversion), where skipping the WAL frees write bandwidth.
+   *
+   * <p>Non-RocksDB implementations fall back to {@link #startTransaction()}.
+   *
+   * @return An object representing the transaction.
+   * @throws StorageException the storage exception
+   */
+  default SegmentedKeyValueStorageTransaction startNoWALTransaction() throws StorageException {
+    return startTransaction();
+  }
+
+  /**
    * Returns a stream of all keys for the segment.
    *
    * @param segmentIdentifier The segment identifier whose keys we want to stream.

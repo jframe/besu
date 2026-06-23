@@ -138,6 +138,22 @@ public interface KeyValueStorage extends Closeable {
   KeyValueStorageTransaction startTransaction() throws StorageException;
 
   /**
+   * Begins a transaction whose writes bypass the write-ahead log. On RocksDB-backed storage this
+   * sets {@code WriteOptions.disableWAL = true}, so commits are not durably logged and may be lost
+   * on a crash; the data still enters the memtable and is visible to subsequent reads. This is only
+   * appropriate for idempotent bulk loads that can be safely resumed after a crash (e.g. the
+   * Bonsai-to-Forest conversion), where skipping the WAL frees write bandwidth.
+   *
+   * <p>Implementations that do not support this fall back to {@link #startTransaction()}.
+   *
+   * @return transaction to sequence key-value operations.
+   * @throws StorageException problem encountered when starting a new transaction.
+   */
+  default KeyValueStorageTransaction startNoWALTransaction() throws StorageException {
+    return startTransaction();
+  }
+
+  /**
    * Return Whether the underlying storage is closed.
    *
    * @return boolean indicating whether the storage is closed.
