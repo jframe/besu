@@ -301,7 +301,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         final SegmentedKeyValueStorageTransaction tx =
             worldStateStorage.getComposedWorldStateStorage().startLowPriorityTransaction();
         if (migrationWorldState != null) {
-          migrateTrieBlock(maybeTrieLog.get(), blockNumber);
+          // Route persist()'s frontier + diff-index writes into this same transaction so the whole
+          // block (frontier, index, flat state, progress) commits atomically — crash-safe resume.
+          migrationTrieStorage.setActiveSharedTransaction(tx);
+          try {
+            migrateTrieBlock(maybeTrieLog.get(), blockNumber, tx);
+          } finally {
+            migrationTrieStorage.setActiveSharedTransaction(null);
+          }
         }
         processBlock(maybeTrieLog.get(), blockNumber, tx);
         saveProgress(blockNumber, tx);
@@ -577,7 +584,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
   }
 
-  private void migrateTrieBlock(final TrieLog trieLog, final long blockNumber) {
+  private void migrateTrieBlock(
+      final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
     // Start a fresh per-block trie-node read cache. Nodes read during the trie put/commit walk are
     // re-read by the diff-index prior-node capture for the same key in the same block; the cache
     // collapses those redundant TRIE_BRANCH reads to a single underlying read per key per block.
@@ -585,25 +593,23 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater()).rollForward(trieLog);
 
     if (migrationHistoryStore != null) {
-      // Index mode: persist every block so the differential index gets per-block entries.
+      // Index mode: persist every block so the differential index gets per-block entries. persist()
+      // writes the frontier + diff-index into the shared per-block transaction (via the deferred
+      // MigrationTransaction) and does not commit it — the migrator commits once in migrateBlocks.
       blockchain
           .getBlockHeader(blockNumber)
           .ifPresent(
               header -> {
                 migrationWorldState.persist(header);
-                // flushIndexIfEnabled() inside persist()'s commit() already advanced
-                // migrationIndexProgress to blockNumber (it reads WORLD_BLOCK_NUMBER_KEY before
-                // the transaction commits, so it sees the previous block's number and adds 1).
-                // After persist() returns, WORLD_BLOCK_NUMBER_KEY is committed to the in-memory
-                // layer, so calling advanceIndexProgress() again would read the wrong value
-                // (blockNumber+1). We only need to persist the already-correct progress to real
-                // storage for crash-recovery durability.
-                final SegmentedKeyValueStorageTransaction progressTx =
-                    worldStateStorage.getComposedWorldStateStorage().startLowPriorityTransaction();
+                // flushIndexIfEnabled() inside persist() already advanced migrationIndexProgress to
+                // blockNumber (it reads WORLD_BLOCK_NUMBER_KEY before commit, sees the previous
+                // block's number and adds 1). Persist the already-correct progress into the same
+                // shared transaction so it commits atomically with the frontier — note save() must
+                // hit real TRIE_BRANCH_STORAGE, so it is written directly on tx (not via the
+                // MigrationTransaction, which would redirect it to TRIE_BRANCH_FRONTIER).
                 if (migrationIndexProgress != null) {
-                  migrationIndexProgress.save(progressTx);
+                  migrationIndexProgress.save(tx);
                 }
-                progressTx.commit();
               });
       return;
     }
@@ -625,6 +631,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
      */
     private final Map<Bytes, Optional<byte[]>> blockReadCache = new HashMap<>();
 
+    /**
+     * When non-null, {@link #startTransaction()} returns a {@link MigrationTransaction} that writes
+     * into this migrator-owned transaction and defers commit/rollback to the migrator. This lets a
+     * block's {@code persist()} (frontier + diff-index) share the same atomic transaction as the
+     * flat-state and progress writes, so a crash can never leave progress out of sync with the
+     * frontier. Set per block by the migrator around {@code migrateTrieBlock}.
+     */
+    private SegmentedKeyValueStorageTransaction activeSharedTransaction;
+
     MigrationTrieStorage(final SegmentedKeyValueStorage real) {
       super(real);
       this.real = real;
@@ -633,6 +648,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     /** Clears the per-block read cache. Called at the start of each migrated block. */
     void resetBlockCache() {
       blockReadCache.clear();
+    }
+
+    /**
+     * Routes {@code persist()}'s writes into the migrator's per-block transaction (or {@code null}
+     * to restore default).
+     */
+    void setActiveSharedTransaction(final SegmentedKeyValueStorageTransaction tx) {
+      this.activeSharedTransaction = tx;
     }
 
     @Override
@@ -676,6 +699,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
     @Override
     public SegmentedKeyValueStorageTransaction startTransaction() {
+      if (activeSharedTransaction != null) {
+        // Write into the migrator's per-block transaction; the migrator owns commit/rollback so
+        // frontier + index + flat + progress are committed atomically.
+        return new MigrationTransaction(activeSharedTransaction, true);
+      }
       return new MigrationTransaction(real.startLowPriorityTransaction());
     }
   }
@@ -683,8 +711,22 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   private static final class MigrationTransaction implements SegmentedKeyValueStorageTransaction {
     private final SegmentedKeyValueStorageTransaction realTx;
 
+    /**
+     * When {@code true}, {@link #commit()}/{@link #rollback()}/{@link #close()} are no-ops: the
+     * wrapped transaction's lifecycle is owned by the migrator, which commits frontier, diff-index,
+     * flat state and progress together in a single atomic per-block transaction. This is what makes
+     * the migration crash-safe — progress can never be committed ahead of (or behind) the frontier.
+     */
+    private final boolean deferLifecycleToOwner;
+
     MigrationTransaction(final SegmentedKeyValueStorageTransaction realTx) {
+      this(realTx, false);
+    }
+
+    MigrationTransaction(
+        final SegmentedKeyValueStorageTransaction realTx, final boolean deferLifecycleToOwner) {
       this.realTx = realTx;
+      this.deferLifecycleToOwner = deferLifecycleToOwner;
     }
 
     @Override
@@ -715,17 +757,23 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
     @Override
     public void commit() {
-      realTx.commit();
+      if (!deferLifecycleToOwner) {
+        realTx.commit();
+      }
     }
 
     @Override
     public void rollback() {
-      realTx.rollback();
+      if (!deferLifecycleToOwner) {
+        realTx.rollback();
+      }
     }
 
     @Override
     public void close() {
-      realTx.close();
+      if (!deferLifecycleToOwner) {
+        realTx.close();
+      }
     }
   }
 

@@ -64,6 +64,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManage
 import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
@@ -294,6 +295,56 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
     verify(spyStorage, atLeastOnce()).startLowPriorityTransaction();
+  }
+
+  // -------------------------------------------------------------------------
+  // Crash-safety: persist() shares the migrator's per-block transaction so the
+  // frontier, diff-index, flat state and progress commit atomically.
+  // -------------------------------------------------------------------------
+
+  @Test
+  public void migrationTrieStorageRoutesWritesToSharedTransactionAndDefersCommit() {
+    final SegmentedKeyValueStorage real = mock(SegmentedKeyValueStorage.class);
+    final SegmentedKeyValueStorageTransaction sharedTx =
+        mock(SegmentedKeyValueStorageTransaction.class);
+    final BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage trieStorage =
+        new BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage(real);
+
+    trieStorage.setActiveSharedTransaction(sharedTx);
+    final SegmentedKeyValueStorageTransaction tx = trieStorage.startTransaction();
+
+    final byte[] key = Bytes.fromHexString("0x1234").toArrayUnsafe();
+    final byte[] node = Bytes.fromHexString("0xabcd").toArrayUnsafe();
+    tx.put(TRIE_BRANCH_STORAGE, key, node);
+
+    // Writes go into the shared transaction (TRIE_BRANCH_STORAGE redirected to FRONTIER); no
+    // separate real transaction is opened by persist().
+    verify(sharedTx).put(eq(TRIE_BRANCH_FRONTIER), eq(key), eq(node));
+    verify(real, never()).startLowPriorityTransaction();
+
+    // commit()/rollback() are deferred to the migrator — the shared transaction is left untouched
+    // so the whole block commits exactly once, atomically.
+    tx.commit();
+    tx.rollback();
+    verify(sharedTx, never()).commit();
+    verify(sharedTx, never()).rollback();
+  }
+
+  @Test
+  public void migrationTrieStorageOwnsItsTransactionWhenNoSharedTransactionSet() {
+    final SegmentedKeyValueStorage real = mock(SegmentedKeyValueStorage.class);
+    final SegmentedKeyValueStorageTransaction ownTx =
+        mock(SegmentedKeyValueStorageTransaction.class);
+    when(real.startLowPriorityTransaction()).thenReturn(ownTx);
+    final BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage trieStorage =
+        new BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage(real);
+
+    // No shared transaction (e.g. recovery replay) → opens and commits its own low-priority tx.
+    final SegmentedKeyValueStorageTransaction tx = trieStorage.startTransaction();
+    tx.commit();
+
+    verify(real).startLowPriorityTransaction();
+    verify(ownTx).commit();
   }
 
   @Test
