@@ -106,6 +106,35 @@ public final class TrieNodeChangeIndex {
       };
 
   /**
+   * Maximum number of entries in the earlier-range count cache. At ~150 bytes/entry this is roughly
+   * 150 MB for a 1 M-entry active trie.
+   */
+  static final int EARLIER_RANGE_COUNT_CACHE_MAX_SIZE = 1_000_000;
+
+  /**
+   * LRU cache of the summed mutation count for a node in all <em>earlier</em> ranges {@code [0,
+   * rangeId)}, keyed by {@link ArchiveNodeKey#rangeKey} ({@code naturalKey‖rangeId}).
+   *
+   * <p>Migration and live import advance through blocks in strictly increasing order, so every
+   * range below the one currently being written is complete and never changes again (reorgs only
+   * touch the head's range, which is whole ranges away from any earlier range). The earlier-range
+   * sum is therefore stable and safe to memoise. This removes the per-append {@code storage.get}
+   * sweep over earlier ranges in {@link #appendAndGetPreviousCount} — otherwise one uncached read
+   * per earlier range on every deep-node change once block ≥ rangeSize, the single largest source
+   * of migration read I/O.
+   *
+   * <p>A stale value (were the immutability assumption ever violated) only mis-places a checkpoint,
+   * which lengthens the bounded backward walk at query time — never a correctness error.
+   */
+  private final LinkedHashMap<Bytes, Long> earlierRangeCountCache =
+      new LinkedHashMap<>(1024, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(final Map.Entry<Bytes, Long> eldest) {
+          return size() > EARLIER_RANGE_COUNT_CACHE_MAX_SIZE;
+        }
+      };
+
+  /**
    * In-session Bloom filter for fresh-migration mode. Non-null only when {@link
    * #enableFreshMigrationMode()} has been called. Tracks every index key written in this session so
    * that first-time-encounter keys (absent from the DB) can be identified without a {@code
@@ -297,22 +326,10 @@ public final class TrieNodeChangeIndex {
     final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
     final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
 
-    // Count mutations in earlier ranges (rarely non-zero for chains < rangeSize blocks).
-    long earlierCount = 0L;
-    for (long r = 0; r < rangeId; r++) {
-      final Bytes rKey = ArchiveNodeKey.rangeKey(naturalKey, r);
-      final Optional<byte[]> raw =
-          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, rKey.toArrayUnsafe());
-      if (raw.isPresent()) {
-        final byte[] b = raw.get();
-        if (b.length >= SUBCOUNT_BYTES) {
-          final int sc =
-              ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
-          final int te = (b.length - SUBCOUNT_BYTES) / RangeRelativeOffsetList.ENTRY_BYTES;
-          earlierCount += (long) sc * DEFAULT_SUBBLOCK_SPLIT_AT + te;
-        }
-      }
-    }
+    // Count mutations in earlier ranges (rarely non-zero for chains < rangeSize blocks). Earlier
+    // ranges are complete and immutable once block ≥ rangeSize, so the sum is memoised per
+    // (naturalKey, rangeId) to avoid re-reading them on every deep-node append.
+    final long earlierCount = earlierRangeCount(naturalKey, rangeId, indexKey);
 
     // Read the current range once — check write-through cache before hitting committed storage.
     final int[] subCountHolder = new int[1];
@@ -366,6 +383,45 @@ public final class TrieNodeChangeIndex {
     }
 
     return previousCount;
+  }
+
+  /**
+   * Returns the summed mutation count for {@code naturalKey} across all ranges strictly before
+   * {@code rangeId}, memoised in {@link #earlierRangeCountCache} under {@code cacheKey} ({@code
+   * naturalKey‖rangeId}). Returns 0 immediately when {@code rangeId == 0}. On a cache miss the
+   * earlier ranges are summed from committed storage; the result is immutable (earlier ranges are
+   * complete once block ≥ rangeSize) and cached.
+   *
+   * @param naturalKey the account or storage natural key
+   * @param rangeId the range whose earlier-range total is needed
+   * @param cacheKey the {@code naturalKey‖rangeId} index key, reused as the cache key
+   * @return the total mutations recorded in ranges {@code [0, rangeId)}
+   */
+  private long earlierRangeCount(final Bytes naturalKey, final long rangeId, final Bytes cacheKey) {
+    if (rangeId == 0) {
+      return 0L;
+    }
+    final Long memoised = earlierRangeCountCache.get(cacheKey);
+    if (memoised != null) {
+      return memoised;
+    }
+    long earlierCount = 0L;
+    for (long r = 0; r < rangeId; r++) {
+      final Bytes rKey = ArchiveNodeKey.rangeKey(naturalKey, r);
+      final Optional<byte[]> raw =
+          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, rKey.toArrayUnsafe());
+      if (raw.isPresent()) {
+        final byte[] b = raw.get();
+        if (b.length >= SUBCOUNT_BYTES) {
+          final int sc =
+              ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
+          final int te = (b.length - SUBCOUNT_BYTES) / RangeRelativeOffsetList.ENTRY_BYTES;
+          earlierCount += (long) sc * DEFAULT_SUBBLOCK_SPLIT_AT + te;
+        }
+      }
+    }
+    earlierRangeCountCache.put(cacheKey, earlierCount);
+    return earlierCount;
   }
 
   /**

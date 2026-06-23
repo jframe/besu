@@ -16,7 +16,14 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -64,6 +71,63 @@ class TrieNodeChangeIndexTest {
     assertThatThrownBy(() -> idx.append(tx, KEY, -1))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("block");
+  }
+
+  // -------------------------------------------------------------------------
+  // Earlier-range count cache: the immutable earlier-range sum is read once per
+  // (key,range), then served from memory on subsequent appends in the same range.
+  // -------------------------------------------------------------------------
+
+  @Test
+  void earlierRangeCountIsMemoisedAcrossAppendsInSameRange() {
+    final SegmentedKeyValueStorage kv = spy(new SegmentedInMemoryKeyValueStorage());
+    final TrieNodeChangeIndex idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    // Seed a single change in range 0 so the earlier-range count is non-zero.
+    var seed = kv.startTransaction();
+    idx.append(seed, KEY, 5);
+    seed.commit();
+
+    final byte[] range0Key = ArchiveNodeKey.rangeKey(KEY, 0).toArrayUnsafe();
+    clearInvocations(kv); // ignore the reads issued while seeding range 0
+
+    // Two appends for the same key in range 1.
+    var tx1 = kv.startTransaction();
+    final long prev1 = idx.appendAndGetPreviousCount(tx1, KEY, 1_000_010);
+    tx1.commit();
+    var tx2 = kv.startTransaction();
+    final long prev2 = idx.appendAndGetPreviousCount(tx2, KEY, 1_000_020);
+    tx2.commit();
+
+    // previousCount must include the range-0 mutation: 1 before the first range-1 change, 2 before
+    // the second — proving the earlier-range total is still counted correctly through the cache.
+    assertThat(prev1).isEqualTo(1L);
+    assertThat(prev2).isEqualTo(2L);
+
+    // The range-0 index entry is read exactly once across both range-1 appends (memoised after).
+    verify(kv, times(1)).get(eq(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE), eq(range0Key));
+  }
+
+  @Test
+  void earlierRangeCountCacheIsKeyedPerRange() {
+    // A change in range 0 and range 1; an append in range 2 must count BOTH earlier ranges (not a
+    // stale range-1 cache entry), and the range-2 entry is cached separately from range 1.
+    final SegmentedKeyValueStorage kv = spy(new SegmentedInMemoryKeyValueStorage());
+    final TrieNodeChangeIndex idx = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    var t0 = kv.startTransaction();
+    idx.append(t0, KEY, 7); // range 0
+    t0.commit();
+    var t1 = kv.startTransaction();
+    idx.appendAndGetPreviousCount(t1, KEY, 1_000_007); // range 1
+    t1.commit();
+
+    var t2 = kv.startTransaction();
+    final long prevRange2 = idx.appendAndGetPreviousCount(t2, KEY, 2_000_007); // range 2
+    t2.commit();
+
+    // range 0 (1) + range 1 (1) = 2 mutations before the range-2 change.
+    assertThat(prevRange2).isEqualTo(2L);
   }
 
   // -------------------------------------------------------------------------
