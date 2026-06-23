@@ -22,6 +22,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_ROOT_HASH_KEY;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -298,6 +299,39 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   // -------------------------------------------------------------------------
+  // Batch overlay: writes within a batch are visible to subsequent gets without commit.
+  // -------------------------------------------------------------------------
+
+  @Test
+  public void migrationTrieStorageReadsSeeWritesWithinBatch() {
+    final SegmentedKeyValueStorage real = mock(SegmentedKeyValueStorage.class);
+    final SegmentedKeyValueStorageTransaction sharedTx =
+        mock(SegmentedKeyValueStorageTransaction.class);
+    final BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage trieStorage =
+        new BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage(real);
+
+    trieStorage.beginBatch(sharedTx);
+    final SegmentedKeyValueStorageTransaction tx = trieStorage.startTransaction();
+
+    final byte[] key = Bytes.fromHexString("0x1234").toArrayUnsafe();
+    final byte[] node = Bytes.fromHexString("0xabcd").toArrayUnsafe();
+    tx.put(TRIE_BRANCH_STORAGE, key, node);
+
+    // get must return the just-written value from the overlay, without touching real.
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, key)).contains(node);
+    verify(real, never()).get(eq(TRIE_BRANCH_FRONTIER), eq(key));
+    verify(real, never()).get(eq(TRIE_BRANCH_STORAGE), eq(key));
+
+    // a metadata key written in the batch is also visible
+    final byte[] worldBlockVal = Bytes.ofUnsignedLong(42).toArrayUnsafe();
+    tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, worldBlockVal);
+    assertThat(trieStorage.get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY))
+        .contains(worldBlockVal);
+
+    trieStorage.endBatch();
+  }
+
+  // -------------------------------------------------------------------------
   // Crash-safety: persist() shares the migrator's per-block transaction so the
   // frontier, diff-index, flat state and progress commit atomically.
   // -------------------------------------------------------------------------
@@ -310,7 +344,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage trieStorage =
         new BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage(real);
 
-    trieStorage.setActiveSharedTransaction(sharedTx);
+    trieStorage.beginBatch(sharedTx);
     final SegmentedKeyValueStorageTransaction tx = trieStorage.startTransaction();
 
     final byte[] key = Bytes.fromHexString("0x1234").toArrayUnsafe();

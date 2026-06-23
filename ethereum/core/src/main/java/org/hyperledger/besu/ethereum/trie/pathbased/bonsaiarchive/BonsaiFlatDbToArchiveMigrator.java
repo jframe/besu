@@ -303,11 +303,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         if (migrationWorldState != null) {
           // Route persist()'s frontier + diff-index writes into this same transaction so the whole
           // block (frontier, index, flat state, progress) commits atomically — crash-safe resume.
-          migrationTrieStorage.setActiveSharedTransaction(tx);
+          migrationTrieStorage.beginBatch(tx);
           try {
             migrateTrieBlock(maybeTrieLog.get(), blockNumber, tx);
           } finally {
-            migrationTrieStorage.setActiveSharedTransaction(null);
+            migrationTrieStorage.endBatch();
           }
         }
         processBlock(maybeTrieLog.get(), blockNumber, tx);
@@ -619,24 +619,32 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     private final SegmentedKeyValueStorage real;
 
     /**
-     * Per-block cache of resolved TRIE_BRANCH_STORAGE reads, keyed by node location. The migration
+     * Per-batch cache of resolved TRIE_BRANCH_STORAGE reads, keyed by node location. The migration
      * runs single-threaded on archive-migrator-0 with parallel state-root computation disabled, so
-     * a plain {@link HashMap} is safe. Cleared at each block boundary via {@link
-     * #resetBlockCache()}.
+     * a plain {@link HashMap} is safe. Cleared at each batch boundary via {@link #beginBatch}.
      *
-     * <p>Reads only ever observe committed (pre-block) state — block writes go to the block
-     * transaction, not {@code real} — so a node's value is stable for the duration of a block and
-     * safe to memoise. This collapses the redundant read the diff-index prior-node capture issues
-     * for a key the put/commit walk has already read in the same block.
+     * <p>Within a batch, committed storage is stable (no per-block commits). Writes within the
+     * batch go to {@link #batchOverlay}, so cached reads always reflect pre-batch committed state —
+     * safe to cache for the entire batch duration.
      */
     private final Map<Bytes, Optional<byte[]>> blockReadCache = new HashMap<>();
 
     /**
+     * Write-back overlay for reads within a batch. Populated by {@link MigrationTransaction}
+     * put/remove calls during the batch; consulted by {@link #get} before the read cache and
+     * committed storage. Keyed by the logical TRIE_BRANCH_STORAGE key (not the physical frontier
+     * key). A {@link Optional#empty()} value represents a tombstone (deleted node).
+     */
+    private final Map<Bytes, Optional<byte[]>> batchOverlay = new HashMap<>();
+
+    /** Running sum of value bytes written to {@link #batchOverlay}. Used for batch-size limit. */
+    private long batchOverlayBytes = 0L;
+
+    /**
      * When non-null, {@link #startTransaction()} returns a {@link MigrationTransaction} that writes
      * into this migrator-owned transaction and defers commit/rollback to the migrator. This lets a
-     * block's {@code persist()} (frontier + diff-index) share the same atomic transaction as the
-     * flat-state and progress writes, so a crash can never leave progress out of sync with the
-     * frontier. Set per block by the migrator around {@code migrateTrieBlock}.
+     * batch's {@code persist()} (frontier + diff-index) share the same atomic transaction as the
+     * flat-state and progress writes.
      */
     private SegmentedKeyValueStorageTransaction activeSharedTransaction;
 
@@ -645,30 +653,55 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       this.real = real;
     }
 
-    /** Clears the per-block read cache. Called at the start of each migrated block. */
+    /**
+     * Clears the per-batch read cache. Kept for backward compatibility with existing unit tests.
+     */
     void resetBlockCache() {
       blockReadCache.clear();
     }
 
     /**
-     * Routes {@code persist()}'s writes into the migrator's per-block transaction (or {@code null}
-     * to restore default).
+     * Starts a new batch: sets the shared transaction, clears the write-back overlay, and clears
+     * the read cache so the batch starts from a clean committed-storage baseline.
      */
-    void setActiveSharedTransaction(final SegmentedKeyValueStorageTransaction tx) {
+    void beginBatch(final SegmentedKeyValueStorageTransaction tx) {
       this.activeSharedTransaction = tx;
+      batchOverlay.clear();
+      batchOverlayBytes = 0L;
+      blockReadCache.clear();
+    }
+
+    /** Ends the current batch: clears the overlay, read cache, and shared transaction reference. */
+    void endBatch() {
+      this.activeSharedTransaction = null;
+      batchOverlay.clear();
+      batchOverlayBytes = 0L;
+      blockReadCache.clear();
+    }
+
+    /** Returns the approximate byte size of frontier writes accumulated in the batch overlay. */
+    long batchByteSize() {
+      return batchOverlayBytes;
     }
 
     @Override
     public Optional<byte[]> get(final SegmentIdentifier segmentId, final byte[] key) {
       if (segmentId == TRIE_BRANCH_STORAGE) {
+        // Batch overlay is checked first — it captures writes made within the current batch,
+        // including metadata keys (WORLD_BLOCK_NUMBER_KEY etc.) written by earlier blocks.
+        final Bytes overlayKey = Bytes.wrap(key);
+        final Optional<byte[]> overlayVal = batchOverlay.get(overlayKey);
+        if (overlayVal != null) {
+          return overlayVal; // Optional.empty() means tombstone (deleted in this batch)
+        }
+
         // Metadata keys (WORLD_*, ARCHIVE_PROOF_BLOCK_NUMBER_KEY) must not fall through to live
         // TRIE_BRANCH_STORAGE — live HEAD values would corrupt the migration context. These keys
-        // are written to TRIE_BRANCH_FRONTIER via MigrationTransaction. They are read at most once
-        // per block, so they bypass the cache.
+        // are written to TRIE_BRANCH_FRONTIER via MigrationTransaction.
         if (isMetadataKey(key)) {
           return real.get(TRIE_BRANCH_FRONTIER, key);
         }
-        final Bytes cacheKey = Bytes.wrap(key);
+        final Bytes cacheKey = overlayKey;
         final Optional<byte[]> cached = blockReadCache.get(cacheKey);
         if (cached != null) {
           return cached;
@@ -700,11 +733,16 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     @Override
     public SegmentedKeyValueStorageTransaction startTransaction() {
       if (activeSharedTransaction != null) {
-        // Write into the migrator's per-block transaction; the migrator owns commit/rollback so
-        // frontier + index + flat + progress are committed atomically.
-        return new MigrationTransaction(activeSharedTransaction, true);
+        // Write into the migrator's batch transaction; the migrator owns commit/rollback so
+        // frontier + index + flat + progress are committed atomically. The overlay is passed so
+        // writes are visible to subsequent get() calls within the same batch.
+        return new MigrationTransaction(activeSharedTransaction, true, batchOverlay, this);
       }
       return new MigrationTransaction(real.startLowPriorityTransaction());
+    }
+
+    void recordOverlayBytes(final long bytes) {
+      batchOverlayBytes += bytes;
     }
   }
 
@@ -714,25 +752,43 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     /**
      * When {@code true}, {@link #commit()}/{@link #rollback()}/{@link #close()} are no-ops: the
      * wrapped transaction's lifecycle is owned by the migrator, which commits frontier, diff-index,
-     * flat state and progress together in a single atomic per-block transaction. This is what makes
+     * flat state and progress together in a single atomic per-batch transaction. This is what makes
      * the migration crash-safe — progress can never be committed ahead of (or behind) the frontier.
      */
     private final boolean deferLifecycleToOwner;
 
+    /**
+     * Write-back overlay from the owning {@link MigrationTrieStorage}. Non-null only in the
+     * deferred (batch) variant; used to make frontier writes visible to same-batch reads.
+     */
+    private final Map<Bytes, Optional<byte[]>> overlay;
+
+    private final MigrationTrieStorage owner;
+
     MigrationTransaction(final SegmentedKeyValueStorageTransaction realTx) {
-      this(realTx, false);
+      this(realTx, false, null, null);
     }
 
     MigrationTransaction(
-        final SegmentedKeyValueStorageTransaction realTx, final boolean deferLifecycleToOwner) {
+        final SegmentedKeyValueStorageTransaction realTx,
+        final boolean deferLifecycleToOwner,
+        final Map<Bytes, Optional<byte[]>> overlay,
+        final MigrationTrieStorage owner) {
       this.realTx = realTx;
       this.deferLifecycleToOwner = deferLifecycleToOwner;
+      this.overlay = overlay;
+      this.owner = owner;
     }
 
     @Override
     public void put(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
       if (segmentId == TRIE_BRANCH_STORAGE) {
         realTx.put(TRIE_BRANCH_FRONTIER, key, value);
+        if (overlay != null) {
+          final Bytes overlayKey = Bytes.wrap(key);
+          overlay.put(overlayKey, Optional.of(value));
+          owner.recordOverlayBytes(value.length);
+        }
       } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
@@ -747,6 +803,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         // Write tombstone sentinel rather than remove() — distinguishes "deleted" from "never
         // written" since RocksDB get() returns empty for both after a remove().
         realTx.put(TRIE_BRANCH_FRONTIER, key, FRONTIER_TOMBSTONE);
+        if (overlay != null) {
+          overlay.put(Bytes.wrap(key), Optional.empty());
+        }
       } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
