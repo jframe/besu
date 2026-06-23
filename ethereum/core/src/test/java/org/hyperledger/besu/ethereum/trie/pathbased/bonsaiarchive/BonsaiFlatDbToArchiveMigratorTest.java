@@ -1178,6 +1178,62 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     verify(spyStorage, atMost(2)).startLowPriorityTransaction();
   }
 
+  /**
+   * Regression test: within a per-batch migration in index mode, block N creates an account and
+   * block N+1 applies an UPDATE to it. Block N+1's {@code rollForward} must be able to read block
+   * N's flat account write from the {@code flatAccountOverlay} even though the batch transaction
+   * has not yet committed. Without the fix this throws "Expected to update account, but the account
+   * does not exist".
+   */
+  @Test
+  public void batchMigrationWithIndex_flatAccountVisibleToNextBlockRollForward() throws Exception {
+    // Block 1: CREATE test account with balance=1
+    final Hash stateRoot1 = computeAccountStateRoot(Wei.ONE);
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot1));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    // Block 2: UPDATE test account from balance=1 to balance=2
+    final Hash stateRoot2 = computeAccountStateRoot(Wei.of(2L));
+    final Block block2 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(block1.getHash())
+                .setBlockNumber(2)
+                .setStateRoot(stateRoot2));
+    blockchain.appendBlock(block2, blockDataGenerator.receipts(block2));
+
+    final PmtStateTrieAccountValue accountAfterBlock1 =
+        new PmtStateTrieAccountValue(1, Wei.ONE, Hash.EMPTY, Hash.EMPTY);
+    final PmtStateTrieAccountValue accountAfterBlock2 =
+        new PmtStateTrieAccountValue(1, Wei.of(2L), Hash.EMPTY, Hash.EMPTY);
+    final TrieLogLayer updateTrieLog = new TrieLogLayer();
+    updateTrieLog.addAccountChange(TEST_ADDRESS, accountAfterBlock1, accountAfterBlock2);
+    when(trieLogManager.getTrieLogLayer(hashAt(2L))).thenReturn(Optional.of(updateTrieLog));
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    final TrieNodeChangeIndex changeIndex =
+        new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+
+    // Both blocks fit in one batch — rollForward for block 2 must see block 1's flat account.
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    assertThat(getArchivedAccountKey(1L))
+        .as("Block 1 account must be in archive after migration")
+        .isPresent();
+    assertThat(getArchivedAccountKey(2L))
+        .as("Block 2 account update must be in archive after migration")
+        .isPresent();
+  }
+
   // --- test helpers ---
 
   private MutableBlockchain createInMemoryBlockchain(final Block genesisBlock) {
@@ -1267,8 +1323,12 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   // matching the account created by createAccountTrieLog(Wei.ONE). Used to set block header
   // stateRoot so that BonsaiWorldState.persist() passes state root verification.
   private Hash computeTestAccountStateRoot() {
+    return computeAccountStateRoot(Wei.ONE);
+  }
+
+  private Hash computeAccountStateRoot(final Wei balance) {
     final PmtStateTrieAccountValue account =
-        new PmtStateTrieAccountValue(1, Wei.ONE, Hash.EMPTY, Hash.EMPTY);
+        new PmtStateTrieAccountValue(1, balance, Hash.EMPTY, Hash.EMPTY);
     final BytesValueRLPOutput out = new BytesValueRLPOutput();
     account.writeTo(out);
     final SimpleMerklePatriciaTrie<org.apache.tuweni.bytes.Bytes, org.apache.tuweni.bytes.Bytes>

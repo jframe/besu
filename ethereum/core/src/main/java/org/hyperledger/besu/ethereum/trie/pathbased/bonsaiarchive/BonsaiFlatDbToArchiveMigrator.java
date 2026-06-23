@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_FRONTIER;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
@@ -69,6 +70,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -334,7 +336,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           if (migrationWorldState != null) {
             migrateTrieBlock(maybeTrieLog.get(), blockNumber, tx);
           }
-          processBlock(maybeTrieLog.get(), blockNumber, tx);
+          final SegmentedKeyValueStorageTransaction processTx =
+              migrationTrieStorage != null ? new FlatCapturingTx(tx, migrationTrieStorage) : tx;
+          processBlock(maybeTrieLog.get(), blockNumber, processTx);
           lastInBatch = blockNumber;
           blocksInBatch++;
           if (migrationTrieStorage != null
@@ -691,6 +695,20 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     private long batchOverlayBytes = 0L;
 
     /**
+     * Per-batch overlay for flat account writes (ACCOUNT_INFO_STATE_ARCHIVE). Keyed by archive key
+     * ({@code addressHash + blockSuffix}), sorted lexicographically to support floor-entry queries.
+     * Populated by {@link FlatCapturingTx} so that block N's accounts are visible to block N+1's
+     * {@code rollForward} via {@link #getNearestBefore} without requiring an interim commit.
+     */
+    private final TreeMap<Bytes, Optional<byte[]>> flatAccountOverlay = new TreeMap<>();
+
+    /**
+     * Per-batch overlay for flat storage writes (ACCOUNT_STORAGE_ARCHIVE). Same motivation as
+     * {@link #flatAccountOverlay}.
+     */
+    private final TreeMap<Bytes, Optional<byte[]>> flatStorageOverlay = new TreeMap<>();
+
+    /**
      * When non-null, {@link #startTransaction()} returns a {@link MigrationTransaction} that writes
      * into this migrator-owned transaction and defers commit/rollback to the migrator. This lets a
      * batch's {@code persist()} (frontier + diff-index) share the same atomic transaction as the
@@ -719,6 +737,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       batchOverlay.clear();
       batchOverlayBytes = 0L;
       blockReadCache.clear();
+      flatAccountOverlay.clear();
+      flatStorageOverlay.clear();
     }
 
     /** Ends the current batch: clears the overlay, read cache, and shared transaction reference. */
@@ -727,6 +747,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       batchOverlay.clear();
       batchOverlayBytes = 0L;
       blockReadCache.clear();
+      flatAccountOverlay.clear();
+      flatStorageOverlay.clear();
     }
 
     /** Returns the approximate byte size of frontier writes accumulated in the batch overlay. */
@@ -770,7 +792,74 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         blockReadCache.put(cacheKey, result);
         return result;
       }
+      if (segmentId == ACCOUNT_INFO_STATE_ARCHIVE) {
+        final Bytes flatKey = Bytes.wrap(key);
+        final Optional<byte[]> v = flatAccountOverlay.get(flatKey);
+        if (v != null) {
+          return v;
+        }
+      } else if (segmentId == ACCOUNT_STORAGE_ARCHIVE) {
+        final Bytes flatKey = Bytes.wrap(key);
+        final Optional<byte[]> v = flatStorageOverlay.get(flatKey);
+        if (v != null) {
+          return v;
+        }
+      }
       return real.get(segmentId, key);
+    }
+
+    void recordFlatWrite(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
+      final Bytes flatKey = Bytes.wrap(key);
+      if (segmentId == ACCOUNT_INFO_STATE_ARCHIVE) {
+        flatAccountOverlay.put(flatKey, Optional.of(value));
+      } else if (segmentId == ACCOUNT_STORAGE_ARCHIVE) {
+        flatStorageOverlay.put(flatKey, Optional.of(value));
+      }
+    }
+
+    void recordFlatRemove(final SegmentIdentifier segmentId, final byte[] key) {
+      final Bytes flatKey = Bytes.wrap(key);
+      if (segmentId == ACCOUNT_INFO_STATE_ARCHIVE) {
+        flatAccountOverlay.put(flatKey, Optional.empty());
+      } else if (segmentId == ACCOUNT_STORAGE_ARCHIVE) {
+        flatStorageOverlay.put(flatKey, Optional.empty());
+      }
+    }
+
+    /**
+     * Overrides {@code getNearestBefore} for flat archive segments so that writes made within the
+     * current batch (captured in {@link #flatAccountOverlay} / {@link #flatStorageOverlay}) are
+     * visible to subsequent blocks' {@code rollForward} calls without an intermediate commit.
+     *
+     * <p>For all other segments the default {@link LayeredKeyValueStorage} implementation is used.
+     */
+    @Override
+    public Optional<NearestKeyValue> getNearestBefore(
+        final SegmentIdentifier segmentId, final Bytes queryKey) {
+      if (segmentId == ACCOUNT_INFO_STATE_ARCHIVE || segmentId == ACCOUNT_STORAGE_ARCHIVE) {
+        final TreeMap<Bytes, Optional<byte[]>> overlay =
+            segmentId == ACCOUNT_INFO_STATE_ARCHIVE ? flatAccountOverlay : flatStorageOverlay;
+        final Optional<NearestKeyValue> overlayNearest =
+            Optional.ofNullable(overlay.floorEntry(queryKey))
+                .map(e -> new NearestKeyValue(e.getKey(), e.getValue()));
+        final Optional<NearestKeyValue> realNearest = real.getNearestBefore(segmentId, queryKey);
+        if (overlayNearest.isPresent() && realNearest.isPresent()) {
+          // Pick the key with the longer common prefix (= more specific match).
+          // On a tie in prefix length, pick the larger key (nearest-before semantics).
+          final int ovCmp = overlayNearest.get().key().compareTo(queryKey);
+          final int rlCmp = realNearest.get().key().compareTo(queryKey);
+          if (ovCmp == 0) return overlayNearest;
+          if (rlCmp == 0) return realNearest;
+          final int ovLen = overlayNearest.get().key().commonPrefixLength(queryKey);
+          final int rlLen = realNearest.get().key().commonPrefixLength(queryKey);
+          if (ovLen != rlLen) return ovLen > rlLen ? overlayNearest : realNearest;
+          return overlayNearest.get().key().compareTo(realNearest.get().key()) > 0
+              ? overlayNearest
+              : realNearest;
+        }
+        return overlayNearest.isPresent() ? overlayNearest : realNearest;
+      }
+      return super.getNearestBefore(segmentId, queryKey);
     }
 
     private static boolean isMetadataKey(final byte[] key) {
@@ -883,6 +972,51 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       if (!deferLifecycleToOwner) {
         realTx.close();
       }
+    }
+  }
+
+  /**
+   * Wraps the batch transaction passed to {@link #processBlock} and mirrors flat account/storage
+   * writes into {@link MigrationTrieStorage}'s per-batch overlays. This makes block N's newly
+   * created/updated accounts visible to block N+1's {@code rollForward} within the same batch,
+   * without requiring an intermediate commit.
+   */
+  private static final class FlatCapturingTx implements SegmentedKeyValueStorageTransaction {
+    private final SegmentedKeyValueStorageTransaction delegate;
+    private final MigrationTrieStorage trieStorage;
+
+    FlatCapturingTx(
+        final SegmentedKeyValueStorageTransaction delegate,
+        final MigrationTrieStorage trieStorage) {
+      this.delegate = delegate;
+      this.trieStorage = trieStorage;
+    }
+
+    @Override
+    public void put(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
+      delegate.put(segmentId, key, value);
+      trieStorage.recordFlatWrite(segmentId, key, value);
+    }
+
+    @Override
+    public void remove(final SegmentIdentifier segmentId, final byte[] key) {
+      delegate.remove(segmentId, key);
+      trieStorage.recordFlatRemove(segmentId, key);
+    }
+
+    @Override
+    public void commit() {
+      delegate.commit();
+    }
+
+    @Override
+    public void rollback() {
+      delegate.rollback();
+    }
+
+    @Override
+    public void close() {
+      delegate.close();
     }
   }
 
