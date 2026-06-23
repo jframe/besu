@@ -27,6 +27,7 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBa
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.clearInvocations;
@@ -1076,6 +1077,40 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     verify(trieLogManager, times(1)).getTrieLogLayer(hashAt(1L));
 
     secondMigrator.close();
+  }
+
+  @Test
+  public void byteSizeGuardFlushesMidRange() throws Exception {
+    // Use one block with a matching state root (same setup as migratesTrieLogsWithRealWorldState).
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    // Spy on storage for transaction counting; reassign so getArchivedAccountKey reads from it.
+    storage = spy(new SegmentedInMemoryKeyValueStorage());
+    when(worldStateStorage.getComposedWorldStateStorage()).thenReturn(storage);
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    final TrieNodeChangeIndex changeIndex =
+        new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
+    // 1-byte limit: even WORLD_BLOCK_NUMBER_KEY (8 bytes) exceeds the limit. Block 0 (genesis)
+    // and block 1 each commit in their own batch.
+    migrator.setMaxBatchBytesForTesting(1L);
+    clearInvocations(storage);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    // Block 0 and block 1 each in their own batch → at least 2 low-priority transactions.
+    verify(storage, atLeast(2)).startLowPriorityTransaction();
+    assertThat(getArchivedAccountKey(1L)).isPresent();
   }
 
   @Test

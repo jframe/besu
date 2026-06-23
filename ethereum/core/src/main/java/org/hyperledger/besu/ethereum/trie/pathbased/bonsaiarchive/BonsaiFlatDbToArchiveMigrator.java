@@ -111,6 +111,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   @VisibleForTesting static final long MAX_BATCH_BYTES = 256L * 1024 * 1024;
 
   private int maxBlocksPerBatch = MAX_BLOCKS_PER_BATCH;
+  private long maxBatchBytes = MAX_BATCH_BYTES;
 
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final TrieLogManager trieLogManager;
@@ -236,6 +237,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     maxBlocksPerBatch = n;
   }
 
+  @VisibleForTesting
+  void setMaxBatchBytesForTesting(final long n) {
+    maxBatchBytes = n;
+  }
+
   /**
    * Migrates Bonsai flat DB to Bonsai archive format.
    *
@@ -332,7 +338,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           lastInBatch = blockNumber;
           blocksInBatch++;
           if (migrationTrieStorage != null
-              && migrationTrieStorage.batchByteSize() >= MAX_BATCH_BYTES) {
+              && migrationTrieStorage.batchByteSize() >= maxBatchBytes) {
             blockNumber++;
             break;
           }
@@ -341,10 +347,18 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           if (migrationChangeIndex != null) {
             migrationChangeIndex.flushBuffer(tx);
           }
+          final long overlayBytes =
+              migrationTrieStorage != null ? migrationTrieStorage.batchByteSize() : 0L;
           saveProgress(lastInBatch, tx);
           tx.commit();
           committed = true;
           migratedBlockNumber.set(lastInBatch);
+          LOG.atDebug()
+              .setMessage("Migration batch committed: {} blocks, last={}, overlayBytes={}")
+              .addArgument(blocksInBatch)
+              .addArgument(lastInBatch)
+              .addArgument(overlayBytes)
+              .log();
           if (shouldLog) {
             logProgress(lastInBatch, target.get());
           }
