@@ -67,6 +67,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -681,15 +682,30 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     private final SegmentedKeyValueStorage real;
 
     /**
-     * Per-batch cache of resolved TRIE_BRANCH_STORAGE reads, keyed by node location. The migration
-     * runs single-threaded on archive-migrator-0 with parallel state-root computation disabled, so
-     * a plain {@link HashMap} is safe. Cleared at each batch boundary via {@link #beginBatch}.
-     *
-     * <p>Within a batch, committed storage is stable (no per-block commits). Writes within the
-     * batch go to {@link #batchOverlay}, so cached reads always reflect pre-batch committed state —
-     * safe to cache for the entire batch duration.
+     * Maximum entries in {@link #blockReadCache}. At ~200–500 bytes per trie node plus key
+     * overhead, 500 K entries ≈ 150–250 MB heap — acceptable for a long-running archive migration.
      */
-    private final Map<Bytes, Optional<byte[]>> blockReadCache = new HashMap<>();
+    private static final int MAX_TRIE_NODE_CACHE_ENTRIES = 500_000;
+
+    /**
+     * Cross-batch LRU read cache for TRIE_BRANCH_STORAGE lookups. During migration, committed
+     * TRIE_BRANCH_STORAGE is stable — all writes redirect to TRIE_BRANCH_FRONTIER — so reads
+     * cached in one batch remain valid in later batches. Nodes written in the current batch are
+     * refreshed into this cache by {@link #endBatch} (from {@link #batchOverlay}) so the next
+     * batch's {@code captureTrieNodeDiff} prior-node reads hit the cache instead of disk.
+     *
+     * <p>Single-threaded migration ({@code archive-migrator-0}, parallel state-root disabled),
+     * so {@link LinkedHashMap} (access-order) is safe without synchronisation.
+     */
+    @SuppressWarnings("serial")
+    private final Map<Bytes, Optional<byte[]>> blockReadCache =
+        new LinkedHashMap<>(16, 0.75f, true) {
+          @Override
+          protected boolean removeEldestEntry(
+              final Map.Entry<Bytes, Optional<byte[]>> eldest) {
+            return size() > MAX_TRIE_NODE_CACHE_ENTRIES;
+          }
+        };
 
     /**
      * Write-back overlay for reads within a batch. Populated by {@link MigrationTransaction}
@@ -737,24 +753,33 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
 
     /**
-     * Starts a new batch: sets the shared transaction, clears the write-back overlay, and clears
-     * the read cache so the batch starts from a clean committed-storage baseline.
+     * Starts a new batch: sets the shared transaction and clears the write-back overlays.
+     *
+     * <p>{@link #blockReadCache} is intentionally NOT cleared here. Committed
+     * TRIE_BRANCH_STORAGE is stable throughout migration (all writes redirect to
+     * TRIE_BRANCH_FRONTIER), so cache entries from prior batches remain correct. Nodes written
+     * in the previous batch were refreshed into the cache by {@link #endBatch}.
      */
     void beginBatch(final SegmentedKeyValueStorageTransaction tx) {
       this.activeSharedTransaction = tx;
       batchOverlay.clear();
       batchOverlayBytes = 0L;
-      blockReadCache.clear();
       flatAccountOverlay.clear();
       flatStorageOverlay.clear();
     }
 
-    /** Ends the current batch: clears the overlay, read cache, and shared transaction reference. */
+    /**
+     * Ends the current batch: refreshes the read cache with all nodes written in this batch
+     * (so the next batch's prior-node reads hit the cache), then clears overlays.
+     */
     void endBatch() {
       this.activeSharedTransaction = null;
+      // Push final batchOverlay values into blockReadCache so that the next batch's
+      // captureTrieNodeDiff prior-node reads find the correct post-commit values in cache
+      // instead of falling through to disk.
+      blockReadCache.putAll(batchOverlay);
       batchOverlay.clear();
       batchOverlayBytes = 0L;
-      blockReadCache.clear();
       flatAccountOverlay.clear();
       flatStorageOverlay.clear();
     }
