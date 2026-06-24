@@ -122,6 +122,21 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Begins a transaction backed by a plain {@code WriteBatch} rather than an {@code
+   * OptimisticTransaction}. A {@code WriteBatch} accumulates writes in memory and applies them
+   * atomically at commit time with no read-set conflict detection, making it safe and efficient
+   * when the caller is the sole writer to the relevant column families.
+   *
+   * <p>Non-RocksDB implementations fall back to {@link #startLowPriorityTransaction()}.
+   *
+   * @return An object representing the transaction.
+   * @throws StorageException the storage exception
+   */
+  default SegmentedKeyValueStorageTransaction startWriteBatchTransaction() throws StorageException {
+    return startLowPriorityTransaction();
+  }
+
+  /**
    * Returns a stream of all keys for the segment.
    *
    * @param segmentIdentifier The segment identifier whose keys we want to stream.

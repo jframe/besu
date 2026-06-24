@@ -334,7 +334,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     while (blockNumber <= target.get()) {
       final long batchStartBlock = blockNumber;
       final SegmentedKeyValueStorageTransaction tx =
-          worldStateStorage.getComposedWorldStateStorage().startLowPriorityTransaction();
+          worldStateStorage.getComposedWorldStateStorage().startWriteBatchTransaction();
       long lastInBatch = -1;
       boolean committed = false;
       boolean retry = false;
@@ -690,8 +690,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   /**
    * Creates a fresh {@link BonsaiWorldState} backed by the existing {@link #migrationKvStorage} and
    * {@link #migrationTrieStorage}. Call this after a failed batch commit to discard the in-memory
-   * trie state that was rolled back with the transaction, while preserving the cross-batch
-   * {@link MigrationTrieStorage#blockReadCache} which still holds valid committed entries.
+   * trie state that was rolled back with the transaction, while preserving the cross-batch {@link
+   * MigrationTrieStorage#blockReadCache} which still holds valid committed entries.
    */
   private void resetMigrationWorldState() {
     final CodeCache codeCache = new CodeCache();
@@ -756,20 +756,19 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
     /**
      * Cross-batch LRU read cache for TRIE_BRANCH_STORAGE lookups. During migration, committed
-     * TRIE_BRANCH_STORAGE is stable — all writes redirect to TRIE_BRANCH_FRONTIER — so reads
-     * cached in one batch remain valid in later batches. Nodes written in the current batch are
-     * refreshed into this cache by {@link #endBatch} (from {@link #batchOverlay}) so the next
-     * batch's {@code captureTrieNodeDiff} prior-node reads hit the cache instead of disk.
+     * TRIE_BRANCH_STORAGE is stable — all writes redirect to TRIE_BRANCH_FRONTIER — so reads cached
+     * in one batch remain valid in later batches. Nodes written in the current batch are refreshed
+     * into this cache by {@link #endBatch} (from {@link #batchOverlay}) so the next batch's {@code
+     * captureTrieNodeDiff} prior-node reads hit the cache instead of disk.
      *
-     * <p>Single-threaded migration ({@code archive-migrator-0}, parallel state-root disabled),
-     * so {@link LinkedHashMap} (access-order) is safe without synchronisation.
+     * <p>Single-threaded migration ({@code archive-migrator-0}, parallel state-root disabled), so
+     * {@link LinkedHashMap} (access-order) is safe without synchronisation.
      */
     @SuppressWarnings("serial")
     private final Map<Bytes, Optional<byte[]>> blockReadCache =
         new LinkedHashMap<>(16, 0.75f, true) {
           @Override
-          protected boolean removeEldestEntry(
-              final Map.Entry<Bytes, Optional<byte[]>> eldest) {
+          protected boolean removeEldestEntry(final Map.Entry<Bytes, Optional<byte[]>> eldest) {
             return size() > MAX_TRIE_NODE_CACHE_ENTRIES;
           }
         };
@@ -822,10 +821,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     /**
      * Starts a new batch: sets the shared transaction and clears the write-back overlays.
      *
-     * <p>{@link #blockReadCache} is intentionally NOT cleared here. Committed
-     * TRIE_BRANCH_STORAGE is stable throughout migration (all writes redirect to
-     * TRIE_BRANCH_FRONTIER), so cache entries from prior batches remain correct. Nodes written
-     * in the previous batch were refreshed into the cache by {@link #endBatch}.
+     * <p>{@link #blockReadCache} is intentionally NOT cleared here. Committed TRIE_BRANCH_STORAGE
+     * is stable throughout migration (all writes redirect to TRIE_BRANCH_FRONTIER), so cache
+     * entries from prior batches remain correct. Nodes written in the previous batch were refreshed
+     * into the cache by {@link #endBatch}.
      */
     void beginBatch(final SegmentedKeyValueStorageTransaction tx) {
       this.activeSharedTransaction = tx;
@@ -836,8 +835,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
 
     /**
-     * Ends the current batch: refreshes the read cache with all nodes written in this batch
-     * (so the next batch's prior-node reads hit the cache), then clears overlays.
+     * Ends the current batch: refreshes the read cache with all nodes written in this batch (so the
+     * next batch's prior-node reads hit the cache), then clears overlays.
      */
     void endBatch() {
       this.activeSharedTransaction = null;
