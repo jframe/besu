@@ -149,6 +149,15 @@ public final class TrieNodeChangeIndex {
     final long rangeId;
     int baseSubCount;
     RangeRelativeOffsetList baseTail;
+
+    /**
+     * {@code true} once {@link #baseSubCount} and {@link #baseTail} have been populated (either
+     * from {@link #indexCache} on first touch or via the bulk {@link #flushBuffer} multiGet). When
+     * {@code false} the fields hold empty/zero defaults and must be loaded before the merge is
+     * written.
+     */
+    boolean baseLoaded;
+
     final List<Integer> pending = new ArrayList<>();
 
     BufferedEntry(final Bytes naturalKey, final long rangeId) {
@@ -177,8 +186,8 @@ public final class TrieNodeChangeIndex {
   }
 
   /**
-   * Clears the write-through LRU index cache. Call this when a batch transaction commit fails
-   * after {@link #flushBuffer} has already updated the cache with values that were never actually
+   * Clears the write-through LRU index cache. Call this when a batch transaction commit fails after
+   * {@link #flushBuffer} has already updated the cache with values that were never actually
    * persisted to storage. A subsequent batch will repopulate the cache from committed storage.
    */
   public void clearIndexCache() {
@@ -190,12 +199,54 @@ public final class TrieNodeChangeIndex {
    * applying the sub-block split logic incrementally as pending offsets are folded in. Updates the
    * LRU index cache with the final committed values. Safe to call when not buffering (no-op).
    *
+   * <p>Before merging, issues a single {@code multiGet} for all buffered entries whose base values
+   * were not available in {@link #indexCache} at first-touch time (i.e. entries with {@link
+   * BufferedEntry#baseLoaded} {@code = false}). This consolidates what would otherwise be N
+   * sequential per-key storage reads during the trie walk into one parallel batch read at flush
+   * time, eliminating the dominant I/O cost on resumed migrations.
+   *
    * @param tx the transaction into which all buffered index values are written
    */
   public void flushBuffer(final SegmentedKeyValueStorageTransaction tx) {
     if (buffer == null) {
       return;
     }
+
+    // ── Phase 1: bulk-load base values for entries not found in indexCache at first touch ──────
+    final List<Bytes> missKeys = new ArrayList<>();
+    final List<byte[]> missKeyBytes = new ArrayList<>();
+    for (final Map.Entry<Bytes, BufferedEntry> entry : buffer.entrySet()) {
+      final BufferedEntry be = entry.getValue();
+      if (!be.baseLoaded) {
+        final byte[] indexKeyBytes = entry.getKey().toArrayUnsafe();
+        // Fresh-migration mode: key definitely absent from DB → skip multiGet for this key.
+        if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
+          be.baseLoaded = true; // treat as empty (new key); nothing to load
+        } else {
+          missKeys.add(entry.getKey());
+          missKeyBytes.add(indexKeyBytes);
+        }
+      }
+    }
+    if (!missKeys.isEmpty()) {
+      final List<Optional<byte[]>> results =
+          storage.multiGet(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, missKeyBytes);
+      for (int i = 0; i < missKeys.size(); i++) {
+        final Bytes indexKey = missKeys.get(i);
+        final Optional<byte[]> raw = results.get(i);
+        final BufferedEntry be = buffer.get(indexKey);
+        be.baseLoaded = true;
+        raw.ifPresent(
+            bytes -> {
+              final IndexValue iv = readIndexValue(bytes);
+              be.baseSubCount = iv.subCount;
+              be.baseTail = iv.list;
+              indexCache.put(indexKey, bytes);
+            });
+      }
+    }
+
+    // ── Phase 2: merge pending offsets and write ──────────────────────────────────────────────
     for (final Map.Entry<Bytes, BufferedEntry> entry : buffer.entrySet()) {
       final Bytes indexKey = entry.getKey();
       final BufferedEntry be = entry.getValue();
@@ -225,28 +276,30 @@ public final class TrieNodeChangeIndex {
     buffer = null;
   }
 
+  /**
+   * Initialises a new {@link BufferedEntry} for {@code (naturalKey, rangeId)}. If the index key is
+   * already in {@link #indexCache} the base values are loaded immediately and {@link
+   * BufferedEntry#baseLoaded} is set to {@code true}. Otherwise the entry is returned with empty
+   * defaults and {@code baseLoaded = false}; {@link #flushBuffer} will bulk-load all such entries
+   * via a single {@code multiGet} before writing.
+   *
+   * <p>This method intentionally performs <em>no</em> storage read. Moving storage reads out of the
+   * per-node hot path (where they occur once per unique key per trie-walk) and into the single
+   * {@code flushBuffer} multiGet call is the key I/O optimisation for resumed migrations: instead
+   * of N sequential preads interspersed with CPU work, all index reads happen together as one
+   * parallel batch.
+   */
   private BufferedEntry initBufferedEntry(
-      final Bytes indexKey,
-      final byte[] indexKeyBytes,
-      final Bytes naturalKey,
-      final long rangeId) {
+      final Bytes indexKey, final Bytes naturalKey, final long rangeId) {
     final BufferedEntry e = new BufferedEntry(naturalKey, rangeId);
     final byte[] cached = indexCache.get(indexKey);
     if (cached != null) {
       final IndexValue iv = readIndexValue(cached);
       e.baseSubCount = iv.subCount;
       e.baseTail = iv.list;
-    } else if (sessionWrittenKeys == null || sessionWrittenKeys.mightContain(indexKeyBytes)) {
-      storage
-          .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
-          .ifPresent(
-              raw -> {
-                final IndexValue iv = readIndexValue(raw);
-                e.baseSubCount = iv.subCount;
-                e.baseTail = iv.list;
-              });
+      e.baseLoaded = true;
     }
-    // If neither cache nor storage has it, baseTail stays as RangeRelativeOffsetList.empty().
+    // baseLoaded stays false → flushBuffer will issue a multiGet for this key.
     return e;
   }
 
@@ -369,7 +422,7 @@ public final class TrieNodeChangeIndex {
       // Buffered path: accumulate offset in memory; no storage read or write.
       BufferedEntry e = buffer.get(indexKey);
       if (e == null) {
-        e = initBufferedEntry(indexKey, indexKeyBytes, naturalKey, rangeId);
+        e = initBufferedEntry(indexKey, naturalKey, rangeId);
         buffer.put(indexKey, e);
       }
       if (sessionWrittenKeys != null) {
@@ -465,7 +518,7 @@ public final class TrieNodeChangeIndex {
       // Buffered path: serve the count from in-memory state; no storage read or write.
       BufferedEntry e = buffer.get(indexKey);
       if (e == null) {
-        e = initBufferedEntry(indexKey, indexKeyBytes, naturalKey, rangeId);
+        e = initBufferedEntry(indexKey, naturalKey, rangeId);
         buffer.put(indexKey, e);
       }
       if (sessionWrittenKeys != null) {

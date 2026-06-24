@@ -17,6 +17,8 @@ package org.hyperledger.besu.plugin.services.storage;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 
 import java.io.Closeable;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -134,6 +136,29 @@ public interface SegmentedKeyValueStorage extends Closeable {
    */
   default SegmentedKeyValueStorageTransaction startWriteBatchTransaction() throws StorageException {
     return startLowPriorityTransaction();
+  }
+
+  /**
+   * Retrieves the values for multiple keys from the given segment in a single call. The returned
+   * list has the same size and ordering as {@code keys}; a missing key maps to {@link
+   * Optional#empty()}.
+   *
+   * <p>Implementations backed by RocksDB issue a single {@code multiGetAsList} call so the storage
+   * layer can parallelise block-cache lookups and SST-file reads. The default implementation falls
+   * back to sequential {@link #get} calls and is provided for non-RocksDB storage backends.
+   *
+   * @param segment the segment to query
+   * @param keys the keys to retrieve; must not contain {@code null} elements
+   * @return a list of {@code Optional<byte[]>} values, one per key in the same order
+   * @throws StorageException the storage exception
+   */
+  default List<Optional<byte[]>> multiGet(final SegmentIdentifier segment, final List<byte[]> keys)
+      throws StorageException {
+    final List<Optional<byte[]>> results = new ArrayList<>(keys.size());
+    for (final byte[] key : keys) {
+      results.add(get(segment, key));
+    }
+    return results;
   }
 
   /**

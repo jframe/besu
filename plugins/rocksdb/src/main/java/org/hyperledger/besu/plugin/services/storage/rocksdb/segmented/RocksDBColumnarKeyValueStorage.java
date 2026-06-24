@@ -433,6 +433,30 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   }
 
   @Override
+  public List<Optional<byte[]>> multiGet(final SegmentIdentifier segment, final List<byte[]> keys)
+      throws StorageException {
+    throwIfClosed();
+    if (keys.isEmpty()) {
+      return List.of();
+    }
+    try {
+      final ColumnFamilyHandle cf = safeColumnHandle(segment);
+      final List<ColumnFamilyHandle> cfList = new ArrayList<>(keys.size());
+      for (int i = 0; i < keys.size(); i++) {
+        cfList.add(cf);
+      }
+      final List<byte[]> raw = getDB().multiGetAsList(cfList, keys);
+      final List<Optional<byte[]>> result = new ArrayList<>(raw.size());
+      for (final byte[] v : raw) {
+        result.add(Optional.ofNullable(v));
+      }
+      return result;
+    } catch (final RocksDBException e) {
+      throw new StorageException(e);
+    }
+  }
+
+  @Override
   public Optional<NearestKeyValue> getNearestBefore(
       final SegmentIdentifier segmentIdentifier, final Bytes key) throws StorageException {
 
