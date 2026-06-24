@@ -61,6 +61,11 @@ import org.apache.tuweni.units.bigints.UInt256;
  */
 public class BonsaiTrieLogToForestConverter {
   private static final Bytes32 EMPTY_TRIE_ROOT = Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes());
+  // Per-entry JVM overhead beyond raw content bytes: Caffeine PSMS node (~120B) + Bytes32 object
+  // overhead (~56B vs 32B counted) + Bytes value object header + backing array header (~52B).
+  // Without this, the weigher underestimates by ~2.5x and the cache exhaust heap before hitting
+  // its weight limit (43.9M entries × 182 counted ≈ 8GB, but actual JVM cost was ~18-20GB).
+  private static final int CACHE_ENTRY_JVM_OVERHEAD = 300;
 
   private final ForestWorldStateKeyValueStorage forestStorage;
   // Cross-block node cache (hash -> encoded node). Null when disabled (cacheMaxBytes <= 0).
@@ -120,7 +125,9 @@ public class BonsaiTrieLogToForestConverter {
     this.currentRootHash = EMPTY_TRIE_ROOT;
     this.nodeCache =
         cacheMaxBytes > 0
-            ? new MemoryBoundCache<>(cacheMaxBytes, (hash, node) -> node.size() + Bytes32.SIZE)
+            ? new MemoryBoundCache<>(
+                cacheMaxBytes,
+                (hash, node) -> node.size() + Bytes32.SIZE + CACHE_ENTRY_JVM_OVERHEAD)
             : null;
     final boolean prefetchEnabled = this.nodeCache != null && prefetchThreads > 0;
     this.prefetchExecutor =
