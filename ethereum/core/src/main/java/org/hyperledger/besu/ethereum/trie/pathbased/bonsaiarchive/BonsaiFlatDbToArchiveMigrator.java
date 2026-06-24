@@ -38,6 +38,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.CacheManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveKeyUtil;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveMigrationTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
@@ -875,6 +876,19 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         final Optional<NearestKeyValue> overlayNearest =
             Optional.ofNullable(overlay.floorEntry(queryKey))
                 .map(e -> new NearestKeyValue(e.getKey(), e.getValue()));
+
+        // Archive keys are naturalKey (32 or 64 bytes) + blockSuffix (8 bytes). If the overlay's
+        // floor entry covers the same natural key as queryKey, it is the definitive answer:
+        // migration always writes blocks in chronological order, so an overlay entry for the same
+        // slot has a block number >= any committed-storage entry for that slot. Skip the RocksDB
+        // iterator seek entirely in this case.
+        if (overlayNearest.isPresent()) {
+          final int naturalKeyLen = queryKey.size() - BonsaiArchiveKeyUtil.KEY_SUFFIX_LENGTH;
+          if (overlayNearest.get().key().commonPrefixLength(queryKey) >= naturalKeyLen) {
+            return overlayNearest;
+          }
+        }
+
         final Optional<NearestKeyValue> realNearest = real.getNearestBefore(segmentId, queryKey);
         if (overlayNearest.isPresent() && realNearest.isPresent()) {
           // Pick the key with the longer common prefix (= more specific match).
