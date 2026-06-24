@@ -375,7 +375,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           migrationTrieStorage.endBatch();
         }
         if (!committed) {
-          tx.rollback();
+          try {
+            tx.rollback();
+          } catch (final IllegalStateException rollbackEx) {
+            // SegmentedKeyValueStorageTransactionValidatorDecorator sets active=false before
+            // calling the underlying RocksDB commit; if that commit threw, active is already
+            // false and rollback is impossible. The original exception propagates cleanly.
+            LOG.debug(
+                "Batch tx already inactive during rollback (commit may have failed)", rollbackEx);
+          }
         }
       }
     }
@@ -1006,17 +1014,17 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
     @Override
     public void commit() {
-      delegate.commit();
+      // migrateBlocks owns the lifecycle of the underlying batch tx; no-op here.
     }
 
     @Override
     public void rollback() {
-      delegate.rollback();
+      // migrateBlocks owns the lifecycle of the underlying batch tx; no-op here.
     }
 
     @Override
     public void close() {
-      delegate.close();
+      // migrateBlocks owns the lifecycle of the underlying batch tx; no-op here.
     }
   }
 
