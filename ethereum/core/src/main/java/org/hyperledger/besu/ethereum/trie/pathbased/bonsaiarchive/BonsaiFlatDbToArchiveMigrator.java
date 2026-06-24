@@ -55,6 +55,7 @@ import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -311,15 +312,32 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
   }
 
+  private static final int MAX_BATCH_RETRIES = 5;
+
+  private static boolean isOptimisticConflictError(final StorageException e) {
+    Throwable t = e;
+    while (t != null) {
+      if (t.getMessage() != null
+          && t.getMessage().contains("MemTable only contains changes newer")) {
+        return true;
+      }
+      t = t.getCause();
+    }
+    return false;
+  }
+
   private void migrateBlocks(
       final long startBlock, final AtomicLong target, final boolean shouldLog) {
     CompletableFuture<Optional<TrieLog>> prefetched = prefetchTrieLog(startBlock);
     long blockNumber = startBlock;
+    int consecutiveRetries = 0;
     while (blockNumber <= target.get()) {
+      final long batchStartBlock = blockNumber;
       final SegmentedKeyValueStorageTransaction tx =
           worldStateStorage.getComposedWorldStateStorage().startLowPriorityTransaction();
       long lastInBatch = -1;
       boolean committed = false;
+      boolean retry = false;
       try {
         if (migrationWorldState != null) {
           migrationTrieStorage.beginBatch(tx);
@@ -356,25 +374,54 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           final long overlayBytes =
               migrationTrieStorage != null ? migrationTrieStorage.batchByteSize() : 0L;
           saveProgress(lastInBatch, tx);
-          tx.commit();
-          committed = true;
-          migratedBlockNumber.set(lastInBatch);
-          LOG.atDebug()
-              .setMessage("Migration batch committed: {} blocks, last={}, overlayBytes={}")
-              .addArgument(blocksInBatch)
-              .addArgument(lastInBatch)
-              .addArgument(overlayBytes)
-              .log();
-          if (shouldLog) {
-            logProgress(lastInBatch, target.get());
+          try {
+            tx.commit();
+            committed = true;
+            consecutiveRetries = 0;
+          } catch (final StorageException e) {
+            if (isOptimisticConflictError(e) && consecutiveRetries < MAX_BATCH_RETRIES) {
+              consecutiveRetries++;
+              retry = true;
+              LOG.warn(
+                  "Migration batch commit failed due to OptimisticTransaction conflict "
+                      + "(attempt {}/{}), retrying from block {}",
+                  consecutiveRetries,
+                  MAX_BATCH_RETRIES,
+                  batchStartBlock);
+            } else {
+              throw e;
+            }
+          }
+          if (committed) {
+            migratedBlockNumber.set(lastInBatch);
+            LOG.atDebug()
+                .setMessage("Migration batch committed: {} blocks, last={}, overlayBytes={}")
+                .addArgument(blocksInBatch)
+                .addArgument(lastInBatch)
+                .addArgument(overlayBytes)
+                .log();
+            if (shouldLog) {
+              logProgress(lastInBatch, target.get());
+            }
           }
         }
       } finally {
         if (migrationWorldState != null) {
-          if (!committed && migrationChangeIndex != null) {
-            migrationChangeIndex.discardBuffer();
+          if (committed) {
+            migrationTrieStorage.endBatch();
+          } else {
+            // Batch failed or is being retried. Cancel without promoting uncommitted trie-node
+            // values into the read cache. If flushBuffer was called (lastInBatch >= 0) it may
+            // have updated indexCache with values that were never persisted — clear it so the
+            // retry reads the correct base state from committed storage.
+            if (migrationChangeIndex != null) {
+              migrationChangeIndex.discardBuffer();
+              if (lastInBatch >= 0) {
+                migrationChangeIndex.clearIndexCache();
+              }
+            }
+            migrationTrieStorage.cancelBatch();
           }
-          migrationTrieStorage.endBatch();
         }
         if (!committed) {
           try {
@@ -387,6 +434,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 "Batch tx already inactive during rollback (commit may have failed)", rollbackEx);
           }
         }
+      }
+      if (retry) {
+        blockNumber = batchStartBlock;
+        prefetched = prefetchTrieLog(batchStartBlock);
       }
     }
   }
@@ -779,6 +830,20 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       // captureTrieNodeDiff prior-node reads find the correct post-commit values in cache
       // instead of falling through to disk.
       blockReadCache.putAll(batchOverlay);
+      batchOverlay.clear();
+      batchOverlayBytes = 0L;
+      flatAccountOverlay.clear();
+      flatStorageOverlay.clear();
+    }
+
+    /**
+     * Cancels the current batch without promoting {@link #batchOverlay} into {@link
+     * #blockReadCache}. Call this instead of {@link #endBatch} when the batch's transaction commit
+     * failed so that uncommitted trie-node values are not visible to the next batch's prior-node
+     * reads.
+     */
+    void cancelBatch() {
+      this.activeSharedTransaction = null;
       batchOverlay.clear();
       batchOverlayBytes = 0L;
       flatAccountOverlay.clear();

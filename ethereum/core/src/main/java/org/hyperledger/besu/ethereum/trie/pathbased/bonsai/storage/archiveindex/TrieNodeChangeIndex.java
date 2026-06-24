@@ -177,6 +177,15 @@ public final class TrieNodeChangeIndex {
   }
 
   /**
+   * Clears the write-through LRU index cache. Call this when a batch transaction commit fails
+   * after {@link #flushBuffer} has already updated the cache with values that were never actually
+   * persisted to storage. A subsequent batch will repopulate the cache from committed storage.
+   */
+  public void clearIndexCache() {
+    indexCache.clear();
+  }
+
+  /**
    * Writes all buffered per-node offset lists into {@code tx} using the existing packed format,
    * applying the sub-block split logic incrementally as pending offsets are folded in. Updates the
    * LRU index cache with the final committed values. Safe to call when not buffering (no-op).
