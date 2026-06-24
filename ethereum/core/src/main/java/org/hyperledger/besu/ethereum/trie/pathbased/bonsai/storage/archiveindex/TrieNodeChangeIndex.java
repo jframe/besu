@@ -83,9 +83,9 @@ public final class TrieNodeChangeIndex {
   /**
    * Maximum number of entries in the write-through LRU index cache. Each entry is an indexKey →
    * serialised index value mapping that avoids re-reading committed storage on the next append for
-   * the same key. At ~350 bytes/entry this is roughly 35 MB for a 100 K-entry active trie.
+   * the same key. At ~350 bytes/entry this is roughly 350 MB for a 1 M-entry active trie.
    */
-  static final int CACHE_MAX_SIZE = 100_000;
+  static final int CACHE_MAX_SIZE = 1_000_000;
 
   /**
    * Write-through LRU cache for {@code TRIE_NODE_INDEX_ARCHIVE} entries written during migration.
