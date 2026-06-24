@@ -438,6 +438,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       if (retry) {
         blockNumber = batchStartBlock;
         prefetched = prefetchTrieLog(batchStartBlock);
+        if (migrationWorldState != null) {
+          // The failed persist() advanced migrationWorldState's internal root past the rolled-back
+          // batch. Reset to a fresh world state that reads the correct frontier from storage.
+          resetMigrationWorldState();
+        }
       }
     }
   }
@@ -679,6 +684,16 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             CacheManager.NO_OP_CACHE,
             0L,
             migrationTrieNodeStrategy);
+    resetMigrationWorldState();
+  }
+
+  /**
+   * Creates a fresh {@link BonsaiWorldState} backed by the existing {@link #migrationKvStorage} and
+   * {@link #migrationTrieStorage}. Call this after a failed batch commit to discard the in-memory
+   * trie state that was rolled back with the transaction, while preserving the cross-batch
+   * {@link MigrationTrieStorage#blockReadCache} which still holds valid committed entries.
+   */
+  private void resetMigrationWorldState() {
     final CodeCache codeCache = new CodeCache();
     migrationWorldState =
         new BonsaiWorldState(
