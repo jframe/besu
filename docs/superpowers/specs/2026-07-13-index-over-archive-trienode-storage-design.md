@@ -200,16 +200,22 @@ Bonsai nodes, and reduces both migration read classes. Approach B is documented
 as the low-risk fallback should the +24% storage or the re-migration ever be
 unacceptable.
 
+## Resolved decisions
+
+1. **Deletion encoding (A): empty value at `naturalKey ‖ block`.** At the block
+   a node is deleted, write a zero-length value. Read resolves
+   `index.latestLeq(naturalKey, X) → b*`, `get(... naturalKey ‖ b*)`; an empty
+   result means the node was deleted at `b*` → return absent. Live values remain
+   raw node RLP (no codec); the index stays authoritative.
+2. **No `seekForPrev` fallback (A): the index is authoritative.** Reads trust the
+   index exclusively. If `index.latestLeq` returns a block but the value CF has no
+   entry at `naturalKey ‖ b*` (other than the empty deletion sentinel), that is a
+   hard error, not a silent seek fallback. Keeps the read path simple; migration
+   correctness (index and value written in the same batch tx) is the guarantee.
+
 ## Open questions
 
-1. **Optional `seekForPrev` fallback in A.** Keep the archive CF suffix-ordered
-   (it already is) so that, if the index is missing/corrupt for a key, a read can
-   fall back to `getNearestBeforeMatchLength` on `naturalKey ‖ block`. This buys
-   robustness for ~0 cost (the key layout already supports it). Recommend: yes.
-2. **Deletion encoding in A.** How is "node absent at block X" stored — an empty
-   value at `naturalKey ‖ block`, or an absence the index records but the value
-   CF omits? Needs to distinguish "unchanged since earlier" from "deleted here."
-3. **Hash-first fast path scope.** Applies cleanly to account/branch nodes;
+1. **Hash-first fast path scope.** Applies cleanly to account/branch nodes;
    confirm it holds for storage-trie nodes under account deletion/recreation.
-4. **Index granularity for A** — confirm `rangeId = block / 1_000_000` is right
+2. **Index granularity for A** — confirm `rangeId = block / 1_000_000` is right
    for the target chain length, or whether a different range size packs better.
