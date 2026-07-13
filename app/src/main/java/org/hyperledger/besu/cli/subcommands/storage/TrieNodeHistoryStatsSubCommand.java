@@ -81,9 +81,11 @@ public class TrieNodeHistoryStatsSubCommand implements Runnable {
   private long maxEntries = 0;
 
   @Option(
-      names = {"--log-interval"},
-      description = "Print a progress line every N entries (default: ${DEFAULT-VALUE})")
-  private long logInterval = 50_000_000L;
+      names = {"--log-interval-seconds"},
+      description =
+          "Print a progress line (with percentage complete against the CF's estimated key count)"
+              + " roughly every N seconds; 0 disables progress (default: ${DEFAULT-VALUE})")
+  private long logIntervalSeconds = 60;
 
   /** Default constructor. */
   public TrieNodeHistoryStatsSubCommand() {}
@@ -116,7 +118,8 @@ public class TrieNodeHistoryStatsSubCommand implements Runnable {
             }
             onDisk[0] = readSizeProperty(rocksdb, cfHandle, "rocksdb.total-sst-files-size");
             onDisk[1] = readSizeProperty(rocksdb, cfHandle, "rocksdb.total-blob-file-size");
-            truncated[0] = scan(rocksdb, cfHandle, comp, out);
+            final long estTotal = readSizeProperty(rocksdb, cfHandle, "rocksdb.estimate-num-keys");
+            truncated[0] = scan(rocksdb, cfHandle, comp, estTotal, out);
           } catch (final RocksDBException e) {
             throw new RuntimeException(e);
           }
@@ -129,24 +132,34 @@ public class TrieNodeHistoryStatsSubCommand implements Runnable {
   /**
    * Iterates the column family, feeding every entry to the accumulator.
    *
+   * @param estTotal RocksDB's estimated key count for the CF, used for the progress percentage (0
+   *     if unavailable)
    * @return {@code true} if the scan stopped early because of {@code --max-entries}
    */
   private boolean scan(
       final RocksDB rocksdb,
       final ColumnFamilyHandle cfHandle,
       final TrieNodeHistoryComposition comp,
+      final long estTotal,
       final PrintWriter out) {
+    final long intervalNanos = logIntervalSeconds * 1_000_000_000L;
     final ReadOptions readOptions = new ReadOptions();
     readOptions.setReadaheadSize(4L * 1024 * 1024).setVerifyChecksums(false).setFillCache(false);
     try (readOptions;
         final RocksIterator it = rocksdb.newIterator(cfHandle, readOptions)) {
+      final long startNanos = System.nanoTime();
+      long lastLogNanos = startNanos;
       long scanned = 0;
       for (it.seekToFirst(); it.isValid(); it.next()) {
         comp.record(it.key(), it.value());
         scanned++;
-        if (logInterval > 0 && scanned % logInterval == 0) {
-          out.println("  ...scanned " + scanned + " entries");
-          out.flush();
+        // Check the wall clock only every 65536 entries to keep the hot loop cheap.
+        if (intervalNanos > 0 && (scanned & 0xFFFF) == 0) {
+          final long now = System.nanoTime();
+          if (now - lastLogNanos >= intervalNanos) {
+            logProgress(out, scanned, estTotal, startNanos, now);
+            lastLogNanos = now;
+          }
         }
         if (maxEntries > 0 && scanned >= maxEntries) {
           out.println("  reached --max-entries=" + maxEntries + ", stopping scan early");
@@ -155,6 +168,43 @@ public class TrieNodeHistoryStatsSubCommand implements Runnable {
       }
     }
     return false;
+  }
+
+  private static void logProgress(
+      final PrintWriter out,
+      final long scanned,
+      final long estTotal,
+      final long startNanos,
+      final long nowNanos) {
+    final double elapsedSec = (nowNanos - startNanos) / 1e9;
+    final double rate = elapsedSec > 0 ? scanned / elapsedSec : 0;
+    final StringBuilder sb =
+        new StringBuilder("  progress: ").append(String.format("%,d", scanned));
+    if (estTotal > 0) {
+      sb.append(" / ~")
+          .append(String.format("%,d", estTotal))
+          .append(String.format(" (%.1f%%)", 100.0 * scanned / estTotal));
+      if (rate > 0 && estTotal > scanned) {
+        sb.append(", ETA ").append(formatDuration((long) ((estTotal - scanned) / rate)));
+      }
+    }
+    sb.append(String.format(", %,.0f entries/s", rate));
+    sb.append(", elapsed ").append(formatDuration((long) elapsedSec));
+    out.println(sb);
+    out.flush();
+  }
+
+  private static String formatDuration(final long totalSeconds) {
+    final long h = totalSeconds / 3600;
+    final long m = (totalSeconds % 3600) / 60;
+    final long s = totalSeconds % 60;
+    if (h > 0) {
+      return String.format("%dh%02dm%02ds", h, m, s);
+    }
+    if (m > 0) {
+      return String.format("%dm%02ds", m, s);
+    }
+    return s + "s";
   }
 
   private static long readSizeProperty(
