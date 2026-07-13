@@ -814,11 +814,19 @@ public final class TrieNodeChangeIndex {
     // each chunk in a single pass — O(total entries). The previous approach appended offsets one at
     // a time, which was O(n²): RangeRelativeOffsetList.append reallocates and copies the entire
     // growing backing array on every call, so hot nodes with many recorded offsets dominated CPU.
-    final List<Bytes> chunks = new ArrayList<>(subCount + 1);
+    // Batch-read every sub-block buffer in a single storage round-trip. The sub-block keys are all
+    // known (subId 0..subCount-1), so one multiGet replaces subCount sequential store.get calls
+    // that
+    // each blocked on disk before issuing the next.
+    final List<byte[]> subKeys = new ArrayList<>(subCount);
     for (int subId = 0; subId < subCount; subId++) {
-      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subId);
-      final Optional<byte[]> subRaw =
-          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE, subKey.toArrayUnsafe());
+      subKeys.add(ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subId).toArrayUnsafe());
+    }
+    final List<Optional<byte[]>> subRaws =
+        storage.multiGet(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE, subKeys);
+
+    final List<Bytes> chunks = new ArrayList<>(subCount + 1);
+    for (final Optional<byte[]> subRaw : subRaws) {
       if (subRaw.isEmpty()) {
         continue; // should not happen in well-formed data, but skip gracefully
       }

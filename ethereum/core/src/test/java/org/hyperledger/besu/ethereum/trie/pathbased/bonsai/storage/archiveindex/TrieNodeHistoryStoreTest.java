@@ -18,6 +18,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.util.List;
+import java.util.Optional;
+
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -175,6 +178,50 @@ class TrieNodeHistoryStoreTest {
 
     assertThat(store.get(ACCOUNT_KEY, 100L)).isEmpty();
     assertThat(store.get(ACCOUNT_KEY, 200L)).hasValue(entry200);
+  }
+
+  // -------------------------------------------------------------------------
+  // Verify tombstone (DELETION codec entry) round-trips correctly
+  // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // getAll — batched multi-block read, same order as requested, gaps -> empty
+  // -------------------------------------------------------------------------
+
+  @Test
+  void getAllReturnsEntriesInRequestedOrderWithGaps() {
+    Bytes entry100 = TrieNodeDiffCodec.encodeFull(NODE_RLP);
+    Bytes entry300 = TrieNodeDiffCodec.encodeFull(Bytes.fromHexString("0xc4"));
+
+    var tx = kv.startTransaction();
+    store.put(tx, ACCOUNT_KEY, 100L, entry100);
+    store.put(tx, ACCOUNT_KEY, 300L, entry300);
+    tx.commit();
+
+    // Request 100 (present), 200 (missing), 300 (present) — result must align by index.
+    List<Optional<Bytes>> results = store.getAll(ACCOUNT_KEY, new long[] {100L, 200L, 300L});
+
+    assertThat(results).hasSize(3);
+    assertThat(results.get(0)).hasValue(entry100);
+    assertThat(results.get(1)).isEmpty();
+    assertThat(results.get(2)).hasValue(entry300);
+  }
+
+  @Test
+  void getAllOnEmptyKeyListReturnsEmptyList() {
+    assertThat(store.getAll(ACCOUNT_KEY, new long[] {})).isEmpty();
+  }
+
+  @Test
+  void getAllIsolatesByNaturalKey() {
+    Bytes entryA = TrieNodeDiffCodec.encodeFull(NODE_RLP);
+    var tx = kv.startTransaction();
+    store.put(tx, ACCOUNT_KEY, 5L, entryA);
+    tx.commit();
+
+    // Same block number under a different natural key must not be returned.
+    assertThat(store.getAll(OTHER_KEY, new long[] {5L})).containsExactly(Optional.empty());
+    assertThat(store.getAll(ACCOUNT_KEY, new long[] {5L})).containsExactly(Optional.of(entryA));
   }
 
   // -------------------------------------------------------------------------

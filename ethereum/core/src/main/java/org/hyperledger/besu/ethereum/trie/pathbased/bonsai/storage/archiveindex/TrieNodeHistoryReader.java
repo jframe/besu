@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -302,7 +303,15 @@ public final class TrieNodeHistoryReader {
       final int cpIdx = (int) checkpointWithinRange;
       final long checkpointBlock = changeBlocks[cpIdx];
 
-      final Optional<Bytes> fullEntryOpt = store.get(naturalKey, checkpointBlock);
+      // Batch-read the checkpoint entry plus every intervening DIFF up to bStar in a single storage
+      // round-trip. These block numbers are all known here (changeBlocks[cpIdx..inRangeCount-1]),
+      // so
+      // one multiGet replaces the previous chain of up to CHECKPOINT_INTERVAL sequential store.get
+      // calls that each blocked on disk before issuing the next.
+      final long[] spanBlocks = Arrays.copyOfRange(changeBlocks, cpIdx, inRangeCount);
+      final List<Optional<Bytes>> spanEntries = store.getAll(naturalKey, spanBlocks);
+
+      final Optional<Bytes> fullEntryOpt = spanEntries.get(0);
       if (fullEntryOpt.isEmpty()) {
         LOG.warn(
             "TrieNodeHistoryReader: index references checkpoint block {} for key {} but store"
@@ -322,18 +331,18 @@ public final class TrieNodeHistoryReader {
             Integer.toHexString(Byte.toUnsignedInt(fullDecoded.metadata())));
         // Fall through to the backward walk fallback below.
       } else {
-        final int diffCount = inRangeCount - cpIdx - 1;
+        final int diffCount = spanBlocks.length - 1;
         if (diffCount == 0) {
           return Optional.of(fullDecoded.fullNode());
         }
         final List<Bytes> diffEntries = new ArrayList<>(diffCount);
-        for (int i = cpIdx + 1; i < inRangeCount; i++) {
-          final Optional<Bytes> diffOpt = store.get(naturalKey, changeBlocks[i]);
+        for (int i = 1; i < spanBlocks.length; i++) {
+          final Optional<Bytes> diffOpt = spanEntries.get(i);
           if (diffOpt.isEmpty()) {
             LOG.warn(
                 "TrieNodeHistoryReader: index references block {} for key {} but store has no"
                     + " entry; index/store mismatch — returning empty",
-                changeBlocks[i],
+                spanBlocks[i],
                 naturalKey);
             return Optional.empty();
           }
@@ -344,7 +353,7 @@ public final class TrieNodeHistoryReader {
                 "TrieNodeHistoryReader: tombstone in diff chain for key {} at block {}"
                     + " — returning empty",
                 naturalKey,
-                changeBlocks[i]);
+                spanBlocks[i]);
             return Optional.empty();
           }
           if (decoded.isFull()) {

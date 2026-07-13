@@ -18,6 +18,8 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -131,5 +133,36 @@ public final class TrieNodeHistoryStore {
     return storage
         .get(KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE, key.toArrayUnsafe())
         .map(Bytes::wrap);
+  }
+
+  /**
+   * Retrieves the diff-codec entries for {@code (naturalKey, blocks[i])} in a single batched read.
+   *
+   * <p>The returned list has the same size and ordering as {@code blocks}; a block with no stored
+   * entry maps to {@link Optional#empty()}. On a RocksDB backend this issues one {@code
+   * multiGetAsList} call, so the N sequential point reads that reconstruction would otherwise
+   * perform collapse into a single storage round-trip.
+   *
+   * @param naturalKey the account or storage natural key; must not be {@code null}
+   * @param blocks the block numbers to fetch, in the desired result order
+   * @return one {@code Optional<Bytes>} per requested block, in the same order
+   * @throws NullPointerException if {@code naturalKey} is {@code null}
+   */
+  public List<Optional<Bytes>> getAll(final Bytes naturalKey, final long[] blocks) {
+    Objects.requireNonNull(naturalKey, "naturalKey must not be null");
+    if (blocks.length == 0) {
+      return List.of();
+    }
+    final List<byte[]> keys = new ArrayList<>(blocks.length);
+    for (final long block : blocks) {
+      keys.add(ArchiveNodeKey.historyKey(naturalKey, block).toArrayUnsafe());
+    }
+    final List<Optional<byte[]>> raw =
+        storage.multiGet(KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE, keys);
+    final List<Optional<Bytes>> results = new ArrayList<>(raw.size());
+    for (final Optional<byte[]> value : raw) {
+      results.add(value.map(Bytes::wrap));
+    }
+    return results;
   }
 }
