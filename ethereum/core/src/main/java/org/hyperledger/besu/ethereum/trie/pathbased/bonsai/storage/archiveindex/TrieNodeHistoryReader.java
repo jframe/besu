@@ -19,7 +19,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -43,12 +42,14 @@ import org.slf4j.LoggerFactory;
  *       node was deleted: return empty.
  *   <li><strong>If entry is FULL</strong> — no reconstruction needed; return the embedded node
  *       directly.
- *   <li><strong>Locate the nearest FULL checkpoint</strong> — uses a single index-list read via
- *       {@link TrieNodeChangeIndex#getChangeBlocksUpTo} to obtain all change blocks in b*'s range,
- *       then computes the checkpoint position in O(1) from the global mutation index. For b* in
- *       range 0 (or any case where the checkpoint falls within the current range) this is a single
- *       RocksDB read. For cross-range cases where the checkpoint is in an earlier range, the
- *       original backward walk loop is used as a fallback.
+ *   <li><strong>Locate the nearest FULL checkpoint</strong> — obtain all change blocks in b*'s
+ *       range via a single index-list read ({@link TrieNodeChangeIndex#getChangeBlocksUpTo}), then
+ *       scan the trailing {@link #RECONSTRUCT_WINDOW} entries backward — read in one batched
+ *       multiGet — for the newest FULL at or before b*. Scanning (rather than computing a
+ *       checkpoint position) is required because the write/migration path does not always place
+ *       FULL entries at globally {@link #CHECKPOINT_INTERVAL}-aligned positions. If no FULL is
+ *       found within the window the checkpoint lies further back (an earlier range or a long diff
+ *       chain) and the bounded backward walk is used as a fallback.
  *   <li><strong>Reconstruct</strong> — call {@link TrieNodeDiffCodec#reconstruct(Bytes, List)} with
  *       the FULL entry as the base and the ordered list of DIFF entries between the checkpoint and
  *       {@code b*} (inclusive) to produce the final node RLP.
@@ -56,10 +57,10 @@ import org.slf4j.LoggerFactory;
  *
  * <h2>Termination guarantee</h2>
  *
- * The write path (Task 3.3) guarantees that every {@link #CHECKPOINT_INTERVAL} mutations for a key
- * emits a FULL checkpoint. Therefore the backward walk (when used as a fallback) terminates within
- * at most {@code CHECKPOINT_INTERVAL - 1} steps. The {@link #MAX_BACKWARD_WALK_STEPS} guard is a
- * safety net for backfill scenarios and corrupt data.
+ * The write path (Task 3.3) emits a FULL checkpoint roughly every {@link #CHECKPOINT_INTERVAL}
+ * mutations for a key, so the newest FULL is normally found within the batched window scan. The
+ * {@link #MAX_BACKWARD_WALK_STEPS} guard bounds the cross-range backward-walk fallback for backfill
+ * scenarios and corrupt data.
  */
 public final class TrieNodeHistoryReader {
 
@@ -68,8 +69,9 @@ public final class TrieNodeHistoryReader {
   /**
    * Every {@code CHECKPOINT_INTERVAL}-th mutation for a node emits a FULL entry. This value must
    * match {@code BonsaiArchiveTrieNodeStrategy.CHECKPOINT_INTERVAL} (same codebase, different
-   * package). The optimised path in {@link #nodeAt} relies on this value to locate checkpoints in
-   * O(1) from the global mutation index.
+   * package). It sets the expected spacing between FULL checkpoints, which {@link
+   * #RECONSTRUCT_WINDOW} is sized to cover so the backward window scan in {@link
+   * #reconstructFromChangeBlocks} normally finds a FULL without falling back to the walk.
    */
   static final int CHECKPOINT_INTERVAL = 16;
 
@@ -80,17 +82,14 @@ public final class TrieNodeHistoryReader {
    */
   static final int MAX_BACKWARD_WALK_STEPS = 64;
 
-  // ---------------------------------------------------------------------------
-  // TEMPORARY diagnostic counters — quantify why backwardWalkFallback triggers.
-  // Remove once the backward-walk elimination (#3) is designed. A summary line is
-  // logged at INFO every DIAG_LOG_EVERY reconstructions.
-  // ---------------------------------------------------------------------------
-  private static final long DIAG_LOG_EVERY = 20_000;
-  private static final AtomicLong DIAG_RECONSTRUCTS = new AtomicLong();
-  private static final AtomicLong DIAG_OPTIMISED_HIT = new AtomicLong();
-  private static final AtomicLong DIAG_FALLBACK_CROSS_RANGE = new AtomicLong();
-  private static final AtomicLong DIAG_FALLBACK_NON_FULL = new AtomicLong();
-  private static final AtomicLong DIAG_FALLBACK_NO_CHANGE_LIST = new AtomicLong();
+  /**
+   * Number of trailing change-block entries {@link #reconstructFromChangeBlocks} reads in one
+   * batched multiGet when scanning backward for the nearest FULL checkpoint. Sized well above
+   * {@link #CHECKPOINT_INTERVAL} to absorb the observed spread between where FULL entries are
+   * actually written and where a naive interval-aligned position would fall; if no FULL is found
+   * within the window the reconstruction falls back to the bounded cross-range backward walk.
+   */
+  static final int RECONSTRUCT_WINDOW = 64;
 
   private final TrieNodeHistoryStore store;
   private final TrieNodeChangeIndex index;
@@ -186,7 +185,6 @@ public final class TrieNodeHistoryReader {
     }
 
     // getChangeBlocksUpTo returned empty — fall back to the backward walk.
-    DIAG_FALLBACK_NO_CHANGE_LIST.incrementAndGet();
     return backwardWalkFallback(naturalKey, bStar, bStarEntry);
   }
 
@@ -304,148 +302,69 @@ public final class TrieNodeHistoryReader {
   private Optional<Bytes> reconstructFromChangeBlocks(
       final Bytes naturalKey, final long bStar, final Bytes bStarEntry, final long[] changeBlocks) {
 
-    maybeLogDiag(DIAG_RECONSTRUCTS.incrementAndGet());
-
     final int inRangeCount = changeBlocks.length;
-    final long rangeId = bStar / index.rangeSize;
-    final int earlierCount = index.countMutationsInEarlierRanges(naturalKey, rangeId);
-    final long globalMutationOfBStar = (long) earlierCount + inRangeCount - 1;
 
-    final long checkpointMutation =
-        globalMutationOfBStar - (globalMutationOfBStar % CHECKPOINT_INTERVAL);
-    final long checkpointWithinRange = checkpointMutation - earlierCount;
+    // Locate the nearest FULL checkpoint at or before bStar by scanning the change-block list
+    // backward over a bounded trailing window, read in a single batched multiGet.
+    //
+    // This deliberately does NOT compute the checkpoint position arithmetically: the
+    // write/migration
+    // path does not always place FULL entries at globally CHECKPOINT_INTERVAL-aligned positions, so
+    // a computed position is unreliable and previously landed on a DIFF, forcing a per-step
+    // sequential backward walk (one index + one store read per step) on essentially every deep-node
+    // reconstruction. Reading the window in one round-trip and scanning it is correct regardless of
+    // where the FULL was actually written, and replaces N blocking round-trips with one.
+    final int windowSize = Math.min(inRangeCount, RECONSTRUCT_WINDOW);
+    final long[] windowBlocks =
+        Arrays.copyOfRange(changeBlocks, inRangeCount - windowSize, inRangeCount);
+    final List<Optional<Bytes>> windowEntries = store.getAll(naturalKey, windowBlocks);
 
-    if (checkpointWithinRange >= 0 && checkpointWithinRange < inRangeCount) {
-      final int cpIdx = (int) checkpointWithinRange;
-      final long checkpointBlock = changeBlocks[cpIdx];
-
-      // Batch-read the checkpoint entry plus every intervening DIFF up to bStar in a single storage
-      // round-trip. These block numbers are all known here (changeBlocks[cpIdx..inRangeCount-1]),
-      // so
-      // one multiGet replaces the previous chain of up to CHECKPOINT_INTERVAL sequential store.get
-      // calls that each blocked on disk before issuing the next.
-      final long[] spanBlocks = Arrays.copyOfRange(changeBlocks, cpIdx, inRangeCount);
-      final List<Optional<Bytes>> spanEntries = store.getAll(naturalKey, spanBlocks);
-
-      final Optional<Bytes> fullEntryOpt = spanEntries.get(0);
-      if (fullEntryOpt.isEmpty()) {
+    // Scan newest → oldest for the nearest FULL. A missing entry or a deletion tombstone reached
+    // before a FULL is handled exactly as before (index/store mismatch, or a deleted node → empty).
+    int fullPos = -1;
+    for (int i = windowSize - 1; i >= 0; i--) {
+      final Optional<Bytes> entryOpt = windowEntries.get(i);
+      if (entryOpt.isEmpty()) {
         LOG.warn(
-            "TrieNodeHistoryReader: index references checkpoint block {} for key {} but store"
-                + " has no entry; index/store mismatch — returning empty",
-            checkpointBlock,
+            "TrieNodeHistoryReader: index references block {} for key {} but store has no entry;"
+                + " index/store mismatch — returning empty",
+            windowBlocks[i],
             naturalKey);
         return Optional.empty();
       }
-      Bytes fullEntry = fullEntryOpt.get();
-      final TrieNodeDiffCodec.Decoded fullDecoded = TrieNodeDiffCodec.decode(fullEntry);
-      if (!fullDecoded.isFull()) {
-        final long nNonFull = DIAG_FALLBACK_NON_FULL.incrementAndGet();
-        if (nNonFull <= 30) {
-          // Scan the batched span [cpIdx..bStar] for the first FULL entry to reveal the off-by-N
-          // between the computed checkpoint position and where the FULL checkpoint actually sits.
-          // firstFullOffsetInSpan > 0  => FULL is that many entries AFTER cpIdx (computed too low).
-          // firstFullOffsetInSpan == -1 => no FULL at/after cpIdx (computed too high; real FULL is
-          //                                below cpIdx and the backward walk finds it).
-          int firstFullInSpan = -1;
-          for (int j = 0; j < spanEntries.size(); j++) {
-            final Optional<Bytes> e = spanEntries.get(j);
-            if (e.isPresent() && TrieNodeDiffCodec.decode(e.get()).isFull()) {
-              firstFullInSpan = j;
-              break;
-            }
-          }
-          LOG.warn(
-              "TrieNodeHistoryReader nonFull diag: key={} bStar={} earlierCount={} inRangeCount={}"
-                  + " globalMut={} checkpointMutation={} cpIdx={} checkpointBlock={}"
-                  + " metadata@cpIdx=0x{} firstFullOffsetInSpan={} firstFullBlock={}",
-              naturalKey,
-              bStar,
-              earlierCount,
-              inRangeCount,
-              globalMutationOfBStar,
-              checkpointMutation,
-              cpIdx,
-              checkpointBlock,
-              Integer.toHexString(Byte.toUnsignedInt(fullDecoded.metadata())),
-              firstFullInSpan,
-              firstFullInSpan >= 0 ? spanBlocks[firstFullInSpan] : -1L);
-        }
-        // Fall through to the backward walk fallback below.
-      } else {
-        DIAG_OPTIMISED_HIT.incrementAndGet();
-        final int diffCount = spanBlocks.length - 1;
-        if (diffCount == 0) {
-          return Optional.of(fullDecoded.fullNode());
-        }
-        final List<Bytes> diffEntries = new ArrayList<>(diffCount);
-        for (int i = 1; i < spanBlocks.length; i++) {
-          final Optional<Bytes> diffOpt = spanEntries.get(i);
-          if (diffOpt.isEmpty()) {
-            LOG.warn(
-                "TrieNodeHistoryReader: index references block {} for key {} but store has no"
-                    + " entry; index/store mismatch — returning empty",
-                spanBlocks[i],
-                naturalKey);
-            return Optional.empty();
-          }
-          final Bytes diffEntry = diffOpt.get();
-          final TrieNodeDiffCodec.Decoded decoded = TrieNodeDiffCodec.decode(diffEntry);
-          if (decoded.isDeletion()) {
-            LOG.warn(
-                "TrieNodeHistoryReader: tombstone in diff chain for key {} at block {}"
-                    + " — returning empty",
-                naturalKey,
-                spanBlocks[i]);
-            return Optional.empty();
-          }
-          if (decoded.isFull()) {
-            // A newer FULL entry (FULL_ABOVE_DEPTH or a later checkpoint) supersedes the prior
-            // checkpoint — use it as the new reconstruction base and discard accumulated DIFFs.
-            fullEntry = diffEntry;
-            diffEntries.clear();
-          } else {
-            diffEntries.add(diffEntry);
-          }
-        }
-        return Optional.of(TrieNodeDiffCodec.reconstruct(fullEntry, diffEntries));
+      final TrieNodeDiffCodec.Decoded decoded = TrieNodeDiffCodec.decode(entryOpt.get());
+      if (decoded.isDeletion()) {
+        LOG.warn(
+            "TrieNodeHistoryReader: tombstone in diff chain for key {} at block {} — returning"
+                + " empty",
+            naturalKey,
+            windowBlocks[i]);
+        return Optional.empty();
+      }
+      if (decoded.isFull()) {
+        fullPos = i;
+        break;
       }
     }
 
-    // Fallback: backward walk. Reached either because the checkpoint mutation mapped outside this
-    // range (cross-range) or because the located checkpoint entry was unexpectedly not FULL. The
-    // non-FULL case already incremented its counter above; anything else here is cross-range.
-    if (checkpointWithinRange < 0 || checkpointWithinRange >= inRangeCount) {
-      DIAG_FALLBACK_CROSS_RANGE.incrementAndGet();
+    if (fullPos < 0) {
+      // No FULL within the window — the checkpoint lies further back (an earlier range, or an
+      // unusually long diff chain). Fall back to the bounded cross-range backward walk. Rare.
+      return backwardWalkFallback(naturalKey, bStar, bStarEntry);
     }
-    return backwardWalkFallback(naturalKey, bStar, bStarEntry);
-  }
 
-  /**
-   * TEMPORARY: emits a one-line summary of backward-walk-fallback trigger counts every {@link
-   * #DIAG_LOG_EVERY} reconstructions so we can see, on a live node, whether the fallback is
-   * dominated by the cross-range case or by non-FULL checkpoint entries. Remove with the counters
-   * once #3 is designed.
-   */
-  private static void maybeLogDiag(final long total) {
-    if (total % DIAG_LOG_EVERY != 0) {
-      return;
+    // Base is the FULL at fullPos; every entry above it up to bStar is a DIFF by construction (the
+    // backward scan stopped at the newest FULL), so apply them in ascending order.
+    final Bytes fullEntry = windowEntries.get(fullPos).get();
+    final int diffCount = windowSize - fullPos - 1;
+    if (diffCount == 0) {
+      return Optional.of(TrieNodeDiffCodec.decode(fullEntry).fullNode());
     }
-    final long optimised = DIAG_OPTIMISED_HIT.get();
-    final long crossRange = DIAG_FALLBACK_CROSS_RANGE.get();
-    final long nonFull = DIAG_FALLBACK_NON_FULL.get();
-    final long noList = DIAG_FALLBACK_NO_CHANGE_LIST.get();
-    final long fallbacks = crossRange + nonFull + noList;
-    LOG.info(
-        "TrieNodeHistoryReader diag: reconstructs={} optimisedHit={} ({}%) fallback={} ({}%)"
-            + " [crossRange={} nonFull={} noChangeList={}]",
-        total,
-        optimised,
-        100 * optimised / total,
-        fallbacks,
-        100 * fallbacks / total,
-        crossRange,
-        nonFull,
-        noList);
+    final List<Bytes> diffEntries = new ArrayList<>(diffCount);
+    for (int i = fullPos + 1; i < windowSize; i++) {
+      diffEntries.add(windowEntries.get(i).get());
+    }
+    return Optional.of(TrieNodeDiffCodec.reconstruct(fullEntry, diffEntries));
   }
 
   /**

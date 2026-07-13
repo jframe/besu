@@ -15,9 +15,17 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atMost;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -297,6 +305,69 @@ class TrieNodeHistoryReaderTest {
     // Spot-check an intermediate version to confirm partial reconstruction
     final Bytes expected11 = versions[1]; // v11
     assertThat(reader.nodeAt(KEY, 11)).hasValue(expected11);
+  }
+
+  /**
+   * When the FULL checkpoint is NOT at the position the reader's global-mutation formula computes
+   * (which is the common case on migrated data), reconstruction must still locate the nearest FULL
+   * via batched reads over the change-block list — <em>not</em> degrade into a per-step sequential
+   * backward walk that issues one index read per step.
+   *
+   * <p>Seeds FULL@100 followed by 20 DIFFs (101–120). The old {@code globalMut - globalMut%16}
+   * checkpoint formula lands on list index 16 (block 116, a DIFF), so the old code fell back to a
+   * 20-step backward walk — one {@code latestChangeBlock} index read per step. The scan-based
+   * reconstruction reads the trailing change-block window in a single batch and finds FULL@100 with
+   * no per-step index walk.
+   */
+  @Test
+  void reconstructionAvoidsSequentialWalkWhenCheckpointNotAtFormulaPosition() {
+    final SegmentedKeyValueStorage spyKv = spy(new SegmentedInMemoryKeyValueStorage());
+    final TrieNodeHistoryStore spyStore = new TrieNodeHistoryStore(spyKv);
+    final TrieNodeChangeIndex spyIndex = new TrieNodeChangeIndex(spyKv, 1_000_000);
+    final TrieNodeHistoryReader spyReader = new TrieNodeHistoryReader(spyStore, spyIndex);
+
+    final int n = 20;
+    final Bytes[] v = new Bytes[n + 1];
+    v[0] = branchWith(0, 100);
+    commitPut(spyKv, spyStore, KEY, 100, TrieNodeDiffCodec.encodeFull(v[0]));
+    commitAppend(spyKv, spyIndex, KEY, 100);
+    for (int i = 1; i <= n; i++) {
+      v[i] = branchWith(i % 16, 100 + i);
+      commitPut(spyKv, spyStore, KEY, 100 + i, TrieNodeDiffCodec.encodeDiff(v[i - 1], v[i]));
+      commitAppend(spyKv, spyIndex, KEY, 100 + i);
+    }
+
+    clearInvocations(spyKv); // ignore all setup reads/writes
+
+    // Correctness: reconstructs v120 from FULL@100 + 20 diffs.
+    assertThat(spyReader.nodeAt(KEY, 120)).hasValueSatisfying(b -> assertThat(b).isEqualTo(v[n]));
+
+    // Behaviour: the index CF is read only a small bounded number of times (the initial
+    // latest-change lookup + the change-list read), never once-per-diff. The old backward walk
+    // issued ~20 index reads here.
+    verify(spyKv, atMost(6))
+        .get(eq(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE), any(byte[].class));
+  }
+
+  private static void commitPut(
+      final SegmentedKeyValueStorage kv,
+      final TrieNodeHistoryStore store,
+      final Bytes key,
+      final long block,
+      final Bytes entry) {
+    var tx = kv.startTransaction();
+    store.put(tx, key, block, entry);
+    tx.commit();
+  }
+
+  private static void commitAppend(
+      final SegmentedKeyValueStorage kv,
+      final TrieNodeChangeIndex index,
+      final Bytes key,
+      final long block) {
+    var tx = kv.startTransaction();
+    index.append(tx, key, block);
+    tx.commit();
   }
 
   /**
