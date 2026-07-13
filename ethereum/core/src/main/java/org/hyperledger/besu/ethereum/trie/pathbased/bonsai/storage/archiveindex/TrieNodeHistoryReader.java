@@ -19,6 +19,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
@@ -78,6 +79,18 @@ public final class TrieNodeHistoryReader {
    * incomplete backfill.
    */
   static final int MAX_BACKWARD_WALK_STEPS = 64;
+
+  // ---------------------------------------------------------------------------
+  // TEMPORARY diagnostic counters — quantify why backwardWalkFallback triggers.
+  // Remove once the backward-walk elimination (#3) is designed. A summary line is
+  // logged at INFO every DIAG_LOG_EVERY reconstructions.
+  // ---------------------------------------------------------------------------
+  private static final long DIAG_LOG_EVERY = 20_000;
+  private static final AtomicLong DIAG_RECONSTRUCTS = new AtomicLong();
+  private static final AtomicLong DIAG_OPTIMISED_HIT = new AtomicLong();
+  private static final AtomicLong DIAG_FALLBACK_CROSS_RANGE = new AtomicLong();
+  private static final AtomicLong DIAG_FALLBACK_NON_FULL = new AtomicLong();
+  private static final AtomicLong DIAG_FALLBACK_NO_CHANGE_LIST = new AtomicLong();
 
   private final TrieNodeHistoryStore store;
   private final TrieNodeChangeIndex index;
@@ -173,6 +186,7 @@ public final class TrieNodeHistoryReader {
     }
 
     // getChangeBlocksUpTo returned empty — fall back to the backward walk.
+    DIAG_FALLBACK_NO_CHANGE_LIST.incrementAndGet();
     return backwardWalkFallback(naturalKey, bStar, bStarEntry);
   }
 
@@ -290,6 +304,8 @@ public final class TrieNodeHistoryReader {
   private Optional<Bytes> reconstructFromChangeBlocks(
       final Bytes naturalKey, final long bStar, final Bytes bStarEntry, final long[] changeBlocks) {
 
+    maybeLogDiag(DIAG_RECONSTRUCTS.incrementAndGet());
+
     final int inRangeCount = changeBlocks.length;
     final long rangeId = bStar / index.rangeSize;
     final int earlierCount = index.countMutationsInEarlierRanges(naturalKey, rangeId);
@@ -323,6 +339,7 @@ public final class TrieNodeHistoryReader {
       Bytes fullEntry = fullEntryOpt.get();
       final TrieNodeDiffCodec.Decoded fullDecoded = TrieNodeDiffCodec.decode(fullEntry);
       if (!fullDecoded.isFull()) {
+        DIAG_FALLBACK_NON_FULL.incrementAndGet();
         LOG.warn(
             "TrieNodeHistoryReader: expected FULL entry at checkpoint block {} for key {} but"
                 + " got metadata 0x{}; falling back to backward walk",
@@ -331,6 +348,7 @@ public final class TrieNodeHistoryReader {
             Integer.toHexString(Byte.toUnsignedInt(fullDecoded.metadata())));
         // Fall through to the backward walk fallback below.
       } else {
+        DIAG_OPTIMISED_HIT.incrementAndGet();
         final int diffCount = spanBlocks.length - 1;
         if (diffCount == 0) {
           return Optional.of(fullDecoded.fullNode());
@@ -369,8 +387,41 @@ public final class TrieNodeHistoryReader {
       }
     }
 
-    // Fallback: backward walk (cross-range case or corrupt checkpoint entry).
+    // Fallback: backward walk. Reached either because the checkpoint mutation mapped outside this
+    // range (cross-range) or because the located checkpoint entry was unexpectedly not FULL. The
+    // non-FULL case already incremented its counter above; anything else here is cross-range.
+    if (checkpointWithinRange < 0 || checkpointWithinRange >= inRangeCount) {
+      DIAG_FALLBACK_CROSS_RANGE.incrementAndGet();
+    }
     return backwardWalkFallback(naturalKey, bStar, bStarEntry);
+  }
+
+  /**
+   * TEMPORARY: emits a one-line summary of backward-walk-fallback trigger counts every {@link
+   * #DIAG_LOG_EVERY} reconstructions so we can see, on a live node, whether the fallback is
+   * dominated by the cross-range case or by non-FULL checkpoint entries. Remove with the counters
+   * once #3 is designed.
+   */
+  private static void maybeLogDiag(final long total) {
+    if (total % DIAG_LOG_EVERY != 0) {
+      return;
+    }
+    final long optimised = DIAG_OPTIMISED_HIT.get();
+    final long crossRange = DIAG_FALLBACK_CROSS_RANGE.get();
+    final long nonFull = DIAG_FALLBACK_NON_FULL.get();
+    final long noList = DIAG_FALLBACK_NO_CHANGE_LIST.get();
+    final long fallbacks = crossRange + nonFull + noList;
+    LOG.info(
+        "TrieNodeHistoryReader diag: reconstructs={} optimisedHit={} ({}%) fallback={} ({}%)"
+            + " [crossRange={} nonFull={} noChangeList={}]",
+        total,
+        optimised,
+        100 * optimised / total,
+        fallbacks,
+        100 * fallbacks / total,
+        crossRange,
+        nonFull,
+        noList);
   }
 
   /**
