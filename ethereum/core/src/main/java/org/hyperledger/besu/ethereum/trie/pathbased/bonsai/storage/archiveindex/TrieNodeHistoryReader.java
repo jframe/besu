@@ -339,13 +339,37 @@ public final class TrieNodeHistoryReader {
       Bytes fullEntry = fullEntryOpt.get();
       final TrieNodeDiffCodec.Decoded fullDecoded = TrieNodeDiffCodec.decode(fullEntry);
       if (!fullDecoded.isFull()) {
-        DIAG_FALLBACK_NON_FULL.incrementAndGet();
-        LOG.warn(
-            "TrieNodeHistoryReader: expected FULL entry at checkpoint block {} for key {} but"
-                + " got metadata 0x{}; falling back to backward walk",
-            checkpointBlock,
-            naturalKey,
-            Integer.toHexString(Byte.toUnsignedInt(fullDecoded.metadata())));
+        final long nNonFull = DIAG_FALLBACK_NON_FULL.incrementAndGet();
+        if (nNonFull <= 30) {
+          // Scan the batched span [cpIdx..bStar] for the first FULL entry to reveal the off-by-N
+          // between the computed checkpoint position and where the FULL checkpoint actually sits.
+          // firstFullOffsetInSpan > 0  => FULL is that many entries AFTER cpIdx (computed too low).
+          // firstFullOffsetInSpan == -1 => no FULL at/after cpIdx (computed too high; real FULL is
+          //                                below cpIdx and the backward walk finds it).
+          int firstFullInSpan = -1;
+          for (int j = 0; j < spanEntries.size(); j++) {
+            final Optional<Bytes> e = spanEntries.get(j);
+            if (e.isPresent() && TrieNodeDiffCodec.decode(e.get()).isFull()) {
+              firstFullInSpan = j;
+              break;
+            }
+          }
+          LOG.warn(
+              "TrieNodeHistoryReader nonFull diag: key={} bStar={} earlierCount={} inRangeCount={}"
+                  + " globalMut={} checkpointMutation={} cpIdx={} checkpointBlock={}"
+                  + " metadata@cpIdx=0x{} firstFullOffsetInSpan={} firstFullBlock={}",
+              naturalKey,
+              bStar,
+              earlierCount,
+              inRangeCount,
+              globalMutationOfBStar,
+              checkpointMutation,
+              cpIdx,
+              checkpointBlock,
+              Integer.toHexString(Byte.toUnsignedInt(fullDecoded.metadata())),
+              firstFullInSpan,
+              firstFullInSpan >= 0 ? spanBlocks[firstFullInSpan] : -1L);
+        }
         // Fall through to the backward walk fallback below.
       } else {
         DIAG_OPTIMISED_HIT.incrementAndGet();
