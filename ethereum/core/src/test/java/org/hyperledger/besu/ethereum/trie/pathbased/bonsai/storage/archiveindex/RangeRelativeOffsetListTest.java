@@ -303,4 +303,48 @@ class RangeRelativeOffsetListTest {
   void emptyListsAreEqual() {
     assertThat(RangeRelativeOffsetList.empty()).isEqualTo(RangeRelativeOffsetList.empty());
   }
+
+  // -------------------------------------------------------------------------
+  // concat — bulk assembly of already-packed chunks in a single allocation
+  // -------------------------------------------------------------------------
+
+  @Test
+  void concatCombinesChunksInOrder() {
+    Bytes a = RangeRelativeOffsetList.empty().append(1).append(2).toBytes();
+    Bytes b = RangeRelativeOffsetList.empty().append(3).append(4).toBytes();
+    Bytes c = RangeRelativeOffsetList.empty().append(999_999).toBytes();
+
+    var combined = RangeRelativeOffsetList.concat(java.util.List.of(a, b, c));
+
+    // Equivalent to appending every offset in order, but assembled in one pass.
+    var expected =
+        RangeRelativeOffsetList.empty().append(1).append(2).append(3).append(4).append(999_999);
+    assertThat(combined.size()).isEqualTo(5);
+    assertThat(combined.toBytes()).isEqualTo(expected.toBytes());
+    assertThat(combined).isEqualTo(expected);
+    assertThat(combined.last()).hasValue(999_999);
+    assertThat(combined.latestLeq(3)).hasValue(3);
+  }
+
+  @Test
+  void concatSkipsEmptyChunks() {
+    Bytes a = RangeRelativeOffsetList.empty().append(10).toBytes();
+    var combined = RangeRelativeOffsetList.concat(java.util.List.of(Bytes.EMPTY, a, Bytes.EMPTY));
+    assertThat(combined.size()).isEqualTo(1);
+    assertThat(combined.last()).hasValue(10);
+  }
+
+  @Test
+  void concatOfNoChunksIsEmpty() {
+    assertThat(RangeRelativeOffsetList.concat(java.util.List.of()).isEmpty()).isTrue();
+    assertThat(RangeRelativeOffsetList.concat(java.util.List.of(Bytes.EMPTY)).isEmpty()).isTrue();
+  }
+
+  @Test
+  void concatRejectsChunkNotMultipleOfThree() {
+    assertThatThrownBy(
+            () -> RangeRelativeOffsetList.concat(java.util.List.of(Bytes.of(0x01, 0x02))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("multiple of 3");
+  }
 }

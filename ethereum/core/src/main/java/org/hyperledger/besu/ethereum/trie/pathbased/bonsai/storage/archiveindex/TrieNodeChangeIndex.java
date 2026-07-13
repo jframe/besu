@@ -806,11 +806,15 @@ public final class TrieNodeChangeIndex {
       return Optional.of(tail);
     }
 
-    // Slow path: prepend sub-block entries then append the tail entries.
-    // Sub-block entries are strictly older (smaller offsets) than the tail.
-
-    // Build the combined list by appending all offsets in ascending order.
-    RangeRelativeOffsetList combined = RangeRelativeOffsetList.empty();
+    // Slow path: concatenate all sub-block buffers (oldest first) followed by the tail.
+    // Sub-block entries are strictly older (smaller offsets) than the tail, and each stored buffer
+    // is already a valid ascending packed list, so their concatenation is itself ascending.
+    //
+    // Assembling via RangeRelativeOffsetList.concat allocates the combined buffer once and copies
+    // each chunk in a single pass — O(total entries). The previous approach appended offsets one at
+    // a time, which was O(n²): RangeRelativeOffsetList.append reallocates and copies the entire
+    // growing backing array on every call, so hot nodes with many recorded offsets dominated CPU.
+    final List<Bytes> chunks = new ArrayList<>(subCount + 1);
     for (int subId = 0; subId < subCount; subId++) {
       final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subId);
       final Optional<byte[]> subRaw =
@@ -818,18 +822,10 @@ public final class TrieNodeChangeIndex {
       if (subRaw.isEmpty()) {
         continue; // should not happen in well-formed data, but skip gracefully
       }
-      final RangeRelativeOffsetList subList =
-          RangeRelativeOffsetList.fromBytes(Bytes.wrap(subRaw.get()));
-      final int subSize = subList.size();
-      for (int i = 0; i < subSize; i++) {
-        combined = combined.append(subList.get(i));
-      }
+      chunks.add(Bytes.wrap(subRaw.get()));
     }
-    final int tailSize = tail.size();
-    for (int i = 0; i < tailSize; i++) {
-      combined = combined.append(tail.get(i));
-    }
-    return Optional.of(combined);
+    chunks.add(tail.toBytes());
+    return Optional.of(RangeRelativeOffsetList.concat(chunks));
   }
 
   /**

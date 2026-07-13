@@ -15,9 +15,11 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.OptionalInt;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.MutableBytes;
 
 /**
  * A compact, immutable list of range-relative block offsets for a single trie node within one
@@ -95,6 +97,50 @@ public final class RangeRelativeOffsetList {
     final int n = b.length / ENTRY_BYTES;
     final int last = readEntry(b, n - 1);
     return new RangeRelativeOffsetList(b, n, last);
+  }
+
+  /**
+   * Concatenates several already-packed offset buffers into a single list in one allocation.
+   *
+   * <p>Each chunk must itself be a valid packed buffer (length a multiple of {@link #ENTRY_BYTES}).
+   * Chunks are laid out in argument order; like {@link #fromBytes}, this does <em>not</em>
+   * re-validate cross-chunk ordering — callers must supply chunks whose offsets are already
+   * non-decreasing (e.g. sub-blocks oldest-first followed by the tail).
+   *
+   * <p>Cost is O(total bytes): the combined buffer is sized once and each chunk copied in with a
+   * single {@code copyTo}. This is the bulk alternative to appending offsets one at a time, which
+   * would be O(n²) because {@link #append} reallocates the whole backing array on every call.
+   *
+   * @param packedChunks the packed buffers to concatenate, in final order
+   * @return a single list containing every entry from every chunk, or {@link #empty()} if the
+   *     combined length is zero
+   */
+  public static RangeRelativeOffsetList concat(final List<Bytes> packedChunks) {
+    int total = 0;
+    for (final Bytes chunk : packedChunks) {
+      final int len = chunk.size();
+      if (len % ENTRY_BYTES != 0) {
+        throw new IllegalArgumentException(
+            "Packed offset buffer length must be a multiple of 3, got " + len);
+      }
+      total += len;
+    }
+    if (total == 0) {
+      return EMPTY;
+    }
+    final byte[] buf = new byte[total];
+    final MutableBytes dest = MutableBytes.wrap(buf);
+    int pos = 0;
+    for (final Bytes chunk : packedChunks) {
+      final int len = chunk.size();
+      if (len == 0) {
+        continue;
+      }
+      chunk.copyTo(dest, pos);
+      pos += len;
+    }
+    final int n = total / ENTRY_BYTES;
+    return new RangeRelativeOffsetList(buf, n, readEntry(buf, n - 1));
   }
 
   // -------------------------------------------------------------------------
