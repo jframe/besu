@@ -190,6 +190,33 @@ class TrieNodeHistoryCompositionTest {
   }
 
   @Test
+  void mergeAddsBucketTotalsAndHistogram() {
+    final TrieNodeHistoryComposition a =
+        new TrieNodeHistoryComposition(MIN_BLOB_SIZE, FULL_ABOVE_DEPTH);
+    final TrieNodeHistoryComposition b =
+        new TrieNodeHistoryComposition(MIN_BLOB_SIZE, FULL_ABOVE_DEPTH);
+    final byte[] creationBranch =
+        TrieNodeDiffCodec.encodeDiff(null, bigBranchRlp()).toArrayUnsafe();
+    final byte[] diffShort =
+        TrieNodeDiffCodec.encodeDiff(smallShortRlp(), smallShortRlp()).toArrayUnsafe();
+
+    a.record(accountKey(6, 1), creationBranch); // depth 6, creation branch, blob
+    b.record(accountKey(6, 2), diffShort); // depth 6, diff short, inline
+    b.record(storageKey(3, 3), creationBranch); // depth 3, creation branch, blob
+
+    a.merge(b);
+
+    assertThat(a.totalEntries()).isEqualTo(3);
+    assertThat(a.bucket(Category.CREATION_BRANCH).count()).isEqualTo(2);
+    assertThat(a.bucket(Category.CREATION_BRANCH).blobValueBytes())
+        .isEqualTo(2L * creationBranch.length);
+    assertThat(a.bucket(Category.DIFF_SHORT).count()).isEqualTo(1);
+    final long[] hist = a.locationDepthHistogram();
+    assertThat(hist[6]).isEqualTo(2);
+    assertThat(hist[3]).isEqualTo(1);
+  }
+
+  @Test
   void tracksLocationDepthHistogramInBytes() {
     final TrieNodeHistoryComposition comp =
         new TrieNodeHistoryComposition(MIN_BLOB_SIZE, FULL_ABOVE_DEPTH);

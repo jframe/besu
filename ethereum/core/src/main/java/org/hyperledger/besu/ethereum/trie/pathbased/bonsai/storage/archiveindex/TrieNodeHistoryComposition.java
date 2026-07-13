@@ -141,6 +141,29 @@ public final class TrieNodeHistoryComposition {
   }
 
   /**
+   * Adds another accumulator's totals into this one. Used to combine per-thread accumulators from a
+   * parallel scan. Both must have been constructed with the same {@code minBlobSize} and {@code
+   * fullAboveDepth}.
+   *
+   * @param other the accumulator to fold into this one
+   */
+  public void merge(final TrieNodeHistoryComposition other) {
+    for (final Category c : Category.values()) {
+      final Bucket dst = buckets.get(c);
+      final Bucket src = other.buckets.get(c);
+      dst.count += src.count;
+      dst.keyBytes += src.keyBytes;
+      dst.valueBytes += src.valueBytes;
+      dst.blobCount += src.blobCount;
+      dst.blobValueBytes += src.blobValueBytes;
+    }
+    for (int i = 0; i < depthHistogram.length; i++) {
+      depthHistogram[i] += other.depthHistogram[i];
+    }
+    totalEntries += other.totalEntries;
+  }
+
+  /**
    * Returns the accumulator for a category.
    *
    * @param category the bucket to read

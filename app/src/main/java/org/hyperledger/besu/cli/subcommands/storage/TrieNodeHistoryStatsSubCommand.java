@@ -23,14 +23,22 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryComposition.Category;
 
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.LongAdder;
 
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
+import org.rocksdb.Slice;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -87,6 +95,14 @@ public class TrieNodeHistoryStatsSubCommand implements Runnable {
               + " roughly every N seconds; 0 disables progress (default: ${DEFAULT-VALUE})")
   private long logIntervalSeconds = 60;
 
+  @Option(
+      names = {"--threads"},
+      description =
+          "Number of parallel scan threads over key-prefix ranges. More threads help until the"
+              + " storage device's throughput ceiling; on networked/EBS volumes a modest value is"
+              + " usually enough (default: ${DEFAULT-VALUE})")
+  private int threads = 8;
+
   /** Default constructor. */
   public TrieNodeHistoryStatsSubCommand() {}
 
@@ -96,10 +112,8 @@ public class TrieNodeHistoryStatsSubCommand implements Runnable {
     final String dbPath = parentCommand.besuCommand.dataDir().resolve(DATABASE_PATH).toString();
 
     final byte[] targetCfId = KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE.getId();
-    final TrieNodeHistoryComposition comp =
-        new TrieNodeHistoryComposition(minBlobSize, fullAboveDepth);
     final long[] onDisk = new long[2]; // [0] = total-sst-files-size, [1] = total-blob-file-size
-    final boolean[] truncated = new boolean[1];
+    final ScanResult[] resultHolder = new ScanResult[1];
 
     out.println(
         "Scanning TRIE_NODE_HISTORY_ARCHIVE (min_blob_size="
@@ -119,55 +133,149 @@ public class TrieNodeHistoryStatsSubCommand implements Runnable {
             onDisk[0] = readSizeProperty(rocksdb, cfHandle, "rocksdb.total-sst-files-size");
             onDisk[1] = readSizeProperty(rocksdb, cfHandle, "rocksdb.total-blob-file-size");
             final long estTotal = readSizeProperty(rocksdb, cfHandle, "rocksdb.estimate-num-keys");
-            truncated[0] = scan(rocksdb, cfHandle, comp, estTotal, out);
+            resultHolder[0] = parallelScan(rocksdb, cfHandle, estTotal, out);
           } catch (final RocksDBException e) {
             throw new RuntimeException(e);
           }
         },
         List.of(KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE.getName()));
 
-    printReport(out, comp, onDisk[0], onDisk[1], truncated[0]);
+    final ScanResult result = resultHolder[0];
+    if (result == null) {
+      out.println("TRIE_NODE_HISTORY_ARCHIVE column family not found in this database.");
+      return;
+    }
+    printReport(out, result.composition(), onDisk[0], onDisk[1], result.truncated());
   }
 
+  private record ScanResult(TrieNodeHistoryComposition composition, boolean truncated) {}
+
   /**
-   * Iterates the column family, feeding every entry to the accumulator.
+   * Scans the column family in parallel, one worker per single-byte key-prefix range, merging the
+   * per-worker accumulators at the end. RocksDB supports concurrent iterators over one handle, so a
+   * higher thread count keeps more random blob reads in flight — up to the storage throughput cap.
    *
    * @param estTotal RocksDB's estimated key count for the CF, used for the progress percentage (0
    *     if unavailable)
-   * @return {@code true} if the scan stopped early because of {@code --max-entries}
+   * @return the merged composition and whether the scan stopped early due to {@code --max-entries}
    */
-  private boolean scan(
+  private ScanResult parallelScan(
       final RocksDB rocksdb,
       final ColumnFamilyHandle cfHandle,
-      final TrieNodeHistoryComposition comp,
       final long estTotal,
       final PrintWriter out) {
-    final long intervalNanos = logIntervalSeconds * 1_000_000_000L;
-    final ReadOptions readOptions = new ReadOptions();
-    readOptions.setReadaheadSize(4L * 1024 * 1024).setVerifyChecksums(false).setFillCache(false);
-    try (readOptions;
-        final RocksIterator it = rocksdb.newIterator(cfHandle, readOptions)) {
-      final long startNanos = System.nanoTime();
-      long lastLogNanos = startNanos;
-      long scanned = 0;
-      for (it.seekToFirst(); it.isValid(); it.next()) {
-        comp.record(it.key(), it.value());
-        scanned++;
-        // Check the wall clock only every 65536 entries to keep the hot loop cheap.
-        if (intervalNanos > 0 && (scanned & 0xFFFF) == 0) {
-          final long now = System.nanoTime();
-          if (now - lastLogNanos >= intervalNanos) {
-            logProgress(out, scanned, estTotal, startNanos, now);
-            lastLogNanos = now;
-          }
-        }
-        if (maxEntries > 0 && scanned >= maxEntries) {
-          out.println("  reached --max-entries=" + maxEntries + ", stopping scan early");
-          return true;
-        }
+    final int nThreads = Math.max(1, threads);
+    out.println("  scanning with " + nThreads + " threads across 256 key-prefix ranges");
+    out.flush();
+
+    final ExecutorService pool = Executors.newFixedThreadPool(nThreads);
+    final LongAdder scannedTotal = new LongAdder();
+    final AtomicBoolean stop = new AtomicBoolean(false);
+    final long startNanos = System.nanoTime();
+    final Thread reporter = startProgressReporter(out, scannedTotal, estTotal, startNanos);
+    final List<Future<TrieNodeHistoryComposition>> futures = new ArrayList<>(256);
+    try {
+      for (int b = 0; b < 256; b++) {
+        final int prefix = b;
+        futures.add(pool.submit(() -> scanRange(rocksdb, cfHandle, prefix, scannedTotal, stop)));
+      }
+      final TrieNodeHistoryComposition merged =
+          new TrieNodeHistoryComposition(minBlobSize, fullAboveDepth);
+      for (final Future<TrieNodeHistoryComposition> f : futures) {
+        merged.merge(f.get());
+      }
+      return new ScanResult(merged, stop.get());
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new RuntimeException("interrupted during scan", e);
+    } catch (final ExecutionException e) {
+      throw new RuntimeException(e.getCause());
+    } finally {
+      pool.shutdownNow();
+      if (reporter != null) {
+        reporter.interrupt();
+      }
+      if (logIntervalSeconds > 0) {
+        logProgress(out, scannedTotal.sum(), estTotal, startNanos, System.nanoTime());
       }
     }
-    return false;
+  }
+
+  /** Scans a single {@code [prefix, prefix+1)} key range into a fresh accumulator. */
+  private TrieNodeHistoryComposition scanRange(
+      final RocksDB rocksdb,
+      final ColumnFamilyHandle cfHandle,
+      final int prefix,
+      final LongAdder scannedTotal,
+      final AtomicBoolean stop) {
+    final TrieNodeHistoryComposition local =
+        new TrieNodeHistoryComposition(minBlobSize, fullAboveDepth);
+    final byte[] lower = new byte[] {(byte) prefix};
+    final Slice lowerSlice = new Slice(lower);
+    final Slice upperSlice = prefix < 255 ? new Slice(new byte[] {(byte) (prefix + 1)}) : null;
+    final ReadOptions ro = new ReadOptions();
+    ro.setVerifyChecksums(false).setFillCache(false).setReadaheadSize(4L * 1024 * 1024);
+    ro.setIterateLowerBound(lowerSlice);
+    if (upperSlice != null) {
+      ro.setIterateUpperBound(upperSlice);
+    }
+    try (ro;
+        final RocksIterator it = rocksdb.newIterator(cfHandle, ro)) {
+      long batch = 0;
+      for (it.seek(lower); it.isValid(); it.next()) {
+        local.record(it.key(), it.value());
+        batch++;
+        if ((batch & 0x1FFF) == 0) { // publish progress and check limits every 8192 entries
+          scannedTotal.add(batch);
+          batch = 0;
+          if (stop.get()) {
+            break;
+          }
+          if (maxEntries > 0 && scannedTotal.sum() >= maxEntries) {
+            stop.set(true);
+            break;
+          }
+        }
+      }
+      scannedTotal.add(batch); // flush the remainder
+    } finally {
+      lowerSlice.close();
+      if (upperSlice != null) {
+        upperSlice.close();
+      }
+    }
+    return local;
+  }
+
+  /**
+   * Starts a daemon thread that prints a progress line every {@code logIntervalSeconds}.
+   *
+   * @return the reporter thread, or {@code null} if progress logging is disabled
+   */
+  private Thread startProgressReporter(
+      final PrintWriter out,
+      final LongAdder scannedTotal,
+      final long estTotal,
+      final long startNanos) {
+    if (logIntervalSeconds <= 0) {
+      return null;
+    }
+    final Thread t =
+        new Thread(
+            () -> {
+              try {
+                while (!Thread.currentThread().isInterrupted()) {
+                  Thread.sleep(logIntervalSeconds * 1000L);
+                  logProgress(out, scannedTotal.sum(), estTotal, startNanos, System.nanoTime());
+                }
+              } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
+            },
+            "history-stats-progress");
+    t.setDaemon(true);
+    t.start();
+    return t;
   }
 
   private static void logProgress(
