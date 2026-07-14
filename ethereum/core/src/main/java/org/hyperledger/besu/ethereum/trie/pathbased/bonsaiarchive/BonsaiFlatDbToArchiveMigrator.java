@@ -115,8 +115,28 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   @VisibleForTesting static final int MAX_BLOCKS_PER_BATCH = 256;
   @VisibleForTesting static final long MAX_BATCH_BYTES = 256L * 1024 * 1024;
 
+  /** Maximum number of concurrently in-flight trie-node prefetch tasks (Design-5 part 2a). */
+  @VisibleForTesting static final int PREFETCH_MAX_IN_FLIGHT = 6;
+
+  /** Maximum trie-node location depth warmed by trie-node prefetch (Design-5 part 2a). */
+  @VisibleForTesting static final int PREFETCH_MAX_DEPTH = 12;
+
   private int maxBlocksPerBatch = MAX_BLOCKS_PER_BATCH;
   private long maxBatchBytes = MAX_BATCH_BYTES;
+
+  /**
+   * Toggle for trie-node path prefetch (Design-5 part 2a). Defaults to enabled; can be disabled via
+   * the {@code besu.bonsaiArchiveMigrationPrefetch=false} system property.
+   */
+  private boolean prefetchEnabled =
+      !"false".equalsIgnoreCase(System.getProperty("besu.bonsaiArchiveMigrationPrefetch"));
+
+  /**
+   * Best-effort background trie-node prefetcher; non-null only when {@link #prefetchEnabled} was
+   * true at the time {@link #initMigrationWorldState} ran. Volatile because {@link #close()} may
+   * race with a concurrent migration batch reading it.
+   */
+  private volatile MigrationPrefetcher prefetcher;
 
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final TrieLogManager trieLogManager;
@@ -248,6 +268,37 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   /**
+   * Enables or disables trie-node prefetch for testing. Must be called before {@link #migrate()}.
+   *
+   * <p>If a prefetcher was already created (e.g. {@link #initMigrationWorldState} ran eagerly from
+   * the index-enabled constructor before this setter could run), disabling here also closes and
+   * discards it so that {@code migrateBlocks} sees {@code prefetcher == null} and genuinely stops
+   * submitting prefetch tasks — not just flips a flag that arrived too late.
+   *
+   * @param enabled whether trie-node prefetch should run during migration
+   */
+  @VisibleForTesting
+  void setPrefetchEnabledForTesting(final boolean enabled) {
+    this.prefetchEnabled = enabled;
+    if (!enabled && prefetcher != null) {
+      prefetcher.close();
+      prefetcher = null;
+    }
+  }
+
+  /**
+   * Returns the number of trie-node prefetch tasks submitted so far.
+   *
+   * @return 0 when prefetch is disabled or the prefetcher has not been created; otherwise the
+   *     prefetcher's submitted-task count
+   */
+  @VisibleForTesting
+  long prefetchTasksSubmittedForTesting() {
+    final MigrationPrefetcher p = prefetcher;
+    return p == null ? 0L : p.submittedTaskCount();
+  }
+
+  /**
    * Migrates Bonsai flat DB to Bonsai archive format.
    *
    * @return a CompletableFuture that completes when migration finishes
@@ -347,6 +398,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         for (; blockNumber <= target.get() && blocksInBatch < maxBlocksPerBatch; blockNumber++) {
           final Optional<TrieLog> maybeTrieLog = prefetched.join();
           prefetched = prefetchTrieLog(blockNumber + 1);
+          if (prefetcher != null) {
+            maybeTrieLog.ifPresent(prefetcher::prefetchTrieNodes);
+          }
           if (maybeTrieLog.isEmpty()) {
             if (blockNumber > 0) {
               throw new IllegalStateException("No trie log found for block " + blockNumber);
@@ -563,6 +617,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     closed = true;
     blockObserverId.ifPresent(blockchain::removeObserver);
     blockObserverId = OptionalLong.empty();
+    if (prefetcher != null) {
+      prefetcher.close();
+    }
     executorService.shutdownNow();
     try {
       if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
@@ -684,6 +741,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             CacheManager.NO_OP_CACHE,
             0L,
             migrationTrieNodeStrategy);
+    if (prefetchEnabled) {
+      prefetcher =
+          new MigrationPrefetcher(
+              worldStateStorage.getComposedWorldStateStorage(),
+              PREFETCH_POOL,
+              PREFETCH_MAX_IN_FLIGHT,
+              PREFETCH_MAX_DEPTH);
+    }
     resetMigrationWorldState();
   }
 

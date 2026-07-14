@@ -20,6 +20,8 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_FRONTIER;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveKeyUtil.calculateArchiveKeyWithMinSuffix;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
@@ -68,13 +70,16 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
@@ -1232,6 +1237,239 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     assertThat(getArchivedAccountKey(2L))
         .as("Block 2 account update must be in archive after migration")
         .isPresent();
+  }
+
+  // --- Task 3: trie-node prefetch (part 2a) wiring + invariant ---
+
+  /**
+   * Design-5 part 2a wires a best-effort {@code MigrationPrefetcher} into the migrator's batch
+   * loop, gated by a toggle. Prefetch reads must never influence what gets written: this test runs
+   * the same 3-block fixture (an account changed on every block, plus a storage slot changed on
+   * every block, to exercise upper trie-node reads) once with prefetch on and once with prefetch
+   * off, and asserts the archive column families are byte-identical either way.
+   *
+   * <p>To make this a genuine red/green test (not one that would pass even if prefetch were never
+   * wired up, or silently no-op'd), it also asserts on {@link
+   * BonsaiFlatDbToArchiveMigrator#prefetchTasksSubmittedForTesting()}: the prefetch-ON run must
+   * have actually submitted background prefetch tasks, and the prefetch-OFF run must have submitted
+   * none.
+   */
+  @Test
+  void prefetchOnProducesIdenticalArchiveContentAsPrefetchOff() throws Exception {
+    // Built once and reused for both runs: the two migrations must replay the IDENTICAL block
+    // hashes/trie logs, otherwise a divergence unrelated to prefetch (e.g. a fresh
+    // BlockDataGenerator producing different block hashes) would make the comparison meaningless.
+    final PrefetchTestFixture fixture = buildPrefetchTestFixture();
+
+    final MigrationSnapshot withPrefetch = runMigrationToCompletion(fixture, true);
+    final MigrationSnapshot withoutPrefetch = runMigrationToCompletion(fixture, false);
+
+    assertThat(withPrefetch.archiveContents())
+        .as("archive CF contents must be byte-identical whether prefetch is on or off")
+        .isEqualTo(withoutPrefetch.archiveContents());
+    assertThat(withPrefetch.tasksSubmitted())
+        .as("prefetch-ON run must actually submit background prefetch tasks")
+        .isGreaterThan(0L);
+    assertThat(withoutPrefetch.tasksSubmitted())
+        .as("prefetch-OFF run must submit no prefetch tasks")
+        .isEqualTo(0L);
+  }
+
+  /**
+   * Snapshot of the archive-relevant column families produced by a migration run, plus the number
+   * of prefetch tasks the run submitted.
+   */
+  private record MigrationSnapshot(
+      Map<SegmentIdentifier, Map<Bytes, Bytes>> archiveContents, long tasksSubmitted) {}
+
+  /**
+   * A 3-block chain (account changed every block, plus one storage slot changed every block) and
+   * its matching trie logs, shared by both the prefetch-on and prefetch-off runs so that only
+   * storage/prefetching differs between them.
+   */
+  private record PrefetchTestFixture(
+      MutableBlockchain blockchain,
+      Block block1,
+      Block block2,
+      Block block3,
+      TrieLogLayer trieLogGenesis,
+      TrieLogLayer trieLog1,
+      TrieLogLayer trieLog2,
+      TrieLogLayer trieLog3) {}
+
+  private PrefetchTestFixture buildPrefetchTestFixture() {
+    final BlockDataGenerator localGenerator = new BlockDataGenerator(1);
+    final MutableBlockchain localBlockchain =
+        createInMemoryBlockchain(
+            localGenerator.genesisBlock(BlockDataGenerator.BlockOptions.create().setTimestamp(0L)));
+    final StorageSlotKey slotKey = new StorageSlotKey(UInt256.ONE);
+
+    // Block 1: CREATE account balance=1, slot 0 -> 42.
+    final Block genesis = localBlockchain.getBlockByNumber(0).orElseThrow();
+    final Hash stateRoot1 = computeAccountAndStorageStateRoot(Wei.ONE, UInt256.valueOf(42));
+    final Block block1 =
+        localGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setTimestamp(1L)
+                .setStateRoot(stateRoot1));
+    localBlockchain.appendBlock(block1, localGenerator.receipts(block1));
+
+    // Block 2: UPDATE balance=2, slot 42 -> 100.
+    final Hash stateRoot2 = computeAccountAndStorageStateRoot(Wei.of(2L), UInt256.valueOf(100));
+    final Block block2 =
+        localGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(block1.getHash())
+                .setBlockNumber(2)
+                .setTimestamp(2L)
+                .setStateRoot(stateRoot2));
+    localBlockchain.appendBlock(block2, localGenerator.receipts(block2));
+
+    // Block 3: UPDATE balance=3, slot 100 -> 7.
+    final Hash stateRoot3 = computeAccountAndStorageStateRoot(Wei.of(3L), UInt256.valueOf(7));
+    final Block block3 =
+        localGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(block2.getHash())
+                .setBlockNumber(3)
+                .setTimestamp(3L)
+                .setStateRoot(stateRoot3));
+    localBlockchain.appendBlock(block3, localGenerator.receipts(block3));
+
+    final TrieLogLayer trieLogGenesis = new TrieLogLayer();
+
+    final TrieLogLayer trieLog1 = new TrieLogLayer();
+    trieLog1.addAccountChange(
+        TEST_ADDRESS,
+        null,
+        new PmtStateTrieAccountValue(
+            1, Wei.ONE, computeStorageRoot(UInt256.valueOf(42)), Hash.EMPTY));
+    trieLog1.addStorageChange(TEST_ADDRESS, slotKey, UInt256.ZERO, UInt256.valueOf(42));
+
+    final TrieLogLayer trieLog2 = new TrieLogLayer();
+    trieLog2.addAccountChange(
+        TEST_ADDRESS,
+        new PmtStateTrieAccountValue(
+            1, Wei.ONE, computeStorageRoot(UInt256.valueOf(42)), Hash.EMPTY),
+        new PmtStateTrieAccountValue(
+            1, Wei.of(2L), computeStorageRoot(UInt256.valueOf(100)), Hash.EMPTY));
+    trieLog2.addStorageChange(TEST_ADDRESS, slotKey, UInt256.valueOf(42), UInt256.valueOf(100));
+
+    final TrieLogLayer trieLog3 = new TrieLogLayer();
+    trieLog3.addAccountChange(
+        TEST_ADDRESS,
+        new PmtStateTrieAccountValue(
+            1, Wei.of(2L), computeStorageRoot(UInt256.valueOf(100)), Hash.EMPTY),
+        new PmtStateTrieAccountValue(
+            1, Wei.of(3L), computeStorageRoot(UInt256.valueOf(7)), Hash.EMPTY));
+    trieLog3.addStorageChange(TEST_ADDRESS, slotKey, UInt256.valueOf(100), UInt256.valueOf(7));
+
+    return new PrefetchTestFixture(
+        localBlockchain, block1, block2, block3, trieLogGenesis, trieLog1, trieLog2, trieLog3);
+  }
+
+  /**
+   * Runs a fresh, isolated trie-node-index-enabled migration to completion over {@code fixture}
+   * with prefetch set to {@code prefetchEnabled}, and returns a snapshot of the archive CFs plus
+   * the prefetcher's submitted-task count.
+   *
+   * <p>Index mode (historyStore/changeIndex/progress all non-null) is required here: it is the only
+   * migrator configuration that calls {@code migrationWorldState.persist(header)} — the real trie
+   * walk that both writes {@code TRIE_BRANCH_FRONTIER}/{@code TRIE_NODE_HISTORY_ARCHIVE}/ {@code
+   * TRIE_NODE_INDEX_ARCHIVE} and is what trie-node prefetch is warming reads for.
+   */
+  private MigrationSnapshot runMigrationToCompletion(
+      final PrefetchTestFixture fixture, final boolean prefetchEnabled) throws Exception {
+    final SegmentedKeyValueStorage localStorage = new SegmentedInMemoryKeyValueStorage();
+    final BonsaiWorldStateKeyValueStorage localWorldStateStorage =
+        mock(BonsaiWorldStateKeyValueStorage.class);
+    when(localWorldStateStorage.getComposedWorldStateStorage()).thenReturn(localStorage);
+    final TrieLogManager localTrieLogManager = mock(TrieLogManager.class);
+    when(localTrieLogManager.getMaxLayersToLoad()).thenReturn(BOUNDARY_DISABLED);
+
+    when(localTrieLogManager.getTrieLogLayer(
+            fixture.blockchain().getBlockHeader(0).orElseThrow().getHash()))
+        .thenReturn(Optional.of(fixture.trieLogGenesis()));
+    when(localTrieLogManager.getTrieLogLayer(fixture.block1().getHash()))
+        .thenReturn(Optional.of(fixture.trieLog1()));
+    when(localTrieLogManager.getTrieLogLayer(fixture.block2().getHash()))
+        .thenReturn(Optional.of(fixture.trieLog2()));
+    when(localTrieLogManager.getTrieLogLayer(fixture.block3().getHash()))
+        .thenReturn(Optional.of(fixture.trieLog3()));
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(localStorage);
+    final TrieNodeChangeIndex changeIndex =
+        new TrieNodeChangeIndex(localStorage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+
+    final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
+    final BonsaiArchiveFlatDbStrategy archiveStrategy =
+        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
+
+    final BonsaiFlatDbToArchiveMigrator migrator =
+        new BonsaiFlatDbToArchiveMigrator(
+            localWorldStateStorage,
+            localTrieLogManager,
+            fixture.blockchain(),
+            Executors.newScheduledThreadPool(1),
+            metricsSystem,
+            archiveStrategy,
+            historyStore,
+            changeIndex,
+            progress);
+    migrators.add(migrator);
+    migrator.setPrefetchEnabledForTesting(prefetchEnabled);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    final long tasksSubmitted = migrator.prefetchTasksSubmittedForTesting();
+
+    final Map<SegmentIdentifier, Map<Bytes, Bytes>> snapshot = new HashMap<>();
+    for (final SegmentIdentifier segment :
+        List.of(TRIE_NODE_INDEX_ARCHIVE, TRIE_NODE_HISTORY_ARCHIVE, TRIE_BRANCH_FRONTIER)) {
+      final Map<Bytes, Bytes> content = new HashMap<>();
+      localStorage.stream(segment)
+          .forEach(entry -> content.put(Bytes.wrap(entry.getKey()), Bytes.wrap(entry.getValue())));
+      snapshot.put(segment, content);
+    }
+    return new MigrationSnapshot(snapshot, tasksSubmitted);
+  }
+
+  /**
+   * Computes the real, canonical storage-trie root for a single-slot account whose only live slot
+   * ({@code StorageSlotKey(UInt256.ONE)}) holds {@code value}. Mirrors {@code
+   * BonsaiWorldState.updateAccountStorageState}'s trie-value encoding ({@code
+   * RLP(value.trimLeadingZeros())}). A Merkle-Patricia trie's root hash depends only on its final
+   * key/value set, not the order or history of writes, so building a fresh trie with just the live
+   * entry reproduces exactly the root {@code BonsaiWorldState} computes internally after applying
+   * the same slot's writes across any number of prior blocks.
+   */
+  private Hash computeStorageRoot(final UInt256 value) {
+    final StorageSlotKey slotKey = new StorageSlotKey(UInt256.ONE);
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    out.writeBytes(value.trimLeadingZeros());
+    final SimpleMerklePatriciaTrie<Bytes, Bytes> storageTrie =
+        new SimpleMerklePatriciaTrie<>(Function.identity());
+    storageTrie.put(slotKey.getSlotHash().getBytes(), out.encoded());
+    return Hash.wrap(storageTrie.getRootHash());
+  }
+
+  /**
+   * Computes the block state root for a world state containing only TEST_ADDRESS, with the given
+   * balance and a single storage slot holding {@code storageValue}. See {@link #computeStorageRoot}
+   * for why a freshly-built trie reproduces the real, history-independent root.
+   */
+  private Hash computeAccountAndStorageStateRoot(final Wei balance, final UInt256 storageValue) {
+    final Hash storageRoot = computeStorageRoot(storageValue);
+    final PmtStateTrieAccountValue account =
+        new PmtStateTrieAccountValue(1, balance, storageRoot, Hash.EMPTY);
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    account.writeTo(out);
+    final SimpleMerklePatriciaTrie<Bytes, Bytes> trie =
+        new SimpleMerklePatriciaTrie<>(Function.identity());
+    trie.put(TEST_ADDRESS.addressHash().getBytes(), out.encoded());
+    return Hash.wrap(trie.getRootHash());
   }
 
   // --- test helpers ---

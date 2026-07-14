@@ -24,6 +24,7 @@ import java.io.Closeable;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Best-effort, read-only background prefetch of trie-node paths (Design-5 migration part 2a). For a
@@ -40,6 +41,13 @@ public final class MigrationPrefetcher implements Closeable {
   private final Semaphore inFlight;
   private final int maxDepth;
   private volatile boolean closed = false;
+
+  /**
+   * Counts prefetch tasks actually submitted to {@link #executor} (i.e. after a successful {@link
+   * #inFlight} acquire). Exists so tests can assert that prefetch genuinely ran end-to-end rather
+   * than silently no-op'ing; production code does not read this value.
+   */
+  private final AtomicLong submittedTaskCount = new AtomicLong();
 
   /**
    * Creates a MigrationPrefetcher.
@@ -88,10 +96,20 @@ public final class MigrationPrefetcher implements Closeable {
               inFlight.release();
             }
           });
+      submittedTaskCount.incrementAndGet();
     } catch (final RuntimeException rejected) {
       // Executor rejected the task (e.g. shutting down) - release and move on.
       inFlight.release();
     }
+  }
+
+  /**
+   * Returns the number of prefetch tasks actually submitted to the executor so far.
+   *
+   * @return the count of submitted (not necessarily completed) prefetch tasks
+   */
+  public long submittedTaskCount() {
+    return submittedTaskCount.get();
   }
 
   /** Stops accepting new prefetch tasks. Already-submitted tasks run to completion. */
