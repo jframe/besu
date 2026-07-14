@@ -16,8 +16,11 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -25,6 +28,8 @@ import static org.mockito.Mockito.verify;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
+
+import java.util.concurrent.Semaphore;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
@@ -1156,5 +1161,89 @@ class TrieNodeChangeIndexTest {
     final var list = idx.readRangeList(KEY, 0);
     assertThat(list).isPresent();
     assertThat(list.get().size()).isEqualTo(TEST_THRESHOLD + 2);
+  }
+
+  // ===========================================================================
+  // Task 2b: background index base-value prefetch
+  // ===========================================================================
+
+  /**
+   * Writes a raw {@code TRIE_NODE_INDEX_ARCHIVE} value for {@code (key, rangeId)} directly
+   * (bypasses the normal append path), simulating a value already committed by a prior batch. The
+   * value is {@code [4B subCount=0 BE][packed offsets]}.
+   */
+  private static void seedIndexValue(
+      final SegmentedKeyValueStorage kv, final Bytes key, final long rangeId, final int[] offsets) {
+    RangeRelativeOffsetList list = RangeRelativeOffsetList.empty();
+    for (final int offset : offsets) {
+      list = list.append(offset);
+    }
+    final Bytes packed = list.toBytes();
+    final byte[] value = new byte[4 + packed.size()];
+    System.arraycopy(packed.toArrayUnsafe(), 0, value, 4, packed.size());
+    final byte[] indexKey = ArchiveNodeKey.rangeKey(key, rangeId).toArrayUnsafe();
+    final var tx = kv.startTransaction();
+    tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey, value);
+    tx.commit();
+  }
+
+  /** Reads the raw committed {@code TRIE_NODE_INDEX_ARCHIVE} bytes for {@code (key, rangeId)}. */
+  private static byte[] readIndexRaw(
+      final SegmentedKeyValueStorage kv, final Bytes key, final long rangeId) {
+    final byte[] indexKey = ArchiveNodeKey.rangeKey(key, rangeId).toArrayUnsafe();
+    return kv.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey).orElse(null);
+  }
+
+  @Test
+  void bufferedAppend_withPrefetch_producesIdenticalIndexValuesAsWithout() {
+    // Build two indexes over two separate in-memory stores pre-seeded with the SAME committed base
+    // values for a key, then run the same buffered append sequence: one with prefetch enabled, one
+    // without. Assert the committed TRIE_NODE_INDEX_ARCHIVE bytes are identical.
+    final long range = 0L;
+    final int[] existingOffsets = {10, 20, 30};
+    final SegmentedInMemoryKeyValueStorage storeA = new SegmentedInMemoryKeyValueStorage();
+    final SegmentedInMemoryKeyValueStorage storeB = new SegmentedInMemoryKeyValueStorage();
+    seedIndexValue(storeA, KEY, range, existingOffsets);
+    seedIndexValue(storeB, KEY, range, existingOffsets);
+
+    final TrieNodeChangeIndex idxA = new TrieNodeChangeIndex(storeA, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeChangeIndex idxB = new TrieNodeChangeIndex(storeB, ArchiveNodeKey.RANGE_SIZE);
+    idxB.enablePrefetch(Runnable::run, new Semaphore(4)); // synchronous executor
+
+    final var txA = storeA.startTransaction();
+    idxA.beginBuffered();
+    idxA.append(txA, KEY, range * ArchiveNodeKey.RANGE_SIZE + 45);
+    idxA.flushBuffer(txA);
+    txA.commit();
+
+    final var txB = storeB.startTransaction();
+    idxB.beginBuffered();
+    idxB.append(txB, KEY, range * ArchiveNodeKey.RANGE_SIZE + 45);
+    idxB.flushBuffer(txB);
+    txB.commit();
+
+    assertThat(readIndexRaw(storeB, KEY, range)).isEqualTo(readIndexRaw(storeA, KEY, range));
+  }
+
+  @Test
+  void prefetchedBase_isConsumedByFlushBuffer_withoutRefetch() {
+    // With prefetch enabled and a synchronous executor, after the append the prefetchedBase staging
+    // must contain the key (proving the background read ran) and flushBuffer must not re-read it.
+    final long range = 0L;
+    final int[] existingOffsets = {10, 20, 30};
+    final SegmentedKeyValueStorage store = spy(new SegmentedInMemoryKeyValueStorage());
+    seedIndexValue(store, KEY, range, existingOffsets);
+    final TrieNodeChangeIndex idx = new TrieNodeChangeIndex(store, ArchiveNodeKey.RANGE_SIZE);
+    idx.enablePrefetchDrainThresholdForTesting(1); // drain immediately
+    idx.enablePrefetch(Runnable::run, new Semaphore(4));
+    final var tx = store.startTransaction();
+    idx.beginBuffered();
+    idx.append(tx, KEY, range * ArchiveNodeKey.RANGE_SIZE + 45); // triggers prefetch of base
+    clearInvocations(store);
+    idx.flushBuffer(tx); // must not multiGet the already-staged key
+    verify(store, never()).multiGet(any(), anyList());
+    // The observable prefetchBaseHits() counter proves the staged value was actually consumed.
+    assertThat(idx.prefetchBaseHits()).isEqualTo(1L);
+    tx.commit();
   }
 }

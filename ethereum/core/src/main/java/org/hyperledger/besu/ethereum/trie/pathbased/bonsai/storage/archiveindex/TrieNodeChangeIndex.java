@@ -24,7 +24,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicLong;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.hash.BloomFilter;
 import com.google.common.hash.Funnels;
 import org.apache.tuweni.bytes.Bytes;
@@ -168,6 +174,101 @@ public final class TrieNodeChangeIndex {
   }
 
   /**
+   * Drain threshold for the background base-value prefetch queue (Task 2b). Adjustable via {@link
+   * #enablePrefetchDrainThresholdForTesting(int)} so unit tests can force an immediate drain
+   * without needing thousands of buffered entries.
+   */
+  private static int prefetchDrainThreshold = 512;
+
+  /**
+   * Executor used for background base-value prefetch reads. {@code null} (the default) means
+   * prefetch is disabled and every code path below behaves exactly as it did before Task 2b.
+   */
+  private Executor prefetchExecutor;
+
+  /** Bounds the number of prefetch reads in flight at once; only used when prefetch is enabled. */
+  private Semaphore prefetchInFlight;
+
+  /**
+   * Cold (not yet loaded) index keys accumulated during the current batch, awaiting a background
+   * {@code multiGet}. Only ever touched by the migrator thread (enqueue) and {@link
+   * #drainPrefetch()} (poll), both of which run under the same single-writer discipline as the rest
+   * of the buffered-append path.
+   */
+  private final ConcurrentLinkedQueue<Bytes> prefetchQueue = new ConcurrentLinkedQueue<>();
+
+  /**
+   * Staging map for background-prefetched base index values, keyed by index key. {@code
+   * Optional.empty()} means the key is definitively absent from committed storage (a valid,
+   * meaningful result — not "not yet fetched").
+   *
+   * <p><strong>Must be a fresh instance per batch</strong>, swapped (never {@code .clear()}'d) in
+   * {@link #beginBuffered()}, {@link #discardBuffer()}, {@link #clearIndexCache()}, and at the end
+   * of {@link #flushBuffer}. A background drain task submitted in batch N captures the batch-N map
+   * reference at submission time ({@code final var target = prefetchedBase;} inside {@link
+   * #drainPrefetch()}); if that task is still running when batch N+1 begins, swapping the field to
+   * a new map ensures the late task can only ever write into the (now-abandoned) old map, never
+   * into batch N+1's staging — because the committed base values for a key can differ between
+   * batches (this class's own {@link #flushBuffer} writes them), a stale value written into the
+   * wrong batch's map would silently corrupt that batch's merge.
+   */
+  private volatile ConcurrentHashMap<Bytes, Optional<byte[]>> prefetchedBase =
+      new ConcurrentHashMap<>();
+
+  /**
+   * Counts base values consumed from {@link #prefetchedBase} by {@link #flushBuffer} — i.e. a
+   * background-staged hit that was used instead of falling back to a synchronous {@code multiGet}.
+   * Exposed via {@link #prefetchBaseHits()} purely as a test/observability hook so that invariant
+   * tests can prove the background prefetch path actually ran.
+   */
+  private final AtomicLong prefetchBaseHits = new AtomicLong();
+
+  /**
+   * Returns the number of base index values that {@link #flushBuffer} consumed directly from the
+   * background prefetch staging map (rather than via its own synchronous {@code multiGet}) since
+   * this index was constructed. Always {@code 0} when prefetch was never enabled.
+   *
+   * @return the cumulative count of prefetch-staged hits consumed by {@code flushBuffer}
+   */
+  public long prefetchBaseHits() {
+    return prefetchBaseHits.get();
+  }
+
+  /**
+   * Enables opt-in background prefetch of committed base index values during buffered migration.
+   *
+   * <p>When enabled, cold keys touched for the first time in a batch (see the {@code append}/{@code
+   * appendAndGetPreviousCount} buffered-path enqueue logic) are queued and, once the queue reaches
+   * {@link #prefetchDrainThreshold}, drained into a background {@code multiGet} submitted to {@code
+   * executor}. Results land in {@link #prefetchedBase}; {@link #flushBuffer} consults that map
+   * before falling back to its own synchronous {@code multiGet} for any keys still missing.
+   *
+   * <p>Never called in production code paths that don't opt in: leaving this unset means {@link
+   * #prefetchExecutor} stays {@code null} and every prefetch-related branch below is skipped,
+   * preserving byte-for-byte identical behaviour to the pre-Task-2b code.
+   *
+   * @param executor the executor on which background {@code multiGet} drains are submitted
+   * @param inFlight bounds the number of concurrently in-flight background drains; a full semaphore
+   *     causes {@link #drainPrefetch()} to skip the drain and leave the keys for {@link
+   *     #flushBuffer}'s synchronous fallback
+   */
+  public void enablePrefetch(final Executor executor, final Semaphore inFlight) {
+    this.prefetchExecutor = executor;
+    this.prefetchInFlight = inFlight;
+  }
+
+  /**
+   * Overrides the prefetch drain threshold for testing, so a single enqueued key can trigger an
+   * immediate drain instead of requiring {@link #prefetchDrainThreshold} (512) keys.
+   *
+   * @param n the new drain threshold
+   */
+  @VisibleForTesting
+  void enablePrefetchDrainThresholdForTesting(final int n) {
+    prefetchDrainThreshold = n;
+  }
+
+  /**
    * Starts buffering mode. Subsequent {@link #append} and {@link #appendAndGetPreviousCount} calls
    * accumulate offsets in memory and perform no storage writes; the {@code tx} argument is unused
    * for the index value (only the running count is served from memory). Call {@link
@@ -176,6 +277,9 @@ public final class TrieNodeChangeIndex {
    */
   public void beginBuffered() {
     buffer = new LinkedHashMap<>();
+    prefetchQueue.clear();
+    // Fresh map per batch — see the field javadoc for why this must be a swap, not a clear().
+    prefetchedBase = new ConcurrentHashMap<>();
   }
 
   /**
@@ -183,6 +287,8 @@ public final class TrieNodeChangeIndex {
    */
   public void discardBuffer() {
     buffer = null;
+    prefetchQueue.clear();
+    prefetchedBase = new ConcurrentHashMap<>();
   }
 
   /**
@@ -192,6 +298,9 @@ public final class TrieNodeChangeIndex {
    */
   public void clearIndexCache() {
     indexCache.clear();
+    // A failed commit must not leave stale staged bases visible to whatever batch follows.
+    prefetchQueue.clear();
+    prefetchedBase = new ConcurrentHashMap<>();
   }
 
   /**
@@ -212,6 +321,10 @@ public final class TrieNodeChangeIndex {
       return;
     }
 
+    // Drain any still-queued keys so in-flight background reads cover as much as possible before
+    // we fall back to a synchronous read for whatever remains uncovered.
+    drainPrefetch();
+
     // ── Phase 1: bulk-load base values for entries not found in indexCache at first touch ──────
     final List<Bytes> missKeys = new ArrayList<>();
     final List<byte[]> missKeyBytes = new ArrayList<>();
@@ -219,8 +332,21 @@ public final class TrieNodeChangeIndex {
       final BufferedEntry be = entry.getValue();
       if (!be.baseLoaded) {
         final byte[] indexKeyBytes = entry.getKey().toArrayUnsafe();
-        // Fresh-migration mode: key definitely absent from DB → skip multiGet for this key.
-        if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
+        final Optional<byte[]> staged = prefetchedBase.get(entry.getKey());
+        if (staged != null) {
+          // A background prefetch already resolved this key (present or definitively absent) —
+          // consume it instead of issuing a synchronous read.
+          be.baseLoaded = true;
+          prefetchBaseHits.incrementAndGet();
+          staged.ifPresent(
+              bytes -> {
+                final IndexValue iv = readIndexValue(bytes);
+                be.baseSubCount = iv.subCount;
+                be.baseTail = iv.list;
+                indexCache.put(entry.getKey(), bytes);
+              });
+        } else if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
+          // Fresh-migration mode: key definitely absent from DB → skip multiGet for this key.
           be.baseLoaded = true; // treat as empty (new key); nothing to load
         } else {
           missKeys.add(entry.getKey());
@@ -274,6 +400,89 @@ public final class TrieNodeChangeIndex {
       indexCache.put(indexKey, newValue);
     }
     buffer = null;
+    prefetchQueue.clear();
+    // Fresh map, not clear(): see the field javadoc — a late background task from this batch that
+    // is still running must not be able to write into the next batch's staging map.
+    prefetchedBase = new ConcurrentHashMap<>();
+  }
+
+  /**
+   * Enqueues {@code indexKey} for background base-value prefetch and triggers a drain once the
+   * queue reaches {@link #prefetchDrainThreshold}. No-op when prefetch is disabled ({@link
+   * #prefetchExecutor} is {@code null}) — but callers only invoke this after already checking that,
+   * so this method itself does not need to re-check.
+   *
+   * @param indexKey the index key to prefetch the committed base value for
+   */
+  private void enqueueBasePrefetch(final Bytes indexKey) {
+    prefetchQueue.add(indexKey);
+    if (prefetchQueue.size() >= prefetchDrainThreshold) {
+      drainPrefetch();
+    }
+  }
+
+  /**
+   * Drains up to {@link #prefetchDrainThreshold} queued keys and, if any were drained and a permit
+   * is available, submits a background {@code multiGet} for them on {@link #prefetchExecutor}.
+   *
+   * <p>Thread-safety: the background task below only calls {@code storage.multiGet} (read-only) and
+   * writes to the captured {@code target} map. It never touches {@link #buffer}, {@link
+   * #indexCache}, {@link #earlierRangeCountCache}, or {@link #sessionWrittenKeys} — the migrator
+   * thread remains the sole mutator of those structures.
+   *
+   * <p>The batch's {@link #prefetchedBase} reference is captured into a local {@code target}
+   * variable at submission time, before the executor runs the task (which may be immediately, on
+   * the calling thread, or arbitrarily later on a pool thread). This is the mechanism that prevents
+   * cross-batch poisoning: even if this task is still pending when the next {@link
+   * #beginBuffered()} swaps {@link #prefetchedBase} to a new instance, this task's closure still
+   * only ever sees and writes to {@code target} (the old batch's map), never the new one.
+   *
+   * <p>If the queue is empty, or the in-flight semaphore has no permits available, this method
+   * returns immediately without submitting anything — the keys remain queued (or, if drained but
+   * not submitted due to no permit, are effectively dropped from the queue but simply uncovered)
+   * and {@link #flushBuffer}'s own synchronous {@code multiGet} fallback will read them at flush
+   * time. A saturated prefetch pipeline is therefore never a correctness issue, only a lost
+   * optimisation opportunity for this batch.
+   */
+  private void drainPrefetch() {
+    if (prefetchExecutor == null) {
+      return;
+    }
+    final List<Bytes> batch = new ArrayList<>();
+    for (Bytes k; (k = prefetchQueue.poll()) != null && batch.size() < prefetchDrainThreshold; ) {
+      batch.add(k);
+    }
+    if (batch.isEmpty() || !prefetchInFlight.tryAcquire()) {
+      return; // saturated: flushBuffer will read these keys itself
+    }
+    // Capture this batch's staging map now — before submission — so a late-running task can never
+    // write into a different (later) batch's map. See the field javadoc on prefetchedBase.
+    final ConcurrentHashMap<Bytes, Optional<byte[]>> target = prefetchedBase;
+    try {
+      prefetchExecutor.execute(
+          () -> {
+            try {
+              final List<byte[]> keyBytes = new ArrayList<>(batch.size());
+              for (final Bytes k : batch) {
+                keyBytes.add(k.toArrayUnsafe());
+              }
+              final List<Optional<byte[]>> res =
+                  storage.multiGet(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, keyBytes);
+              for (int i = 0; i < batch.size(); i++) {
+                target.put(batch.get(i), res.get(i));
+              }
+            } catch (final RuntimeException ignored) {
+              // Best-effort: flushBuffer falls back to a synchronous read for any key missing from
+              // the staging map, so a failed background read never causes incorrect results.
+            } finally {
+              prefetchInFlight.release();
+            }
+          });
+    } catch (final RuntimeException rejected) {
+      // Executor rejected the task (e.g. shutting down); release the permit we acquired above so it
+      // isn't leaked, and let flushBuffer's synchronous fallback cover these keys.
+      prefetchInFlight.release();
+    }
   }
 
   /**
@@ -424,6 +633,14 @@ public final class TrieNodeChangeIndex {
       if (e == null) {
         e = initBufferedEntry(indexKey, naturalKey, rangeId);
         buffer.put(indexKey, e);
+        // Prefetch the committed base only for cold keys that might actually exist on disk.
+        // Evaluate the bloom BEFORE recording this touch (below) so fresh first-appearances
+        // (definitely absent) are not prefetched.
+        if (prefetchExecutor != null
+            && !e.baseLoaded
+            && (sessionWrittenKeys == null || sessionWrittenKeys.mightContain(indexKeyBytes))) {
+          enqueueBasePrefetch(indexKey);
+        }
       }
       if (sessionWrittenKeys != null) {
         sessionWrittenKeys.put(indexKeyBytes);
@@ -520,6 +737,14 @@ public final class TrieNodeChangeIndex {
       if (e == null) {
         e = initBufferedEntry(indexKey, naturalKey, rangeId);
         buffer.put(indexKey, e);
+        // Prefetch the committed base only for cold keys that might actually exist on disk.
+        // Evaluate the bloom BEFORE recording this touch (below) so fresh first-appearances
+        // (definitely absent) are not prefetched.
+        if (prefetchExecutor != null
+            && !e.baseLoaded
+            && (sessionWrittenKeys == null || sessionWrittenKeys.mightContain(indexKeyBytes))) {
+          enqueueBasePrefetch(indexKey);
+        }
       }
       if (sessionWrittenKeys != null) {
         sessionWrittenKeys.put(indexKeyBytes);
