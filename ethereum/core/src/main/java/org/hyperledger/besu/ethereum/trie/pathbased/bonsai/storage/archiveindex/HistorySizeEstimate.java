@@ -42,11 +42,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  */
 public final class HistorySizeEstimate {
 
-  // Current production defaults (analysis.md §5: "FULL_ABOVE_DEPTH (2)"; §4:
-  // "CHECKPOINT_INTERVAL=16").
-  private static final int DEFAULT_FULL_ABOVE_DEPTH = 2;
-  private static final int DEFAULT_CHECKPOINT_INTERVAL = 16;
-
   // Representative lever sweep for the text/JSON renderers, informed by analysis.md §5 Lever 1
   // (FULL_ABOVE_DEPTH candidates 0/1/2) and §8.1 (CHECKPOINT_INTERVAL candidates 16/64/128).
   private static final int[] DEFAULT_SWEEP_FULL_ABOVE_DEPTHS = {0, 1, 2};
@@ -156,27 +151,28 @@ public final class HistorySizeEstimate {
     return Math.min(1.0, netNewLeaves / (double) totalMutations);
   }
 
-  private long leafCountAtLatestEra() {
-    long running = 0;
+  long leafCountAtLatestEra() {
+    // leafCountByRange is already cumulative (per-era running totals), so the latest era's leaf
+    // count is the last non-zero entry BY POSITION — not a re-sum, and not the maximum (net
+    // deletions can make a later cumulative value smaller than an earlier one).
     long lastNonZero = 0;
-    for (final long delta : leafCountByRange) {
-      running += delta;
-      if (running != 0) {
-        lastNonZero = running;
+    for (final long cumulative : leafCountByRange) {
+      if (cumulative != 0) {
+        lastNonZero = cumulative;
       }
     }
     return lastNonZero;
   }
 
-  public String renderText() {
+  public String renderText(final int fullAboveDepth, final int checkpointInterval) {
     final StringBuilder sb = new StringBuilder();
     sb.append("Estimated on-disk TRIE_NODE_HISTORY_ARCHIVE size\n");
     sb.append(
         String.format(
             "  headline (FULL_ABOVE_DEPTH=%d, CHECKPOINT_INTERVAL=%d): %d bytes%n",
-            DEFAULT_FULL_ABOVE_DEPTH,
-            DEFAULT_CHECKPOINT_INTERVAL,
-            estimatedOnDiskBytes(DEFAULT_FULL_ABOVE_DEPTH, DEFAULT_CHECKPOINT_INTERVAL)));
+            fullAboveDepth,
+            checkpointInterval,
+            estimatedOnDiskBytes(fullAboveDepth, checkpointInterval)));
     sb.append("  lever sweep (fullAboveDepth x checkpointInterval), on-disk bytes:\n");
     final long[][] table =
         leverTable(DEFAULT_SWEEP_FULL_ABOVE_DEPTHS, DEFAULT_SWEEP_CHECKPOINT_INTERVALS);
@@ -191,7 +187,7 @@ public final class HistorySizeEstimate {
     return sb.toString();
   }
 
-  public JsonNode renderJson() {
+  public JsonNode renderJson(final int fullAboveDepth, final int checkpointInterval) {
     final ObjectMapper mapper = new ObjectMapper();
     final ObjectNode root = mapper.createObjectNode();
 
@@ -208,7 +204,7 @@ public final class HistorySizeEstimate {
       }
       final double branchFraction = shape.branchFraction(d, leafCount);
       final double fullFraction =
-          d <= DEFAULT_FULL_ABOVE_DEPTH ? 1.0 : sampledFullFraction(d, DEFAULT_CHECKPOINT_INTERVAL);
+          d <= fullAboveDepth ? 1.0 : sampledFullFraction(d, checkpointInterval);
       final double fullWrites = totalWrites * fullFraction;
       final double diffWrites = totalWrites - fullWrites;
       final double fullBytes = fullWrites * sizes.fullBytes(d, branchFraction);
@@ -243,8 +239,7 @@ public final class HistorySizeEstimate {
       }
     }
 
-    root.put(
-        "headline", estimatedOnDiskBytes(DEFAULT_FULL_ABOVE_DEPTH, DEFAULT_CHECKPOINT_INTERVAL));
+    root.put("headline", estimatedOnDiskBytes(fullAboveDepth, checkpointInterval));
     return root;
   }
 }

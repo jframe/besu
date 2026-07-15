@@ -217,12 +217,13 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
         fullAboveDepth,
         checkpointInterval,
         estimate.estimatedOnDiskBytes(fullAboveDepth, checkpointInterval));
-    out.print(estimate.renderText());
+    out.print(estimate.renderText(fullAboveDepth, checkpointInterval));
     out.flush();
 
     if (output != null) {
       try {
-        Files.writeString(output, estimate.renderJson().toPrettyString());
+        Files.writeString(
+            output, estimate.renderJson(fullAboveDepth, checkpointInterval).toPrettyString());
         out.println("Wrote JSON estimate to " + output);
       } catch (final java.io.IOException e) {
         throw new UncheckedIOException(e);

@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 
@@ -67,6 +68,79 @@ class HistorySizeEstimateTest {
     // 20 keys × ceil(50/16)=4 FULLs = 80 FULLs / (20×50=1000 writes) = 0.08.
     assertThat(est.sampledFullFraction(1, 16))
         .isCloseTo(0.08, org.assertj.core.api.Assertions.within(0.001));
+  }
+
+  @Test
+  void leafCountAtLatestEraUsesLastCumulativeEntryNotReSummed() {
+    // leafCountByRange is ALREADY cumulative (produced by prefixSum in the subcommand): each entry
+    // is the running distinct-leaf total as of that era. The latest era's count is simply the last
+    // entry (12000), NOT the re-sum 1000+6000+18000 the pre-fix code produced.
+    final HistorySizeEstimate est =
+        new HistorySizeEstimate(
+            countsWithUpperChurn(),
+            EntrySizeTable.hoodiDefaults(),
+            new TrieShapeModel(16),
+            new long[] {1000, 5000, 12000},
+            1.93,
+            1.44);
+    assertThat(est.leafCountAtLatestEra()).isEqualTo(12000L);
+  }
+
+  @Test
+  void leafCountAtLatestEraTakesLastNonZeroByPositionUnderNetDeletions() {
+    // Net deletions make a later cumulative value SMALLER than an earlier one. The correct answer
+    // is
+    // the last non-zero entry BY POSITION (5000), not the maximum (8000) nor any re-sum.
+    final HistorySizeEstimate est =
+        new HistorySizeEstimate(
+            countsWithUpperChurn(),
+            EntrySizeTable.hoodiDefaults(),
+            new TrieShapeModel(16),
+            new long[] {1000, 8000, 5000},
+            1.93,
+            1.44);
+    assertThat(est.leafCountAtLatestEra()).isEqualTo(5000L);
+  }
+
+  @Test
+  void renderTextHeadlineReflectsRequestedLevers() {
+    final HistorySizeEstimate est =
+        new HistorySizeEstimate(
+            countsWithUpperChurn(),
+            EntrySizeTable.hoodiDefaults(),
+            new TrieShapeModel(16),
+            new long[] {1_000_000L},
+            1.93,
+            1.44);
+    // Non-default levers: F=0 (depth 1 becomes checkpoint+diff), K=64. Headline must match these,
+    // not the 2/16 defaults.
+    final long expected = est.estimatedOnDiskBytes(0, 64);
+    final long atDefaults = est.estimatedOnDiskBytes(2, 16);
+    assertThat(expected).isNotEqualTo(atDefaults);
+
+    final String text = est.renderText(0, 64);
+    assertThat(text).contains("FULL_ABOVE_DEPTH=0");
+    assertThat(text).contains("CHECKPOINT_INTERVAL=64");
+    assertThat(text).contains(Long.toString(expected));
+    assertThat(text).doesNotContain("headline (FULL_ABOVE_DEPTH=2, CHECKPOINT_INTERVAL=16)");
+  }
+
+  @Test
+  void renderJsonHeadlineReflectsRequestedLevers() {
+    final HistorySizeEstimate est =
+        new HistorySizeEstimate(
+            countsWithUpperChurn(),
+            EntrySizeTable.hoodiDefaults(),
+            new TrieShapeModel(16),
+            new long[] {1_000_000L},
+            1.93,
+            1.44);
+    final long expected = est.estimatedOnDiskBytes(0, 64);
+    final long atDefaults = est.estimatedOnDiskBytes(2, 16);
+    assertThat(expected).isNotEqualTo(atDefaults);
+
+    final JsonNode json = est.renderJson(0, 64);
+    assertThat(json.get("headline").asLong()).isEqualTo(expected);
   }
 
   @Test
