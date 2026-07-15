@@ -76,7 +76,6 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -1395,17 +1394,17 @@ public class BonsaiFlatDbToArchiveMigratorTest {
    * TrieNodeIndexProgress} reloaded from storage) so its caches start cold, and resumes migration
    * of the remaining blocks.
    *
-   * <p>The second migrator's change index has its (process-wide, static) prefetch drain threshold
-   * lowered to 1 via reflection — mirroring {@code
-   * TrieNodeChangeIndexTest#prefetchedBase_isConsumedByFlushBuffer_withoutRefetch}'s use of {@code
-   * enablePrefetchDrainThresholdForTesting}, which is package-private and so not directly callable
-   * from this package — so the very first cold key touched in the resumed batch is queued for
-   * background prefetch immediately, giving the background read the rest of the batch's
-   * block-processing time to complete before the batch's single {@code flushBuffer} call consults
-   * the staging map. All second-half blocks are kept in a single batch ({@link
-   * BonsaiFlatDbToArchiveMigrator#setMaxBlocksPerBatchForTesting}) so that window is as large as
-   * possible. The threshold is restored to its default afterwards since it is static (process-wide)
-   * state shared with other test classes.
+   * <p>When {@code prefetchEnabled} is {@code true}, the second (resumed) migrator has a
+   * synchronous ({@code Runnable::run}) executor injected via {@link
+   * BonsaiFlatDbToArchiveMigrator#setPrefetchExecutorForTesting} so that the background {@code
+   * multiGet} which populates {@link TrieNodeChangeIndex}'s prefetch staging map runs inline,
+   * before the batch's single {@code flushBuffer} call consults it. This makes {@code
+   * prefetchBaseHits() > 0} a deterministic outcome rather than one that depends on a background
+   * thread winning a race against {@code flushBuffer} — the migrator's {@code drainPrefetch}/{@code
+   * flushBuffer} pairing is fire-and-forget by design (no await), so without a synchronous executor
+   * the assertion would flake under load. All second-half blocks are kept in a single batch ({@link
+   * BonsaiFlatDbToArchiveMigrator#setMaxBlocksPerBatchForTesting}) so every cold key is queued
+   * before that single {@code flushBuffer} call runs.
    *
    * @param fixture the two-half block/trie-log fixture (shared across the prefetch-on/off runs)
    * @param prefetchEnabled whether index base-value prefetch (part 2b) is enabled for both halves
@@ -1475,55 +1474,40 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final TrieNodeIndexProgress progress2 =
         TrieNodeIndexProgress.load(localStorage, ArchiveNodeKey.RANGE_SIZE);
 
-    lowerPrefetchDrainThresholdForTesting(changeIndex2, 1);
-    try {
-      final BonsaiFlatDbToArchiveMigrator secondMigrator =
-          new BonsaiFlatDbToArchiveMigrator(
-              localWorldStateStorage,
-              localTrieLogManager,
-              localBlockchain,
-              Executors.newScheduledThreadPool(1),
-              metricsSystem,
-              archiveStrategy,
-              historyStore2,
-              changeIndex2,
-              progress2);
-      migrators.add(secondMigrator);
-      secondMigrator.setMaxBlocksPerBatchForTesting(fixture.blocks().size() + 1);
-      secondMigrator.setPrefetchEnabledForTesting(prefetchEnabled);
-      secondMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-      assertThat(secondMigrator.getMigrationProgress()).hasValue((long) fixture.blocks().size());
-
-      final Map<SegmentIdentifier, Map<Bytes, Bytes>> snapshot = new HashMap<>();
-      for (final SegmentIdentifier segment :
-          List.of(TRIE_NODE_INDEX_ARCHIVE, TRIE_NODE_HISTORY_ARCHIVE, TRIE_BRANCH_FRONTIER)) {
-        final Map<Bytes, Bytes> content = new HashMap<>();
-        localStorage.stream(segment)
-            .forEach(
-                entry -> content.put(Bytes.wrap(entry.getKey()), Bytes.wrap(entry.getValue())));
-        snapshot.put(segment, content);
-      }
-      return new ResumedMigrationSnapshot(
-          snapshot, secondMigrator.indexPrefetchBaseHitsForTesting());
-    } finally {
-      lowerPrefetchDrainThresholdForTesting(changeIndex2, 512);
+    final BonsaiFlatDbToArchiveMigrator secondMigrator =
+        new BonsaiFlatDbToArchiveMigrator(
+            localWorldStateStorage,
+            localTrieLogManager,
+            localBlockchain,
+            Executors.newScheduledThreadPool(1),
+            metricsSystem,
+            archiveStrategy,
+            historyStore2,
+            changeIndex2,
+            progress2);
+    migrators.add(secondMigrator);
+    secondMigrator.setMaxBlocksPerBatchForTesting(fixture.blocks().size() + 1);
+    secondMigrator.setPrefetchEnabledForTesting(prefetchEnabled);
+    if (prefetchEnabled) {
+      // Deterministic evidence that 2b actually ran: run the background multiGet inline (on the
+      // migrator thread, synchronously within flushBuffer's drainPrefetch() call) instead of on a
+      // real background thread, so prefetchBaseHits() > 0 holds every time rather than depending on
+      // the background task winning a race against flushBuffer's fire-and-forget consultation of
+      // the staging map.
+      secondMigrator.setPrefetchExecutorForTesting(Runnable::run);
     }
-  }
+    secondMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    assertThat(secondMigrator.getMigrationProgress()).hasValue((long) fixture.blocks().size());
 
-  /**
-   * Reflectively invokes {@link TrieNodeChangeIndex#enablePrefetchDrainThresholdForTesting(int)},
-   * which is package-private in {@code
-   * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex} and so not directly
-   * callable from this package. The threshold it sets is process-wide (static) state, so callers of
-   * this helper are responsible for restoring it (512, the production default) once done.
-   */
-  private static void lowerPrefetchDrainThresholdForTesting(
-      final TrieNodeChangeIndex changeIndex, final int threshold) throws Exception {
-    final Method m =
-        TrieNodeChangeIndex.class.getDeclaredMethod(
-            "enablePrefetchDrainThresholdForTesting", int.class);
-    m.setAccessible(true);
-    m.invoke(changeIndex, threshold);
+    final Map<SegmentIdentifier, Map<Bytes, Bytes>> snapshot = new HashMap<>();
+    for (final SegmentIdentifier segment :
+        List.of(TRIE_NODE_INDEX_ARCHIVE, TRIE_NODE_HISTORY_ARCHIVE, TRIE_BRANCH_FRONTIER)) {
+      final Map<Bytes, Bytes> content = new HashMap<>();
+      localStorage.stream(segment)
+          .forEach(entry -> content.put(Bytes.wrap(entry.getKey()), Bytes.wrap(entry.getValue())));
+      snapshot.put(segment, content);
+    }
+    return new ResumedMigrationSnapshot(snapshot, secondMigrator.indexPrefetchBaseHitsForTesting());
   }
 
   /**

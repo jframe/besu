@@ -139,6 +139,16 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    */
   private volatile MigrationPrefetcher prefetcher;
 
+  /**
+   * Executor used for both trie-node prefetch (Design-5 part 2a) and index base-value prefetch
+   * (part 2b). Defaults to {@link #PREFETCH_POOL}; overridable via {@link
+   * #setPrefetchExecutorForTesting} so tests can inject a synchronous executor and observe prefetch
+   * effects deterministically instead of racing a background thread. Volatile because it is read
+   * from {@link #initMigrationWorldState} and written from test code on a different thread before
+   * {@link #migrate()} starts the migration thread.
+   */
+  private volatile Executor prefetchExecutor = PREFETCH_POOL;
+
   private final BonsaiWorldStateKeyValueStorage worldStateStorage;
   private final TrieLogManager trieLogManager;
   private final Blockchain blockchain;
@@ -293,6 +303,44 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       // 2b): TrieNodeChangeIndex treats a null prefetchExecutor exactly as if enablePrefetch had
       // never been called, so no background drains are submitted and prefetchBaseHits() stays 0.
       migrationChangeIndex.enablePrefetch(null, null);
+    }
+  }
+
+  /**
+   * Overrides the executor used for trie-node prefetch (2a) and index base-value prefetch (2b) for
+   * testing. Must be called before {@link #migrate()}.
+   *
+   * <p>The index-enabled constructor calls {@link #initMigrationWorldState} eagerly, so by the time
+   * this setter runs, the 2a {@link MigrationPrefetcher} and the 2b {@link
+   * TrieNodeChangeIndex#enablePrefetch} wiring may already have captured the default {@link
+   * #PREFETCH_POOL} executor — this setter would otherwise arrive too late to have any effect.
+   * Mirroring {@link #setPrefetchEnabledForTesting}'s approach of re-applying wiring to
+   * already-created components, this setter — when prefetch is enabled — closes and recreates the
+   * 2a prefetcher with the new executor and re-invokes {@link TrieNodeChangeIndex#enablePrefetch}
+   * with the new executor (and a fresh semaphore), so the injected executor genuinely takes effect.
+   * A test injecting a synchronous ({@code Runnable::run}) executor here makes the background
+   * {@code multiGet} run inline before it is consulted, eliminating the race with the fire-and-
+   * forget {@code drainPrefetch}/{@code flushBuffer} design.
+   *
+   * @param executor the executor to use for background prefetch tasks
+   */
+  @VisibleForTesting
+  void setPrefetchExecutorForTesting(final Executor executor) {
+    this.prefetchExecutor = executor;
+    if (prefetchEnabled) {
+      if (prefetcher != null) {
+        prefetcher.close();
+        prefetcher =
+            new MigrationPrefetcher(
+                worldStateStorage.getComposedWorldStateStorage(),
+                prefetchExecutor,
+                PREFETCH_MAX_IN_FLIGHT,
+                PREFETCH_MAX_DEPTH);
+      }
+      if (migrationChangeIndex != null) {
+        migrationChangeIndex.enablePrefetch(
+            prefetchExecutor, new Semaphore(PREFETCH_MAX_IN_FLIGHT));
+      }
     }
   }
 
@@ -767,15 +815,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       prefetcher =
           new MigrationPrefetcher(
               worldStateStorage.getComposedWorldStateStorage(),
-              PREFETCH_POOL,
+              prefetchExecutor,
               PREFETCH_MAX_IN_FLIGHT,
               PREFETCH_MAX_DEPTH);
     }
     if (prefetchEnabled && migrationChangeIndex != null) {
       // Design-5 part 2b: background prefetch of committed TRIE_NODE_INDEX_ARCHIVE base values.
-      // Shares the same bounded pool as the part-2a trie-node prefetcher above, with its own
+      // Shares the same bounded executor as the part-2a trie-node prefetcher above, with its own
       // semaphore so the two prefetchers' in-flight limits are independent.
-      migrationChangeIndex.enablePrefetch(PREFETCH_POOL, new Semaphore(PREFETCH_MAX_IN_FLIGHT));
+      migrationChangeIndex.enablePrefetch(prefetchExecutor, new Semaphore(PREFETCH_MAX_IN_FLIGHT));
     }
     resetMigrationWorldState();
   }
