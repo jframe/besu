@@ -45,6 +45,13 @@ class HistoryKeyTest {
   }
 
   @Test
+  void matchesNodeAcceptsGenuineMatch() {
+    final Bytes naturalKey = Bytes.fromHexString("0xabcd");
+    final Bytes key = HistoryKey.encode(HistoryKey.DOMAIN_ACCOUNT, naturalKey, 7L);
+    assertThat(HistoryKey.matchesNode(key, HistoryKey.DOMAIN_ACCOUNT, naturalKey)).isTrue();
+  }
+
+  @Test
   void matchesNodeRejectsDifferentDomain() {
     final Bytes naturalKey = Bytes.fromHexString("0xabcd");
     final Bytes key = HistoryKey.encode(HistoryKey.DOMAIN_ACCOUNT, naturalKey, 7L);

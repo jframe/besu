@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -77,11 +78,22 @@ class HistoryKeyPropertyBasedTest {
             .filter(k -> HistoryKey.matchesNode(k, queryDomain, queryNaturalKey))
             .map(HistoryKey::blockOf);
 
+    // Oracle is deliberately independent of HistoryKey.matchesNode: it re-derives candidate blocks
+    // for exactly this (queryDomain, queryNaturalKey) node from the raw generated data (not by
+    // asking matchesNode which keys belong to this node), then confirms presence via direct Bytes
+    // key equality (sorted's comparator/containsKey), which is a different code path from
+    // matchesNode's field-by-field check. If matchesNode were broken (e.g. always false), emulated
+    // would go empty while this oracle would still find the real match, and the assertion below
+    // would catch it.
+    final List<Long> candidateBlocks = new ArrayList<>(List.of(0L, targetBlock, targetBlock + 1));
+    for (final Entry e : entries) {
+      candidateBlocks.add(e.block());
+    }
     final Optional<Long> oracle =
-        sorted.keySet().stream()
-            .filter(k -> HistoryKey.matchesNode(k, queryDomain, queryNaturalKey))
-            .map(HistoryKey::blockOf)
+        candidateBlocks.stream()
+            .distinct()
             .filter(b -> b <= targetBlock)
+            .filter(b -> sorted.containsKey(HistoryKey.encode(queryDomain, queryNaturalKey, b)))
             .max(Long::compareTo);
 
     assertThat(emulatedBlock).isEqualTo(oracle);
