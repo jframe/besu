@@ -52,7 +52,8 @@ import picocli.CommandLine.Spec;
       TrieLogSubCommand.class,
       RevertMetadataSubCommand.class,
       PrunePreMergeBlockDataSubCommand.class,
-      TrieNodeHistoryStatsSubCommand.class
+      TrieNodeHistoryStatsSubCommand.class,
+      TrieNodeHistoryEstimateSubCommand.class
     })
 public class StorageSubCommand implements Runnable {
 
