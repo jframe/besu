@@ -62,6 +62,11 @@ class TrieNodeHistoryEstimateSubCommandTest {
   }
 
   @Test
+  void startBlockDefaultsToOneSoTrieLogFreeGenesisIsNotScanned() {
+    assertThat(new TrieNodeHistoryEstimateSubCommand().startBlock).isEqualTo(1L);
+  }
+
+  @Test
   void countRangeFailsFastWhenTrieLogMissing() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final MutableBlockchain blockchain = createInMemoryBlockchain(gen.genesisBlock());

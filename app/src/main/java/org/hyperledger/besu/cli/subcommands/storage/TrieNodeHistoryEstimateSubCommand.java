@@ -111,9 +111,10 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
   @Option(
       names = {"--start-block"},
       description =
-          "First block (inclusive) to scan (default: ${DEFAULT-VALUE}). If genesis has no trie log,"
-              + " pass --start-block=1.")
-  private long startBlock = 0;
+          "First block (inclusive) to scan (default: ${DEFAULT-VALUE}). Genesis (block 0) has no"
+              + " trie log, so scanning starts at block 1; pass 0 only if you have stored a genesis"
+              + " trie log.")
+  long startBlock = 1;
 
   @Option(
       names = {"--end-block"},
