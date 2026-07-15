@@ -177,8 +177,19 @@ public final class TrieNodeChangeIndex {
    * Drain threshold for the background base-value prefetch queue (Task 2b). Adjustable via {@link
    * #enablePrefetchDrainThresholdForTesting(int)} so unit tests can force an immediate drain
    * without needing thousands of buffered entries.
+   *
+   * <p>Deliberately small (not the migration batch size, e.g. 256 blocks). A 256-block batch
+   * commonly touches far fewer than a few hundred distinct cold index keys, so a large threshold
+   * (originally 512) was rarely crossed mid-batch — the only drain that ran was the unconditional
+   * one at the start of {@link #flushBuffer}, submitted with essentially zero lead time before
+   * Phase 1 reads it back, so the background read routinely lost the race and fell through to
+   * {@code flushBuffer}'s own synchronous {@code multiGet} anyway (confirmed by profiling: {@code
+   * flushBuffer}'s synchronous-read share was statistically unchanged from the pre-prefetch
+   * baseline at comparable migration depth). A small threshold drains incrementally throughout the
+   * batch instead, giving each background {@code multiGet} real wall-clock time to complete before
+   * {@code flushBuffer} needs the result.
    */
-  private static int prefetchDrainThreshold = 512;
+  private static int prefetchDrainThreshold = 64;
 
   /**
    * Executor used for background base-value prefetch reads. {@code null} (the default) means
@@ -259,7 +270,7 @@ public final class TrieNodeChangeIndex {
 
   /**
    * Overrides the prefetch drain threshold for testing, so a single enqueued key can trigger an
-   * immediate drain instead of requiring {@link #prefetchDrainThreshold} (512) keys.
+   * immediate drain instead of requiring {@link #prefetchDrainThreshold} (64) keys.
    *
    * @param n the new drain threshold
    */
