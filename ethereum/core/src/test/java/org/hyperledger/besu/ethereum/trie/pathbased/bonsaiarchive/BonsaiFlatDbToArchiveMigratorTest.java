@@ -76,6 +76,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -1281,6 +1282,249 @@ public class BonsaiFlatDbToArchiveMigratorTest {
    */
   private record MigrationSnapshot(
       Map<SegmentIdentifier, Map<Bytes, Bytes>> archiveContents, long tasksSubmitted) {}
+
+  // --- Task 5: index base-value prefetch (part 2b) wiring + resumed invariant ---
+
+  /**
+   * Design-5 part 2b wires background prefetch of committed {@code TRIE_NODE_INDEX_ARCHIVE} base
+   * values into the migrator's injected {@link TrieNodeChangeIndex}, sharing the migrator's {@code
+   * PREFETCH_POOL} executor. Unlike part 2a (which benefits every migration), part 2b's cold
+   * base-value reads only dominate on a <em>resumed</em> migration: a fresh migration switches the
+   * change index into fresh-migration mode ({@code recoverTrieState}), which short-circuits base
+   * reads for first-ever-seen keys entirely (no prefetch is even queued). A resumed run does not
+   * set that mode, so every first-touched key in the resumed batch is queued for background
+   * prefetch.
+   *
+   * <p>This test migrates the same fixture twice (prefetch on, then off), each time in two halves
+   * on the same backing storage: a first migrator that migrates blocks {@code 1..k} and is then
+   * closed (simulating a restart), followed by a second, freshly-constructed migrator — with a
+   * brand-new {@link TrieNodeChangeIndex} whose in-memory LRU cache starts cold — that resumes
+   * migration of blocks {@code k+1..N}. The same account and storage slot change on every block,
+   * including across the resume boundary, so the resumed migrator's first touch of each is a
+   * genuine cold read of a value the first half already committed to storage.
+   *
+   * <p>It asserts both that the archive CF contents are byte-identical whether prefetch is on or
+   * off, and — to make this a genuine red/green test rather than one that would pass even if 2b
+   * were silently left unwired or a no-op — that the resumed (second) migrator's {@link
+   * BonsaiFlatDbToArchiveMigrator#indexPrefetchBaseHitsForTesting()} is greater than zero when
+   * prefetch is on, and exactly zero when prefetch is off.
+   */
+  @Test
+  void migrationWithIndexPrefetch_matchesBaseline_onResumedRun() throws Exception {
+    final ResumedMigrationFixture fixture = buildResumedMigrationFixture();
+
+    final ResumedMigrationSnapshot withPrefetch = runMigrationInTwoHalves(fixture, true);
+    final ResumedMigrationSnapshot withoutPrefetch = runMigrationInTwoHalves(fixture, false);
+
+    assertThat(withPrefetch.archiveContents())
+        .as("archive CF contents must be byte-identical whether index prefetch is on or off")
+        .isEqualTo(withoutPrefetch.archiveContents());
+    assertThat(withPrefetch.indexPrefetchBaseHits())
+        .as("prefetch-ON resumed run must actually consume background-staged index base values")
+        .isGreaterThan(0L);
+    assertThat(withoutPrefetch.indexPrefetchBaseHits())
+        .as("prefetch-OFF resumed run must never populate/consult the prefetch staging map")
+        .isEqualTo(0L);
+  }
+
+  /**
+   * Snapshot of the archive-relevant column families produced by one resumed (two-half) migration
+   * run, plus the resumed (second) migrator's index base-value prefetch hit count.
+   */
+  private record ResumedMigrationSnapshot(
+      Map<SegmentIdentifier, Map<Bytes, Bytes>> archiveContents, long indexPrefetchBaseHits) {}
+
+  /**
+   * A chain of {@code totalBlocks} blocks (one account with one storage slot, both changing every
+   * block) split into a first half ({@code 1..firstHalfBlocks}) and a resumed second half ({@code
+   * firstHalfBlocks+1..totalBlocks}), built once and reused for both the prefetch-on and
+   * prefetch-off runs so the two runs replay identical block hashes/trie logs.
+   */
+  private record ResumedMigrationFixture(
+      Block genesis, List<Block> blocks, List<TrieLogLayer> trieLogs, int firstHalfBlocks) {}
+
+  private ResumedMigrationFixture buildResumedMigrationFixture() {
+    final int firstHalfBlocks = 2;
+    final int secondHalfBlocks = 8;
+    final int totalBlocks = firstHalfBlocks + secondHalfBlocks;
+
+    final BlockDataGenerator localGenerator = new BlockDataGenerator(1);
+    final Block genesis =
+        localGenerator.genesisBlock(BlockDataGenerator.BlockOptions.create().setTimestamp(0L));
+    final StorageSlotKey slotKey = new StorageSlotKey(UInt256.ONE);
+
+    final List<Block> blocks = new ArrayList<>();
+    final List<TrieLogLayer> trieLogs = new ArrayList<>();
+    trieLogs.add(new TrieLogLayer()); // genesis (block 0): no changes.
+
+    Hash parentHash = genesis.getHash();
+    PmtStateTrieAccountValue previousAccount = null;
+    UInt256 previousSlotValue = UInt256.ZERO;
+    for (int i = 1; i <= totalBlocks; i++) {
+      final Wei balance = Wei.of(i);
+      final UInt256 slotValue = UInt256.valueOf(i * 10L);
+      final Hash stateRoot = computeAccountAndStorageStateRoot(balance, slotValue);
+      final Block block =
+          localGenerator.block(
+              BlockDataGenerator.BlockOptions.create()
+                  .setParentHash(parentHash)
+                  .setBlockNumber(i)
+                  .setTimestamp((long) i)
+                  .setStateRoot(stateRoot));
+      blocks.add(block);
+
+      final PmtStateTrieAccountValue account =
+          new PmtStateTrieAccountValue(1, balance, computeStorageRoot(slotValue), Hash.EMPTY);
+      final TrieLogLayer trieLog = new TrieLogLayer();
+      trieLog.addAccountChange(TEST_ADDRESS, previousAccount, account);
+      trieLog.addStorageChange(TEST_ADDRESS, slotKey, previousSlotValue, slotValue);
+      trieLogs.add(trieLog);
+
+      previousAccount = account;
+      previousSlotValue = slotValue;
+      parentHash = block.getHash();
+    }
+
+    return new ResumedMigrationFixture(genesis, blocks, trieLogs, firstHalfBlocks);
+  }
+
+  /**
+   * Runs {@code fixture} to completion in two migrator instances sharing one backing storage: the
+   * first migrates blocks {@code 1..firstHalfBlocks} and is closed (simulating a restart); the
+   * second is built with a brand-new {@link TrieNodeChangeIndex} (and a {@link
+   * TrieNodeIndexProgress} reloaded from storage) so its caches start cold, and resumes migration
+   * of the remaining blocks.
+   *
+   * <p>The second migrator's change index has its (process-wide, static) prefetch drain threshold
+   * lowered to 1 via reflection — mirroring {@code
+   * TrieNodeChangeIndexTest#prefetchedBase_isConsumedByFlushBuffer_withoutRefetch}'s use of {@code
+   * enablePrefetchDrainThresholdForTesting}, which is package-private and so not directly callable
+   * from this package — so the very first cold key touched in the resumed batch is queued for
+   * background prefetch immediately, giving the background read the rest of the batch's
+   * block-processing time to complete before the batch's single {@code flushBuffer} call consults
+   * the staging map. All second-half blocks are kept in a single batch ({@link
+   * BonsaiFlatDbToArchiveMigrator#setMaxBlocksPerBatchForTesting}) so that window is as large as
+   * possible. The threshold is restored to its default afterwards since it is static (process-wide)
+   * state shared with other test classes.
+   *
+   * @param fixture the two-half block/trie-log fixture (shared across the prefetch-on/off runs)
+   * @param prefetchEnabled whether index base-value prefetch (part 2b) is enabled for both halves
+   * @return a snapshot of the archive CFs after both halves complete, plus the second migrator's
+   *     {@code indexPrefetchBaseHitsForTesting()} count
+   */
+  private ResumedMigrationSnapshot runMigrationInTwoHalves(
+      final ResumedMigrationFixture fixture, final boolean prefetchEnabled) throws Exception {
+    final MutableBlockchain localBlockchain = createInMemoryBlockchain(fixture.genesis());
+    final SegmentedKeyValueStorage localStorage = new SegmentedInMemoryKeyValueStorage();
+    final BonsaiWorldStateKeyValueStorage localWorldStateStorage =
+        mock(BonsaiWorldStateKeyValueStorage.class);
+    when(localWorldStateStorage.getComposedWorldStateStorage()).thenReturn(localStorage);
+    final TrieLogManager localTrieLogManager = mock(TrieLogManager.class);
+    when(localTrieLogManager.getMaxLayersToLoad()).thenReturn(BOUNDARY_DISABLED);
+
+    when(localTrieLogManager.getTrieLogLayer(fixture.genesis().getHash()))
+        .thenReturn(Optional.of(fixture.trieLogs().get(0)));
+    for (int i = 0; i < fixture.blocks().size(); i++) {
+      when(localTrieLogManager.getTrieLogLayer(fixture.blocks().get(i).getHash()))
+          .thenReturn(Optional.of(fixture.trieLogs().get(i + 1)));
+    }
+
+    final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
+    final BonsaiArchiveFlatDbStrategy archiveStrategy =
+        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
+
+    // --- First half: append + migrate blocks 1..firstHalfBlocks, then "restart". ---
+    for (int i = 0; i < fixture.firstHalfBlocks(); i++) {
+      final Block block = fixture.blocks().get(i);
+      localBlockchain.appendBlock(block, blockDataGenerator.receipts(block));
+    }
+
+    final TrieNodeHistoryStore historyStore1 = new TrieNodeHistoryStore(localStorage);
+    final TrieNodeChangeIndex changeIndex1 =
+        new TrieNodeChangeIndex(localStorage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress1 = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+    final BonsaiFlatDbToArchiveMigrator firstMigrator =
+        new BonsaiFlatDbToArchiveMigrator(
+            localWorldStateStorage,
+            localTrieLogManager,
+            localBlockchain,
+            Executors.newScheduledThreadPool(1),
+            metricsSystem,
+            archiveStrategy,
+            historyStore1,
+            changeIndex1,
+            progress1);
+    migrators.add(firstMigrator);
+    firstMigrator.setPrefetchEnabledForTesting(prefetchEnabled);
+    firstMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    assertThat(firstMigrator.getMigrationProgress()).hasValue((long) fixture.firstHalfBlocks());
+    firstMigrator.close(); // simulate node restart
+
+    // --- Second half: append + resume-migrate the remaining blocks on the same storage. ---
+    for (int i = fixture.firstHalfBlocks(); i < fixture.blocks().size(); i++) {
+      final Block block = fixture.blocks().get(i);
+      localBlockchain.appendBlock(block, blockDataGenerator.receipts(block));
+    }
+
+    // Fresh change index + progress reloaded from storage: the resumed migrator's caches start
+    // cold, so its base-value reads for the account/storage keys the first half already committed
+    // are genuine cold reads from storage — exactly what part 2b prefetches in the background.
+    final TrieNodeHistoryStore historyStore2 = new TrieNodeHistoryStore(localStorage);
+    final TrieNodeChangeIndex changeIndex2 =
+        new TrieNodeChangeIndex(localStorage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress2 =
+        TrieNodeIndexProgress.load(localStorage, ArchiveNodeKey.RANGE_SIZE);
+
+    lowerPrefetchDrainThresholdForTesting(changeIndex2, 1);
+    try {
+      final BonsaiFlatDbToArchiveMigrator secondMigrator =
+          new BonsaiFlatDbToArchiveMigrator(
+              localWorldStateStorage,
+              localTrieLogManager,
+              localBlockchain,
+              Executors.newScheduledThreadPool(1),
+              metricsSystem,
+              archiveStrategy,
+              historyStore2,
+              changeIndex2,
+              progress2);
+      migrators.add(secondMigrator);
+      secondMigrator.setMaxBlocksPerBatchForTesting(fixture.blocks().size() + 1);
+      secondMigrator.setPrefetchEnabledForTesting(prefetchEnabled);
+      secondMigrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+      assertThat(secondMigrator.getMigrationProgress()).hasValue((long) fixture.blocks().size());
+
+      final Map<SegmentIdentifier, Map<Bytes, Bytes>> snapshot = new HashMap<>();
+      for (final SegmentIdentifier segment :
+          List.of(TRIE_NODE_INDEX_ARCHIVE, TRIE_NODE_HISTORY_ARCHIVE, TRIE_BRANCH_FRONTIER)) {
+        final Map<Bytes, Bytes> content = new HashMap<>();
+        localStorage.stream(segment)
+            .forEach(
+                entry -> content.put(Bytes.wrap(entry.getKey()), Bytes.wrap(entry.getValue())));
+        snapshot.put(segment, content);
+      }
+      return new ResumedMigrationSnapshot(
+          snapshot, secondMigrator.indexPrefetchBaseHitsForTesting());
+    } finally {
+      lowerPrefetchDrainThresholdForTesting(changeIndex2, 512);
+    }
+  }
+
+  /**
+   * Reflectively invokes {@link TrieNodeChangeIndex#enablePrefetchDrainThresholdForTesting(int)},
+   * which is package-private in {@code
+   * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex} and so not directly
+   * callable from this package. The threshold it sets is process-wide (static) state, so callers of
+   * this helper are responsible for restoring it (512, the production default) once done.
+   */
+  private static void lowerPrefetchDrainThresholdForTesting(
+      final TrieNodeChangeIndex changeIndex, final int threshold) throws Exception {
+    final Method m =
+        TrieNodeChangeIndex.class.getDeclaredMethod(
+            "enablePrefetchDrainThresholdForTesting", int.class);
+    m.setAccessible(true);
+    m.invoke(changeIndex, threshold);
+  }
 
   /**
    * A 3-block chain (account changed every block, plus one storage slot changed every block) and

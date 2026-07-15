@@ -79,6 +79,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -284,6 +285,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       prefetcher.close();
       prefetcher = null;
     }
+    if (!enabled && migrationChangeIndex != null) {
+      // The index-enabled constructor calls initMigrationWorldState eagerly, which may have already
+      // called migrationChangeIndex.enablePrefetch(...) if prefetchEnabled was true at construction
+      // time (i.e. this setter arrived too late to prevent that call). Re-invoking enablePrefetch
+      // with a null executor/semaphore genuinely disables index base-value prefetch (Design-5 part
+      // 2b): TrieNodeChangeIndex treats a null prefetchExecutor exactly as if enablePrefetch had
+      // never been called, so no background drains are submitted and prefetchBaseHits() stays 0.
+      migrationChangeIndex.enablePrefetch(null, null);
+    }
   }
 
   /**
@@ -296,6 +306,18 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   long prefetchTasksSubmittedForTesting() {
     final MigrationPrefetcher p = prefetcher;
     return p == null ? 0L : p.submittedTaskCount();
+  }
+
+  /**
+   * Returns the number of index base-value reads (Design-5 part 2b) that {@link
+   * TrieNodeChangeIndex#flushBuffer} consumed directly from its background prefetch staging map.
+   *
+   * @return 0 when the trie-node differential index is disabled or prefetch never produced a usable
+   *     staged value; otherwise the change index's cumulative prefetch-hit count
+   */
+  @VisibleForTesting
+  long indexPrefetchBaseHitsForTesting() {
+    return migrationChangeIndex == null ? 0L : migrationChangeIndex.prefetchBaseHits();
   }
 
   /**
@@ -748,6 +770,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
               PREFETCH_POOL,
               PREFETCH_MAX_IN_FLIGHT,
               PREFETCH_MAX_DEPTH);
+    }
+    if (prefetchEnabled && migrationChangeIndex != null) {
+      // Design-5 part 2b: background prefetch of committed TRIE_NODE_INDEX_ARCHIVE base values.
+      // Shares the same bounded pool as the part-2a trie-node prefetcher above, with its own
+      // semaphore so the two prefetchers' in-flight limits are independent.
+      migrationChangeIndex.enablePrefetch(PREFETCH_POOL, new Semaphore(PREFETCH_MAX_IN_FLIGHT));
     }
     resetMigrationWorldState();
   }
