@@ -192,6 +192,31 @@ public final class TrieNodeChangeIndex {
   private static int prefetchDrainThreshold = 64;
 
   /**
+   * Call-count interval for a periodic base-value prefetch drain, independent of {@link
+   * #prefetchDrainThreshold}. Adjustable via {@link
+   * #enablePrefetchDrainCallIntervalForTesting(int)}.
+   *
+   * <p>{@link #prefetchDrainThreshold} alone only drains once the queue accumulates that many
+   * distinct cold keys — but how many distinct <em>repeat-touched</em> keys (the only ones eligible
+   * for prefetch; first-touches are skipped via the fresh-migration bloom) a given batch contains
+   * depends on that batch's block content, not a fixed rate. Profiling a live migration confirmed
+   * batches whose repeat-touch count stayed under the size threshold got no benefit from prefetch
+   * at all — the queue never drained until the unconditional, zero-lead-time call at the start of
+   * {@link #flushBuffer}. This periodic, call-count-based trigger forces a drain of however many
+   * keys are currently queued (even far below the size threshold) at a regular cadence throughout
+   * the batch, so a sparse batch still gets real background lead time instead of depending on
+   * hitting the size threshold at all.
+   */
+  private static int prefetchDrainCallInterval = 4096;
+
+  /**
+   * Buffered {@code append}/{@code appendAndGetPreviousCount} calls observed since the last
+   * periodic drain (see {@link #prefetchDrainCallInterval}). Reset per batch alongside the other
+   * per-batch prefetch state.
+   */
+  private int callsSinceLastPeriodicDrain = 0;
+
+  /**
    * Executor used for background base-value prefetch reads. {@code null} (the default) means
    * prefetch is disabled and every code path below behaves exactly as it did before Task 2b.
    */
@@ -280,6 +305,18 @@ public final class TrieNodeChangeIndex {
   }
 
   /**
+   * Overrides the periodic drain call-count interval for testing, so a single buffered append call
+   * can trigger the periodic drain instead of requiring {@link #prefetchDrainCallInterval} (4096)
+   * calls.
+   *
+   * @param n the new call-count interval
+   */
+  @VisibleForTesting
+  void enablePrefetchDrainCallIntervalForTesting(final int n) {
+    prefetchDrainCallInterval = n;
+  }
+
+  /**
    * Starts buffering mode. Subsequent {@link #append} and {@link #appendAndGetPreviousCount} calls
    * accumulate offsets in memory and perform no storage writes; the {@code tx} argument is unused
    * for the index value (only the running count is served from memory). Call {@link
@@ -291,6 +328,7 @@ public final class TrieNodeChangeIndex {
     prefetchQueue.clear();
     // Fresh map per batch — see the field javadoc for why this must be a swap, not a clear().
     prefetchedBase = new ConcurrentHashMap<>();
+    callsSinceLastPeriodicDrain = 0;
   }
 
   /**
@@ -300,6 +338,7 @@ public final class TrieNodeChangeIndex {
     buffer = null;
     prefetchQueue.clear();
     prefetchedBase = new ConcurrentHashMap<>();
+    callsSinceLastPeriodicDrain = 0;
   }
 
   /**
@@ -312,6 +351,7 @@ public final class TrieNodeChangeIndex {
     // A failed commit must not leave stale staged bases visible to whatever batch follows.
     prefetchQueue.clear();
     prefetchedBase = new ConcurrentHashMap<>();
+    callsSinceLastPeriodicDrain = 0;
   }
 
   /**
@@ -415,6 +455,7 @@ public final class TrieNodeChangeIndex {
     // Fresh map, not clear(): see the field javadoc — a late background task from this batch that
     // is still running must not be able to write into the next batch's staging map.
     prefetchedBase = new ConcurrentHashMap<>();
+    callsSinceLastPeriodicDrain = 0;
   }
 
   /**
@@ -428,6 +469,26 @@ public final class TrieNodeChangeIndex {
   private void enqueueBasePrefetch(final Bytes indexKey) {
     prefetchQueue.add(indexKey);
     if (prefetchQueue.size() >= prefetchDrainThreshold) {
+      drainPrefetch();
+    }
+  }
+
+  /**
+   * Forces a drain of however many keys are currently queued — even far below {@link
+   * #prefetchDrainThreshold} — every {@link #prefetchDrainCallInterval} buffered append calls, so a
+   * batch that never accumulates enough distinct cold keys to cross the size threshold still gets
+   * real background lead time instead of relying solely on {@link #flushBuffer}'s zero-lead-time
+   * drain. Called unconditionally from the buffered branch of {@code append}/{@code
+   * appendAndGetPreviousCount} (i.e. every buffered call, whether or not that particular call
+   * enqueued a key), so the interval reflects overall batch progress rather than enqueue volume
+   * alone. No-op when prefetch is disabled.
+   */
+  private void maybeDrainPeriodically() {
+    if (prefetchExecutor == null) {
+      return;
+    }
+    if (++callsSinceLastPeriodicDrain >= prefetchDrainCallInterval) {
+      callsSinceLastPeriodicDrain = 0;
       drainPrefetch();
     }
   }
@@ -640,6 +701,7 @@ public final class TrieNodeChangeIndex {
 
     if (buffer != null) {
       // Buffered path: accumulate offset in memory; no storage read or write.
+      maybeDrainPeriodically();
       BufferedEntry e = buffer.get(indexKey);
       if (e == null) {
         e = initBufferedEntry(indexKey, naturalKey, rangeId);
@@ -744,6 +806,7 @@ public final class TrieNodeChangeIndex {
 
     if (buffer != null) {
       // Buffered path: serve the count from in-memory state; no storage read or write.
+      maybeDrainPeriodically();
       BufferedEntry e = buffer.get(indexKey);
       if (e == null) {
         e = initBufferedEntry(indexKey, naturalKey, rangeId);
