@@ -20,6 +20,7 @@ import org.hyperledger.besu.cli.util.VersionProvider;
 import org.hyperledger.besu.controller.BesuController;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.CalibrationResult;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ChangeCountResult;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.EntrySizeTable;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistorySizeEstimate;
@@ -90,9 +91,7 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
       names = {"--calibration-file"},
       description =
           "Path to a calibration file produced by x-trie-node-history-calibrate, supplying measured"
-              + " entry sizes and ratios instead of the embedded hoodi defaults. NOTE: not yet"
-              + " wired in — a later task adds parsing; currently the embedded defaults are always"
-              + " used.")
+              + " entry sizes instead of the embedded hoodi defaults.")
   private Path calibrationFile = null;
 
   @Option(
@@ -166,12 +165,7 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
       return;
     }
 
-    if (calibrationFile != null) {
-      out.println(
-          "NOTE: --calibration-file is not yet wired in; using embedded hoodi defaults. ("
-              + calibrationFile
-              + ")");
-    }
+    final EntrySizeTable entrySizeTable = resolveEntrySizeTable(out, calibrationFile);
     out.println(
         "Scanning trie logs for blocks ["
             + from
@@ -211,7 +205,7 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
     final HistorySizeEstimate estimate =
         new HistorySizeEstimate(
             passB,
-            EntrySizeTable.hoodiDefaults(),
+            entrySizeTable,
             shape,
             leafCountByRange,
             DEFAULT_SST_COMPRESSION_RATIO,
@@ -234,6 +228,36 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
         throw new UncheckedIOException(e);
       }
     }
+  }
+
+  /**
+   * Resolves the {@link EntrySizeTable} to price trie-node writes with: measured calibration data
+   * when {@code calibrationFile} is given, otherwise the embedded hoodi fallback defaults. Package-
+   * private so it can be tested without standing up a full controller.
+   *
+   * @throws IllegalArgumentException if {@code calibrationFile} is given but cannot be read (e.g.
+   *     missing or malformed) — calibration is explicitly requested, so a silent fallback to hoodi
+   *     defaults would be surprising and wrong.
+   */
+  static EntrySizeTable resolveEntrySizeTable(final PrintWriter out, final Path calibrationFile) {
+    if (calibrationFile == null) {
+      out.println("Using embedded hoodi fallback defaults (no --calibration-file given).");
+      return EntrySizeTable.hoodiDefaults();
+    }
+    final CalibrationResult calibration;
+    try {
+      calibration = CalibrationResult.readFrom(calibrationFile);
+    } catch (final RuntimeException e) {
+      throw new IllegalArgumentException(
+          "Failed to read calibration file "
+              + calibrationFile
+              + ": "
+              + e.getMessage()
+              + ". Check the path and that it was produced by x-trie-node-history-calibrate.",
+          e);
+    }
+    out.println("Using calibration data from " + calibrationFile);
+    return calibration.toEntrySizeTable();
   }
 
   /** A per-chunk scan step over {@code [fromInclusive, toExclusive)}. */

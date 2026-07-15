@@ -25,15 +25,32 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.CalibrationResult;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ChangeCountResult;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.EntrySizeTable;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.RecordingTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieLogChangeCounter;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeDiffCodec;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieShapeModel;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.TrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogFactoryImpl;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Optional;
+
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class TrieNodeHistoryEstimateSubCommandTest {
 
@@ -83,6 +100,133 @@ class TrieNodeHistoryEstimateSubCommandTest {
                     blockchain, trieLogStorage, 1L, 2L, counter, leafCountByRange))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("1");
+  }
+
+  @Test
+  void resolveEntrySizeTableUsesHoodiDefaultsWhenNoCalibrationFileGiven() {
+    final StringWriter sw = new StringWriter();
+    final PrintWriter out = new PrintWriter(sw);
+
+    final EntrySizeTable table = TrieNodeHistoryEstimateSubCommand.resolveEntrySizeTable(out, null);
+
+    assertThat(table.fullBytes(0, 1.0)).isEqualTo(EntrySizeTable.hoodiDefaults().fullBytes(0, 1.0));
+    assertThat(sw.toString()).containsIgnoringCase("hoodi");
+  }
+
+  @Test
+  void resolveEntrySizeTableUsesCalibrationDataWhenFileGiven(@TempDir final Path tempDir) {
+    final Bytes node = shortNode(Bytes.of(0x01, 0x02, 0x03));
+    final int expectedFullSize = TrieNodeDiffCodec.encodeFull(node).size();
+    final CalibrationResult calibration = recordOneShortNodeWriteAtDepth(2, node);
+    final Path calibrationFile = tempDir.resolve("calibration.json");
+    calibration.writeTo(calibrationFile);
+
+    final StringWriter sw = new StringWriter();
+    final PrintWriter out = new PrintWriter(sw);
+
+    final EntrySizeTable table =
+        TrieNodeHistoryEstimateSubCommand.resolveEntrySizeTable(out, calibrationFile);
+
+    // A single recorded write means the per-depth mean equals that write's own size exactly, and
+    // differs from the hoodi fallback constant at the same depth/shape.
+    assertThat(table.fullBytes(2, 0.0)).isEqualTo(expectedFullSize);
+    assertThat(table.fullBytes(2, 0.0))
+        .isNotEqualTo(EntrySizeTable.hoodiDefaults().fullBytes(2, 0.0));
+    assertThat(sw.toString()).contains(calibrationFile.toString());
+  }
+
+  @Test
+  void resolveEntrySizeTableThrowsClearErrorWhenCalibrationFileMissing(
+      @TempDir final Path tempDir) {
+    final Path missing = tempDir.resolve("does-not-exist.json");
+    final PrintWriter out = new PrintWriter(new StringWriter());
+
+    assertThatThrownBy(() -> TrieNodeHistoryEstimateSubCommand.resolveEntrySizeTable(out, missing))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Failed to read calibration file")
+        .hasMessageContaining(missing.toString())
+        .hasMessageContaining("x-trie-node-history-calibrate");
+  }
+
+  @Test
+  void resolveEntrySizeTableThrowsClearErrorWhenCalibrationFileMalformed(
+      @TempDir final Path tempDir) throws Exception {
+    final Path malformed = tempDir.resolve("malformed.json");
+    Files.writeString(malformed, "{ not valid calibration json");
+    final PrintWriter out = new PrintWriter(new StringWriter());
+
+    assertThatThrownBy(
+            () -> TrieNodeHistoryEstimateSubCommand.resolveEntrySizeTable(out, malformed))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Failed to read calibration file")
+        .hasMessageContaining(malformed.toString());
+  }
+
+  private static CalibrationResult recordOneShortNodeWriteAtDepth(
+      final int depth, final Bytes node) {
+    final SegmentedKeyValueStorage storage = new SegmentedInMemoryKeyValueStorage();
+    final RecordingTrieNodeStrategy recorder =
+        new RecordingTrieNodeStrategy(new NoOpTrieNodeStrategy());
+    final Bytes location = Bytes.wrap(new byte[depth]);
+    recorder.putFlatAccountTrieNode(
+        storage, (SegmentedKeyValueStorageTransaction) null, location, Bytes32.ZERO, node);
+    return recorder.result();
+  }
+
+  private static Bytes shortNode(final Bytes value) {
+    return RLP.encode(
+        rlpOut -> {
+          rlpOut.startList();
+          rlpOut.writeBytes(Bytes.of(0x12));
+          rlpOut.writeBytes(value);
+          rlpOut.endList();
+        });
+  }
+
+  private static final class NoOpTrieNodeStrategy implements TrieNodeStrategy {
+    @Override
+    public Optional<Bytes> getFlatAccountTrieNode(
+        final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
+      return Optional.empty();
+    }
+
+    @Override
+    public Optional<Bytes> getFlatStorageTrieNode(
+        final Hash accountHash,
+        final Bytes location,
+        final Bytes32 nodeHash,
+        final SegmentedKeyValueStorage storage) {
+      return Optional.empty();
+    }
+
+    @Override
+    public void putFlatAccountTrieNode(
+        final SegmentedKeyValueStorage storage,
+        final SegmentedKeyValueStorageTransaction transaction,
+        final Bytes location,
+        final Bytes32 nodeHash,
+        final Bytes node) {
+      // no-op: only the recording decorator's own bookkeeping is under test
+    }
+
+    @Override
+    public void putFlatStorageTrieNode(
+        final SegmentedKeyValueStorage storage,
+        final SegmentedKeyValueStorageTransaction transaction,
+        final Hash accountHash,
+        final Bytes location,
+        final Bytes32 nodeHash,
+        final Bytes node) {
+      // no-op: only the recording decorator's own bookkeeping is under test
+    }
+
+    @Override
+    public void removeFlatAccountStateTrieNode(
+        final SegmentedKeyValueStorage storage,
+        final SegmentedKeyValueStorageTransaction transaction,
+        final Bytes location) {
+      // no-op: only the recording decorator's own bookkeeping is under test
+    }
   }
 
   private static void appendBlocks(
