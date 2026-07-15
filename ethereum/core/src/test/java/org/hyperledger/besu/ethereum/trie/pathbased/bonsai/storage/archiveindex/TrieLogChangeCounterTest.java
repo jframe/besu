@@ -22,8 +22,12 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive.TrieNodePathEnumerator;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
 
+import java.util.List;
+
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.Test;
 
@@ -95,5 +99,72 @@ class TrieLogChangeCounterTest {
     final ChangeCountResult out = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
 
     assertThatCode(() -> shiftedCounter.countBlock(log, 100L, 4L, out)).doesNotThrowAnyException();
+  }
+
+  @Test
+  void accountTrieDepthsUpToTwoAreAlwaysTrackedRegardlessOfSampling() {
+    final Address a = Address.fromHexString("0x00000000000000000000000000000000000000aa");
+    final Address b = Address.fromHexString("0x00000000000000000000000000000000000000bb");
+    final Address c = Address.fromHexString("0x00000000000000000000000000000000000000cc");
+    final List<Address> addresses = List.of(a, b, c);
+
+    // Aggressive sampling: isSampled alone would almost never keep a given depth 0/1/2 path.
+    final TrieLogChangeCounter shiftedCounter =
+        new TrieLogChangeCounter(2, 10, new TrieShapeModel(16));
+    final ChangeCountResult out = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+
+    final int blocks = 3;
+    for (long block = 100; block < 100 + blocks; block++) {
+      final TrieLogLayer log = new TrieLogLayer();
+      for (final Address addr : addresses) {
+        log.addAccountChange(addr, acct(1), acct(2));
+      }
+      shiftedCounter.countBlock(log, block, 4L, out);
+    }
+
+    boolean anyPathNotSampledByHashAlone = false;
+    for (final Address addr : addresses) {
+      final Bytes nibbles = TrieNodePathEnumerator.toNibbles(addr.addressHash().getBytes());
+      for (int depth = 0; depth <= 2; depth++) {
+        final Bytes path = nibbles.slice(0, depth);
+        if (!shiftedCounter.isSampled(path)) {
+          anyPathNotSampledByHashAlone = true;
+        }
+        final int[] lifetime = out.sampledLifetime().get(path);
+        assertThat(lifetime)
+            .as("depth %d path for account %s must be exactly tracked", depth, addr)
+            .isNotNull();
+        assertThat(lifetime[1]).isEqualTo(blocks);
+      }
+    }
+    // Sanity check: the fixture actually exercises the force-inclusion guarantee (i.e. hash
+    // sampling alone would have dropped at least one of these paths).
+    assertThat(anyPathNotSampledByHashAlone).isTrue();
+  }
+
+  @Test
+  void deeperAccountPathsAndAllStoragePathsStillDependOnHashSampling() {
+    final Address addr = Address.fromHexString("0x00000000000000000000000000000000000000aa");
+    final StorageSlotKey slot = new StorageSlotKey(UInt256.valueOf(7));
+    final TrieLogChangeCounter shiftedCounter =
+        new TrieLogChangeCounter(2, 10, new TrieShapeModel(16));
+    final TrieLogLayer log = new TrieLogLayer();
+    log.addAccountChange(addr, acct(1), acct(2));
+    log.addStorageChange(addr, slot, UInt256.ZERO, UInt256.valueOf(5));
+
+    final ChangeCountResult out = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+    // Large leaf count → deep termination cap, so depth-3 account paths are expanded.
+    shiftedCounter.countBlock(log, 100L, 1_000_000L, out);
+
+    final Bytes accountNibbles = TrieNodePathEnumerator.toNibbles(addr.addressHash().getBytes());
+    final Bytes depth3AccountPath = accountNibbles.slice(0, 3);
+    assertThat(out.sampledLifetime().containsKey(depth3AccountPath))
+        .isEqualTo(shiftedCounter.isSampled(depth3AccountPath));
+
+    final Bytes accountHash = addr.addressHash().getBytes();
+    final Bytes storageNibbles = TrieNodePathEnumerator.toNibbles(slot.getSlotHash().getBytes());
+    final Bytes storageRootPath = Bytes.concatenate(accountHash, storageNibbles.slice(0, 0));
+    assertThat(out.sampledLifetime().containsKey(storageRootPath))
+        .isEqualTo(shiftedCounter.isSampled(storageRootPath));
   }
 }

@@ -32,6 +32,12 @@ public final class TrieLogChangeCounter {
   private static final int ACCOUNT_HASH_BYTES = 32;
   private static final int SLACK = 3;
 
+  // Account-trie paths at depth <= 2 have only 1 + 16 + 256 = 273 distinct possible values, so
+  // it's cheap to track every one of them exactly instead of hash-sampling. This prices the
+  // dominant upper-trie bucket exactly for any FULL_ABOVE_DEPTH / interval combination. Storage
+  // trie shallow nodes are per-contract and unbounded, so they stay on the hash sample.
+  private static final int EXACT_ACCOUNT_TRACKING_MAX_DEPTH = 2;
+
   private final int fullAboveDepth;
   private final int sampleShift;
   private final TrieShapeModel shapeModel;
@@ -100,19 +106,23 @@ public final class TrieLogChangeCounter {
             });
 
     for (final Bytes path : accountPaths) {
-      recordPath(path, path.size(), out);
+      recordPath(path, path.size(), true, out);
     }
     for (final Bytes path : storagePaths) {
-      recordPath(path, path.size() - ACCOUNT_HASH_BYTES, out);
+      recordPath(path, path.size() - ACCOUNT_HASH_BYTES, false, out);
     }
   }
 
-  private void recordPath(final Bytes naturalKey, final int depth, final ChangeCountResult out) {
+  private void recordPath(
+      final Bytes naturalKey,
+      final int depth,
+      final boolean isAccountPath,
+      final ChangeCountResult out) {
     out.recordMutation(depth, false);
     if (depth <= fullAboveDepth) {
       out.recordUpperFull(depth);
     }
-    if (isSampled(naturalKey)) {
+    if ((isAccountPath && depth <= EXACT_ACCOUNT_TRACKING_MAX_DEPTH) || isSampled(naturalKey)) {
       out.recordSampledWrite(naturalKey, depth);
     }
   }
