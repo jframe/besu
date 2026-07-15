@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.within;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -113,13 +114,17 @@ class TrieLogChangeCounterTest {
         new TrieLogChangeCounter(2, 10, new TrieShapeModel(16));
     final ChangeCountResult out = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
 
+    // Mainnet-scale leaf count: depth <= 2 occupancy is ~100% here (occupancy-aware existence
+    // gating only guarantees every key reaches depth 2 when the era is this large), which is
+    // exactly the scale the exact-tracking guarantee is meant for.
+    final long leafCountForEra = 50_000_000L;
     final int blocks = 3;
     for (long block = 100; block < 100 + blocks; block++) {
       final TrieLogLayer log = new TrieLogLayer();
       for (final Address addr : addresses) {
         log.addAccountChange(addr, acct(1), acct(2));
       }
-      shiftedCounter.countBlock(log, block, 4L, out);
+      shiftedCounter.countBlock(log, block, leafCountForEra, out);
     }
 
     boolean anyPathNotSampledByHashAlone = false;
@@ -166,5 +171,72 @@ class TrieLogChangeCounterTest {
     final Bytes storageRootPath = Bytes.concatenate(accountHash, storageNibbles.slice(0, 0));
     assertThat(out.sampledLifetime().containsKey(storageRootPath))
         .isEqualTo(shiftedCounter.isSampled(storageRootPath));
+  }
+
+  @Test
+  void toyScaleSingleAccountOnlyTouchesRootAcrossBlocks() {
+    // Real migrator ground truth (Task 8): 1 account, 3 blocks -> exactly 1 entry/block (root
+    // only). Besu's real trie uses extension-node compaction, so a node only exists at a key's
+    // own termination depth, not at every depth up to a shared cap. leafCountForEra=1 is the
+    // shapeModel's own special case (100% mass at depth 0), so every key must terminate at depth
+    // 0 here.
+    final Address addr = Address.fromHexString("0x00000000000000000000000000000000000000aa");
+    final ChangeCountResult out = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+
+    final int blocks = 3;
+    for (long block = 100; block < 100 + blocks; block++) {
+      final TrieLogLayer log = new TrieLogLayer();
+      log.addAccountChange(addr, acct(1), acct(2));
+      counter.countBlock(log, block, 1L, out);
+    }
+
+    assertThat(out.mutationsByDepth()[0]).isEqualTo((long) blocks);
+    for (int depth = 1; depth < out.mutationsByDepth().length; depth++) {
+      assertThat(out.mutationsByDepth()[depth]).as("depth %d must be zero", depth).isEqualTo(0L);
+    }
+  }
+
+  @Test
+  void sampledTerminationDepthIsDeterministic() {
+    final Bytes hash =
+        Address.fromHexString("0x00000000000000000000000000000000000000aa")
+            .addressHash()
+            .getBytes();
+
+    final int first = counter.sampledTerminationDepth(hash, 10_000L, 20);
+    final int second = counter.sampledTerminationDepth(hash, 10_000L, 20);
+
+    assertThat(second).isEqualTo(first);
+  }
+
+  @Test
+  void sampledTerminationDepthHistogramTracksModelShape() {
+    final long leafCount = 10_000L;
+    final int maxDepth = 20;
+    final int keyCount = 2_000;
+    final long[] histogram = new long[maxDepth + 1];
+
+    for (int i = 0; i < keyCount; i++) {
+      final Bytes hash = Hash.hash(UInt256.valueOf(i)).getBytes();
+      final int depth = counter.sampledTerminationDepth(hash, leafCount, maxDepth);
+      histogram[depth]++;
+    }
+
+    final TrieShapeModel model = new TrieShapeModel(16);
+    final double expectedPeak = model.expectedLeafDepth(leafCount);
+
+    int peakDepth = 0;
+    for (int d = 1; d <= maxDepth; d++) {
+      if (histogram[d] > histogram[peakDepth]) {
+        peakDepth = d;
+      }
+    }
+    assertThat((double) peakDepth).isCloseTo(expectedPeak, within(2.0));
+
+    long tailBeyondTen = 0;
+    for (int d = 11; d <= maxDepth; d++) {
+      tailBeyondTen += histogram[d];
+    }
+    assertThat((double) tailBeyondTen / keyCount).isLessThan(0.01);
   }
 }

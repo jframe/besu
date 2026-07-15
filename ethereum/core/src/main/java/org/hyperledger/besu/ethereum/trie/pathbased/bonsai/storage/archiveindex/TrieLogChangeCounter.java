@@ -54,6 +54,40 @@ public final class TrieLogChangeCounter {
     return Math.min(64, Math.max(1, cap));
   }
 
+  /**
+   * Derives a deterministic value in {@code [0,1)} from a key's own hash bytes: no actual
+   * randomness, just a stable per-key seed (same technique {@link java.util.Random#nextDouble()}
+   * uses to turn 53 bits into a uniform double). Since account/slot hashes are already
+   * keccak-uniform, any consistent byte slice of the hash preserves that uniformity.
+   */
+  static double uniformFromHash(final Bytes hash) {
+    final int size = hash.size();
+    long bits = 0L;
+    for (int i = size - 8; i < size; i++) {
+      bits = (bits << 8) | (hash.get(i) & 0xFFL);
+    }
+    return (bits >>> 11) / (double) (1L << 53);
+  }
+
+  /**
+   * Draws the depth at which a real trie would terminate this key's path, per {@link
+   * TrieShapeModel#terminationDepthPmf}. The draw is seeded by the key's own full hash (not a path
+   * prefix) so every prefix along the key's path agrees on the same termination depth — a key's
+   * real termination depth is one fixed property of that key, not of a truncated view of it.
+   */
+  int sampledTerminationDepth(final Bytes fullKeyHash, final long leafCount, final int maxDepth) {
+    final double[] pmf = shapeModel.terminationDepthPmf(leafCount, maxDepth);
+    final double u = uniformFromHash(fullKeyHash);
+    double cumulative = 0.0;
+    for (int d = 0; d <= maxDepth; d++) {
+      cumulative += pmf[d];
+      if (cumulative > u) {
+        return d;
+      }
+    }
+    return maxDepth; // rounding-residue fallback: pmf mass didn't fully reach 1 by maxDepth.
+  }
+
   boolean isSampled(final Bytes naturalKey) {
     if (sampleShift <= 0) {
       return true;
@@ -73,7 +107,10 @@ public final class TrieLogChangeCounter {
       final long blockNumber,
       final long leafCountForEra,
       final ChangeCountResult out) {
-    final int cap = terminationCap(leafCountForEra);
+    // The outer safety ceiling: how far a path could possibly be expanded. The actual per-key
+    // limit is drawn per-key below, since a real trie only has a node at each key's own
+    // termination depth (path compaction), not at every depth up to a shared cap.
+    final int outerCap = terminationCap(leafCountForEra);
     final Set<Bytes> accountPaths = new LinkedHashSet<>();
     final Set<Bytes> storagePaths = new LinkedHashSet<>();
 
@@ -82,8 +119,11 @@ public final class TrieLogChangeCounter {
         .forEach(
             (address, change) -> {
               final Bytes accountHash = address.addressHash().getBytes();
+              final int keyDepthLimit =
+                  Math.min(
+                      outerCap, sampledTerminationDepth(accountHash, leafCountForEra, outerCap));
               TrieNodePathEnumerator.addLocationPrefixes(
-                  TrieNodePathEnumerator.toNibbles(accountHash), cap, null, accountPaths);
+                  TrieNodePathEnumerator.toNibbles(accountHash), keyDepthLimit, null, accountPaths);
               if (change.getPrior() == null && change.getUpdated() != null) {
                 out.recordAccountDelta(blockNumber, 1);
               } else if (change.getUpdated() == null && change.getPrior() != null) {
@@ -97,12 +137,17 @@ public final class TrieLogChangeCounter {
             (address, slotMap) -> {
               final Bytes accountHash = address.addressHash().getBytes();
               slotMap.forEach(
-                  (slotKey, change) ->
-                      TrieNodePathEnumerator.addLocationPrefixes(
-                          TrieNodePathEnumerator.toNibbles(slotKey.getSlotHash().getBytes()),
-                          cap,
-                          accountHash,
-                          storagePaths));
+                  (slotKey, change) -> {
+                    final Bytes slotHash = slotKey.getSlotHash().getBytes();
+                    final int keyDepthLimit =
+                        Math.min(
+                            outerCap, sampledTerminationDepth(slotHash, leafCountForEra, outerCap));
+                    TrieNodePathEnumerator.addLocationPrefixes(
+                        TrieNodePathEnumerator.toNibbles(slotHash),
+                        keyDepthLimit,
+                        accountHash,
+                        storagePaths);
+                  });
             });
 
     for (final Bytes path : accountPaths) {
