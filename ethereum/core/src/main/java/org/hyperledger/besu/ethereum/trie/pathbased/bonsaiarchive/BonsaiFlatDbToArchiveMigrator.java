@@ -26,41 +26,29 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBa
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_ROOT_HASH_KEY;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.NoOpBonsaiCachedWorldStorageManager;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.NoopBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.CacheManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveKeyUtil;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveMigrationTrieNodeStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.NoOpTrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
-import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
-import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
-import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
-import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.LayeredKeyValueStorage;
 import org.hyperledger.besu.util.log.LogUtil;
 
@@ -79,7 +67,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -134,18 +121,17 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   /**
    * Best-effort background trie-node prefetcher; non-null only when {@link #prefetchEnabled} was
-   * true at the time {@link #initMigrationWorldState} ran. Volatile because {@link #close()} may
+   * true at the time {@link #initArchiveTrieBuilder} ran. Volatile because {@link #close()} may
    * race with a concurrent migration batch reading it.
    */
   private volatile MigrationPrefetcher prefetcher;
 
   /**
-   * Executor used for both trie-node prefetch (Design-5 part 2a) and index base-value prefetch
-   * (part 2b). Defaults to {@link #PREFETCH_POOL}; overridable via {@link
-   * #setPrefetchExecutorForTesting} so tests can inject a synchronous executor and observe prefetch
-   * effects deterministically instead of racing a background thread. Volatile because it is read
-   * from {@link #initMigrationWorldState} and written from test code on a different thread before
-   * {@link #migrate()} starts the migration thread.
+   * Executor used for trie-node prefetch (Design-5 part 2a). Defaults to {@link #PREFETCH_POOL};
+   * overridable via {@link #setPrefetchExecutorForTesting} so tests can inject a synchronous
+   * executor and observe prefetch effects deterministically. Volatile because it is read from
+   * {@link #initArchiveTrieBuilder} and written from test code on a different thread before {@link
+   * #migrate()} starts the migration thread.
    */
   private volatile Executor prefetchExecutor = PREFETCH_POOL;
 
@@ -163,21 +149,17 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   protected volatile OptionalLong blockObserverId = OptionalLong.empty();
   private boolean closed = false;
 
-  private BonsaiWorldState migrationWorldState;
-  private MigrationTrieStorage migrationTrieStorage;
-  private BonsaiCachedMerkleTrieLoader migrationTrieLoader;
-  private BonsaiWorldStateKeyValueStorage migrationKvStorage;
-
-  // Optional trie-node differential-index components (null when index is disabled).
-  private final TrieNodeHistoryStore migrationHistoryStore;
-  private final TrieNodeChangeIndex migrationChangeIndex;
-  private final TrieNodeIndexProgress migrationIndexProgress;
-  // The migration strategy reference — retained so we can call advanceIndexProgress after
-  // persist().
-  private BonsaiArchiveMigrationTrieNodeStrategy migrationTrieNodeStrategy;
+  /**
+   * The append-only trie history builder; non-null when trie-node history capture is enabled (i.e.
+   * the node was started with the archive trie index flag). {@code null} in flat-archive-only mode.
+   *
+   * <p>Non-final so that {@link #resetArchiveTrieBuilder()} can reinitialize it after a failed
+   * batch commit (Task 13 will add full re-anchoring).
+   */
+  private ArchiveTrieBuilder archiveTrieBuilder;
 
   /**
-   * Creates a new BonsaiFlatDbToArchiveMigrator without trie-node differential index support.
+   * Creates a new BonsaiFlatDbToArchiveMigrator without trie-node history capture.
    *
    * @param worldStateStorage the Bonsai world state storage
    * @param trieLogManager the trie log manager for reading trie logs
@@ -193,29 +175,22 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final ScheduledExecutorService executorService,
       final MetricsSystem metricsSystem,
       final BonsaiArchiveFlatDbStrategy archiveStrategy) {
-    this(
-        worldStateStorage,
-        trieLogManager,
-        blockchain,
-        executorService,
-        metricsSystem,
-        archiveStrategy,
-        null,
-        null,
-        null);
+    this.worldStateStorage = worldStateStorage;
+    this.trieLogManager = trieLogManager;
+    this.blockchain = blockchain;
+    this.executorService = executorService;
+    this.archiveStrategy = archiveStrategy;
+    this.archiveTrieBuilder = null;
+    metricsSystem.createLongGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_archive_migration_block",
+        "The current block the Bonsai archive migration has reached",
+        migratedBlockNumber::get);
   }
 
   /**
-   * Creates a new BonsaiFlatDbToArchiveMigrator with trie-node differential index support.
-   *
-   * <p>When {@code historyStore} and {@code changeIndex} are both non-null (and {@code
-   * archiveStrategy} has a non-null checkpoint interval), each checkpoint's trie-node writes are
-   * also captured into the differential index so that migrated blocks gain fast historical proofs.
-   * {@code progress} is optional (may be null) even when the other two are supplied.
-   *
-   * <p>Partial injection — exactly one of {@code historyStore} / {@code changeIndex} non-null — is
-   * rejected with {@link IllegalArgumentException}: both must be null (index disabled) or both
-   * non-null (index enabled).
+   * Creates a new BonsaiFlatDbToArchiveMigrator with optional trie-node history capture via {@link
+   * ArchiveTrieBuilder}.
    *
    * @param worldStateStorage the Bonsai world state storage
    * @param trieLogManager the trie log manager for reading trie logs
@@ -223,13 +198,59 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    * @param executorService the executor service for running migration on a separate thread
    * @param metricsSystem the metrics system for tracking migration progress
    * @param archiveStrategy the archive flat DB strategy for writing archive keys
-   * @param historyStore the diff-entry store to write history entries to; must be non-null when
-   *     {@code changeIndex} is non-null, null when {@code changeIndex} is null
-   * @param changeIndex the change-block index to record mutations in; must be non-null when {@code
-   *     historyStore} is non-null, null when {@code historyStore} is null
-   * @param progress the coverage-progress tracker to advance after each block; may be null
-   * @throws IllegalArgumentException if exactly one of {@code historyStore} / {@code changeIndex}
-   *     is non-null
+   * @param trieNodeHistoryEnabled whether to capture trie-node history into {@code
+   *     TRIE_NODE_HISTORY_ARCHIVE_V2} via {@link ArchiveTrieBuilder}
+   */
+  public BonsaiFlatDbToArchiveMigrator(
+      final BonsaiWorldStateKeyValueStorage worldStateStorage,
+      final TrieLogManager trieLogManager,
+      final Blockchain blockchain,
+      final ScheduledExecutorService executorService,
+      final MetricsSystem metricsSystem,
+      final BonsaiArchiveFlatDbStrategy archiveStrategy,
+      final boolean trieNodeHistoryEnabled) {
+    this(
+        worldStateStorage,
+        trieLogManager,
+        blockchain,
+        executorService,
+        metricsSystem,
+        archiveStrategy);
+    if (trieNodeHistoryEnabled) {
+      this.archiveTrieBuilder = initArchiveTrieBuilder();
+    }
+  }
+
+  /**
+   * Convenience constructor for tests that want trie-node history capture enabled without injecting
+   * an executor or metrics system.
+   *
+   * @param worldStateStorage the Bonsai world state storage
+   * @param blockchain the blockchain for reading block headers
+   * @param trieLogManager the trie log manager for reading trie logs
+   * @param trieNodeHistoryEnabled whether to enable trie-node history capture
+   */
+  @VisibleForTesting
+  BonsaiFlatDbToArchiveMigrator(
+      final BonsaiWorldStateKeyValueStorage worldStateStorage,
+      final MutableBlockchain blockchain,
+      final TrieLogManager trieLogManager,
+      final boolean trieNodeHistoryEnabled) {
+    this(
+        worldStateStorage,
+        trieLogManager,
+        blockchain,
+        Executors.newScheduledThreadPool(1),
+        new NoOpMetricsSystem(),
+        new BonsaiArchiveFlatDbStrategy(new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy()),
+        trieNodeHistoryEnabled);
+  }
+
+  /**
+   * Index components replaced by {@link ArchiveTrieBuilder} in Task 11; use the constructor with
+   * {@code trieNodeHistoryEnabled=true} instead. The {@code historyStore}, {@code changeIndex}, and
+   * {@code progress} arguments are accepted but ignored. Kept for backward compile compatibility
+   * only; callers should migrate to the 7-arg constructor.
    */
   public BonsaiFlatDbToArchiveMigrator(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
@@ -241,31 +262,14 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       final TrieNodeHistoryStore historyStore,
       final TrieNodeChangeIndex changeIndex,
       final TrieNodeIndexProgress progress) {
-    if ((historyStore == null) != (changeIndex == null)) {
-      throw new IllegalArgumentException(
-          "historyStore and changeIndex must both be null (index disabled) or both non-null"
-              + " (index enabled); got historyStore="
-              + (historyStore == null ? "null" : "non-null")
-              + ", changeIndex="
-              + (changeIndex == null ? "null" : "non-null"));
-    }
-    this.worldStateStorage = worldStateStorage;
-    this.trieLogManager = trieLogManager;
-    this.blockchain = blockchain;
-    this.executorService = executorService;
-    this.archiveStrategy = archiveStrategy;
-    this.migrationHistoryStore = historyStore;
-    this.migrationChangeIndex = changeIndex;
-    this.migrationIndexProgress = progress;
-    metricsSystem.createLongGauge(
-        BesuMetricCategory.BLOCKCHAIN,
-        "bonsai_archive_migration_block",
-        "The current block the Bonsai archive migration has reached",
-        migratedBlockNumber::get);
-    if (migrationHistoryStore != null) {
-      initMigrationWorldState(metricsSystem);
-      recoverTrieState();
-    }
+    // index machinery replaced by ArchiveTrieBuilder; historyStore/changeIndex/progress ignored
+    this(
+        worldStateStorage,
+        trieLogManager,
+        blockchain,
+        executorService,
+        metricsSystem,
+        archiveStrategy);
   }
 
   @VisibleForTesting
@@ -281,10 +285,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   /**
    * Enables or disables trie-node prefetch for testing. Must be called before {@link #migrate()}.
    *
-   * <p>If a prefetcher was already created (e.g. {@link #initMigrationWorldState} ran eagerly from
-   * the index-enabled constructor before this setter could run), disabling here also closes and
-   * discards it so that {@code migrateBlocks} sees {@code prefetcher == null} and genuinely stops
-   * submitting prefetch tasks — not just flips a flag that arrived too late.
+   * <p>If a prefetcher was already created (e.g. {@link #initArchiveTrieBuilder} ran eagerly from
+   * the trieNodeHistoryEnabled constructor before this setter could run), disabling here also
+   * closes and discards it so that {@code migrateBlocks} sees {@code prefetcher == null} and
+   * genuinely stops submitting prefetch tasks.
    *
    * @param enabled whether trie-node prefetch should run during migration
    */
@@ -295,52 +299,25 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       prefetcher.close();
       prefetcher = null;
     }
-    if (!enabled && migrationChangeIndex != null) {
-      // The index-enabled constructor calls initMigrationWorldState eagerly, which may have already
-      // called migrationChangeIndex.enablePrefetch(...) if prefetchEnabled was true at construction
-      // time (i.e. this setter arrived too late to prevent that call). Re-invoking enablePrefetch
-      // with a null executor/semaphore genuinely disables index base-value prefetch (Design-5 part
-      // 2b): TrieNodeChangeIndex treats a null prefetchExecutor exactly as if enablePrefetch had
-      // never been called, so no background drains are submitted and prefetchBaseHits() stays 0.
-      migrationChangeIndex.enablePrefetch(null, null);
-    }
   }
 
   /**
-   * Overrides the executor used for trie-node prefetch (2a) and index base-value prefetch (2b) for
-   * testing. Must be called before {@link #migrate()}.
-   *
-   * <p>The index-enabled constructor calls {@link #initMigrationWorldState} eagerly, so by the time
-   * this setter runs, the 2a {@link MigrationPrefetcher} and the 2b {@link
-   * TrieNodeChangeIndex#enablePrefetch} wiring may already have captured the default {@link
-   * #PREFETCH_POOL} executor — this setter would otherwise arrive too late to have any effect.
-   * Mirroring {@link #setPrefetchEnabledForTesting}'s approach of re-applying wiring to
-   * already-created components, this setter — when prefetch is enabled — closes and recreates the
-   * 2a prefetcher with the new executor and re-invokes {@link TrieNodeChangeIndex#enablePrefetch}
-   * with the new executor (and a fresh semaphore), so the injected executor genuinely takes effect.
-   * A test injecting a synchronous ({@code Runnable::run}) executor here makes the background
-   * {@code multiGet} run inline before it is consulted, eliminating the race with the fire-and-
-   * forget {@code drainPrefetch}/{@code flushBuffer} design.
+   * Overrides the executor used for trie-node prefetch (2a) for testing. Must be called before
+   * {@link #migrate()}.
    *
    * @param executor the executor to use for background prefetch tasks
    */
   @VisibleForTesting
   void setPrefetchExecutorForTesting(final Executor executor) {
     this.prefetchExecutor = executor;
-    if (prefetchEnabled) {
-      if (prefetcher != null) {
-        prefetcher.close();
-        prefetcher =
-            new MigrationPrefetcher(
-                worldStateStorage.getComposedWorldStateStorage(),
-                prefetchExecutor,
-                PREFETCH_MAX_IN_FLIGHT,
-                PREFETCH_MAX_DEPTH);
-      }
-      if (migrationChangeIndex != null) {
-        migrationChangeIndex.enablePrefetch(
-            prefetchExecutor, new Semaphore(PREFETCH_MAX_IN_FLIGHT));
-      }
+    if (prefetchEnabled && prefetcher != null) {
+      prefetcher.close();
+      prefetcher =
+          new MigrationPrefetcher(
+              worldStateStorage.getComposedWorldStateStorage(),
+              prefetchExecutor,
+              PREFETCH_MAX_IN_FLIGHT,
+              PREFETCH_MAX_DEPTH);
     }
   }
 
@@ -357,15 +334,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   /**
-   * Returns the number of index base-value reads (Design-5 part 2b) that {@link
-   * TrieNodeChangeIndex#flushBuffer} consumed directly from its background prefetch staging map.
-   *
-   * @return 0 when the trie-node differential index is disabled or prefetch never produced a usable
-   *     staged value; otherwise the change index's cumulative prefetch-hit count
+   * Index prefetch replaced by {@link ArchiveTrieBuilder}; always returns 0 in Task 11+. Kept for
+   * backward compile compatibility with existing tests that assert on this value.
    */
   @VisibleForTesting
   long indexPrefetchBaseHitsForTesting() {
-    return migrationChangeIndex == null ? 0L : migrationChangeIndex.prefetchBaseHits();
+    return 0L;
   }
 
   /**
@@ -459,11 +433,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       long lastInBatch = -1;
       boolean committed = false;
       boolean retry = false;
+      // Running byte counter for the batch-size guard. TODO(task 13): implement proper byte
+      // tracking for archiveTrieBuilder path; for now the block-count guard is the effective limit.
+      long batchBytes = 0L;
       try {
-        if (migrationWorldState != null) {
-          migrationTrieStorage.beginBatch(tx);
-          migrationChangeIndex.beginBuffered();
-        }
         int blocksInBatch = 0;
         for (; blockNumber <= target.get() && blocksInBatch < maxBlocksPerBatch; blockNumber++) {
           final Optional<TrieLog> maybeTrieLog = prefetched.join();
@@ -477,26 +450,19 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             }
             continue;
           }
-          if (migrationWorldState != null) {
+          if (archiveTrieBuilder != null) {
             migrateTrieBlock(maybeTrieLog.get(), blockNumber, tx);
           }
-          final SegmentedKeyValueStorageTransaction processTx =
-              migrationTrieStorage != null ? new FlatCapturingTx(tx, migrationTrieStorage) : tx;
-          processBlock(maybeTrieLog.get(), blockNumber, processTx);
+          processBlock(maybeTrieLog.get(), blockNumber, tx);
           lastInBatch = blockNumber;
           blocksInBatch++;
-          if (migrationTrieStorage != null
-              && migrationTrieStorage.batchByteSize() >= maxBatchBytes) {
+          if (batchBytes >= maxBatchBytes) {
             blockNumber++;
             break;
           }
         }
         if (lastInBatch >= 0) {
-          if (migrationChangeIndex != null) {
-            migrationChangeIndex.flushBuffer(tx);
-          }
-          final long overlayBytes =
-              migrationTrieStorage != null ? migrationTrieStorage.batchByteSize() : 0L;
+          final long overlayBytes = batchBytes;
           saveProgress(lastInBatch, tx);
           try {
             tx.commit();
@@ -530,22 +496,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           }
         }
       } finally {
-        if (migrationWorldState != null) {
-          if (committed) {
-            migrationTrieStorage.endBatch();
-          } else {
-            // Batch failed or is being retried. Cancel without promoting uncommitted trie-node
-            // values into the read cache. If flushBuffer was called (lastInBatch >= 0) it may
-            // have updated indexCache with values that were never persisted — clear it so the
-            // retry reads the correct base state from committed storage.
-            if (migrationChangeIndex != null) {
-              migrationChangeIndex.discardBuffer();
-              if (lastInBatch >= 0) {
-                migrationChangeIndex.clearIndexCache();
-              }
-            }
-            migrationTrieStorage.cancelBatch();
-          }
+        if (!committed && archiveTrieBuilder != null) {
+          archiveTrieBuilder.resetBatchState();
         }
         if (!committed) {
           try {
@@ -562,10 +514,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       if (retry) {
         blockNumber = batchStartBlock;
         prefetched = prefetchTrieLog(batchStartBlock);
-        if (migrationWorldState != null) {
-          // The failed persist() advanced migrationWorldState's internal root past the rolled-back
-          // batch. Reset to a fresh world state that reads the correct frontier from storage.
-          resetMigrationWorldState();
+        if (archiveTrieBuilder != null) {
+          resetArchiveTrieBuilder();
         }
       }
     }
@@ -788,29 +738,21 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         Bytes.ofUnsignedLong(blockNumber).toArrayUnsafe());
   }
 
-  private void initMigrationWorldState(final MetricsSystem metricsSystem) {
-    final BonsaiArchiveFlatDbStrategy readStrategy =
-        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
-    migrationTrieStorage =
-        new MigrationTrieStorage(worldStateStorage.getComposedWorldStateStorage());
-    final StaticArchiveFlatDbStrategyProvider provider =
-        new StaticArchiveFlatDbStrategyProvider(metricsSystem, readStrategy);
-    provider.loadFlatDbStrategy(migrationTrieStorage);
-    migrationTrieLoader = new NoopBonsaiCachedMerkleTrieLoader();
-    migrationTrieNodeStrategy =
-        new BonsaiArchiveMigrationTrieNodeStrategy(
-            migrationTrieLoader,
-            migrationHistoryStore,
-            migrationChangeIndex,
-            migrationIndexProgress);
-    migrationKvStorage =
-        new BonsaiWorldStateKeyValueStorage(
-            provider,
-            migrationTrieStorage,
-            new InMemoryKeyValueStorage(),
-            CacheManager.NO_OP_CACHE,
-            0L,
-            migrationTrieNodeStrategy);
+  /**
+   * Initializes a fresh {@link ArchiveTrieBuilder} re-rooted at the last committed migration
+   * progress block. For fresh migrations, starts at {@link Hash#EMPTY_TRIE_HASH}. For resumed
+   * migrations, reads the account root from {@code TRIE_NODE_HISTORY_ARCHIVE_V2} at the last
+   * committed block.
+   */
+  private ArchiveTrieBuilder initArchiveTrieBuilder() {
+    final long lastMigratedBlock = getMigrationProgress().orElse(-1L);
+    final Hash startingRoot = resolveAccountRootAt(lastMigratedBlock);
+    if (lastMigratedBlock >= 0) {
+      LOG.info(
+          "Resuming archive trie migration from block {} with account root {}",
+          lastMigratedBlock,
+          startingRoot);
+    }
     if (prefetchEnabled) {
       prefetcher =
           new MigrationPrefetcher(
@@ -819,72 +761,54 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
               PREFETCH_MAX_IN_FLIGHT,
               PREFETCH_MAX_DEPTH);
     }
-    if (prefetchEnabled && migrationChangeIndex != null) {
-      // Design-5 part 2b: background prefetch of committed TRIE_NODE_INDEX_ARCHIVE base values.
-      // Shares the same bounded executor as the part-2a trie-node prefetcher above, with its own
-      // semaphore so the two prefetchers' in-flight limits are independent.
-      migrationChangeIndex.enablePrefetch(prefetchExecutor, new Semaphore(PREFETCH_MAX_IN_FLIGHT));
-    }
-    resetMigrationWorldState();
+    return new ArchiveTrieBuilder(
+        worldStateStorage.getComposedWorldStateStorage(),
+        Math.max(lastMigratedBlock, 0L),
+        startingRoot);
   }
 
   /**
-   * Creates a fresh {@link BonsaiWorldState} backed by the existing {@link #migrationKvStorage} and
-   * {@link #migrationTrieStorage}. Call this after a failed batch commit to discard the in-memory
-   * trie state that was rolled back with the transaction, while preserving the cross-batch {@link
-   * MigrationTrieStorage#blockReadCache} which still holds valid committed entries.
+   * Reinitializes the {@link ArchiveTrieBuilder} from the last committed migration progress after a
+   * failed batch commit. Task 13 will replace this with full re-anchoring from committed history.
    */
-  private void resetMigrationWorldState() {
-    final CodeCache codeCache = new CodeCache();
-    migrationWorldState =
-        new BonsaiWorldState(
-            migrationKvStorage,
-            migrationTrieLoader,
-            new NoOpBonsaiCachedWorldStorageManager(
-                migrationKvStorage, EvmConfiguration.DEFAULT, codeCache),
-            new NoOpTrieLogManager(),
-            EvmConfiguration.DEFAULT,
-            WorldStateConfig.newBuilder(WorldStateConfig.createStatefulConfigWithTrie())
-                .parallelStateRootComputationEnabled(false)
-                .build(),
-            codeCache);
+  private void resetArchiveTrieBuilder() {
+    this.archiveTrieBuilder = initArchiveTrieBuilder();
   }
 
-  private void recoverTrieState() {
-    final Optional<Long> progress = getMigrationProgress();
-    if (progress.isEmpty()) {
-      migrationChangeIndex.enableFreshMigrationMode();
-    } else {
-      LOG.info("Resuming archive migration from block {} (frontier CF available)", progress.get());
+  /**
+   * Resolves the account trie root hash at the given block by reading the root node from {@code
+   * TRIE_NODE_HISTORY_ARCHIVE_V2}. Returns {@link Hash#EMPTY_TRIE_HASH} if no history is present
+   * (e.g. fresh migration or pre-v2 data).
+   */
+  private Hash resolveAccountRootAt(final long block) {
+    if (block < 0) {
+      return Hash.EMPTY_TRIE_HASH;
     }
+    final var reader =
+        new TrieNodeHistoryReaderV2(worldStateStorage.getComposedWorldStateStorage());
+    return reader
+        .nodeAt(HistoryKey.DOMAIN_ACCOUNT, Bytes.EMPTY, block)
+        .map(Hash::hash)
+        .orElse(Hash.EMPTY_TRIE_HASH);
   }
 
+  /**
+   * Applies one block's trie-log to the {@link ArchiveTrieBuilder}, capturing every dirty trie node
+   * as a write-once entry in {@code TRIE_NODE_HISTORY_ARCHIVE_V2}.
+   */
   private void migrateTrieBlock(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater()).rollForward(trieLog);
-
-    if (migrationHistoryStore != null) {
-      // Index mode: persist every block so the differential index gets per-block entries. persist()
-      // writes the frontier + diff-index into the shared per-block transaction (via the deferred
-      // MigrationTransaction) and does not commit it — the migrator commits once in migrateBlocks.
-      blockchain
-          .getBlockHeader(blockNumber)
-          .ifPresent(
-              header -> {
-                migrationWorldState.persist(header);
-                // flushIndexIfEnabled() inside persist() already advanced migrationIndexProgress to
-                // blockNumber (it reads WORLD_BLOCK_NUMBER_KEY before commit, sees the previous
-                // block's number and adds 1). Persist the already-correct progress into the same
-                // shared transaction so it commits atomically with the frontier — note save() must
-                // hit real TRIE_BRANCH_STORAGE, so it is written directly on tx (not via the
-                // MigrationTransaction, which would redirect it to TRIE_BRANCH_FRONTIER).
-                if (migrationIndexProgress != null) {
-                  migrationIndexProgress.save(tx);
-                }
-              });
-      return;
-    }
+    blockchain
+        .getBlockHeader(blockNumber)
+        .ifPresent(header -> archiveTrieBuilder.applyBlock(trieLog, header, tx));
   }
+
+  // -------------------------------------------------------------------------
+  // Inner classes kept for test compatibility and incremental cleanup.
+  // MigrationTrieStorage and MigrationTransaction are no longer used by the
+  // migrator's main loop but remain compilable for tests; they will be removed
+  // in Tasks 12/13.
+  // -------------------------------------------------------------------------
 
   static final class MigrationTrieStorage extends LayeredKeyValueStorage {
     private final SegmentedKeyValueStorage real;
@@ -1239,70 +1163,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       if (!deferLifecycleToOwner) {
         realTx.close();
       }
-    }
-  }
-
-  /**
-   * Wraps the batch transaction passed to {@link #processBlock} and mirrors flat account/storage
-   * writes into {@link MigrationTrieStorage}'s per-batch overlays. This makes block N's newly
-   * created/updated accounts visible to block N+1's {@code rollForward} within the same batch,
-   * without requiring an intermediate commit.
-   */
-  private static final class FlatCapturingTx implements SegmentedKeyValueStorageTransaction {
-    private final SegmentedKeyValueStorageTransaction delegate;
-    private final MigrationTrieStorage trieStorage;
-
-    FlatCapturingTx(
-        final SegmentedKeyValueStorageTransaction delegate,
-        final MigrationTrieStorage trieStorage) {
-      this.delegate = delegate;
-      this.trieStorage = trieStorage;
-    }
-
-    @Override
-    public void put(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
-      delegate.put(segmentId, key, value);
-      trieStorage.recordFlatWrite(segmentId, key, value);
-    }
-
-    @Override
-    public void remove(final SegmentIdentifier segmentId, final byte[] key) {
-      delegate.remove(segmentId, key);
-      trieStorage.recordFlatRemove(segmentId, key);
-    }
-
-    @Override
-    public void commit() {
-      // migrateBlocks owns the lifecycle of the underlying batch tx; no-op here.
-    }
-
-    @Override
-    public void rollback() {
-      // migrateBlocks owns the lifecycle of the underlying batch tx; no-op here.
-    }
-
-    @Override
-    public void close() {
-      // migrateBlocks owns the lifecycle of the underlying batch tx; no-op here.
-    }
-  }
-
-  private static final class StaticArchiveFlatDbStrategyProvider
-      extends BonsaiFlatDbStrategyProvider {
-    private final BonsaiArchiveFlatDbStrategy strategy;
-
-    StaticArchiveFlatDbStrategyProvider(
-        final MetricsSystem metricsSystem, final BonsaiArchiveFlatDbStrategy strategy) {
-      super(metricsSystem, DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG);
-      this.strategy = strategy;
-    }
-
-    @Override
-    protected FlatDbStrategy createFlatDbStrategy(
-        final FlatDbMode flatDbMode,
-        final MetricsSystem metricsSystem,
-        final CodeStorageStrategy codeStorageStrategy) {
-      return strategy;
     }
   }
 }
