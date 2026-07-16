@@ -26,7 +26,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldSt
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveProofNodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveReadFlatDbStrategyProvider;
@@ -71,7 +71,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   // Design 5 trie-node differential index — proof routing
   private final TrieNodeChangeIndex trieNodeChangeIndex;
   private final TrieNodeHistoryStore trieNodeHistoryStore;
-  private final TrieNodeHistoryReader trieNodeHistoryReader;
+  private final TrieNodeHistoryReaderV2 trieNodeHistoryReaderV2;
   // volatile so that the migration thread's in-place mutations to lastIndexedBlock /
   // indexStartBlock (which are themselves volatile) are published consistently. The reference
   // is shared with the migrator; both sides mutate the same instance in-place.
@@ -124,8 +124,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         worldStateKeyValueStorage.getComposedWorldStateStorage();
     this.trieNodeChangeIndex = new TrieNodeChangeIndex(archiveStorage, ArchiveNodeKey.RANGE_SIZE);
     this.trieNodeHistoryStore = new TrieNodeHistoryStore(archiveStorage);
-    this.trieNodeHistoryReader =
-        new TrieNodeHistoryReader(trieNodeHistoryStore, trieNodeChangeIndex);
+    this.trieNodeHistoryReaderV2 = new TrieNodeHistoryReaderV2(archiveStorage);
     this.trieNodeIndexProgress =
         TrieNodeIndexProgress.load(archiveStorage, ArchiveNodeKey.RANGE_SIZE);
 
@@ -270,16 +269,18 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       final Hash stateRoot = blockHeader.getStateRoot();
       final SegmentedKeyValueStorage liveStorage =
           worldStateKeyValueStorage.getComposedWorldStateStorage();
-      final ArchiveProofNodeLoader archiveLoader =
-          new ArchiveProofNodeLoader(
-              trieNodeChangeIndex, trieNodeHistoryReader, liveStorage, targetBlock);
+
+      // NodeLoader for the account trie — backed by the V2 history reader.
+      final org.hyperledger.besu.ethereum.trie.NodeLoader accountNodeLoader =
+          ArchiveProofNodeLoader.accountNodeLoader(
+              liveStorage, trieNodeHistoryReaderV2, targetBlock);
 
       // Build a WorldStateStorageCoordinator whose trie-node accessors delegate to the
-      // ArchiveProofNodeLoader. isWorldStateAvailable always returns true: the stateRoot comes from
-      // a trusted block header and the gates above confirm the archive index covers targetBlock.
-      // If a node is nevertheless absent (e.g. pruned from the live trie and not yet in history),
-      // the trie traversal throws MerkleTrieException, which the catch block below converts to
-      // Optional.empty() — so returning true here is safe.
+      // ArchiveProofNodeLoader static factory. isWorldStateAvailable always returns true: the
+      // stateRoot comes from a trusted block header and the gates above confirm the archive index
+      // covers targetBlock. If a node is nevertheless absent (e.g. pruned from the live trie and
+      // not yet in history), the trie traversal throws MerkleTrieException, which the catch block
+      // below converts to Optional.empty() — so returning true here is safe.
       final WorldStateStorageCoordinator archiveCoordinator =
           new WorldStateStorageCoordinator(worldStateKeyValueStorage) {
             @Override
@@ -290,14 +291,17 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             @Override
             public Optional<Bytes> getAccountStateTrieNode(
                 final Bytes location, final Bytes32 nodeHash) {
-              return archiveLoader.accountNodeLoader().getNode(location, nodeHash);
+              return accountNodeLoader.getNode(location, nodeHash);
             }
 
             @Override
             public Optional<Bytes> getAccountStorageTrieNode(
                 final Hash accountHash, final Bytes location, final Bytes32 nodeHash) {
-              return archiveLoader
-                  .storageNodeLoader(Bytes32.wrap(accountHash.getBytes()))
+              return ArchiveProofNodeLoader.storageNodeLoader(
+                      liveStorage,
+                      trieNodeHistoryReaderV2,
+                      targetBlock,
+                      Bytes32.wrap(accountHash.getBytes()))
                   .getNode(location, nodeHash);
             }
           };

@@ -17,13 +17,14 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.crypto.Hash.keccak256;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE_V2;
 
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -37,17 +38,20 @@ import org.junit.jupiter.api.Test;
  * <p>Three main scenarios:
  *
  * <ol>
- *   <li>Hash-first fast path: stored hash matches expectedHash → live trie read, no index accessed.
- *   <li>Changed node: stored hash differs → index path reconstructs version at b*, hash verified.
+ *   <li>Hash-first fast path: stored hash matches expectedHash → live trie read, no history
+ *       accessed.
+ *   <li>Changed node: stored hash differs → V2 history reader finds version at b*, hash verified.
  *   <li>Hash mismatch: history returns valid node but expected hash doesn't match → throws.
  * </ol>
  *
- * <p>Live nodes are stored in the new {@code hash[32] ‖ nodeBytes} format that {@link
- * BonsaiTrieNodeStrategy} writes. The {@link #putLiveNode} helper encodes this format.
+ * <p>Live nodes are stored as bare node bytes in {@code TRIE_BRANCH_STORAGE} (the format the loader
+ * expects). History entries are stored in {@code TRIE_NODE_HISTORY_ARCHIVE_V2} using {@link
+ * HistoryKey} as the key and {@link HistoryEntryCodec} wrapping a {@link TrieNodeDiffCodec} payload
+ * as the value.
  *
  * <p>Note on types: {@link NodeLoader#getNode} takes a {@link Bytes32} for the hash parameter.
  * Tests use {@code keccak256(node)} from {@link org.hyperledger.besu.crypto.Hash} which returns
- * {@link Bytes32} directly — the same idiom used by {@link TrieNodeChangeIndex}.
+ * {@link Bytes32} directly.
  */
 class ArchiveProofNodeLoaderTest {
 
@@ -62,16 +66,14 @@ class ArchiveProofNodeLoaderTest {
   private static final Bytes STORAGE_LOCATION = Bytes.fromHexString("0xcafebabe");
 
   private SegmentedInMemoryKeyValueStorage kv;
-  private TrieNodeHistoryStore store;
-  private TrieNodeChangeIndex index;
-  private TrieNodeHistoryReader historyReader;
+  private TrieNodeHistoryReaderV2 historyReader;
 
   @BeforeEach
   void setUp() {
-    kv = new SegmentedInMemoryKeyValueStorage();
-    store = new TrieNodeHistoryStore(kv);
-    index = new TrieNodeChangeIndex(kv, 1_000_000);
-    historyReader = new TrieNodeHistoryReader(store, index);
+    kv =
+        new SegmentedInMemoryKeyValueStorage(
+            List.of(TRIE_NODE_HISTORY_ARCHIVE_V2, KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE));
+    historyReader = new TrieNodeHistoryReaderV2(kv);
   }
 
   // ---------------------------------------------------------------------------
@@ -103,24 +105,59 @@ class ArchiveProofNodeLoaderTest {
     return keccak256(node);
   }
 
-  /** Write a single (key, block, entry) pair to the history store and commit. */
-  private void putEntry(final Bytes naturalKey, final long block, final Bytes entry) {
-    var tx = kv.startTransaction();
-    store.put(tx, naturalKey, block, entry);
-    tx.commit();
-  }
-
-  /** Append a single (key, block) change record to the index and commit. */
-  private void appendIndex(final Bytes naturalKey, final long block) {
-    var tx = kv.startTransaction();
-    index.append(tx, naturalKey, block);
+  /**
+   * Write a FULL history entry to {@code TRIE_NODE_HISTORY_ARCHIVE_V2}.
+   *
+   * @param domain {@link HistoryKey#DOMAIN_ACCOUNT} or {@link HistoryKey#DOMAIN_STORAGE}
+   * @param naturalKey account location or {@code accountHash ‖ storageLocation}
+   * @param block block number at which this version was current
+   * @param nodeRlp the full trie node RLP bytes
+   */
+  private void writeFullEntry(
+      final byte domain, final Bytes naturalKey, final long block, final Bytes nodeRlp) {
+    final var tx = kv.startTransaction();
+    tx.put(
+        TRIE_NODE_HISTORY_ARCHIVE_V2,
+        HistoryKey.encode(domain, naturalKey, block).toArrayUnsafe(),
+        HistoryEntryCodec.encode(
+                HistoryEntryCodec.EntryType.FULL, 0, TrieNodeDiffCodec.encodeFull(nodeRlp))
+            .toArrayUnsafe());
     tx.commit();
   }
 
   /**
-   * Write a node directly to the live TRIE_BRANCH_STORAGE in the legacy bare {@code nodeBytes}
-   * format used by {@link BonsaiTrieNodeStrategy}. The loader's hash-first fast path recomputes
-   * {@code keccak256(node)} to compare against the expected hash.
+   * Write a DIFF history entry to {@code TRIE_NODE_HISTORY_ARCHIVE_V2}.
+   *
+   * @param domain {@link HistoryKey#DOMAIN_ACCOUNT} or {@link HistoryKey#DOMAIN_STORAGE}
+   * @param naturalKey account location or {@code accountHash ‖ storageLocation}
+   * @param block block number at which the diff was recorded
+   * @param countSinceFull number of DIFF entries since the last FULL (used by the chain walk)
+   * @param oldRlp the previous node RLP (before this block)
+   * @param newRlp the new node RLP (at this block)
+   */
+  private void writeDiffEntry(
+      final byte domain,
+      final Bytes naturalKey,
+      final long block,
+      final int countSinceFull,
+      final Bytes oldRlp,
+      final Bytes newRlp) {
+    final var tx = kv.startTransaction();
+    tx.put(
+        TRIE_NODE_HISTORY_ARCHIVE_V2,
+        HistoryKey.encode(domain, naturalKey, block).toArrayUnsafe(),
+        HistoryEntryCodec.encode(
+                HistoryEntryCodec.EntryType.DIFF,
+                countSinceFull,
+                TrieNodeDiffCodec.encodeDiff(oldRlp, newRlp))
+            .toArrayUnsafe());
+    tx.commit();
+  }
+
+  /**
+   * Write a node directly to the live {@code TRIE_BRANCH_STORAGE} in bare {@code nodeBytes} format.
+   * The loader's hash-first fast path recomputes {@code keccak256(node)} to compare against the
+   * expected hash.
    *
    * <p>Key = naturalKey (account trie: location; storage trie: accountHash ‖ location).
    */
@@ -138,25 +175,20 @@ class ArchiveProofNodeLoaderTest {
   // ---------------------------------------------------------------------------
 
   /**
-   * Node changed only at block 50 (before T=100). The live node's stored hash matches expectedHash
-   * → hash-first fast path: loader returns the live trie node without reading the index at all.
+   * Node changed only at block 50 (before T=100). The live node's keccak256 matches expectedHash →
+   * hash-first fast path: loader returns the live trie node without reading history at all.
    */
   @Test
   void unchangedNodeReturnedFromLiveTrie() {
     final long targetBlock = 100;
 
-    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes liveNode = branchWith(3, 50);
 
-    // Index records block 50 only (not consulted — hash-first takes the fast path).
-    appendIndex(accountNaturalKey, 50);
-    // Live trie holds the current version in hash-prefixed format.
-    putLiveNode(accountNaturalKey, liveNode);
+    // Live trie holds the current version in bare nodeBytes format.
+    putLiveNode(ACCOUNT_LOCATION, liveNode);
 
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
-
-    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final NodeLoader accountLoader =
+        ArchiveProofNodeLoader.accountNodeLoader(kv, historyReader, targetBlock);
     final Bytes32 expectedHash = keccak(liveNode);
     final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, expectedHash);
 
@@ -169,32 +201,26 @@ class ArchiveProofNodeLoaderTest {
 
   /**
    * Node changed at block 50 (before T=60) and again at block 80 (after T=60). The live node is
-   * v80; its stored hash != keccak(v50) → hash-first fails → index path reconstructs v50. Keccak of
+   * v80; its keccak256 != keccak(v50) → hash-first fails → V2 history reader finds v50. Keccak of
    * result matches expected hash.
    */
   @Test
   void changedNodeReconstructedFromHistory() {
     final long targetBlock = 60;
 
-    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
-
     final Bytes v50 = branchWith(3, 50); // FULL checkpoint at block 50
     final Bytes v80 = branchWith(5, 80); // live version at block 80 (after T)
 
     // History: FULL@50, DIFF@80
-    putEntry(accountNaturalKey, 50, TrieNodeDiffCodec.encodeFull(v50));
-    appendIndex(accountNaturalKey, 50);
-    putEntry(accountNaturalKey, 80, TrieNodeDiffCodec.encodeDiff(v50, v80));
-    appendIndex(accountNaturalKey, 80);
+    writeFullEntry(HistoryKey.DOMAIN_ACCOUNT, ACCOUNT_LOCATION, 50, v50);
+    writeDiffEntry(HistoryKey.DOMAIN_ACCOUNT, ACCOUNT_LOCATION, 80, 1, v50, v80);
 
     // Live trie holds v80 (current head version).
-    putLiveNode(accountNaturalKey, v80);
-
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
+    putLiveNode(ACCOUNT_LOCATION, v80);
 
     // At T=60, the correct version is v50 (latest change ≤ 60 was at block 50).
-    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final NodeLoader accountLoader =
+        ArchiveProofNodeLoader.accountNodeLoader(kv, historyReader, targetBlock);
     final Bytes32 expectedHash = keccak(v50);
     final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, expectedHash);
 
@@ -216,23 +242,17 @@ class ArchiveProofNodeLoaderTest {
   void hashMismatchThrowsIllegalStateException() {
     final long targetBlock = 60;
 
-    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
-
     final Bytes v50 = branchWith(3, 50);
     final Bytes v80 = branchWith(5, 80);
 
     // History: FULL@50, DIFF@80 — node changed after T=60.
-    putEntry(accountNaturalKey, 50, TrieNodeDiffCodec.encodeFull(v50));
-    appendIndex(accountNaturalKey, 50);
-    putEntry(accountNaturalKey, 80, TrieNodeDiffCodec.encodeDiff(v50, v80));
-    appendIndex(accountNaturalKey, 80);
+    writeFullEntry(HistoryKey.DOMAIN_ACCOUNT, ACCOUNT_LOCATION, 50, v50);
+    writeDiffEntry(HistoryKey.DOMAIN_ACCOUNT, ACCOUNT_LOCATION, 80, 1, v50, v80);
 
-    putLiveNode(accountNaturalKey, v80);
+    putLiveNode(ACCOUNT_LOCATION, v80);
 
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
-
-    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final NodeLoader accountLoader =
+        ArchiveProofNodeLoader.accountNodeLoader(kv, historyReader, targetBlock);
     // wrongHash matches neither v50 nor v80 — hash-first fails, history returns v50, keccak(v50) !=
     // wrongHash → throw.
     final Bytes32 wrongHash = keccak(branchWith(7, 99));
@@ -255,20 +275,16 @@ class ArchiveProofNodeLoaderTest {
   void noHistoryBeforeTargetReturnsEmpty() {
     final long targetBlock = 50;
 
-    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes v100 = branchWith(3, 100);
 
     // Node only recorded at block 100 (after T=50).
-    putEntry(accountNaturalKey, 100, TrieNodeDiffCodec.encodeFull(v100));
-    appendIndex(accountNaturalKey, 100);
-    putLiveNode(accountNaturalKey, v100);
+    writeFullEntry(HistoryKey.DOMAIN_ACCOUNT, ACCOUNT_LOCATION, 100, v100);
+    putLiveNode(ACCOUNT_LOCATION, v100);
 
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
-
-    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final NodeLoader accountLoader =
+        ArchiveProofNodeLoader.accountNodeLoader(kv, historyReader, targetBlock);
     // Use a hash that doesn't match the live node (keccak(v100)) so hash-first fails and we
-    // consult the index. The index confirms no change ≤ T=50 → return empty.
+    // consult the history. The history confirms no change ≤ T=50 → return empty.
     final Bytes32 absentNodeHash = keccak(branchWith(0, 1));
     final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, absentNodeHash);
 
@@ -287,23 +303,19 @@ class ArchiveProofNodeLoaderTest {
   void storageNodeLoaderReconstructsChangedNode() {
     final long targetBlock = 60;
 
-    final Bytes storageNaturalKey = ArchiveNodeKey.storage(ACCOUNT_HASH, STORAGE_LOCATION);
+    final Bytes storageNaturalKey = HistoryKey.storageNaturalKey(ACCOUNT_HASH, STORAGE_LOCATION);
 
     final Bytes v50 = branchWith(1, 50);
     final Bytes v80 = branchWith(2, 80);
 
-    putEntry(storageNaturalKey, 50, TrieNodeDiffCodec.encodeFull(v50));
-    appendIndex(storageNaturalKey, 50);
-    putEntry(storageNaturalKey, 80, TrieNodeDiffCodec.encodeDiff(v50, v80));
-    appendIndex(storageNaturalKey, 80);
+    writeFullEntry(HistoryKey.DOMAIN_STORAGE, storageNaturalKey, 50, v50);
+    writeDiffEntry(HistoryKey.DOMAIN_STORAGE, storageNaturalKey, 80, 1, v50, v80);
 
     // Live storage trie node keyed by naturalKey = accountHash ‖ location.
     putLiveNode(storageNaturalKey, v80);
 
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
-
-    final NodeLoader storageLoader = loader.storageNodeLoader(ACCOUNT_HASH);
+    final NodeLoader storageLoader =
+        ArchiveProofNodeLoader.storageNodeLoader(kv, historyReader, targetBlock, ACCOUNT_HASH);
     final Bytes32 expectedHash = keccak(v50);
     final Optional<Bytes> result = storageLoader.getNode(STORAGE_LOCATION, expectedHash);
 
@@ -318,22 +330,19 @@ class ArchiveProofNodeLoaderTest {
 
   /**
    * Storage trie node unchanged after T: only changed at block 50. T=100. The storage node loader
-   * takes the hash-first fast path (stored hash matches expectedHash) and returns the live node.
+   * takes the hash-first fast path (keccak(live) matches expectedHash) and returns the live node.
    */
   @Test
   void storageNodeLoaderFastPathForUnchangedNode() {
     final long targetBlock = 100;
 
-    final Bytes storageNaturalKey = ArchiveNodeKey.storage(ACCOUNT_HASH, STORAGE_LOCATION);
+    final Bytes storageNaturalKey = HistoryKey.storageNaturalKey(ACCOUNT_HASH, STORAGE_LOCATION);
     final Bytes liveNode = branchWith(4, 50);
 
-    appendIndex(storageNaturalKey, 50);
     putLiveNode(storageNaturalKey, liveNode);
 
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
-
-    final NodeLoader storageLoader = loader.storageNodeLoader(ACCOUNT_HASH);
+    final NodeLoader storageLoader =
+        ArchiveProofNodeLoader.storageNodeLoader(kv, historyReader, targetBlock, ACCOUNT_HASH);
     final Bytes32 expectedHash = keccak(liveNode);
     final Optional<Bytes> result = storageLoader.getNode(STORAGE_LOCATION, expectedHash);
 
@@ -341,27 +350,24 @@ class ArchiveProofNodeLoaderTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Test 7: Hash-first fast path — node never indexed (no range entry at all)
+  // Test 7: Hash-first fast path — node never indexed (no history entry at all)
   // ---------------------------------------------------------------------------
 
   /**
-   * Node has never been indexed (no index entries). Live node's stored hash matches expectedHash →
+   * Node has never been recorded in history. Live node's keccak256 matches expectedHash →
    * hash-first fast path returns the live node directly. T=100.
    */
   @Test
   void nodeNeverIndexedReturnsLiveNodeDirectly() {
     final long targetBlock = 100;
 
-    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes liveNode = branchWith(7, 42);
 
-    // No index entries — node was never recorded as changed.
-    putLiveNode(accountNaturalKey, liveNode);
+    // No history entries — node was never recorded as changed.
+    putLiveNode(ACCOUNT_LOCATION, liveNode);
 
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
-
-    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final NodeLoader accountLoader =
+        ArchiveProofNodeLoader.accountNodeLoader(kv, historyReader, targetBlock);
     final Bytes32 expectedHash = keccak(liveNode);
     final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, expectedHash);
 
@@ -374,28 +380,23 @@ class ArchiveProofNodeLoaderTest {
 
   /**
    * Node changed exactly at T and again after T. The historical version at T is the FULL entry at
-   * T. T=50, change at 50 (FULL) and 80 (DIFF after T). The single-range list read finds bStar=50
-   * via latestLeq(50) and the preloaded list is passed to the history reader.
+   * T. T=50, change at 50 (FULL) and 80 (DIFF after T). The V2 reader's nearest-before lookup finds
+   * the FULL@50 entry directly.
    */
   @Test
   void nodeChangedExactlyAtTReturnsTVersion() {
     final long targetBlock = 50;
 
-    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes vT = branchWith(2, 50); // version at T=50
     final Bytes vHead = branchWith(6, 80); // live version after T
 
-    putEntry(accountNaturalKey, 50, TrieNodeDiffCodec.encodeFull(vT));
-    appendIndex(accountNaturalKey, 50);
-    putEntry(accountNaturalKey, 80, TrieNodeDiffCodec.encodeDiff(vT, vHead));
-    appendIndex(accountNaturalKey, 80);
+    writeFullEntry(HistoryKey.DOMAIN_ACCOUNT, ACCOUNT_LOCATION, 50, vT);
+    writeDiffEntry(HistoryKey.DOMAIN_ACCOUNT, ACCOUNT_LOCATION, 80, 1, vT, vHead);
 
-    putLiveNode(accountNaturalKey, vHead);
+    putLiveNode(ACCOUNT_LOCATION, vHead);
 
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
-
-    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final NodeLoader accountLoader =
+        ArchiveProofNodeLoader.accountNodeLoader(kv, historyReader, targetBlock);
     final Bytes32 expectedHash = keccak(vT);
     final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, expectedHash);
 
@@ -408,23 +409,18 @@ class ArchiveProofNodeLoaderTest {
 
   /**
    * Node changed only at block 30 (before T=80). No change after T. Live node's hash matches
-   * expectedHash → hash-first fast path returns the live node directly, without consulting the
-   * index.
+   * expectedHash → hash-first fast path returns the live node directly, without consulting history.
    */
   @Test
   void nodeChangedOnlyBeforeTReturnedFromLiveTrieViaSingleRangeList() {
     final long targetBlock = 80;
 
-    final Bytes accountNaturalKey = ArchiveNodeKey.account(ACCOUNT_LOCATION);
     final Bytes liveNode = branchWith(1, 30);
 
-    appendIndex(accountNaturalKey, 30);
-    putLiveNode(accountNaturalKey, liveNode);
+    putLiveNode(ACCOUNT_LOCATION, liveNode);
 
-    final ArchiveProofNodeLoader loader =
-        new ArchiveProofNodeLoader(index, historyReader, kv, targetBlock);
-
-    final NodeLoader accountLoader = loader.accountNodeLoader();
+    final NodeLoader accountLoader =
+        ArchiveProofNodeLoader.accountNodeLoader(kv, historyReader, targetBlock);
     final Bytes32 expectedHash = keccak(liveNode);
     final Optional<Bytes> result = accountLoader.getNode(ACCOUNT_LOCATION, expectedHash);
 

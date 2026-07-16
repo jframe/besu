@@ -20,40 +20,34 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 
-import java.util.Objects;
 import java.util.Optional;
-import java.util.OptionalInt;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
 /**
- * Adapts the Design-5 trie-node differential index (Stage 2/3) to the {@link NodeLoader} interface
+ * Adapts the Design-5 trie-node history (V2 append-only store) to the {@link NodeLoader} interface
  * used by {@link org.hyperledger.besu.ethereum.proof.WorldStateProofProvider}.
  *
- * <p>Two {@link NodeLoader} views are provided:
+ * <p>Two {@link NodeLoader} views are provided via static factory methods:
  *
  * <ul>
- *   <li>{@link #accountNodeLoader()} — for the account state trie; {@code naturalKey = location}.
- *   <li>{@link #storageNodeLoader(Bytes32)} — for a specific account's storage trie; {@code
- *       naturalKey = accountHash ‖ location}.
+ *   <li>{@link #accountNodeLoader} — for the account state trie; {@code naturalKey = location}.
+ *   <li>{@link #storageNodeLoader} — for a specific account's storage trie; {@code naturalKey =
+ *       accountHash ‖ location}.
  * </ul>
  *
  * <h2>Algorithm — {@link #resolveNodeAt(Bytes, Bytes32)}</h2>
  *
  * <ol>
  *   <li><strong>Hash-first fast path</strong> — read {@code TRIE_BRANCH_STORAGE[naturalKey]} once.
- *       The stored value is {@code hash[32] ‖ nodeBytes}. If the stored 32-byte hash equals {@code
- *       expectedHash}, the live trie node IS the historical node at {@code targetBlock} — return it
- *       directly (1 read total). This is the common case for nodes that haven't changed since T.
- *   <li><strong>Index path</strong> — hash mismatch or absent. Read the range list for {@code
- *       targetBlock}'s range via {@link TrieNodeChangeIndex#readRangeList}. Use {@link
- *       RangeRelativeOffsetList#latestLeq} to find {@code b*} (latest change ≤ T) in-memory. If
- *       found, delegate to {@link TrieNodeHistoryReader#nodeAt(Bytes, long,
- *       RangeRelativeOffsetList, long)} with the preloaded list.
- *   <li><strong>History fallback</strong> — if the range list is absent or contains no change ≤ T,
- *       delegate to {@link TrieNodeHistoryReader#nodeAt(Bytes, long)} which walks earlier ranges.
- *   <li><strong>Hash verification</strong> — after index/history reconstruction, compute {@code
+ *       If the stored node's keccak256 equals {@code expectedHash}, the live trie node IS the
+ *       historical node at {@code targetBlock} — return it directly (1 read total). This is the
+ *       common case for nodes that haven't changed since T.
+ *   <li><strong>History path</strong> — hash mismatch or absent. Delegate to {@link
+ *       TrieNodeHistoryReaderV2#nodeAt} which performs a single nearest-before lookup and, if
+ *       needed, a bounded backward walk to reconstruct the node from DIFF entries.
+ *   <li><strong>Hash verification</strong> — after history reconstruction, compute {@code
  *       keccak256(node)} and compare to {@code expectedHash}. A mismatch throws {@link
  *       IllegalStateException} (fail-closed — never serve silently incorrect proof data).
  * </ol>
@@ -61,37 +55,26 @@ import org.apache.tuweni.bytes.Bytes32;
  * <h2>Fail-closed invariant</h2>
  *
  * A hash mismatch after history reconstruction is always thrown as {@link IllegalStateException}.
- * This is intentional: a mismatch means the index, history store, or live trie are inconsistent
- * (data corruption). Serving a node that does not match the expected hash would silently produce an
+ * This is intentional: a mismatch means the history store or live trie is inconsistent (data
+ * corruption). Serving a node that does not match the expected hash would silently produce an
  * incorrect proof, which is worse than failing loudly.
  */
 public final class ArchiveProofNodeLoader {
 
-  private final TrieNodeChangeIndex index;
-  private final TrieNodeHistoryReader historyReader;
   private final SegmentedKeyValueStorage liveStorage;
+  private final TrieNodeHistoryReaderV2 historyReader;
   private final long targetBlock;
+  private final byte domain;
 
-  /**
-   * Constructs a new loader for historical proof resolution.
-   *
-   * @param index the trie-node change index (Design 5, Stage 2); must not be {@code null}
-   * @param historyReader the history reader for reconstructing past node versions (Stage 3); must
-   *     not be {@code null}
-   * @param liveStorage the live segmented KV storage containing {@code TRIE_BRANCH_STORAGE} (for
-   *     the hash-first fast-path live-trie read); must not be {@code null}
-   * @param targetBlock T — the historical block being proved (inclusive)
-   * @throws NullPointerException if any reference argument is {@code null}
-   */
-  public ArchiveProofNodeLoader(
-      final TrieNodeChangeIndex index,
-      final TrieNodeHistoryReader historyReader,
+  private ArchiveProofNodeLoader(
       final SegmentedKeyValueStorage liveStorage,
-      final long targetBlock) {
-    this.index = Objects.requireNonNull(index, "index must not be null");
-    this.historyReader = Objects.requireNonNull(historyReader, "historyReader must not be null");
-    this.liveStorage = Objects.requireNonNull(liveStorage, "liveStorage must not be null");
+      final TrieNodeHistoryReaderV2 historyReader,
+      final long targetBlock,
+      final byte domain) {
+    this.liveStorage = liveStorage;
+    this.historyReader = historyReader;
     this.targetBlock = targetBlock;
+    this.domain = domain;
   }
 
   // ---------------------------------------------------------------------------
@@ -103,11 +86,21 @@ public final class ArchiveProofNodeLoader {
    *
    * <p>The natural key for each node is {@code location} (the compact path).
    *
+   * @param liveStorage the live segmented KV storage containing {@code TRIE_BRANCH_STORAGE}; must
+   *     not be {@code null}
+   * @param historyReader the V2 history reader backed by {@code TRIE_NODE_HISTORY_ARCHIVE_V2}; must
+   *     not be {@code null}
+   * @param targetBlock T — the historical block being proved (inclusive)
    * @return a NodeLoader for account-trie nodes at {@code targetBlock}
    */
-  public NodeLoader accountNodeLoader() {
-    return (location, expectedHash) ->
-        resolveNodeAt(ArchiveNodeKey.account(location), expectedHash);
+  public static NodeLoader accountNodeLoader(
+      final SegmentedKeyValueStorage liveStorage,
+      final TrieNodeHistoryReaderV2 historyReader,
+      final long targetBlock) {
+    final ArchiveProofNodeLoader delegate =
+        new ArchiveProofNodeLoader(
+            liveStorage, historyReader, targetBlock, HistoryKey.DOMAIN_ACCOUNT);
+    return (location, hash) -> delegate.resolveNodeAt(HistoryKey.accountNaturalKey(location), hash);
   }
 
   /**
@@ -115,14 +108,25 @@ public final class ArchiveProofNodeLoader {
    *
    * <p>The natural key for each node is {@code accountHash ‖ location}.
    *
+   * @param liveStorage the live segmented KV storage containing {@code TRIE_BRANCH_STORAGE}; must
+   *     not be {@code null}
+   * @param historyReader the V2 history reader backed by {@code TRIE_NODE_HISTORY_ARCHIVE_V2}; must
+   *     not be {@code null}
+   * @param targetBlock T — the historical block being proved (inclusive)
    * @param accountHash the 32-byte hash of the account that owns the storage trie; must be exactly
    *     32 bytes
    * @return a NodeLoader for storage-trie nodes at {@code targetBlock}
    */
-  public NodeLoader storageNodeLoader(final Bytes32 accountHash) {
-    Objects.requireNonNull(accountHash, "accountHash must not be null");
-    return (location, expectedHash) ->
-        resolveNodeAt(ArchiveNodeKey.storage(accountHash, location), expectedHash);
+  public static NodeLoader storageNodeLoader(
+      final SegmentedKeyValueStorage liveStorage,
+      final TrieNodeHistoryReaderV2 historyReader,
+      final long targetBlock,
+      final Bytes32 accountHash) {
+    final ArchiveProofNodeLoader delegate =
+        new ArchiveProofNodeLoader(
+            liveStorage, historyReader, targetBlock, HistoryKey.DOMAIN_STORAGE);
+    return (location, hash) ->
+        delegate.resolveNodeAt(HistoryKey.storageNaturalKey(accountHash, location), hash);
   }
 
   // ---------------------------------------------------------------------------
@@ -135,22 +139,16 @@ public final class ArchiveProofNodeLoader {
    * <h2>Algorithm</h2>
    *
    * <ol>
-   *   <li><strong>Hash-first fast path</strong> — read {@code TRIE_BRANCH_STORAGE[naturalKey]}. The
-   *       value is stored as {@code hash[32] ‖ nodeBytes}. Compare the first 32 bytes to {@code
-   *       expectedHash}. Match → return node bytes directly (1 read).
-   *   <li><strong>Index path</strong> — call {@link TrieNodeChangeIndex#readRangeList} once for
-   *       {@code (naturalKey, targetBlock's rangeId)}. Use {@link
-   *       RangeRelativeOffsetList#latestLeq} to find {@code b*} in-memory. If found, reconstruct
-   *       from {@link TrieNodeHistoryReader#nodeAt(Bytes, long, RangeRelativeOffsetList, long)}.
-   *   <li><strong>History fallback</strong> — if the list is empty or has no change ≤ T, delegate
-   *       to {@link TrieNodeHistoryReader#nodeAt(Bytes, long)} which walks earlier ranges.
+   *   <li><strong>Hash-first fast path</strong> — read {@code TRIE_BRANCH_STORAGE[naturalKey]}. If
+   *       keccak256(live) equals {@code expectedHash}, the live version IS the T-version.
+   *   <li><strong>History path</strong> — call {@link TrieNodeHistoryReaderV2#nodeAt} which
+   *       performs a nearest-before lookup and, if needed, a bounded backward DIFF-chain walk.
    *   <li><strong>Hash verification</strong> — verify reconstructed node; throw on mismatch.
    * </ol>
    *
-   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey}); must not be
-   *     {@code null}
-   * @param expectedHash the keccak256 hash the caller expects for this node (from the trie
-   *     framework); must not be {@code null}
+   * @param naturalKey the account or storage natural key; must not be {@code null}
+   * @param expectedHash the keccak256 hash the caller expects for this node; must not be {@code
+   *     null}
    * @return the node bytes if found, or empty if the node was absent at {@code targetBlock}
    * @throws IllegalStateException if the node is found but its keccak256 does not match {@code
    *     expectedHash} (fail-closed on data inconsistency)
@@ -172,37 +170,16 @@ public final class ArchiveProofNodeLoader {
       }
     }
 
-    // Step 2: Hash mismatch or absent → consult the index.
-    final long rangeId = targetBlock / index.rangeSize;
-    final int withinRangeT = (int) (targetBlock - rangeId * index.rangeSize);
-
-    final Optional<RangeRelativeOffsetList> listOpt = index.readRangeList(naturalKey, rangeId);
-
-    if (listOpt.isPresent()) {
-      final RangeRelativeOffsetList list = listOpt.get();
-      final OptionalInt bStarOffsetOpt = list.latestLeq(withinRangeT);
-      if (bStarOffsetOpt.isPresent()) {
-        final long bStar = rangeId * index.rangeSize + bStarOffsetOpt.getAsInt();
-        final Optional<Bytes> nodeOpt = historyReader.nodeAt(naturalKey, bStar, list, rangeId);
-        return verifyAndReturn(nodeOpt, naturalKey, expectedHash);
-      }
-    }
-
-    // No change ≤ T in T's range (or no list at all) → walk earlier ranges via historyReader.
-    return resolveFromHistory(naturalKey, expectedHash);
-  }
-
-  /**
-   * Fallback for when the range list for T's range is absent or has no change ≤ T. Delegates to
-   * {@link TrieNodeHistoryReader#nodeAt(Bytes, long)} which walks earlier ranges.
-   */
-  private Optional<Bytes> resolveFromHistory(final Bytes naturalKey, final Bytes32 expectedHash) {
-    final Optional<Bytes> nodeOpt = historyReader.nodeAt(naturalKey, targetBlock);
+    // Step 2: Hash mismatch or absent → consult the V2 history store.
+    // One call replaces the old readRangeList + latestLeq + windowed reconstruct +
+    // backwardWalkFallback chain.
+    final Optional<Bytes> nodeOpt = historyReader.nodeAt(domain, naturalKey, targetBlock);
     return verifyAndReturn(nodeOpt, naturalKey, expectedHash);
   }
 
   private Optional<Bytes> verifyAndReturn(
       final Optional<Bytes> nodeOpt, final Bytes naturalKey, final Bytes32 expectedHash) {
+    // Step 3: fail-closed keccak verify — unchanged from before.
     if (nodeOpt.isEmpty()) {
       return Optional.empty();
     }
