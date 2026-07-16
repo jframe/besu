@@ -63,7 +63,8 @@ public final class HistoryNodeCache {
 
   /**
    * Enable on a from-genesis migration only -- lets first-ever touches of a key skip the history
-   * read entirely (see design section 4.2, mirrors {@code TrieNodeChangeIndex#sessionWrittenKeys}).
+   * read entirely (see design section 4.2, mirrors the bloom-filter optimisation in the V2
+   * append-only writer).
    */
   public void enableFreshMigrationBloom() {
     freshMigrationBloom = BloomFilter.create(Funnels.byteArrayFunnel(), 30_000_000, 0.01);
