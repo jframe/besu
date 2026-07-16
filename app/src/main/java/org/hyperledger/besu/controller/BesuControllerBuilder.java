@@ -1045,8 +1045,6 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
         new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
     if (stateProofsEnabled) {
-      final BonsaiArchiveWorldStateProvider archiveProvider =
-          (BonsaiArchiveWorldStateProvider) worldStateArchive;
       return new BonsaiFlatDbToArchiveMigrator(
           worldStateKeyValueStorage,
           trieLogManager,
@@ -1054,9 +1052,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
           migrationExecutor,
           metricsSystem,
           archiveStrategy,
-          archiveProvider.getTrieNodeHistoryStore(),
-          archiveProvider.getTrieNodeChangeIndex(),
-          archiveProvider.getTrieNodeIndexProgress());
+          /* trieNodeHistoryEnabled= */ true);
     }
     return new BonsaiFlatDbToArchiveMigrator(
         worldStateKeyValueStorage,

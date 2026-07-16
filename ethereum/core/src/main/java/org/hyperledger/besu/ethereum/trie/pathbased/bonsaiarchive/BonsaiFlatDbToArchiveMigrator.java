@@ -433,8 +433,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
       long lastInBatch = -1;
       boolean committed = false;
       boolean retry = false;
-      // Running byte counter for the batch-size guard. TODO(task 13): implement proper byte
-      // tracking for archiveTrieBuilder path; for now the block-count guard is the effective limit.
+      // Running byte counter for the batch-size guard (rough approximation based on change counts).
       long batchBytes = 0L;
       try {
         int blocksInBatch = 0;
@@ -456,6 +455,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           processBlock(maybeTrieLog.get(), blockNumber, tx);
           lastInBatch = blockNumber;
           blocksInBatch++;
+          final TrieLog tl = maybeTrieLog.get();
+          batchBytes +=
+              (long) tl.getAccountChanges().size() * 200
+                  + tl.getStorageChanges().values().stream().mapToInt(m -> m.size()).sum() * 100L;
           if (batchBytes >= maxBatchBytes) {
             blockNumber++;
             break;
