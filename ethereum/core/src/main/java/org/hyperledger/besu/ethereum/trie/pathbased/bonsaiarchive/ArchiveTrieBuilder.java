@@ -135,6 +135,39 @@ public final class ArchiveTrieBuilder {
     return RLP.encode(out -> out.writeBytes(value.trimLeadingZeros()));
   }
 
+  Hash applyAccountChanges(
+      final TrieLog trieLog,
+      final Hash priorAccountRoot,
+      final long block,
+      final SegmentedKeyValueStorageTransaction tx) {
+
+    final StoredMerklePatriciaTrie<Bytes, Bytes> accountTrie =
+        new StoredMerklePatriciaTrie<>(
+            new HistoryNodeLoader(nodeCache, HistoryKey.DOMAIN_ACCOUNT, null),
+            Bytes32.wrap(priorAccountRoot.getBytes()),
+            Function.identity(),
+            Function.identity());
+
+    trieLog
+        .getAccountChanges()
+        .forEach(
+            (address, change) -> {
+              final Bytes accountHash = address.addressHash().getBytes();
+              final var updated = change.getUpdated();
+              if (updated == null) {
+                accountTrie.remove(accountHash);
+              } else {
+                accountTrie.put(accountHash, RLP.encode(updated::writeTo));
+              }
+            });
+
+    accountTrie.commit(
+        (location, hash, value) ->
+            captureNode(HistoryKey.DOMAIN_ACCOUNT, location, location, hash, value, block, tx));
+
+    return Hash.wrap(accountTrie.getRootHash());
+  }
+
   @SuppressWarnings("UnusedVariable") // stub -- parameters wired up in Task 8
   private void captureNode(
       final byte domain,

@@ -90,4 +90,47 @@ class ArchiveTrieBuilderTest {
 
     assertThat(rootAfterRemoval).isEqualTo(Hash.wrap(MerkleTrie.EMPTY_TRIE_NODE_HASH));
   }
+
+  @Test
+  void accountTrieRootChangesWhenAnAccountIsAdded() {
+    final Address address = Address.fromHexString("0x3333333333333333333333333333333333333333");
+    final TrieLogLayer trieLog = new TrieLogLayer();
+    trieLog.addAccountChange(
+        address,
+        null,
+        new PmtStateTrieAccountValue(1, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
+    trieLog.freeze();
+
+    final var tx = storage.startTransaction();
+    final Hash root = builder.applyAccountChanges(trieLog, Hash.EMPTY_TRIE_HASH, 1L, tx);
+    tx.commit();
+
+    assertThat(root).isNotEqualTo(Hash.EMPTY_TRIE_HASH);
+  }
+
+  @Test
+  void accountTrieRootReturnsToEmptyAfterTheOnlyAccountIsDeleted() {
+    final Address address = Address.fromHexString("0x4444444444444444444444444444444444444444");
+    final TrieLogLayer addLog = new TrieLogLayer();
+    addLog.addAccountChange(
+        address,
+        null,
+        new PmtStateTrieAccountValue(1, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
+    addLog.freeze();
+    final var tx1 = storage.startTransaction();
+    final Hash rootAfterAdd = builder.applyAccountChanges(addLog, Hash.EMPTY_TRIE_HASH, 1L, tx1);
+    tx1.commit();
+
+    final TrieLogLayer removeLog = new TrieLogLayer();
+    removeLog.addAccountChange(
+        address,
+        new PmtStateTrieAccountValue(1, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY),
+        null);
+    removeLog.freeze();
+    final var tx2 = storage.startTransaction();
+    final Hash rootAfterRemove = builder.applyAccountChanges(removeLog, rootAfterAdd, 2L, tx2);
+    tx2.commit();
+
+    assertThat(rootAfterRemove).isEqualTo(Hash.EMPTY_TRIE_HASH);
+  }
 }
