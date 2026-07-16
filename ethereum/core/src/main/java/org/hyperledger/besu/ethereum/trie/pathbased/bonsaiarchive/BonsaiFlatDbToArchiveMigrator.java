@@ -80,6 +80,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   @VisibleForTesting static final int MAX_BLOCKS_PER_BATCH = 256;
   @VisibleForTesting static final long MAX_BATCH_BYTES = 256L * 1024 * 1024;
 
+  /**
+   * Batch cut-off on distinct trie-node locations written by the current batch. Must stay well
+   * below {@link HistoryNodeCache#MAX_CACHE_ENTRIES}: while a batch is uncommitted its node writes
+   * are pinned on-heap in {@link HistoryNodeCache}'s pending map (the reader cannot serve
+   * uncommitted entries), so this bound is what keeps the pending map's footprint sane on
+   * storage-write-heavy chains.
+   */
+  @VisibleForTesting static final int MAX_PENDING_NODE_WRITES = 350_000;
+
   /** Maximum number of concurrently in-flight trie-node prefetch tasks (Design-5 part 2a). */
   @VisibleForTesting static final int PREFETCH_MAX_IN_FLIGHT = 6;
 
@@ -417,7 +426,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
           batchBytes +=
               (long) tl.getAccountChanges().size() * 200
                   + tl.getStorageChanges().values().stream().mapToInt(m -> m.size()).sum() * 100L;
-          if (batchBytes >= maxBatchBytes) {
+          if (batchBytes >= maxBatchBytes
+              || (archiveTrieBuilder != null
+                  && archiveTrieBuilder.pendingWriteCount() >= MAX_PENDING_NODE_WRITES)) {
             blockNumber++;
             break;
           }
@@ -444,6 +455,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
             }
           }
           if (committed) {
+            if (archiveTrieBuilder != null) {
+              archiveTrieBuilder.onBatchCommitted(lastInBatch);
+            }
             migratedBlockNumber.set(lastInBatch);
             LOG.atDebug()
                 .setMessage("Migration batch committed: {} blocks, last={}, overlayBytes={}")

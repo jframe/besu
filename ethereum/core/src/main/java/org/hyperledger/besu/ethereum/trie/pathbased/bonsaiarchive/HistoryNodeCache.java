@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -29,14 +30,18 @@ import com.google.common.hash.Funnels;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
- * Bounded state shared by every {@link HistoryNodeLoader} and by {@code ArchiveTrieBuilder}'s
- * capture step during one builder's lifetime (one batch, or the ongoing-migration catch-up loop).
- * Resolution order for a read: {@link #committedNodeValues} LRU (500K entries) -> {@link
- * TrieNodeHistoryReader} first-touch read (seekForPrev + bounded backward walk) -> live {@code
- * TRIE_BRANCH_STORAGE} fallthrough (unchanged nodes are byte-identical at HEAD). The in-memory
- * decoded trie node objects themselves are NOT cached here -- that's the JVM object graph owned by
- * the {@code StoredMerklePatriciaTrie} instances in {@code ArchiveTrieBuilder}, dropped at batch
- * end.
+ * State shared by every {@link HistoryNodeLoader} and by {@code ArchiveTrieBuilder}'s capture step
+ * during one builder's lifetime. Resolution order for a read: {@link #pendingBatchWrites} (nodes
+ * written by the current uncommitted batch -- unbounded and never evicted, because the {@link
+ * TrieNodeHistoryReader} cannot see uncommitted entries and a silent live-fallthrough for such a
+ * node returns future-state bytes) -> {@link #committedNodeValues} LRU (500K entries) -> {@link
+ * TrieNodeHistoryReader} read at {@link #lastMigratedBlock} (seekForPrev + bounded backward walk)
+ * -> live {@code TRIE_BRANCH_STORAGE} fallthrough (sound only for nodes never written by the
+ * migration, i.e. byte-identical at HEAD). {@link #onBatchCommitted} moves the pending map into the
+ * LRU and advances {@link #lastMigratedBlock} so evicted entries remain recoverable via the reader.
+ * The in-memory decoded trie node objects themselves are NOT cached here -- that's the JVM object
+ * graph owned by the {@code StoredMerklePatriciaTrie} instances in {@code ArchiveTrieBuilder},
+ * dropped at batch end.
  */
 public final class HistoryNodeCache {
 
@@ -44,8 +49,10 @@ public final class HistoryNodeCache {
 
   private final SegmentedKeyValueStorage storage;
   private final TrieNodeHistoryReader historyReader;
-  private final long lastMigratedBlock;
+  private long lastMigratedBlock;
   private final LinkedHashMap<Bytes, NodeState> committedNodeValues;
+  private final Map<Bytes, NodeState> pendingBatchWrites = new HashMap<>();
+  private long pendingBatchBytes = 0;
   private BloomFilter<byte[]> freshMigrationBloom;
 
   public HistoryNodeCache(final SegmentedKeyValueStorage storage, final long lastMigratedBlock) {
@@ -72,6 +79,10 @@ public final class HistoryNodeCache {
 
   public Optional<Bytes> get(final byte domain, final Bytes naturalKey) {
     final Bytes cacheKey = HistoryKey.prefix(domain, naturalKey);
+    final NodeState pending = pendingBatchWrites.get(cacheKey);
+    if (pending != null) {
+      return Optional.of(pending.value());
+    }
     final NodeState cached = committedNodeValues.get(cacheKey);
     if (cached != null) {
       return Optional.of(cached.value());
@@ -91,21 +102,55 @@ public final class HistoryNodeCache {
   }
 
   /**
-   * Prior value/countSinceFull for the capture decision -- reads only the LRU, never storage,
-   * because by the time capture runs for a node its prior value was already resolved by {@link
-   * #get}.
+   * Prior value/countSinceFull for the capture decision -- reads only the in-memory maps, never
+   * storage, because by the time capture runs for a node its prior value was already resolved by
+   * {@link #get}.
    */
   public Optional<NodeState> priorState(final byte domain, final Bytes naturalKey) {
-    return Optional.ofNullable(committedNodeValues.get(HistoryKey.prefix(domain, naturalKey)));
+    final Bytes cacheKey = HistoryKey.prefix(domain, naturalKey);
+    final NodeState pending = pendingBatchWrites.get(cacheKey);
+    if (pending != null) {
+      return Optional.of(pending);
+    }
+    return Optional.ofNullable(committedNodeValues.get(cacheKey));
   }
 
   public void recordWrite(
       final byte domain, final Bytes naturalKey, final Bytes value, final int countSinceFull) {
     final Bytes cacheKey = HistoryKey.prefix(domain, naturalKey);
-    committedNodeValues.put(cacheKey, new NodeState(value, countSinceFull));
+    final NodeState previous =
+        pendingBatchWrites.put(cacheKey, new NodeState(value, countSinceFull));
+    pendingBatchBytes +=
+        value.size() + (previous == null ? cacheKey.size() : -previous.value().size());
     if (freshMigrationBloom != null) {
       freshMigrationBloom.put(cacheKey.toArrayUnsafe());
     }
+  }
+
+  /**
+   * Number of distinct node locations written by the current uncommitted batch. The migrator uses
+   * this to end a batch before the pending map's heap footprint grows unbounded.
+   */
+  public int pendingWriteCount() {
+    return pendingBatchWrites.size();
+  }
+
+  /** Approximate heap bytes (keys + latest values) held by the current batch's pending writes. */
+  public long pendingWriteBytes() {
+    return pendingBatchBytes;
+  }
+
+  /**
+   * Called after the migrator durably commits a batch ending at {@code block}. Moves the batch's
+   * pinned writes into the bounded LRU (safe to evict now -- the {@link TrieNodeHistoryReader} can
+   * recover them from the committed {@code TRIE_NODE_HISTORY_ARCHIVE_V2} entries) and advances the
+   * reader watermark so those recoveries actually see the new entries.
+   */
+  public void onBatchCommitted(final long block) {
+    committedNodeValues.putAll(pendingBatchWrites);
+    pendingBatchWrites.clear();
+    pendingBatchBytes = 0;
+    lastMigratedBlock = block;
   }
 
   private Optional<Bytes> fallThroughToLive(final Bytes naturalKey, final Bytes cacheKey) {

@@ -155,4 +155,74 @@ class HistoryNodeCacheTest {
     assertThat(cache.priorState(HistoryKey.DOMAIN_ACCOUNT, naturalKey))
         .contains(new HistoryNodeCache.NodeState(value, 0));
   }
+
+  @Test
+  void uncommittedBatchWriteSurvivesLruScaleChurnAndNeverFallsThroughToLive() {
+    // Regression for the QBFT block-222 migration failure: a node written by the current
+    // (uncommitted) batch was evicted from the bounded LRU by later same-batch writes; the reader
+    // cannot see uncommitted entries, so the read silently fell through to TRIE_BRANCH_STORAGE and
+    // returned the chain-HEAD version of the node -> wrong storage root. Pending-batch writes must
+    // be pinned regardless of how many other writes the batch makes.
+    final Bytes batchValue = leafNode(0x11);
+    final Bytes livePoison = Bytes.fromHexString("0xdead");
+    final var tx = storage.startTransaction();
+    tx.put(TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe(), livePoison.toArrayUnsafe());
+    tx.commit();
+
+    final HistoryNodeCache cache = new HistoryNodeCache(storage, 0L);
+    cache.recordWrite(HistoryKey.DOMAIN_ACCOUNT, naturalKey, batchValue, 0);
+    // Churn far past the LRU capacity within the same batch.
+    for (int i = 0; i < HistoryNodeCache.MAX_CACHE_ENTRIES + 10; i++) {
+      cache.recordWrite(HistoryKey.DOMAIN_STORAGE, Bytes.ofUnsignedInt(i), Bytes.of((byte) i), 0);
+    }
+
+    assertThat(cache.get(HistoryKey.DOMAIN_ACCOUNT, naturalKey)).contains(batchValue);
+  }
+
+  @Test
+  void committedBatchWriteEvictedFromLruIsRecoveredViaReaderNotLive() {
+    // Second half of the same regression: once a batch commits, its writes may be evicted from the
+    // LRU -- but onBatchCommitted must advance the reader watermark so the eviction is recoverable
+    // from the committed TRIE_NODE_HISTORY_ARCHIVE_V2 entries instead of falling through to the
+    // chain-HEAD TRIE_BRANCH_STORAGE value.
+    final Bytes committedValue = leafNode(0x22);
+    final Bytes livePoison = Bytes.fromHexString("0xdead");
+    final var tx = storage.startTransaction();
+    tx.put(TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe(), livePoison.toArrayUnsafe());
+    tx.commit();
+
+    final HistoryNodeCache cache = new HistoryNodeCache(storage, 0L);
+    // Batch 1 writes the node (both through the cache and, as the migrator's tx would, to the CF).
+    cache.recordWrite(HistoryKey.DOMAIN_ACCOUNT, naturalKey, committedValue, 0);
+    putHistoryEntry(committedValue, 5L);
+    cache.onBatchCommitted(5L);
+
+    // Batch 2 churns enough distinct keys that committing it evicts the batch-1 entry from the
+    // LRU.
+    for (int i = 0; i < HistoryNodeCache.MAX_CACHE_ENTRIES + 10; i++) {
+      cache.recordWrite(HistoryKey.DOMAIN_STORAGE, Bytes.ofUnsignedInt(i), Bytes.of((byte) i), 0);
+    }
+    cache.onBatchCommitted(6L);
+
+    assertThat(cache.get(HistoryKey.DOMAIN_ACCOUNT, naturalKey)).contains(committedValue);
+  }
+
+  @Test
+  void pendingWriteCountAndBytesTrackTheBatchAndResetOnCommit() {
+    final HistoryNodeCache cache = new HistoryNodeCache(storage, 0L);
+    assertThat(cache.pendingWriteCount()).isZero();
+    assertThat(cache.pendingWriteBytes()).isZero();
+
+    cache.recordWrite(HistoryKey.DOMAIN_ACCOUNT, naturalKey, Bytes.fromHexString("0xc0c1"), 0);
+    assertThat(cache.pendingWriteCount()).isEqualTo(1);
+    assertThat(cache.pendingWriteBytes()).isGreaterThan(0);
+
+    // Overwriting the same location must not grow the count (it is a distinct-locations bound).
+    cache.recordWrite(HistoryKey.DOMAIN_ACCOUNT, naturalKey, Bytes.fromHexString("0xc2c3c4"), 1);
+    assertThat(cache.pendingWriteCount()).isEqualTo(1);
+
+    cache.onBatchCommitted(7L);
+    assertThat(cache.pendingWriteCount()).isZero();
+    assertThat(cache.pendingWriteBytes()).isZero();
+  }
 }

@@ -160,6 +160,26 @@ public final class ArchiveTrieBuilder {
   }
 
   /**
+   * Must be called after the migrator durably commits a batch ending at {@code block}. Unpins the
+   * batch's node writes from {@link HistoryNodeCache}'s pending map and advances the reader
+   * watermark -- without this, a node written in a committed batch and later evicted from the LRU
+   * would silently fall through to live HEAD state and corrupt subsequent roots.
+   */
+  public void onBatchCommitted(final long block) {
+    nodeCache.onBatchCommitted(block);
+  }
+
+  /** Distinct node locations written by the current uncommitted batch (heap-growth signal). */
+  public int pendingWriteCount() {
+    return nodeCache.pendingWriteCount();
+  }
+
+  /** Approximate heap bytes pinned by the current uncommitted batch's node writes. */
+  public long pendingWriteBytes() {
+    return nodeCache.pendingWriteBytes();
+  }
+
+  /**
    * Applies one account's storage-slot changes, returns the account's new storage root, and drops
    * the account's storage trie from the batch-scoped cache if the account itself was deleted this
    * block (per design section 3.4, its storage entries become unreachable, not wrong -- no cleanup
