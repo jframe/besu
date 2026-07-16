@@ -50,7 +50,9 @@ import org.hyperledger.besu.util.log.LogUtil;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -113,6 +115,13 @@ public class ConvertToForestSubCommand implements Runnable {
           "EXPERIMENTAL: number of upcoming blocks whose changed keys are prefetched together before replay (default: ${DEFAULT-VALUE})",
       hidden = true)
   private int convertPrefetchWindow = 64;
+
+  @CommandLine.Option(
+      names = {"--Xx-convert-prefetch-lookahead"},
+      description =
+          "EXPERIMENTAL: number of windows to prefetch ahead of the apply phase; deeper lookahead keeps prefetch threads busy when apply takes longer than a single prefetch window (default: ${DEFAULT-VALUE})",
+      hidden = true)
+  private int convertPrefetchLookahead = 4;
 
   @SuppressWarnings("unused")
   @ParentCommand
@@ -236,9 +245,10 @@ public class ConvertToForestSubCommand implements Runnable {
         final long startMillis = System.currentTimeMillis();
         final long loopStartBlock = resumeBlock;
 
-        // Process the chain in windows, pipelining the parallel cache-warming of the next window
-        // with the single-threaded replay of the current one so the disk stays busy continuously
-        // (instead of alternating disk-saturated prefetch with disk-idle apply).
+        // Process the chain in windows, pipelining cache-warming of upcoming windows with the
+        // single-threaded apply so the disk stays busy continuously. With convertPrefetchLookahead
+        // windows in flight simultaneously, the prefetch threads stay active even when apply takes
+        // much longer than a single prefetch window (the "pipeline inversion" problem).
         WindowData current =
             gatherWindow(
                 blockchain,
@@ -249,24 +259,22 @@ public class ConvertToForestSubCommand implements Runnable {
         // Warm the first window synchronously from the (on-disk) resume root before replaying it.
         converter.prefetch(current.layers());
 
-        while (current != null) {
-          final long nextStart = current.startBlock() + current.layers().size();
-          // Capture the on-disk base root before mutating the running root, so the background
-          // warming of the next window never races the apply thread on it.
-          final Hash baseForNext = converter.currentRootHash();
-          WindowData next = null;
-          Future<?> nextWarm = null;
-          if (nextStart <= head) {
-            next =
-                gatherWindow(
-                    blockchain,
-                    bonsai,
-                    trieLogFactory,
-                    nextStart,
-                    Math.min(nextStart + convertPrefetchWindow - 1, head));
-            nextWarm = converter.prefetchAsync(next.layers(), baseForNext);
-          }
+        // Seed the lookahead queue: submit prefetch for the next convertPrefetchLookahead windows
+        // so the prefetch threads stay busy throughout the entire apply phase.
+        final Deque<WindowData> windowQueue = new ArrayDeque<>();
+        final Deque<Future<?>> prefetchQueue = new ArrayDeque<>();
+        long nextToGather = current.startBlock() + current.layers().size();
+        while (prefetchQueue.size() < convertPrefetchLookahead && nextToGather <= head) {
+          final long end = Math.min(nextToGather + convertPrefetchWindow - 1, head);
+          final WindowData upcoming =
+              gatherWindow(blockchain, bonsai, trieLogFactory, nextToGather, end);
+          windowQueue.addLast(upcoming);
+          prefetchQueue.addLast(
+              converter.prefetchAsync(upcoming.layers(), converter.currentRootHash()));
+          nextToGather = upcoming.startBlock() + upcoming.layers().size();
+        }
 
+        while (current != null) {
           for (int i = 0; i < current.layers().size(); i++) {
             final long blockNumber = current.startBlock() + i;
             converter.applyTrieLog(current.layers().get(i), current.expectedRoots().get(i));
@@ -297,17 +305,30 @@ public class ConvertToForestSubCommand implements Runnable {
                 LOG_INTERVAL_SECONDS);
           }
 
-          if (nextWarm != null) {
+          // Keep the lookahead queue full: submit one more window as we consume one.
+          if (nextToGather <= head) {
+            final long end = Math.min(nextToGather + convertPrefetchWindow - 1, head);
+            final WindowData upcoming =
+                gatherWindow(blockchain, bonsai, trieLogFactory, nextToGather, end);
+            windowQueue.addLast(upcoming);
+            prefetchQueue.addLast(
+                converter.prefetchAsync(upcoming.layers(), converter.currentRootHash()));
+            nextToGather = upcoming.startBlock() + upcoming.layers().size();
+          }
+
+          // Wait for the oldest in-flight prefetch to complete before advancing to the next window.
+          if (!prefetchQueue.isEmpty()) {
             try {
-              nextWarm.get();
+              prefetchQueue.pollFirst().get();
             } catch (final InterruptedException e) {
               Thread.currentThread().interrupt();
             } catch (final ExecutionException e) {
               // Warming is best-effort; replay re-reads the authoritative node by hash on a miss.
-              LOG.debug("Prefetch of window starting at block {} failed", nextStart, e);
+              LOG.debug("Prefetch of upcoming window failed", e);
             }
           }
-          current = next;
+
+          current = windowQueue.pollFirst();
         }
         LOG.info("Conversion complete to head {} (root={})", head, converter.currentRootHash());
 
