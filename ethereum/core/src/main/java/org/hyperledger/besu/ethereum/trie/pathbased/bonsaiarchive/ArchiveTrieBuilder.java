@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE_V2;
 
 import org.hyperledger.besu.datatypes.AccountValue;
@@ -31,10 +32,14 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
@@ -180,6 +185,17 @@ public final class ArchiveTrieBuilder {
 
     final Hash priorStorageRoot = resolvePriorStorageRoot(address, accountChange);
     final Bytes accountHash = address.addressHash().getBytes();
+
+    // For a first-touch account with non-empty prior storage, TRIE_BRANCH_STORAGE has already
+    // been updated by the running node (which processed this block before the migrator reached
+    // it). Nodes on the path to slots that changed at this block now hold the post-block value,
+    // not the pre-block value the prior-trie traversal requires. Reading them from
+    // TRIE_BRANCH_STORAGE gives wrong prior state → wrong computed root. Build the new trie
+    // directly from the flat DB instead, bypassing the race condition entirely.
+    if (!storageTrieCache.containsKey(address) && !priorStorageRoot.equals(Hash.EMPTY_TRIE_HASH)) {
+      return buildStorageTrieFromCurrentFlatDb(address, accountHash, block, tx);
+    }
+
     final StoredMerklePatriciaTrie<Bytes, Bytes> storageTrie =
         storageTrieCache.computeIfAbsent(
             address,
@@ -213,6 +229,75 @@ public final class ArchiveTrieBuilder {
                 tx));
 
     return Hash.wrap(storageTrie.getRootHash());
+  }
+
+  /**
+   * Builds the post-block storage trie for {@code address} directly from the flat DB (which holds
+   * the current chain-HEAD slot values), captures all nodes as {@link
+   * HistoryEntryCodec.EntryType#FULL_CREATION} entries, and populates {@link #storageTrieCache}.
+   *
+   * <p>Used exclusively for accounts that have genesis-initialized storage and appear in a trie-log
+   * for the first time. At that point TRIE_BRANCH_STORAGE has already been updated by the running
+   * node, so its prior-state nodes for paths that changed at this block are stale.
+   */
+  private Hash buildStorageTrieFromCurrentFlatDb(
+      final Address address,
+      final Bytes accountHash,
+      final long block,
+      final SegmentedKeyValueStorageTransaction tx) {
+
+    // Build a fresh trie (no prior nodes to load) populated from current flat storage.
+    final StoredMerklePatriciaTrie<Bytes, Bytes> flatStateTrie =
+        new StoredMerklePatriciaTrie<>(
+            (location, hash) -> Optional.empty(), Function.identity(), Function.identity());
+
+    // Range: accountHash(32B) || 0x00..00(32B)  →  accountHash(32B) || 0xFF..FF(32B)
+    final byte[] endSlot = new byte[Bytes32.SIZE];
+    Arrays.fill(endSlot, (byte) 0xFF);
+    final byte[] startKey = Bytes.concatenate(accountHash, Bytes32.ZERO).toArrayUnsafe();
+    final byte[] endKey = Bytes.concatenate(accountHash, Bytes.wrap(endSlot)).toArrayUnsafe();
+
+    try (final Stream<Pair<byte[], byte[]>> stream =
+        storage.streamFromKey(ACCOUNT_STORAGE_STORAGE, startKey, endKey)) {
+      stream.forEach(
+          pair -> {
+            if (pair.getKey().length != Bytes32.SIZE * 2) {
+              return; // guard against malformed entries
+            }
+            final Bytes slotHashBytes = Bytes.wrap(pair.getKey(), Bytes32.SIZE, Bytes32.SIZE);
+            final Bytes rawValue = Bytes.wrap(pair.getValue()).trimLeadingZeros();
+            if (rawValue.isEmpty()) {
+              return; // zero value = deleted slot
+            }
+            flatStateTrie.put(slotHashBytes, RLP.encode(out -> out.writeBytes(rawValue)));
+          });
+    }
+
+    flatStateTrie.commit(
+        (location, hash, value) ->
+            captureNode(
+                HistoryKey.DOMAIN_STORAGE,
+                Bytes.concatenate(accountHash, location),
+                location,
+                hash,
+                value,
+                block,
+                tx));
+
+    final Hash newRoot = Hash.wrap(flatStateTrie.getRootHash());
+
+    // Cache a HistoryNodeLoader-backed trie at the committed root. Future blocks within this
+    // batch use it for their delta; the decoded in-memory nodes serve those puts without
+    // going back to storage. After resetBatchState() the next batch re-roots via V2 CF.
+    storageTrieCache.put(
+        address,
+        new StoredMerklePatriciaTrie<>(
+            new HistoryNodeLoader(nodeCache, HistoryKey.DOMAIN_STORAGE, accountHash),
+            Bytes32.wrap(newRoot.getBytes()),
+            Function.identity(),
+            Function.identity()));
+
+    return newRoot;
   }
 
   private Hash resolvePriorStorageRoot(
