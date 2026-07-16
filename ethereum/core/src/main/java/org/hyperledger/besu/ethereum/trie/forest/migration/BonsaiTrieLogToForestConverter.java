@@ -307,10 +307,8 @@ public class BonsaiTrieLogToForestConverter {
             return null;
           });
     }
-    try {
-      prefetchExecutor.invokeAll(tasks);
-    } catch (final InterruptedException e) {
-      Thread.currentThread().interrupt();
+    for (final Callable<Void> task : tasks) {
+      prefetchExecutor.submit(task);
     }
   }
 
