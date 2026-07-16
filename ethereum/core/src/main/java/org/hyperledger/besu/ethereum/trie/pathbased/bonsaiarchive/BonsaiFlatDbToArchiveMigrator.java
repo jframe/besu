@@ -15,16 +15,6 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_FRONTIER;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_HASH_KEY;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_ROOT_HASH_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
@@ -37,7 +27,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveKeyUtil;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
@@ -45,23 +34,16 @@ import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
-import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
-import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
-import org.hyperledger.besu.services.kvstore.LayeredKeyValueStorage;
 import org.hyperledger.besu.util.log.LogUtil;
 
 import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -97,8 +79,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private static final byte[] MIGRATION_PROGRESS_KEY =
       "ARCHIVE_MIGRATION_PROGRESS".getBytes(StandardCharsets.UTF_8);
-
-  private static final byte[] FRONTIER_TOMBSTONE = new byte[0];
 
   @VisibleForTesting static final int MAX_BLOCKS_PER_BATCH = 256;
   @VisibleForTesting static final long MAX_BATCH_BYTES = 256L * 1024 * 1024;
@@ -429,7 +409,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     while (blockNumber <= target.get()) {
       final long batchStartBlock = blockNumber;
       final SegmentedKeyValueStorageTransaction tx =
-          worldStateStorage.getComposedWorldStateStorage().startWriteBatchTransaction();
+          worldStateStorage
+              .getComposedWorldStateStorage()
+              .startNormalPriorityWriteBatchTransaction();
       long lastInBatch = -1;
       boolean committed = false;
       boolean retry = false;
@@ -804,368 +786,5 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     blockchain
         .getBlockHeader(blockNumber)
         .ifPresent(header -> archiveTrieBuilder.applyBlock(trieLog, header, tx));
-  }
-
-  // -------------------------------------------------------------------------
-  // Inner classes kept for test compatibility and incremental cleanup.
-  // MigrationTrieStorage and MigrationTransaction are no longer used by the
-  // migrator's main loop but remain compilable for tests; they will be removed
-  // in Tasks 12/13.
-  // -------------------------------------------------------------------------
-
-  static final class MigrationTrieStorage extends LayeredKeyValueStorage {
-    private final SegmentedKeyValueStorage real;
-
-    /**
-     * Maximum entries in {@link #blockReadCache}. At ~200–500 bytes per trie node plus key
-     * overhead, 500 K entries ≈ 150–250 MB heap — acceptable for a long-running archive migration.
-     */
-    private static final int MAX_TRIE_NODE_CACHE_ENTRIES = 500_000;
-
-    /**
-     * Cross-batch LRU read cache for TRIE_BRANCH_STORAGE lookups. During migration, committed
-     * TRIE_BRANCH_STORAGE is stable — all writes redirect to TRIE_BRANCH_FRONTIER — so reads cached
-     * in one batch remain valid in later batches. Nodes written in the current batch are refreshed
-     * into this cache by {@link #endBatch} (from {@link #batchOverlay}) so the next batch's {@code
-     * captureTrieNodeDiff} prior-node reads hit the cache instead of disk.
-     *
-     * <p>Single-threaded migration ({@code archive-migrator-0}, parallel state-root disabled), so
-     * {@link LinkedHashMap} (access-order) is safe without synchronisation.
-     */
-    @SuppressWarnings("serial")
-    private final Map<Bytes, Optional<byte[]>> blockReadCache =
-        new LinkedHashMap<>(16, 0.75f, true) {
-          @Override
-          protected boolean removeEldestEntry(final Map.Entry<Bytes, Optional<byte[]>> eldest) {
-            return size() > MAX_TRIE_NODE_CACHE_ENTRIES;
-          }
-        };
-
-    /**
-     * Write-back overlay for reads within a batch. Populated by {@link MigrationTransaction}
-     * put/remove calls during the batch; consulted by {@link #get} before the read cache and
-     * committed storage. Keyed by the logical TRIE_BRANCH_STORAGE key (not the physical frontier
-     * key). A {@link Optional#empty()} value represents a tombstone (deleted node).
-     */
-    private final Map<Bytes, Optional<byte[]>> batchOverlay = new HashMap<>();
-
-    /** Running sum of value bytes written to {@link #batchOverlay}. Used for batch-size limit. */
-    private long batchOverlayBytes = 0L;
-
-    /**
-     * Per-batch overlay for flat account writes (ACCOUNT_INFO_STATE_ARCHIVE). Keyed by archive key
-     * ({@code addressHash + blockSuffix}), sorted lexicographically to support floor-entry queries.
-     * Populated by {@link FlatCapturingTx} so that block N's accounts are visible to block N+1's
-     * {@code rollForward} via {@link #getNearestBefore} without requiring an interim commit.
-     */
-    private final TreeMap<Bytes, Optional<byte[]>> flatAccountOverlay = new TreeMap<>();
-
-    /**
-     * Per-batch overlay for flat storage writes (ACCOUNT_STORAGE_ARCHIVE). Same motivation as
-     * {@link #flatAccountOverlay}.
-     */
-    private final TreeMap<Bytes, Optional<byte[]>> flatStorageOverlay = new TreeMap<>();
-
-    /**
-     * When non-null, {@link #startTransaction()} returns a {@link MigrationTransaction} that writes
-     * into this migrator-owned transaction and defers commit/rollback to the migrator. This lets a
-     * batch's {@code persist()} (frontier + diff-index) share the same atomic transaction as the
-     * flat-state and progress writes.
-     */
-    private SegmentedKeyValueStorageTransaction activeSharedTransaction;
-
-    MigrationTrieStorage(final SegmentedKeyValueStorage real) {
-      super(real);
-      this.real = real;
-    }
-
-    /**
-     * Clears the per-batch read cache. Kept for backward compatibility with existing unit tests.
-     */
-    void resetBlockCache() {
-      blockReadCache.clear();
-    }
-
-    /**
-     * Starts a new batch: sets the shared transaction and clears the write-back overlays.
-     *
-     * <p>{@link #blockReadCache} is intentionally NOT cleared here. Committed TRIE_BRANCH_STORAGE
-     * is stable throughout migration (all writes redirect to TRIE_BRANCH_FRONTIER), so cache
-     * entries from prior batches remain correct. Nodes written in the previous batch were refreshed
-     * into the cache by {@link #endBatch}.
-     */
-    void beginBatch(final SegmentedKeyValueStorageTransaction tx) {
-      this.activeSharedTransaction = tx;
-      batchOverlay.clear();
-      batchOverlayBytes = 0L;
-      flatAccountOverlay.clear();
-      flatStorageOverlay.clear();
-    }
-
-    /**
-     * Ends the current batch: refreshes the read cache with all nodes written in this batch (so the
-     * next batch's prior-node reads hit the cache), then clears overlays.
-     */
-    void endBatch() {
-      this.activeSharedTransaction = null;
-      // Push final batchOverlay values into blockReadCache so that the next batch's
-      // captureTrieNodeDiff prior-node reads find the correct post-commit values in cache
-      // instead of falling through to disk.
-      blockReadCache.putAll(batchOverlay);
-      batchOverlay.clear();
-      batchOverlayBytes = 0L;
-      flatAccountOverlay.clear();
-      flatStorageOverlay.clear();
-    }
-
-    /**
-     * Cancels the current batch without promoting {@link #batchOverlay} into {@link
-     * #blockReadCache}. Call this instead of {@link #endBatch} when the batch's transaction commit
-     * failed so that uncommitted trie-node values are not visible to the next batch's prior-node
-     * reads.
-     */
-    void cancelBatch() {
-      this.activeSharedTransaction = null;
-      batchOverlay.clear();
-      batchOverlayBytes = 0L;
-      flatAccountOverlay.clear();
-      flatStorageOverlay.clear();
-    }
-
-    /** Returns the approximate byte size of frontier writes accumulated in the batch overlay. */
-    long batchByteSize() {
-      return batchOverlayBytes;
-    }
-
-    @Override
-    public Optional<byte[]> get(final SegmentIdentifier segmentId, final byte[] key) {
-      if (segmentId == TRIE_BRANCH_STORAGE) {
-        // Batch overlay is checked first — it captures writes made within the current batch,
-        // including metadata keys (WORLD_BLOCK_NUMBER_KEY etc.) written by earlier blocks.
-        final Bytes overlayKey = Bytes.wrap(key);
-        final Optional<byte[]> overlayVal = batchOverlay.get(overlayKey);
-        if (overlayVal != null) {
-          return overlayVal; // Optional.empty() means tombstone (deleted in this batch)
-        }
-
-        // Metadata keys (WORLD_*, ARCHIVE_PROOF_BLOCK_NUMBER_KEY) must not fall through to live
-        // TRIE_BRANCH_STORAGE — live HEAD values would corrupt the migration context. These keys
-        // are written to TRIE_BRANCH_FRONTIER via MigrationTransaction.
-        if (isMetadataKey(key)) {
-          return real.get(TRIE_BRANCH_FRONTIER, key);
-        }
-        final Bytes cacheKey = overlayKey;
-        final Optional<byte[]> cached = blockReadCache.get(cacheKey);
-        if (cached != null) {
-          return cached;
-        }
-        final Optional<byte[]> result;
-        final Optional<byte[]> frontier = real.get(TRIE_BRANCH_FRONTIER, key);
-        if (frontier.isPresent()) {
-          final byte[] val = frontier.get();
-          // Zero-length sentinel means the node was explicitly deleted — no fallthrough.
-          result = val.length == 0 ? Optional.empty() : frontier;
-        } else {
-          // Frontier miss: fall through to live storage.
-          // Unchanged trie nodes are byte-identical at any historical state and at live HEAD.
-          result = real.get(segmentId, key);
-        }
-        blockReadCache.put(cacheKey, result);
-        return result;
-      }
-      if (segmentId == ACCOUNT_INFO_STATE_ARCHIVE) {
-        final Bytes flatKey = Bytes.wrap(key);
-        final Optional<byte[]> v = flatAccountOverlay.get(flatKey);
-        if (v != null) {
-          return v;
-        }
-      } else if (segmentId == ACCOUNT_STORAGE_ARCHIVE) {
-        final Bytes flatKey = Bytes.wrap(key);
-        final Optional<byte[]> v = flatStorageOverlay.get(flatKey);
-        if (v != null) {
-          return v;
-        }
-      }
-      return real.get(segmentId, key);
-    }
-
-    void recordFlatWrite(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
-      final Bytes flatKey = Bytes.wrap(key);
-      if (segmentId == ACCOUNT_INFO_STATE_ARCHIVE) {
-        flatAccountOverlay.put(flatKey, Optional.of(value));
-      } else if (segmentId == ACCOUNT_STORAGE_ARCHIVE) {
-        flatStorageOverlay.put(flatKey, Optional.of(value));
-      }
-    }
-
-    void recordFlatRemove(final SegmentIdentifier segmentId, final byte[] key) {
-      final Bytes flatKey = Bytes.wrap(key);
-      if (segmentId == ACCOUNT_INFO_STATE_ARCHIVE) {
-        flatAccountOverlay.put(flatKey, Optional.empty());
-      } else if (segmentId == ACCOUNT_STORAGE_ARCHIVE) {
-        flatStorageOverlay.put(flatKey, Optional.empty());
-      }
-    }
-
-    /**
-     * Overrides {@code getNearestBefore} for flat archive segments so that writes made within the
-     * current batch (captured in {@link #flatAccountOverlay} / {@link #flatStorageOverlay}) are
-     * visible to subsequent blocks' {@code rollForward} calls without an intermediate commit.
-     *
-     * <p>For all other segments the default {@link LayeredKeyValueStorage} implementation is used.
-     */
-    @Override
-    public Optional<NearestKeyValue> getNearestBefore(
-        final SegmentIdentifier segmentId, final Bytes queryKey) {
-      if (segmentId == ACCOUNT_INFO_STATE_ARCHIVE || segmentId == ACCOUNT_STORAGE_ARCHIVE) {
-        final TreeMap<Bytes, Optional<byte[]>> overlay =
-            segmentId == ACCOUNT_INFO_STATE_ARCHIVE ? flatAccountOverlay : flatStorageOverlay;
-        final Optional<NearestKeyValue> overlayNearest =
-            Optional.ofNullable(overlay.floorEntry(queryKey))
-                .map(e -> new NearestKeyValue(e.getKey(), e.getValue()));
-
-        // Archive keys are naturalKey (32 or 64 bytes) + blockSuffix (8 bytes). If the overlay's
-        // floor entry covers the same natural key as queryKey, it is the definitive answer:
-        // migration always writes blocks in chronological order, so an overlay entry for the same
-        // slot has a block number >= any committed-storage entry for that slot. Skip the RocksDB
-        // iterator seek entirely in this case.
-        if (overlayNearest.isPresent()) {
-          final int naturalKeyLen = queryKey.size() - BonsaiArchiveKeyUtil.KEY_SUFFIX_LENGTH;
-          if (overlayNearest.get().key().commonPrefixLength(queryKey) >= naturalKeyLen) {
-            return overlayNearest;
-          }
-        }
-
-        final Optional<NearestKeyValue> realNearest = real.getNearestBefore(segmentId, queryKey);
-        if (overlayNearest.isPresent() && realNearest.isPresent()) {
-          // Pick the key with the longer common prefix (= more specific match).
-          // On a tie in prefix length, pick the larger key (nearest-before semantics).
-          final int ovCmp = overlayNearest.get().key().compareTo(queryKey);
-          final int rlCmp = realNearest.get().key().compareTo(queryKey);
-          if (ovCmp == 0) return overlayNearest;
-          if (rlCmp == 0) return realNearest;
-          final int ovLen = overlayNearest.get().key().commonPrefixLength(queryKey);
-          final int rlLen = realNearest.get().key().commonPrefixLength(queryKey);
-          if (ovLen != rlLen) return ovLen > rlLen ? overlayNearest : realNearest;
-          return overlayNearest.get().key().compareTo(realNearest.get().key()) > 0
-              ? overlayNearest
-              : realNearest;
-        }
-        return overlayNearest.isPresent() ? overlayNearest : realNearest;
-      }
-      return super.getNearestBefore(segmentId, queryKey);
-    }
-
-    private static boolean isMetadataKey(final byte[] key) {
-      return java.util.Arrays.equals(key, WORLD_BLOCK_NUMBER_KEY)
-          || java.util.Arrays.equals(key, WORLD_BLOCK_HASH_KEY)
-          || java.util.Arrays.equals(key, WORLD_ROOT_HASH_KEY)
-          || java.util.Arrays.equals(key, ARCHIVE_PROOF_BLOCK_NUMBER_KEY);
-    }
-
-    @Override
-    public SegmentedKeyValueStorageTransaction startTransaction() {
-      if (activeSharedTransaction != null) {
-        // Write into the migrator's batch transaction; the migrator owns commit/rollback so
-        // frontier + index + flat + progress are committed atomically. The overlay is passed so
-        // writes are visible to subsequent get() calls within the same batch.
-        return new MigrationTransaction(activeSharedTransaction, true, batchOverlay, this);
-      }
-      return new MigrationTransaction(real.startLowPriorityTransaction());
-    }
-
-    void recordOverlayBytes(final long bytes) {
-      batchOverlayBytes += bytes;
-    }
-  }
-
-  private static final class MigrationTransaction implements SegmentedKeyValueStorageTransaction {
-    private final SegmentedKeyValueStorageTransaction realTx;
-
-    /**
-     * When {@code true}, {@link #commit()}/{@link #rollback()}/{@link #close()} are no-ops: the
-     * wrapped transaction's lifecycle is owned by the migrator, which commits frontier, diff-index,
-     * flat state and progress together in a single atomic per-batch transaction. This is what makes
-     * the migration crash-safe — progress can never be committed ahead of (or behind) the frontier.
-     */
-    private final boolean deferLifecycleToOwner;
-
-    /**
-     * Write-back overlay from the owning {@link MigrationTrieStorage}. Non-null only in the
-     * deferred (batch) variant; used to make frontier writes visible to same-batch reads.
-     */
-    private final Map<Bytes, Optional<byte[]>> overlay;
-
-    private final MigrationTrieStorage owner;
-
-    MigrationTransaction(final SegmentedKeyValueStorageTransaction realTx) {
-      this(realTx, false, null, null);
-    }
-
-    MigrationTransaction(
-        final SegmentedKeyValueStorageTransaction realTx,
-        final boolean deferLifecycleToOwner,
-        final Map<Bytes, Optional<byte[]>> overlay,
-        final MigrationTrieStorage owner) {
-      this.realTx = realTx;
-      this.deferLifecycleToOwner = deferLifecycleToOwner;
-      this.overlay = overlay;
-      this.owner = owner;
-    }
-
-    @Override
-    public void put(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
-      if (segmentId == TRIE_BRANCH_STORAGE) {
-        realTx.put(TRIE_BRANCH_FRONTIER, key, value);
-        if (overlay != null) {
-          final Bytes overlayKey = Bytes.wrap(key);
-          overlay.put(overlayKey, Optional.of(value));
-          owner.recordOverlayBytes(value.length);
-        }
-      } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
-          || segmentId == TRIE_NODE_INDEX_ARCHIVE
-          || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
-        realTx.put(segmentId, key, value);
-      }
-      // flat account/storage writes dropped — processBlock() handles those separately
-    }
-
-    @Override
-    public void remove(final SegmentIdentifier segmentId, final byte[] key) {
-      if (segmentId == TRIE_BRANCH_STORAGE) {
-        // Write tombstone sentinel rather than remove() — distinguishes "deleted" from "never
-        // written" since RocksDB get() returns empty for both after a remove().
-        realTx.put(TRIE_BRANCH_FRONTIER, key, FRONTIER_TOMBSTONE);
-        if (overlay != null) {
-          overlay.put(Bytes.wrap(key), Optional.empty());
-        }
-      } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
-          || segmentId == TRIE_NODE_INDEX_ARCHIVE
-          || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
-        realTx.remove(segmentId, key);
-      }
-      // flat account/storage removes dropped — processBlock() handles those separately
-    }
-
-    @Override
-    public void commit() {
-      if (!deferLifecycleToOwner) {
-        realTx.commit();
-      }
-    }
-
-    @Override
-    public void rollback() {
-      if (!deferLifecycleToOwner) {
-        realTx.rollback();
-      }
-    }
-
-    @Override
-    public void close() {
-      if (!deferLifecycleToOwner) {
-        realTx.close();
-      }
-    }
   }
 }

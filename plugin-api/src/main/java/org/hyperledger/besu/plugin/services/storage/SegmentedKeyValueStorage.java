@@ -139,6 +139,23 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Starts a WriteBatch-backed transaction at normal write priority (not low-priority). Intended
+   * for dedicated, single-threaded background writers (e.g. archive migration) where RocksDB's
+   * internal low-priority write throttle would otherwise stall the writer's own progress whenever
+   * compaction lags behind — see project notes on the migration low-pri throttle stall. Concurrent
+   * foreground writers (e.g. block import) should keep using {@link #startWriteBatchTransaction()}.
+   *
+   * <p>Non-RocksDB implementations fall back to {@link #startWriteBatchTransaction()}.
+   *
+   * @return a new normal-priority WriteBatch transaction
+   * @throws StorageException the storage exception
+   */
+  default SegmentedKeyValueStorageTransaction startNormalPriorityWriteBatchTransaction()
+      throws StorageException {
+    return startWriteBatchTransaction();
+  }
+
+  /**
    * Retrieves the values for multiple keys from the given segment in a single call. The returned
    * list has the same size and ordering as {@code keys}; a missing key maps to {@link
    * Optional#empty()}.

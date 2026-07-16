@@ -39,7 +39,7 @@ class MigrationPrefetcherTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void prefetchTrieNodes_readsFrontierThenStorageForEnumeratedKeys() {
+  void prefetchTrieNodes_readsStorageForEnumeratedKeys() {
     final SegmentedKeyValueStorage storage = mock(SegmentedKeyValueStorage.class);
     when(storage.multiGet(Mockito.any(), Mockito.anyList())).thenReturn(List.of(Optional.empty()));
     final Executor direct =
@@ -55,7 +55,8 @@ class MigrationPrefetcherTest {
     final MigrationPrefetcher prefetcher = new MigrationPrefetcher(storage, direct, 4, 3);
     prefetcher.prefetchTrieNodes(log);
 
-    verify(storage, timeout(1000)).multiGet(Mockito.eq(TRIE_BRANCH_FRONTIER), Mockito.anyList());
+    // Frontier CF no longer prefetched (removed in task 12 — frontier write path deleted).
+    verify(storage, never()).multiGet(Mockito.eq(TRIE_BRANCH_FRONTIER), Mockito.anyList());
     verify(storage, timeout(1000)).multiGet(Mockito.eq(TRIE_BRANCH_STORAGE), Mockito.anyList());
   }
 

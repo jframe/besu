@@ -14,7 +14,6 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_FRONTIER;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -30,9 +29,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * Best-effort, read-only background prefetch of trie-node paths (Design-5 migration part 2a). For a
  * look-ahead block's {@link TrieLog}, enumerates the trie-node keys the migrator's {@code
  * persist()} walk will read and issues one bounded background {@code multiGet} against {@code
- * TRIE_BRANCH_FRONTIER} then {@code TRIE_BRANCH_STORAGE}, discarding the results to warm the
- * RocksDB block cache. Never touches the migrator's in-memory caches, so it is safe to run
- * off-thread.
+ * TRIE_BRANCH_STORAGE}, discarding the results to warm the RocksDB block cache. Never touches the
+ * migrator's in-memory caches, so it is safe to run off-thread.
  */
 public final class MigrationPrefetcher implements Closeable {
 
@@ -88,7 +86,6 @@ public final class MigrationPrefetcher implements Closeable {
       executor.execute(
           () -> {
             try {
-              storage.multiGet(TRIE_BRANCH_FRONTIER, keys);
               storage.multiGet(TRIE_BRANCH_STORAGE, keys);
             } catch (final RuntimeException ignored) {
               // Prefetch is best-effort; a failed warm read must never affect migration.
