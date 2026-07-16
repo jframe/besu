@@ -63,7 +63,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.tuweni.units.bigints.UInt256;
 import org.awaitility.Awaitility;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -239,45 +238,6 @@ public class BonsaiFlatDbToArchiveMigratorTest extends BonsaiFlatDbToArchiveMigr
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
     verify(spyStorage, atLeastOnce()).startNormalPriorityWriteBatchTransaction();
-  }
-
-  // -------------------------------------------------------------------------
-  // Batch overlay: writes within a batch are visible to subsequent gets without commit.
-  // -------------------------------------------------------------------------
-
-  @Disabled("reworked in task 17")
-  @Test
-  public void migrationTrieStorageReadsSeeWritesWithinBatch() {
-    // MigrationTrieStorage deleted in task 12; test reworked in task 17.
-  }
-
-  // -------------------------------------------------------------------------
-  // Crash-safety: persist() shares the migrator's per-block transaction so the
-  // frontier, diff-index, flat state and progress commit atomically.
-  // -------------------------------------------------------------------------
-
-  @Disabled("reworked in task 17")
-  @Test
-  public void migrationTrieStorageRoutesWritesToSharedTransactionAndDefersCommit() {
-    // MigrationTrieStorage deleted in task 12; test reworked in task 17.
-  }
-
-  @Disabled("reworked in task 17")
-  @Test
-  public void migrationTrieStorageOwnsItsTransactionWhenNoSharedTransactionSet() {
-    // MigrationTrieStorage deleted in task 12; test reworked in task 17.
-  }
-
-  @Disabled("reworked in task 17")
-  @Test
-  public void migrationTrieStorageServesRepeatedTrieBranchReadsFromPerBlockCache() {
-    // MigrationTrieStorage deleted in task 12; test reworked in task 17.
-  }
-
-  @Disabled("reworked in task 17")
-  @Test
-  public void migrationTrieStorageCachesFrontierHitsAndTombstonesWithinBlock() {
-    // MigrationTrieStorage deleted in task 12; test reworked in task 17.
   }
 
   @Test
@@ -625,9 +585,9 @@ public class BonsaiFlatDbToArchiveMigratorTest extends BonsaiFlatDbToArchiveMigr
     clearInvocations(spyStorage);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-    // All 3 blocks fit in one batch → at most one low-priority transaction is opened for the bulk
-    // loop (completion may open one more for upgradeToArchiveFlatDbMode).
-    verify(spyStorage, atMost(2)).startLowPriorityTransaction();
+    // All 3 blocks fit in one batch → exactly one normal-priority write-batch transaction is opened
+    // for the bulk loop (completion may open one more for upgradeToArchiveFlatDbMode).
+    verify(spyStorage, atMost(2)).startNormalPriorityWriteBatchTransaction();
   }
 
   // --- test helpers ---
