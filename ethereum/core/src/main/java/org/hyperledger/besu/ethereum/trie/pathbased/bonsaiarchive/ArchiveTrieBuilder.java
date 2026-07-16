@@ -121,10 +121,12 @@ public final class ArchiveTrieBuilder {
     // all: reuse whatever root this builder last computed for the account within the current batch,
     // if any, else start empty.
     //
-    // The cached-non-null case below is believed unreachable in practice: a new account can only
-    // reach this fallback on its first storage touch within the batch, before any trie could have
-    // been cached for it. Once a trie is cached for the address, later blocks in the same batch see
-    // a non-null prior account instead (the primary branch above), not a fresh creation.
+    // For new-account creation specifically, the cached-non-null case below is unreachable on the
+    // account's first storage touch (nothing could have been cached for it yet). But for the "no
+    // account change recorded" sub-case, a non-null cached trie is the normal outcome once the
+    // account was touched by an earlier block in the same batch -- see
+    // removingTheOnlySlotReturnsToTheEmptyTrieRoot, which exercises exactly that path across two
+    // blocks.
     final StoredMerklePatriciaTrie<Bytes, Bytes> cached = storageTrieCache.get(address);
     return cached == null ? Hash.EMPTY_TRIE_HASH : Hash.wrap(cached.getRootHash());
   }
