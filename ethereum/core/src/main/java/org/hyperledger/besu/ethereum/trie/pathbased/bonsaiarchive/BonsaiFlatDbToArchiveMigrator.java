@@ -133,8 +133,8 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
    * The append-only trie history builder; non-null when trie-node history capture is enabled (i.e.
    * the node was started with the archive trie index flag). {@code null} in flat-archive-only mode.
    *
-   * <p>Non-final so that {@link #resetArchiveTrieBuilder()} can reinitialize it after a failed
-   * batch commit (Task 13 will add full re-anchoring).
+   * <p>Non-final so that {@link #resetArchiveTrieBuilder()} can reinitialize it after a failed or
+   * aborted batch commit by re-anchoring from the last committed progress in storage.
    */
   private ArchiveTrieBuilder archiveTrieBuilder;
 
@@ -407,6 +407,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     long blockNumber = startBlock;
     int consecutiveRetries = 0;
     while (blockNumber <= target.get()) {
+      // Drop decoded trie-node objects from the previous successful batch to bound heap usage;
+      // re-root lazily on the next applyBlock via HistoryNodeCache (backed by committed history).
+      if (archiveTrieBuilder != null) {
+        archiveTrieBuilder.resetBatchState();
+      }
       final long batchStartBlock = blockNumber;
       final SegmentedKeyValueStorageTransaction tx =
           worldStateStorage
@@ -482,7 +487,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         }
       } finally {
         if (!committed && archiveTrieBuilder != null) {
-          archiveTrieBuilder.resetBatchState();
+          resetArchiveTrieBuilder();
         }
         if (!committed) {
           try {
@@ -724,10 +729,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   /**
-   * Initializes a fresh {@link ArchiveTrieBuilder} re-rooted at the last committed migration
-   * progress block. For fresh migrations, starts at {@link Hash#EMPTY_TRIE_HASH}. For resumed
-   * migrations, reads the account root from {@code TRIE_NODE_HISTORY_ARCHIVE_V2} at the last
-   * committed block.
+   * Builds a fresh {@link ArchiveTrieBuilder} anchored at the last <em>committed</em> progress.
+   * Used both at startup and after any failed/aborted batch — both cases reduce to "trust storage,
+   * discard memory", because progress and history always commit together in the same {@code
+   * WriteBatch} (see {@link #saveProgress}), so "last committed progress" and "last committed
+   * history" can never disagree.
+   *
+   * <p>For fresh migrations the progress is absent and the builder starts at {@link
+   * Hash#EMPTY_TRIE_HASH}. For resumed migrations, reads the account root from {@code
+   * TRIE_NODE_HISTORY_ARCHIVE_V2} at the last committed block.
    */
   private ArchiveTrieBuilder initArchiveTrieBuilder() {
     final long lastMigratedBlock = getMigrationProgress().orElse(-1L);
@@ -754,7 +764,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   /**
    * Reinitializes the {@link ArchiveTrieBuilder} from the last committed migration progress after a
-   * failed batch commit. Task 13 will replace this with full re-anchoring from committed history.
+   * failed or aborted batch. Intentionally delegates to {@link #initArchiveTrieBuilder()} — the
+   * whole point of design §4.3 is that there is nothing else to recover: progress and history
+   * commit atomically in the same write-batch, so "re-anchor from committed storage" is the
+   * complete recovery procedure for any uncommitted batch, whether it failed due to an optimistic
+   * conflict, an exception, or a deliberate {@code close()}.
    */
   private void resetArchiveTrieBuilder() {
     this.archiveTrieBuilder = initArchiveTrieBuilder();

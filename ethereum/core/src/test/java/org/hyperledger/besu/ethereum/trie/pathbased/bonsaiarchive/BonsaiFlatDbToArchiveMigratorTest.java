@@ -41,20 +41,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
-import org.hyperledger.besu.ethereum.chain.DefaultBlockchain;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
-import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
-import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
-import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
@@ -71,7 +66,6 @@ import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
-import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.ArrayList;
@@ -92,55 +86,19 @@ import java.util.function.Function;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.awaitility.Awaitility;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-public class BonsaiFlatDbToArchiveMigratorTest {
+public class BonsaiFlatDbToArchiveMigratorTest extends BonsaiFlatDbToArchiveMigratorTestBase {
 
-  private static final Address TEST_ADDRESS =
-      Address.fromHexString("0x95cD8499051f7FE6a2F53749eC1e9F4a81cafa13");
-  private static final long BOUNDARY_DISABLED = 0L;
-  private static final long MIGRATION_TIMEOUT_SECONDS = 10L;
   private static final long AWAIT_TIMEOUT_SECONDS = 5L;
-
-  @Mock private BonsaiWorldStateKeyValueStorage worldStateStorage;
-  @Mock private TrieLogManager trieLogManager;
-  private MutableBlockchain blockchain;
-  private SegmentedKeyValueStorage storage;
-  private BlockDataGenerator blockDataGenerator;
-  private final List<BonsaiFlatDbToArchiveMigrator> migrators = new ArrayList<>();
-
-  @BeforeEach
-  public void setup() {
-    storage = new SegmentedInMemoryKeyValueStorage();
-    blockDataGenerator = new BlockDataGenerator();
-    blockchain = createInMemoryBlockchain(blockDataGenerator.genesisBlock());
-    when(worldStateStorage.getComposedWorldStateStorage()).thenReturn(storage);
-    when(trieLogManager.getTrieLogLayer(any()))
-        .thenReturn(Optional.of(createAccountTrieLog(Wei.ONE)));
-  }
-
-  @AfterEach
-  public void tearDown() {
-    migrators.forEach(
-        m -> {
-          try {
-            m.close();
-          } catch (final Exception ignored) {
-            // Ignore exceptions during close
-          }
-        });
-  }
 
   @Test
   public void migratesAccountChangesFromTrieLogs() throws Exception {
@@ -1623,30 +1581,6 @@ public class BonsaiFlatDbToArchiveMigratorTest {
 
   // --- test helpers ---
 
-  private MutableBlockchain createInMemoryBlockchain(final Block genesisBlock) {
-    return DefaultBlockchain.createMutable(
-        genesisBlock,
-        new KeyValueStoragePrefixedKeyBlockchainStorage(
-            new InMemoryKeyValueStorage(),
-            new VariablesKeyValueStorage(new InMemoryKeyValueStorage()),
-            new MainnetBlockHeaderFunctions(),
-            false),
-        new NoOpMetricsSystem(),
-        0);
-  }
-
-  private void appendBlocks(final int count) {
-    final Block head = blockchain.getBlockByNumber(blockchain.getChainHeadBlockNumber()).get();
-    final List<Block> blocks = blockDataGenerator.blockSequence(head, count);
-    for (Block block : blocks) {
-      blockchain.appendBlock(block, blockDataGenerator.receipts(block));
-    }
-  }
-
-  private Hash hashAt(final long blockNumber) {
-    return blockchain.getBlockHeader(blockNumber).orElseThrow().getHash();
-  }
-
   private BonsaiFlatDbToArchiveMigrator createMigrator() {
     return createMigrator(BOUNDARY_DISABLED);
   }
@@ -1680,24 +1614,6 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     assertThat(entryCount)
         .as("ArchiveTrieBuilder must write at least one trie-node history entry after block 1")
         .isGreaterThan(0);
-  }
-
-  /**
-   * Creates a migrator with {@link ArchiveTrieBuilder} enabled (trie-node history capture on),
-   * configured so that genesis (block 0) receives an empty trie log (no account changes) and all
-   * subsequent blocks receive the default account trie log ({@link
-   * #createAccountTrieLog(Wei.ONE)}).
-   */
-  private BonsaiFlatDbToArchiveMigrator createMigratorWithRealTrieLogsAndArchiveTrieBuilder() {
-    when(trieLogManager.getMaxLayersToLoad()).thenReturn(BOUNDARY_DISABLED);
-    // Genesis must have an empty trie log so ArchiveTrieBuilder starts at EMPTY_TRIE_HASH and the
-    // root check passes (applying no changes leaves the root unchanged).
-    when(trieLogManager.getTrieLogLayer(hashAt(0L))).thenReturn(Optional.of(new TrieLogLayer()));
-    final BonsaiFlatDbToArchiveMigrator migrator =
-        new BonsaiFlatDbToArchiveMigrator(
-            worldStateStorage, blockchain, trieLogManager, /* trieNodeHistoryEnabled= */ true);
-    migrators.add(migrator);
-    return migrator;
   }
 
   // Wires the trie-node differential index for integration tests.
@@ -1745,32 +1661,6 @@ public class BonsaiFlatDbToArchiveMigratorTest {
             archiveStrategy);
     migrators.add(migrator);
     return migrator;
-  }
-
-  private TrieLogLayer createAccountTrieLog(final Wei balance) {
-    final TrieLogLayer trieLog = new TrieLogLayer();
-    final PmtStateTrieAccountValue value =
-        new PmtStateTrieAccountValue(1, balance, Hash.EMPTY, Hash.EMPTY);
-    trieLog.addAccountChange(TEST_ADDRESS, null, value);
-    return trieLog;
-  }
-
-  // Compute the MPT state root for a world state containing only TEST_ADDRESS with balance=1,
-  // matching the account created by createAccountTrieLog(Wei.ONE). Used to set block header
-  // stateRoot so that BonsaiWorldState.persist() passes state root verification.
-  private Hash computeTestAccountStateRoot() {
-    return computeAccountStateRoot(Wei.ONE);
-  }
-
-  private Hash computeAccountStateRoot(final Wei balance) {
-    final PmtStateTrieAccountValue account =
-        new PmtStateTrieAccountValue(1, balance, Hash.EMPTY, Hash.EMPTY);
-    final BytesValueRLPOutput out = new BytesValueRLPOutput();
-    account.writeTo(out);
-    final SimpleMerklePatriciaTrie<org.apache.tuweni.bytes.Bytes, org.apache.tuweni.bytes.Bytes>
-        trie = new SimpleMerklePatriciaTrie<>(Function.identity());
-    trie.put(TEST_ADDRESS.addressHash().getBytes(), out.encoded());
-    return Hash.wrap(trie.getRootHash());
   }
 
   private Optional<byte[]> getArchivedAccountKey(final long blockNumber) {
