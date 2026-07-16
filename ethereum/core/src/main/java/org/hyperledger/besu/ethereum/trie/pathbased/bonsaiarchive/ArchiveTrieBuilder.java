@@ -57,6 +57,15 @@ public final class ArchiveTrieBuilder {
   private final Map<Address, StoredMerklePatriciaTrie<Bytes, Bytes>> storageTrieCache =
       new HashMap<>();
 
+  /**
+   * Cached account trie, shared across all blocks within a single batch. Keeping the trie object
+   * alive preserves its internal decoded-node cache, preventing LRU eviction of in-batch nodes from
+   * {@link HistoryNodeCache} from causing stale reads when later blocks in the same batch need to
+   * re-traverse those nodes. Nulled by {@link #resetBatchState()} at batch end so the next batch
+   * re-roots from committed history.
+   */
+  private StoredMerklePatriciaTrie<Bytes, Bytes> accountTrie;
+
   private Hash accountRoot = Hash.EMPTY_TRIE_HASH;
 
   public ArchiveTrieBuilder(final SegmentedKeyValueStorage storage, final long lastMigratedBlock) {
@@ -82,8 +91,29 @@ public final class ArchiveTrieBuilder {
     trieLog
         .getStorageChanges()
         .forEach(
-            (address, slotChanges) ->
-                applyStorageChanges(address, slotChanges, trieLog, block, tx));
+            (address, slotChanges) -> {
+              final Hash computedRoot =
+                  applyStorageChanges(address, slotChanges, trieLog, block, tx);
+              // Cross-check the computed storage root against the trie-log's expected value.
+              // The account change for this address carries the updated AccountValue, which
+              // embeds the storage root that the EVM computed for this block.
+              final TrieLog.LogTuple<?> accountChange = trieLog.getAccountChanges().get(address);
+              if (accountChange != null && accountChange.getUpdated() != null) {
+                final Hash expectedRoot =
+                    ((AccountValue) accountChange.getUpdated()).getStorageRoot();
+                if (!computedRoot.equals(expectedRoot)) {
+                  throw new IllegalStateException(
+                      "ArchiveTrieBuilder computed storage root "
+                          + computedRoot
+                          + " for address "
+                          + address
+                          + " at block "
+                          + block
+                          + " but trie-log expects "
+                          + expectedRoot);
+                }
+              }
+            });
 
     final Hash newAccountRoot = applyAccountChanges(trieLog, accountRoot, block, tx);
 
@@ -112,6 +142,17 @@ public final class ArchiveTrieBuilder {
    */
   public void resetBatchState() {
     storageTrieCache.clear();
+    accountTrie = null;
+  }
+
+  /**
+   * Enables the bloom-filter optimisation for a from-genesis migration. When enabled, first-ever
+   * touches of a key skip the history read entirely. Must be called once, immediately after
+   * construction, before any {@link #applyBlock} calls. Delegates to {@link
+   * HistoryNodeCache#enableFreshMigrationBloom()}.
+   */
+  public void enableFreshMigrationBloom() {
+    nodeCache.enableFreshMigrationBloom();
   }
 
   /**
@@ -199,12 +240,19 @@ public final class ArchiveTrieBuilder {
       final long block,
       final SegmentedKeyValueStorageTransaction tx) {
 
-    final StoredMerklePatriciaTrie<Bytes, Bytes> accountTrie =
-        new StoredMerklePatriciaTrie<>(
-            new HistoryNodeLoader(nodeCache, HistoryKey.DOMAIN_ACCOUNT, null),
-            Bytes32.wrap(priorAccountRoot.getBytes()),
-            Function.identity(),
-            Function.identity());
+    // Reuse the cached trie across blocks within a batch so that its internal decoded-node cache
+    // stays alive. Constructing a fresh trie each block would discard those decoded objects; if
+    // the HistoryNodeCache LRU then evicts the corresponding raw-bytes entry before a later block
+    // in the same uncommitted batch needs to re-traverse those nodes, the re-root would read stale
+    // data and produce a wrong root → migration abort. See design section 4.2.
+    if (accountTrie == null) {
+      accountTrie =
+          new StoredMerklePatriciaTrie<>(
+              new HistoryNodeLoader(nodeCache, HistoryKey.DOMAIN_ACCOUNT, null),
+              Bytes32.wrap(priorAccountRoot.getBytes()),
+              Function.identity(),
+              Function.identity());
+    }
 
     trieLog
         .getAccountChanges()
@@ -255,9 +303,21 @@ public final class ArchiveTrieBuilder {
       diffCodecPayload = TrieNodeDiffCodec.encodeFull(value);
       countSinceFull = 0;
     } else {
-      type = HistoryEntryCodec.EntryType.DIFF;
-      diffCodecPayload = TrieNodeDiffCodec.encodeDiff(priorState.get().value(), value);
-      countSinceFull = priorState.get().countSinceFull() + 1;
+      final Bytes encodedDiff = TrieNodeDiffCodec.encodeDiff(priorState.get().value(), value);
+      if (TrieNodeDiffCodec.decode(encodedDiff).isFull()) {
+        // Type change (Case 4 in TrieNodeDiffCodec): old and new node have different arities
+        // (branch ↔ short node). encodeDiff returns a FULL payload in this case to avoid
+        // encoding a structurally incompatible delta. Promote the outer entry to FULL so that
+        // TrieNodeHistoryReader never sees a FULL inner payload while walking back a DIFF chain,
+        // which would cause reconstruct() to throw IllegalArgumentException.
+        type = HistoryEntryCodec.EntryType.FULL;
+        diffCodecPayload = encodedDiff;
+        countSinceFull = 0;
+      } else {
+        type = HistoryEntryCodec.EntryType.DIFF;
+        diffCodecPayload = encodedDiff;
+        countSinceFull = priorState.get().countSinceFull() + 1;
+      }
     }
 
     final Bytes entry = HistoryEntryCodec.encode(type, countSinceFull, diffCodecPayload);

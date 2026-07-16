@@ -727,10 +727,17 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
               PREFETCH_MAX_IN_FLIGHT,
               PREFETCH_MAX_DEPTH);
     }
-    return new ArchiveTrieBuilder(
-        worldStateStorage.getComposedWorldStateStorage(),
-        Math.max(lastMigratedBlock, 0L),
-        startingRoot);
+    final ArchiveTrieBuilder builder =
+        new ArchiveTrieBuilder(
+            worldStateStorage.getComposedWorldStateStorage(),
+            Math.max(lastMigratedBlock, 0L),
+            startingRoot);
+    if (lastMigratedBlock < 0) {
+      // Fresh from-genesis migration: activate the bloom-filter first-touch optimisation so
+      // that HistoryNodeCache can skip the history read for keys never written before.
+      builder.enableFreshMigrationBloom();
+    }
+    return builder;
   }
 
   /**

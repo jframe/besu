@@ -32,6 +32,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -239,6 +240,67 @@ class ArchiveTrieBuilderTest {
     tx.commit();
 
     assertThat(builder.currentAccountRoot()).isEqualTo(expectedRoot);
+  }
+
+  @Test
+  void typeChangeAtDeepTrieNodeIsPromotedToFullNotWrittenAsDiff() {
+    // Regression for Fix 1 (critical): when TrieNodeDiffCodec.encodeDiff returns a FULL-flagged
+    // payload (branch ↔ short-node type change at the same trie location — Case 4 in the codec),
+    // captureNode must promote the outer entry to FULL rather than write outer DIFF + inner FULL.
+    // Without the fix, TrieNodeHistoryReader walking back the DIFF chain would encounter the inner
+    // FULL bit and call reconstruct() with it as a DIFF entry, throwing IllegalArgumentException.
+    //
+    // With 256 accounts in block 1, there is a >99% probability that the account trie has branch
+    // nodes at depth > FULL_ABOVE_DEPTH (shared address-hash prefixes). Removing 128 accounts in
+    // block 2 causes structural collapses that produce branch→short-node type changes at those
+    // deep locations. All block-2 history entries must be reconstructable without exception.
+
+    final int numAccounts = 256;
+    final List<Address> addresses = new ArrayList<>(numAccounts);
+    for (int i = 1; i <= numAccounts; i++) {
+      addresses.add(Address.fromHexString(String.format("0x%040x", i)));
+    }
+
+    // Block 1: add all accounts
+    final TrieLogLayer block1Log = new TrieLogLayer();
+    for (final Address addr : addresses) {
+      block1Log.addAccountChange(
+          addr, null, new PmtStateTrieAccountValue(0, Wei.of(1), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
+    }
+    block1Log.freeze();
+
+    final var tx1 = storage.startTransaction();
+    final Hash root1 = builder.applyAccountChanges(block1Log, Hash.EMPTY_TRIE_HASH, 1L, tx1);
+    tx1.commit();
+
+    // Block 2: remove the first 128 accounts — structural collapses produce type-change events
+    final TrieLogLayer block2Log = new TrieLogLayer();
+    for (int i = 0; i < numAccounts / 2; i++) {
+      block2Log.addAccountChange(
+          addresses.get(i),
+          new PmtStateTrieAccountValue(0, Wei.of(1), Hash.EMPTY_TRIE_HASH, Hash.EMPTY),
+          null);
+    }
+    block2Log.freeze();
+
+    final var tx2 = storage.startTransaction();
+    builder.applyAccountChanges(block2Log, root1, 2L, tx2);
+    tx2.commit();
+
+    // All block-2 history entries must be reconstructable.
+    // Before the fix, any entry written with outer DIFF + inner FULL would cause
+    // TrieNodeHistoryReader.nodeAt to throw — specifically inside reconstruct().
+    final var reader = new TrieNodeHistoryReader(storage);
+    storage
+        .streamKeys(TRIE_NODE_HISTORY_ARCHIVE_V2)
+        .map(Bytes::wrap)
+        .filter(key -> HistoryKey.blockOf(key) == 2L)
+        .forEach(
+            key ->
+                assertThat(
+                        reader.nodeAt(HistoryKey.domainOf(key), HistoryKey.naturalKeyOf(key), 2L))
+                    .as("node at %s (block 2) must be reconstructable without throwing", key)
+                    .isPresent());
   }
 
   @Test
