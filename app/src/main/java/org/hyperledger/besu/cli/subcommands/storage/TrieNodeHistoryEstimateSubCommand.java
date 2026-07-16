@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.cli.subcommands.storage;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_LOG_STORAGE;
 
 import org.hyperledger.besu.cli.util.VersionProvider;
@@ -23,7 +24,9 @@ import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.CalibrationResult;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ChangeCountResult;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.EntrySizeTable;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.FlatDbStorageLeafCountProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistorySizeEstimate;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.StorageTrieLeafCountProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieLogChangeCounter;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieShapeModel;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogFactoryImpl;
@@ -78,6 +81,11 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
   private static final double DEFAULT_BLOB_OVERHEAD_RATIO = 1.44;
 
   private static final int TRIE_RADIX = 16;
+
+  // Per-contract storage-slot scan cap. A storage trie's expected node-path depth grows only as
+  // log16(slotCount), so counting beyond this adds no meaningful depth resolution while bounding
+  // worst-case scan cost for the few very large contracts. 32k slots ≈ depth ~3.5.
+  private static final int STORAGE_SLOT_PROBE_CAP = 1 << 15;
 
   @SuppressWarnings("unused")
   @ParentCommand
@@ -155,6 +163,12 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
     final MutableBlockchain blockchain = controller.getProtocolContext().getBlockchain();
     final SegmentedKeyValueStorage trieLogStorage =
         controller.getStorageProvider().getStorageBySegmentIdentifiers(List.of(TRIE_LOG_STORAGE));
+    final SegmentedKeyValueStorage storageTrieStorage =
+        controller
+            .getStorageProvider()
+            .getStorageBySegmentIdentifiers(List.of(ACCOUNT_STORAGE_STORAGE));
+    final StorageTrieLeafCountProvider storageLeafCounts =
+        new FlatDbStorageLeafCountProvider(storageTrieStorage, STORAGE_SLOT_PROBE_CAP);
 
     final long head = blockchain.getChainHeadBlockNumber();
     final long from = Math.max(0, startBlock);
@@ -200,7 +214,7 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
             from,
             toExclusive,
             "pass B (full count)",
-            (b, s, f, t) -> countRange(b, s, f, t, counter, leafCountByRange));
+            (b, s, f, t) -> countRange(b, s, f, t, counter, leafCountByRange, storageLeafCounts));
 
     final HistorySizeEstimate estimate =
         new HistorySizeEstimate(
@@ -368,11 +382,13 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
       final long fromInclusive,
       final long toExclusive,
       final TrieLogChangeCounter counter,
-      final long[] leafCountByRange) {
+      final long[] leafCountByRange,
+      final StorageTrieLeafCountProvider storageLeafCounts) {
     final ChangeCountResult local = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
     for (long n = fromInclusive; n < toExclusive; n++) {
       final TrieLog trieLog = loadTrieLog(blockchain, trieLogStorage, n);
-      counter.countBlock(trieLog, n, leafCountForEra(n, leafCountByRange), local);
+      counter.countBlock(
+          trieLog, n, leafCountForEra(n, leafCountByRange), storageLeafCounts, local);
     }
     return local;
   }

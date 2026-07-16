@@ -102,15 +102,39 @@ public final class TrieLogChangeCounter {
     return (h & mask) == 0;
   }
 
+  /**
+   * Convenience overload that prices storage-trie paths against the same {@code leafCountForEra} as
+   * the account trie. Retained for tests and callers that don't model per-contract storage sizes;
+   * production estimation should use {@link #countBlock(TrieLog, long, long,
+   * StorageTrieLeafCountProvider, ChangeCountResult)} with a real provider, since a global account
+   * leaf count drives storage-slot paths far too deep.
+   */
   public void countBlock(
       final TrieLog trieLog,
       final long blockNumber,
       final long leafCountForEra,
       final ChangeCountResult out) {
-    // The outer safety ceiling: how far a path could possibly be expanded. The actual per-key
-    // limit is drawn per-key below, since a real trie only has a node at each key's own
-    // termination depth (path compaction), not at every depth up to a shared cap.
-    final int outerCap = terminationCap(leafCountForEra);
+    countBlock(trieLog, blockNumber, leafCountForEra, accountHash -> leafCountForEra, out);
+  }
+
+  /**
+   * Counts a block's per-depth trie-node writes, drawing account-trie path depths from {@code
+   * accountLeafCountForEra} (the global account-trie leaf count) and each storage-trie's path
+   * depths from that contract's own leaf count supplied by {@code storageLeafCounts}. Storage tries
+   * are per-contract and typically far smaller than the account trie, so using the global count
+   * here is the dominant source of over-counting; a per-contract count makes each slot's path
+   * terminate at the depth its real (compacted) storage trie would.
+   */
+  public void countBlock(
+      final TrieLog trieLog,
+      final long blockNumber,
+      final long accountLeafCountForEra,
+      final StorageTrieLeafCountProvider storageLeafCounts,
+      final ChangeCountResult out) {
+    // Per-trie safety ceilings: how far a path could possibly be expanded. The actual per-key limit
+    // is drawn per-key below, since a real trie only has a node at each key's own termination depth
+    // (path compaction), not at every depth up to a shared cap.
+    final int accountCap = terminationCap(accountLeafCountForEra);
     final Set<Bytes> accountPaths = new LinkedHashSet<>();
     final Set<Bytes> storagePaths = new LinkedHashSet<>();
 
@@ -121,7 +145,8 @@ public final class TrieLogChangeCounter {
               final Bytes accountHash = address.addressHash().getBytes();
               final int keyDepthLimit =
                   Math.min(
-                      outerCap, sampledTerminationDepth(accountHash, leafCountForEra, outerCap));
+                      accountCap,
+                      sampledTerminationDepth(accountHash, accountLeafCountForEra, accountCap));
               TrieNodePathEnumerator.addLocationPrefixes(
                   TrieNodePathEnumerator.toNibbles(accountHash), keyDepthLimit, null, accountPaths);
               if (change.getPrior() == null && change.getUpdated() != null) {
@@ -136,12 +161,19 @@ public final class TrieLogChangeCounter {
         .forEach(
             (address, slotMap) -> {
               final Bytes accountHash = address.addressHash().getBytes();
+              // Floor the probed head-state slot count at the number of slots this block touches: a
+              // block cannot change more distinct slots than the trie holds, so this guards against
+              // under-counting depth for accounts whose slots were pruned/destructed before head.
+              final long storageLeafCount =
+                  Math.max(slotMap.size(), storageLeafCounts.leafCount(accountHash));
+              final int storageCap = terminationCap(storageLeafCount);
               slotMap.forEach(
                   (slotKey, change) -> {
                     final Bytes slotHash = slotKey.getSlotHash().getBytes();
                     final int keyDepthLimit =
                         Math.min(
-                            outerCap, sampledTerminationDepth(slotHash, leafCountForEra, outerCap));
+                            storageCap,
+                            sampledTerminationDepth(slotHash, storageLeafCount, storageCap));
                     TrieNodePathEnumerator.addLocationPrefixes(
                         TrieNodePathEnumerator.toNibbles(slotHash),
                         keyDepthLimit,

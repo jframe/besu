@@ -90,6 +90,42 @@ class TrieLogChangeCounterTest {
   }
 
   @Test
+  void storageSlotDepthUsesPerContractLeafCountNotGlobalAccountCount() {
+    final Address addr = Address.fromHexString("0x00000000000000000000000000000000000000aa");
+    final StorageSlotKey slot = new StorageSlotKey(UInt256.valueOf(7));
+    final TrieLogLayer log = new TrieLogLayer();
+    log.addStorageChange(addr, slot, UInt256.ZERO, UInt256.valueOf(5));
+
+    // A mainnet-scale account trie, but this contract's storage trie holds a single slot.
+    final long largeAccountLeafCount = 50_000_000L;
+
+    // With a per-contract provider reporting a one-slot storage trie, the slot is a lone leaf and
+    // terminates at depth 0 (path compaction): only the storage root node is written.
+    final ChangeCountResult perContract = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+    counter.countBlock(log, 100L, largeAccountLeafCount, accountHash -> 1L, perContract);
+    assertThat(perContract.mutationsByDepth()[0]).isEqualTo(1L);
+    for (int depth = 1; depth < perContract.mutationsByDepth().length; depth++) {
+      assertThat(perContract.mutationsByDepth()[depth])
+          .as("a one-slot storage trie must not write nodes below depth 0 (depth %d)", depth)
+          .isZero();
+    }
+
+    // Regression guard: pricing the same slot against the global account leaf count (the pre-fix
+    // behaviour, reproduced by the 4-arg overload) drives it many levels deep.
+    final ChangeCountResult global = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+    counter.countBlock(log, 100L, largeAccountLeafCount, global);
+    int deepest = 0;
+    for (int depth = 0; depth < global.mutationsByDepth().length; depth++) {
+      if (global.mutationsByDepth()[depth] > 0) {
+        deepest = depth;
+      }
+    }
+    assertThat(deepest)
+        .as("global-account-count pricing over-expands a single storage slot into a deep path")
+        .isGreaterThan(3);
+  }
+
+  @Test
   void samplingWithNonZeroShiftDoesNotThrowAtShallowDepths() {
     final Address addr = Address.fromHexString("0x00000000000000000000000000000000000000aa");
     final TrieLogLayer log = new TrieLogLayer();
