@@ -66,7 +66,9 @@ class ArchiveTrieBuilderDifferentialTest {
 
   @RepeatedTest(20)
   void archiveTrieBuilderMatchesDirectTrieApplicationAcrossARandomBlockSequence() {
-    final Random random = new Random();
+    final long seed = new Random().nextLong();
+    final Random random = new Random(seed);
+    System.err.printf("ArchiveTrieBuilderDifferentialTest seed=%d%n", seed);
     final List<Address> accounts = new ArrayList<>();
     for (int i = 0; i < 5; i++) {
       accounts.add(Address.fromHexString("0x" + "1".repeat(39) + i));
