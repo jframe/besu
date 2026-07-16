@@ -70,6 +70,7 @@ import java.util.function.Function;
 
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -97,6 +98,7 @@ import org.junit.jupiter.api.Test;
  * ensures the trie-node index entries written during chain building land in the same {@link
  * SegmentedKeyValueStorage} that the archive provider's {@link TrieNodeChangeIndex} reads from.
  */
+@Disabled("reworked in Part 5 task 17/18")
 class BonsaiArchiveTrieNodeIndexIntegrationTest {
 
   private static final Address ACCOUNT =

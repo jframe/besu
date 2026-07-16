@@ -23,12 +23,8 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveProofNodeLoader;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveReadFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
@@ -68,14 +64,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   private final boolean stateProofsEnabled;
   private volatile LongSupplier archiveMigrationProgressSupplier = () -> -1L;
 
-  // Design 5 trie-node differential index — proof routing
-  private final TrieNodeChangeIndex trieNodeChangeIndex;
-  private final TrieNodeHistoryStore trieNodeHistoryStore;
-  private final TrieNodeHistoryReaderV2 trieNodeHistoryReaderV2;
-  // volatile so that the migration thread's in-place mutations to lastIndexedBlock /
-  // indexStartBlock (which are themselves volatile) are published consistently. The reference
-  // is shared with the migrator; both sides mutate the same instance in-place.
-  private volatile TrieNodeIndexProgress trieNodeIndexProgress;
+  private final TrieNodeHistoryReaderV2 trieNodeHistoryReader;
 
   public BonsaiArchiveWorldStateProvider(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
@@ -118,24 +107,15 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
                 ? new BonsaiArchiveTrieNodeStrategy(null) // reads archive; migrator owns all writes
                 : new BonsaiTrieNodeStrategy());
 
-    // Initialise the Design-5 trie-node index components from the shared archive storage.
-    // All five ARCHIVE column families live in the same composedWorldStateStorage, so we reuse it.
     final SegmentedKeyValueStorage archiveStorage =
         worldStateKeyValueStorage.getComposedWorldStateStorage();
-    this.trieNodeChangeIndex = new TrieNodeChangeIndex(archiveStorage, ArchiveNodeKey.RANGE_SIZE);
-    this.trieNodeHistoryStore = new TrieNodeHistoryStore(archiveStorage);
-    this.trieNodeHistoryReaderV2 = new TrieNodeHistoryReaderV2(archiveStorage);
-    this.trieNodeIndexProgress =
-        TrieNodeIndexProgress.load(archiveStorage, ArchiveNodeKey.RANGE_SIZE);
+    this.trieNodeHistoryReader = new TrieNodeHistoryReaderV2(archiveStorage);
 
-    // The trie-node index is written exclusively by BonsaiFlatDbToArchiveMigrator (bulk migration
-    // and ongoing catch-up via migrateTrieBlock). The live block-import path must NOT write index
-    // entries: during bulk migration it would append high offsets (e.g. block 6760) before the
-    // migrator reaches the corresponding low offsets (e.g. block 0 for the same naturalKey),
-    // violating RangeRelativeOffsetList's non-decreasing monotonicity invariant.
-    //
-    // The live worldStateKeyValueStorage therefore retains its default BonsaiTrieNodeStrategy (a
-    // plain pass-through to TRIE_BRANCH_STORAGE that does not touch the index CFs).
+    // TRIE_NODE_HISTORY_ARCHIVE_V2 is written exclusively by ArchiveTrieBuilder (migrator-owned).
+    // The live block-import path does not write to this CF, for the same reason the old index CFs
+    // were write-protected: concurrency with the migrator would produce entries at wrong block
+    // offsets. No monotonicity invariant is involved in the append-only V2 design; the exclusion
+    // still holds because ArchiveTrieBuilder is the sole writer.
   }
 
   @Override
@@ -172,32 +152,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     this.archiveMigrationProgressSupplier = supplier;
   }
 
-  /**
-   * Replaces the in-memory {@link TrieNodeIndexProgress} record used by the coverage gate in {@link
-   * #getAccountProof}.
-   *
-   * <p>This method exists primarily for testing (to inject a pre-populated progress record without
-   * going through storage serialisation) and for live updates when ranges are marked complete by
-   * the background indexer.
-   *
-   * @param progress the new progress record; must not be {@code null}
-   */
-  public void setTrieNodeIndexProgress(final TrieNodeIndexProgress progress) {
-    this.trieNodeIndexProgress = java.util.Objects.requireNonNull(progress, "progress");
-  }
-
-  public TrieNodeHistoryStore getTrieNodeHistoryStore() {
-    return trieNodeHistoryStore;
-  }
-
-  public TrieNodeChangeIndex getTrieNodeChangeIndex() {
-    return trieNodeChangeIndex;
-  }
-
-  public TrieNodeIndexProgress getTrieNodeIndexProgress() {
-    return trieNodeIndexProgress;
-  }
-
   private boolean isHistoricalQuery(final WorldStateQueryParams queryParams) {
     final long queryBlock = queryParams.getBlockHeader().getNumber();
     return worldStateKeyValueStorage.getFlatDbMode().equals(FlatDbMode.ARCHIVE)
@@ -215,10 +169,10 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
    *
    * <ol>
    *   <li><strong>Historical + index enabled + covered</strong> — the block is too old for trie-log
-   *       rollback, the flag {@code stateProofsEnabled} is on, and {@link
-   *       TrieNodeIndexProgress#covers(long)} confirms that the range containing the target block
-   *       has been fully indexed. In this case an {@link ArchiveProofNodeLoader} is built and a
-   *       {@link WorldStateProofProvider} is driven directly from the stateRoot stored in the block
+   *       rollback, the flag {@code stateProofsEnabled} is on, and {@code
+   *       archiveMigrationProgressSupplier} confirms that the migration has reached or passed the
+   *       target block. In this case an {@link ArchiveProofNodeLoader} is built and a {@link
+   *       WorldStateProofProvider} is driven directly from the stateRoot stored in the block
    *       header, without any trie-log replay or archive-world-state rolling.
    *   <li><strong>All other cases</strong> — delegate to the parent implementation which either
    *       performs trie-log rollback (near-head) or the existing archive-proof rolling path.
@@ -243,27 +197,18 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final long maxLayers = trieLogManager.getMaxLayersToLoad();
 
     // Historical + index enabled + block indexed → use Design-5 index path.
-    // The archiveMigrationProgressSupplier check is intentionally OMITTED here: the Design-5
-    // ArchiveProofNodeLoader reads only from TRIE_NODE_HISTORY_ARCHIVE and the live trie — it does
-    // not need the flat-DB archive CFs (ACCOUNT_INFO_STATE_ARCHIVE, ACCOUNT_STORAGE_ARCHIVE) that
-    // the migration populates.  Including the supplier check caused the index path to be blocked
-    // whenever the migrator was behind the chain head, forcing all proofs through the legacy
-    // seekForPrev rollback path even though the trie-node index was fully populated.
-    //
-    // covers() checks block in [indexStartBlock, lastIndexedBlock] — handles both live-import and
-    // migrator paths.
-    final boolean blockIsIndexed = trieNodeIndexProgress.covers(targetBlock);
+    // blockIsIndexed is true when the single migration progress key (written by ArchiveTrieBuilder
+    // in the same WriteBatch as the trie-node history) has advanced to or past targetBlock.
+    final boolean blockIsIndexed = archiveMigrationProgressSupplier.getAsLong() >= targetBlock;
     LOG.debug(
         "getAccountProof routing: target={} head={} maxLayers={} gap={} indexEnabled={}"
-            + " blockIsIndexed={} lastIndexed={} indexStart={}",
+            + " blockIsIndexed={}",
         targetBlock,
         headBlock,
         maxLayers,
         headBlock - targetBlock,
         stateProofsEnabled,
-        blockIsIndexed,
-        trieNodeIndexProgress.lastIndexedBlock(),
-        trieNodeIndexProgress.indexStartBlock());
+        blockIsIndexed);
     if (stateProofsEnabled && headBlock - targetBlock >= maxLayers && blockIsIndexed) {
 
       final Hash stateRoot = blockHeader.getStateRoot();
@@ -272,8 +217,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
       // NodeLoader for the account trie — backed by the V2 history reader.
       final org.hyperledger.besu.ethereum.trie.NodeLoader accountNodeLoader =
-          ArchiveProofNodeLoader.accountNodeLoader(
-              liveStorage, trieNodeHistoryReaderV2, targetBlock);
+          ArchiveProofNodeLoader.accountNodeLoader(liveStorage, trieNodeHistoryReader, targetBlock);
 
       // Build a WorldStateStorageCoordinator whose trie-node accessors delegate to the
       // ArchiveProofNodeLoader static factory. isWorldStateAvailable always returns true: the
@@ -299,7 +243,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
                 final Hash accountHash, final Bytes location, final Bytes32 nodeHash) {
               return ArchiveProofNodeLoader.storageNodeLoader(
                       liveStorage,
-                      trieNodeHistoryReaderV2,
+                      trieNodeHistoryReader,
                       targetBlock,
                       Bytes32.wrap(accountHash.getBytes()))
                   .getNode(location, nodeHash);

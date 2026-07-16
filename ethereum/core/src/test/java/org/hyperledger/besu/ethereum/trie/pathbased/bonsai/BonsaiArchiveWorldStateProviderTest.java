@@ -29,8 +29,6 @@ import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFullFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
@@ -288,8 +286,6 @@ public class BonsaiArchiveWorldStateProviderTest {
   void trieNodeIndex_flagOff_fallsThroughToParent() {
     final BonsaiArchiveWorldStateProvider indexProvider =
         createProviderWithTrieNodeIndex(true, false);
-    // mark range 0 as complete so only the flag matters
-    markRange0Complete(indexProvider);
 
     final BlockHeader historicalHeader =
         new BlockHeaderTestFixture()
@@ -309,22 +305,26 @@ public class BonsaiArchiveWorldStateProviderTest {
   }
 
   /**
-   * Flag on but the range is not yet covered (progress bitmap not set) → falls through to parent.
+   * Flag on but migration has not yet reached the target block → falls through to parent.
+   *
+   * <p>"Not covered" is now expressed via {@code archiveMigrationProgressSupplier} returning a
+   * value less than the target block number.
    */
   @Test
   void trieNodeIndex_flagOn_notCovered_fallsThroughToParent() {
     final BonsaiArchiveWorldStateProvider indexProvider =
         createProviderWithTrieNodeIndex(true, true);
-    // do NOT mark range 0 complete
 
+    final long queryBlockNumber = CHAIN_HEAD - MAX_LAYERS - 1;
     final BlockHeader historicalHeader =
         new BlockHeaderTestFixture()
-            .number(CHAIN_HEAD - MAX_LAYERS - 1)
+            .number(queryBlockNumber)
             .stateRoot(Hash.EMPTY_TRIE_HASH)
             .buildHeader();
     when(blockchain.getBlockHeader(historicalHeader.getHash()))
         .thenReturn(Optional.of(historicalHeader));
-    indexProvider.setArchiveMigrationProgressSupplier(() -> CHAIN_HEAD);
+    // Supplier is one behind the target block → blockIsIndexed = false
+    indexProvider.setArchiveMigrationProgressSupplier(() -> queryBlockNumber - 1);
 
     final Optional<Optional<WorldStateProof>> result =
         indexProvider.getAccountProof(
@@ -344,7 +344,8 @@ public class BonsaiArchiveWorldStateProviderTest {
   void trieNodeIndex_flagOn_covered_nearHead_fallsThroughToParent() {
     final BonsaiArchiveWorldStateProvider indexProvider =
         createProviderWithTrieNodeIndex(true, true);
-    markRange0Complete(indexProvider);
+    // Coverage is present (supplier covers the near-head block), but the age gate still fails.
+    indexProvider.setArchiveMigrationProgressSupplier(() -> CHAIN_HEAD);
 
     // Block is within maxLayersToLoad of the chain head → NOT historical
     final BlockHeader nearHeadHeader =
@@ -372,7 +373,6 @@ public class BonsaiArchiveWorldStateProviderTest {
   void trieNodeIndex_flagOn_covered_historical_usesIndexPath() {
     final BonsaiArchiveWorldStateProvider indexProvider =
         createProviderWithTrieNodeIndex(true, true);
-    markRange0Complete(indexProvider);
 
     final Hash emptyTrieRoot = Hash.EMPTY_TRIE_HASH;
     final BlockHeader historicalHeader =
@@ -403,7 +403,6 @@ public class BonsaiArchiveWorldStateProviderTest {
   void trieNodeIndex_flagOn_covered_mapperReturnsEmpty_propagatesEmpty() {
     final BonsaiArchiveWorldStateProvider indexProvider =
         createProviderWithTrieNodeIndex(true, true);
-    markRange0Complete(indexProvider);
 
     final Hash emptyTrieRoot = Hash.EMPTY_TRIE_HASH;
     final BlockHeader historicalHeader =
@@ -422,20 +421,6 @@ public class BonsaiArchiveWorldStateProviderTest {
             historicalHeader, Address.ZERO, Collections.emptyList(), mapper);
 
     assertThat(result).isEmpty();
-  }
-
-  // ---- Helpers ----
-
-  /**
-   * Injects a {@link TrieNodeIndexProgress} covering [0, {@link ArchiveNodeKey#RANGE_SIZE}) into
-   * the provider, making {@link TrieNodeIndexProgress#covers(long)} return {@code true} for any
-   * block in that window.
-   */
-  private static void markRange0Complete(final BonsaiArchiveWorldStateProvider provider) {
-    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
-    progress.setIndexStartBlock(0L);
-    progress.setLastIndexedBlock(ArchiveNodeKey.RANGE_SIZE - 1L);
-    provider.setTrieNodeIndexProgress(progress);
   }
 
   private BonsaiArchiveWorldStateProvider createProvider(final boolean archiveModeReady) {
