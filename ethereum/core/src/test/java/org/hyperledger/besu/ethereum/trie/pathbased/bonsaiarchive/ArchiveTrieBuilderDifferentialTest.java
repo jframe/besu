@@ -27,7 +27,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -51,7 +51,7 @@ import org.junit.jupiter.api.RepeatedTest;
  * to a fresh {@code StoredMerklePatriciaTrie} directly (the oracle) and to {@link
  * ArchiveTrieBuilder}. Asserts identical account-trie state roots per block and, after all blocks,
  * that every history entry written to {@code TRIE_NODE_HISTORY_ARCHIVE_V2} can be reconstructed via
- * {@link TrieNodeHistoryReaderV2} -- including DIFF entries that arise when a node at depth > 2 is
+ * {@link TrieNodeHistoryReader} -- including DIFF entries that arise when a node at depth > 2 is
  * mutated a second time.
  *
  * <p>The oracle is a second, independent {@code StoredMerklePatriciaTrie} built by this test's own
@@ -111,7 +111,7 @@ class ArchiveTrieBuilderDifferentialTest {
           .isEqualTo(oracleRoot);
     }
 
-    // Second pass: verify history-entry readability via TrieNodeHistoryReaderV2.
+    // Second pass: verify history-entry readability via TrieNodeHistoryReader.
     // Checking the root (Bytes.EMPTY) at every block confirms FULL-entry chain integrity.
     // Scanning ALL history entries (both DOMAIN_ACCOUNT and DOMAIN_STORAGE) verifies that
     // DIFF entries are correctly encoded and reconstructable.  DOMAIN_STORAGE entries always
@@ -119,7 +119,7 @@ class ArchiveTrieBuilderDifferentialTest {
     // as DIFF after their first FULL -- making them the primary DIFF-correctness signal.
     // The in-memory HistoryNodeCache means DIFF entries are never used during applyBlock
     // itself, so only an out-of-band read via the reader confirms correctness.
-    final TrieNodeHistoryReaderV2 reader = new TrieNodeHistoryReaderV2(builderStorage);
+    final TrieNodeHistoryReader reader = new TrieNodeHistoryReader(builderStorage);
 
     for (long block = 1; block <= 30; block++) {
       assertThat(reader.nodeAt(HistoryKey.DOMAIN_ACCOUNT, Bytes.EMPTY, block))

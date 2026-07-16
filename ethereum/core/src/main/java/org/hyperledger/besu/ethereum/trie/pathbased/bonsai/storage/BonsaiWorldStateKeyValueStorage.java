@@ -27,7 +27,6 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.CacheManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.VersionedCacheManager;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
@@ -445,22 +444,9 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
       return trieLogStorageTransaction;
     }
 
-    /**
-     * If the trie-node strategy is a {@link BonsaiArchiveTrieNodeStrategy}, advances {@code
-     * TrieNodeIndexProgress} for the current block into the given transaction, BEFORE the
-     * transaction is committed. Must be called just before {@code
-     * composedWorldStateTransaction.commit()}.
-     */
-    private void flushIndexIfEnabled() {
-      if (trieNodeStrategy instanceof BonsaiArchiveTrieNodeStrategy archiveStrategy) {
-        archiveStrategy.advanceIndexProgress(composedWorldStateTransaction, worldStorage);
-      }
-    }
-
     @Override
     public void commit() {
       trieLogStorageTransaction.commit();
-      flushIndexIfEnabled();
       composedWorldStateTransaction.commit();
     }
 
@@ -472,7 +458,6 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
 
     @Override
     public void commitComposedOnly() {
-      flushIndexIfEnabled();
       composedWorldStateTransaction.commit();
       trieLogStorageTransaction.close();
     }

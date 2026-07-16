@@ -14,427 +14,117 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE_V2;
+
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage.NearestKeyValue;
+
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
+import java.util.Deque;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
- * Reconstructs the historical state of a trie node at a given block by combining point-access reads
- * from {@link TrieNodeHistoryStore} with change-block lookups from {@link TrieNodeChangeIndex}
- * (Design 5, Task 3.2).
- *
- * <h2>Algorithm — {@link #nodeAt(Bytes, long)}</h2>
- *
- * <ol>
- *   <li><strong>Find the latest change block ≤ targetBlock</strong> — call {@link
- *       TrieNodeChangeIndex#latestChangeBlock(Bytes, long)} to find {@code b*}, the most-recent
- *       block at which the node changed. If absent, the node was never written for this key before
- *       {@code targetBlock}: return empty.
- *   <li><strong>Fetch the entry at b*</strong> — read from the store. If absent (shouldn't happen
- *       in well-formed data), log a warning and return empty.
- *   <li><strong>Decode and check for tombstone</strong> — if the entry is a DELETION tombstone, the
- *       node was deleted: return empty.
- *   <li><strong>If entry is FULL</strong> — no reconstruction needed; return the embedded node
- *       directly.
- *   <li><strong>Locate the nearest FULL checkpoint</strong> — obtain all change blocks in b*'s
- *       range via a single index-list read ({@link TrieNodeChangeIndex#getChangeBlocksUpTo}), then
- *       scan the trailing {@link #RECONSTRUCT_WINDOW} entries backward — read in one batched
- *       multiGet — for the newest FULL at or before b*. Scanning (rather than computing a
- *       checkpoint position) is required because the write/migration path does not always place
- *       FULL entries at globally {@link #CHECKPOINT_INTERVAL}-aligned positions. If no FULL is
- *       found within the window the checkpoint lies further back (an earlier range or a long diff
- *       chain) and the bounded backward walk is used as a fallback.
- *   <li><strong>Reconstruct</strong> — call {@link TrieNodeDiffCodec#reconstruct(Bytes, List)} with
- *       the FULL entry as the base and the ordered list of DIFF entries between the checkpoint and
- *       {@code b*} (inclusive) to produce the final node RLP.
- * </ol>
- *
- * <h2>Termination guarantee</h2>
- *
- * The write path (Task 3.3) emits a FULL checkpoint roughly every {@link #CHECKPOINT_INTERVAL}
- * mutations for a key, so the newest FULL is normally found within the batched window scan. The
- * {@link #MAX_BACKWARD_WALK_STEPS} guard bounds the cross-range backward-walk fallback for backfill
- * scenarios and corrupt data.
+ * Answers "what was this trie node's value at or before block T?" against {@code
+ * TRIE_NODE_HISTORY_ARCHIVE_V2}. One {@link SegmentedKeyValueStorage#getNearestBeforeMatchLength}
+ * call finds the newest entry &lt;= T; if it is a DIFF, walks backward one entry at a time (each
+ * step is another getNearestBeforeMatchLength call at {@code foundBlock - 1}, since the plugin
+ * storage API exposes only one-shot nearest-key lookups, not a reusable iterator handle) until a
+ * FULL is found, bounded by {@link #MAX_BACKWARD_WALK_STEPS}. Collected DIFF payloads are folded
+ * with the unchanged {@link TrieNodeDiffCodec#reconstruct}.
  */
 public final class TrieNodeHistoryReader {
 
-  private static final Logger LOG = LoggerFactory.getLogger(TrieNodeHistoryReader.class);
-
-  /**
-   * Every {@code CHECKPOINT_INTERVAL}-th mutation for a node emits a FULL entry. This value must
-   * match {@code BonsaiArchiveTrieNodeStrategy.CHECKPOINT_INTERVAL} (same codebase, different
-   * package). It sets the expected spacing between FULL checkpoints, which {@link
-   * #RECONSTRUCT_WINDOW} is sized to cover so the backward window scan in {@link
-   * #reconstructFromChangeBlocks} normally finds a FULL without falling back to the walk.
-   */
-  static final int CHECKPOINT_INTERVAL = 16;
-
-  /**
-   * Maximum number of backward steps before giving up the walk. In steady state this bound is never
-   * reached (CHECKPOINT_INTERVAL - 1 = 15 steps suffice), but it guards against corrupt data or
-   * incomplete backfill.
-   */
   static final int MAX_BACKWARD_WALK_STEPS = 64;
 
-  /**
-   * Number of trailing change-block entries {@link #reconstructFromChangeBlocks} reads in one
-   * batched multiGet when scanning backward for the nearest FULL checkpoint. Sized well above
-   * {@link #CHECKPOINT_INTERVAL} to absorb the observed spread between where FULL entries are
-   * actually written and where a naive interval-aligned position would fall; if no FULL is found
-   * within the window the reconstruction falls back to the bounded cross-range backward walk.
-   */
-  static final int RECONSTRUCT_WINDOW = 64;
+  private final SegmentedKeyValueStorage storage;
 
-  private final TrieNodeHistoryStore store;
-  private final TrieNodeChangeIndex index;
-
-  /**
-   * Constructs a reader backed by the given store and change index.
-   *
-   * @param store the point-access trie-node history store; must not be {@code null}
-   * @param index the change-block index; must not be {@code null}
-   * @throws NullPointerException if either argument is {@code null}
-   */
-  public TrieNodeHistoryReader(final TrieNodeHistoryStore store, final TrieNodeChangeIndex index) {
-    this.store = Objects.requireNonNull(store, "store must not be null");
-    this.index = Objects.requireNonNull(index, "index must not be null");
+  public TrieNodeHistoryReader(final SegmentedKeyValueStorage storage) {
+    this.storage = storage;
   }
 
-  // ---------------------------------------------------------------------------
-  // Public API
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Returns the trie-node RLP for {@code naturalKey} at {@code targetBlock}, reconstructed from the
-   * nearest FULL checkpoint plus any intervening DIFF entries.
-   *
-   * <p>The returned bytes are the raw node RLP (not a codec entry) — suitable for direct use as a
-   * trie node.
-   *
-   * <p><strong>Tombstone semantics:</strong> if the node was deleted at or before {@code
-   * targetBlock} and not re-created before {@code targetBlock}, {@link Optional#empty()} is
-   * returned.
-   *
-   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey}); must not be
-   *     {@code null}
-   * @param targetBlock the block number to reconstruct the node at (inclusive)
-   * @return the reconstructed node RLP, or empty if the node did not exist at {@code targetBlock}
-   * @throws NullPointerException if {@code naturalKey} is {@code null}
-   * @throws IllegalArgumentException if {@code targetBlock} is negative
-   */
-  public Optional<Bytes> nodeAt(final Bytes naturalKey, final long targetBlock) {
-    Objects.requireNonNull(naturalKey, "naturalKey must not be null");
-    if (targetBlock < 0) {
-      throw new IllegalArgumentException("targetBlock must be >= 0, got " + targetBlock);
-    }
-
-    // Step 1: find the latest change block <= targetBlock.
-    final Optional<Long> latestOpt = index.latestChangeBlock(naturalKey, targetBlock);
-    if (latestOpt.isEmpty()) {
-      // No change recorded at or before targetBlock — node never written for this key.
-      return Optional.empty();
-    }
-    final long bStar = latestOpt.get();
-
-    // Step 2: fetch the entry at b*.
-    final Optional<Bytes> entryOpt = store.get(naturalKey, bStar);
-    if (entryOpt.isEmpty()) {
-      LOG.warn(
-          "TrieNodeHistoryReader: index references block {} for key {} but store has no entry;"
-              + " index/store mismatch — returning empty",
-          bStar,
-          naturalKey);
-      return Optional.empty();
-    }
-    final Bytes bStarEntry = entryOpt.get();
-
-    // Step 3: decode and check for tombstone.
-    final TrieNodeDiffCodec.Decoded bStarDecoded = TrieNodeDiffCodec.decode(bStarEntry);
-    if (bStarDecoded.isDeletion()) {
-      // Node was deleted at b* (or the latest version is a tombstone).
-      return Optional.empty();
-    }
-
-    // Step 4: if FULL, return the embedded node directly — no reconstruction needed.
-    if (bStarDecoded.isFull()) {
-      return Optional.of(bStarDecoded.fullNode());
-    }
-
-    // Step 5: b* is a DIFF — locate the nearest FULL checkpoint and collect the diff chain.
-    //
-    // Optimised path: read all change blocks in b*'s range in a single index-list read, then
-    // compute the checkpoint position from the global mutation index in O(1). This replaces the
-    // old loop of up to CHECKPOINT_INTERVAL-1 individual latestChangeBlock calls (each doing 3
-    // RocksDB reads: bloom, range marker, list binary search).
-    //
-    // Cross-range fallback: if the FULL checkpoint is in an earlier range (i.e. the node's history
-    // spans multiple ranges and the checkpoint falls before the current range boundary), the
-    // original backward-walk loop is used as a safe fallback. This is rare in practice for chains
-    // shorter than RANGE_SIZE = 1,000,000 blocks.
-
-    final Optional<long[]> changeBlocksOpt = index.getChangeBlocksUpTo(naturalKey, bStar);
-
-    if (changeBlocksOpt.isPresent()) {
-      return reconstructFromChangeBlocks(naturalKey, bStar, bStarEntry, changeBlocksOpt.get());
-    }
-
-    // getChangeBlocksUpTo returned empty — fall back to the backward walk.
-    return backwardWalkFallback(naturalKey, bStar, bStarEntry);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Package-private overload with preloaded range list (avoids duplicate index read)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Reconstructs the trie node at {@code bStar} using an already-fetched {@link
-   * RangeRelativeOffsetList} for the same range, avoiding a second {@link
-   * TrieNodeChangeIndex#getChangeBlocksUpTo} call.
-   *
-   * <p>This overload is used by {@link ArchiveProofNodeLoader} when it has already read the range
-   * list once (via {@link TrieNodeChangeIndex#readRangeList}) to determine {@code bStar}. Passing
-   * the preloaded list here prevents the triple-read pattern: bloom + marker + list read that would
-   * otherwise happen in both {@link TrieNodeChangeIndex#modifiedAfter} and {@link
-   * TrieNodeChangeIndex#latestChangeBlock} as well as here.
-   *
-   * <p>The preloaded list must cover the full range (all sub-blocks + tail, unsieved — not filtered
-   * by any ceiling), as produced by {@link TrieNodeChangeIndex#readRangeList}. The method filters
-   * the list in memory to obtain change blocks up to {@code bStar}.
-   *
-   * <p>If {@code bStar} is in a <em>different</em> range than {@code rangeId} (cross-range case),
-   * this overload falls back to the standard {@link #nodeAt(Bytes, long)} to avoid incorrect
-   * reconstruction.
-   *
-   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey}); must not be
-   *     {@code null}
-   * @param bStar the latest change block ≤ targetBlock, already resolved by the caller
-   * @param preloadedList the full (unfiltered) offset list for {@code (naturalKey, rangeId)},
-   *     produced by {@link TrieNodeChangeIndex#readRangeList}
-   * @param rangeId the range identifier that {@code preloadedList} covers
-   * @return the reconstructed node RLP, or empty if the node did not exist at {@code bStar}
-   * @throws NullPointerException if {@code naturalKey} or {@code preloadedList} is {@code null}
-   */
-  Optional<Bytes> nodeAt(
-      final Bytes naturalKey,
-      final long bStar,
-      final RangeRelativeOffsetList preloadedList,
-      final long rangeId) {
-    Objects.requireNonNull(naturalKey, "naturalKey must not be null");
-    Objects.requireNonNull(preloadedList, "preloadedList must not be null");
-
-    // If bStar is in a different range than the preloaded list, fall back to the standard path.
-    if (bStar / index.rangeSize != rangeId) {
-      return nodeAt(naturalKey, bStar);
-    }
-
-    // Fetch the entry at bStar.
-    final Optional<Bytes> entryOpt = store.get(naturalKey, bStar);
-    if (entryOpt.isEmpty()) {
-      LOG.warn(
-          "TrieNodeHistoryReader: index references block {} for key {} but store has no entry;"
-              + " index/store mismatch — returning empty",
-          bStar,
-          naturalKey);
-      return Optional.empty();
-    }
-    final Bytes bStarEntry = entryOpt.get();
-
-    // Decode and check for tombstone.
-    final TrieNodeDiffCodec.Decoded bStarDecoded = TrieNodeDiffCodec.decode(bStarEntry);
-    if (bStarDecoded.isDeletion()) {
-      return Optional.empty();
-    }
-
-    // If FULL, return the embedded node directly — no reconstruction needed.
-    if (bStarDecoded.isFull()) {
-      return Optional.of(bStarDecoded.fullNode());
-    }
-
-    // bStar is a DIFF — use the preloaded list to locate the nearest FULL checkpoint.
-    // Filter the preloaded list to offsets ≤ bStar's within-range offset to get change blocks up
-    // to bStar, then delegate to the same optimised checkpoint logic as nodeAt(naturalKey, bStar).
-    final int bStarWithinRange = (int) (bStar - rangeId * index.rangeSize);
-    final int listSize = preloadedList.size();
-    final int[] offsets = new int[listSize];
-    int count = 0;
-    for (int i = 0; i < listSize; i++) {
-      final int offset = preloadedList.get(i);
-      if (offset > bStarWithinRange) {
-        break; // sorted ascending
-      }
-      offsets[count++] = offset;
-    }
-
-    // Build the absolute block array (equivalent to getChangeBlocksUpTo output).
-    final long rangeBase = rangeId * index.rangeSize;
-    final long[] changeBlocks = new long[count];
-    for (int i = 0; i < count; i++) {
-      changeBlocks[i] = rangeBase + offsets[i];
-    }
-
-    if (changeBlocks.length == 0) {
-      // No changes ≤ bStar in this range (shouldn't happen if bStar came from the list).
-      // Fall back to the backward walk via standard nodeAt.
-      return nodeAt(naturalKey, bStar);
-    }
-
-    // Delegate to the shared reconstruction logic using the in-memory change block array.
-    return reconstructFromChangeBlocks(naturalKey, bStar, bStarEntry, changeBlocks);
+  /** Node bytes only — the proof read path doesn't need countSinceFull. */
+  public Optional<Bytes> nodeAt(final byte domain, final Bytes naturalKey, final long targetBlock) {
+    return nodeAtWithMeta(domain, naturalKey, targetBlock).map(Hit::nodeRlp);
   }
 
   /**
-   * Shared DIFF-reconstruction helper used by both {@link #nodeAt(Bytes, long)} and the preloaded
-   * overload. Given the sorted ascending {@code changeBlocks} array (all change blocks ≤ bStar in
-   * bStar's range), locates the nearest FULL checkpoint and applies intervening DIFFs.
-   *
-   * @param naturalKey the account or storage natural key
-   * @param bStar the latest change block ≤ targetBlock
-   * @param bStarEntry the already-decoded raw codec entry at bStar (known to be a DIFF)
-   * @param changeBlocks sorted ascending absolute block numbers ≤ bStar in bStar's range
-   * @return the reconstructed node RLP, or empty if reconstruction fails
+   * Node bytes plus the newest entry's countSinceFull — the migration node loader needs both so it
+   * can seed its own checkpoint decision without a second read.
    */
-  private Optional<Bytes> reconstructFromChangeBlocks(
-      final Bytes naturalKey, final long bStar, final Bytes bStarEntry, final long[] changeBlocks) {
-
-    final int inRangeCount = changeBlocks.length;
-
-    // Locate the nearest FULL checkpoint at or before bStar by scanning the change-block list
-    // backward over a bounded trailing window, read in a single batched multiGet.
-    //
-    // This deliberately does NOT compute the checkpoint position arithmetically: the
-    // write/migration
-    // path does not always place FULL entries at globally CHECKPOINT_INTERVAL-aligned positions, so
-    // a computed position is unreliable and previously landed on a DIFF, forcing a per-step
-    // sequential backward walk (one index + one store read per step) on essentially every deep-node
-    // reconstruction. Reading the window in one round-trip and scanning it is correct regardless of
-    // where the FULL was actually written, and replaces N blocking round-trips with one.
-    final int windowSize = Math.min(inRangeCount, RECONSTRUCT_WINDOW);
-    final long[] windowBlocks =
-        Arrays.copyOfRange(changeBlocks, inRangeCount - windowSize, inRangeCount);
-    final List<Optional<Bytes>> windowEntries = store.getAll(naturalKey, windowBlocks);
-
-    // Scan newest → oldest for the nearest FULL. A missing entry or a deletion tombstone reached
-    // before a FULL is handled exactly as before (index/store mismatch, or a deleted node → empty).
-    int fullPos = -1;
-    for (int i = windowSize - 1; i >= 0; i--) {
-      final Optional<Bytes> entryOpt = windowEntries.get(i);
-      if (entryOpt.isEmpty()) {
-        LOG.warn(
-            "TrieNodeHistoryReader: index references block {} for key {} but store has no entry;"
-                + " index/store mismatch — returning empty",
-            windowBlocks[i],
-            naturalKey);
-        return Optional.empty();
-      }
-      final TrieNodeDiffCodec.Decoded decoded = TrieNodeDiffCodec.decode(entryOpt.get());
-      if (decoded.isDeletion()) {
-        LOG.warn(
-            "TrieNodeHistoryReader: tombstone in diff chain for key {} at block {} — returning"
-                + " empty",
-            naturalKey,
-            windowBlocks[i]);
-        return Optional.empty();
-      }
-      if (decoded.isFull()) {
-        fullPos = i;
-        break;
-      }
+  public Optional<Hit> nodeAtWithMeta(
+      final byte domain, final Bytes naturalKey, final long targetBlock) {
+    final Optional<NearestKeyValue> newestOpt =
+        storage.getNearestBeforeMatchLength(
+            TRIE_NODE_HISTORY_ARCHIVE_V2, HistoryKey.encode(domain, naturalKey, targetBlock));
+    if (newestOpt.isEmpty() || !HistoryKey.matchesNode(newestOpt.get().key(), domain, naturalKey)) {
+      return Optional.empty();
     }
 
-    if (fullPos < 0) {
-      // No FULL within the window — the checkpoint lies further back (an earlier range, or an
-      // unusually long diff chain). Fall back to the bounded cross-range backward walk. Rare.
-      return backwardWalkFallback(naturalKey, bStar, bStarEntry);
-    }
+    final NearestKeyValue newest = newestOpt.get();
+    final HistoryEntryCodec.Decoded newestDecoded =
+        HistoryEntryCodec.decode(Bytes.wrap(newest.value().orElseThrow()));
+    final int newestCountSinceFull = newestDecoded.countSinceFull();
 
-    // Base is the FULL at fullPos; every entry above it up to bStar is a DIFF by construction (the
-    // backward scan stopped at the newest FULL), so apply them in ascending order.
-    final Bytes fullEntry = windowEntries.get(fullPos).get();
-    final int diffCount = windowSize - fullPos - 1;
-    if (diffCount == 0) {
-      return Optional.of(TrieNodeDiffCodec.decode(fullEntry).fullNode());
-    }
-    final List<Bytes> diffEntries = new ArrayList<>(diffCount);
-    for (int i = fullPos + 1; i < windowSize; i++) {
-      diffEntries.add(windowEntries.get(i).get());
-    }
-    return Optional.of(TrieNodeDiffCodec.reconstruct(fullEntry, diffEntries));
-  }
-
-  /**
-   * Backward-walk fallback used when the FULL checkpoint lies in an earlier range or when the
-   * checkpoint entry is unexpectedly not FULL. Identical in semantics to the original fallback in
-   * {@link #nodeAt(Bytes, long)}.
-   */
-  private Optional<Bytes> backwardWalkFallback(
-      final Bytes naturalKey, final long bStar, final Bytes bStarEntry) {
-    final List<Bytes> entriesDescending = new ArrayList<>();
-    entriesDescending.add(bStarEntry);
-
-    Bytes fullEntry = null;
-    long walkBlock = bStar;
+    final Deque<Bytes> diffPayloadsOldestFirst = new ArrayDeque<>();
+    HistoryEntryCodec.Decoded current = newestDecoded;
+    long walkBlock = HistoryKey.blockOf(newest.key());
     int steps = 0;
-
-    while (steps < MAX_BACKWARD_WALK_STEPS) {
-      steps++;
-      if (walkBlock == 0) {
-        break;
+    while (!current.isFull()) {
+      final Bytes diffPayload = current.diffCodecPayload();
+      if (TrieNodeDiffCodec.decode(diffPayload).isDeletion()) {
+        // The writer (ArchiveTrieBuilder) never emits DELETION-tagged entries -- deleted nodes
+        // are simply never referenced again, no tombstone needed. If one is ever encountered
+        // here it means corrupt/legacy data; fail closed with a clear error naming the node and
+        // block, rather than let an unrelated IllegalArgumentException surface out of
+        // TrieNodeDiffCodec#reconstruct three calls away.
+        throw new IllegalStateException(
+            "history entry for naturalKey="
+                + naturalKey
+                + " at block "
+                + walkBlock
+                + " is a DELETION tombstone; cannot reconstruct through a deletion -- corrupt"
+                + " history");
       }
-      final Optional<Long> prevOpt = index.latestChangeBlock(naturalKey, walkBlock - 1);
-      if (prevOpt.isEmpty()) {
-        break;
+      diffPayloadsOldestFirst.addFirst(diffPayload);
+      if (++steps > MAX_BACKWARD_WALK_STEPS) {
+        throw new IllegalStateException(
+            "history chain for naturalKey="
+                + naturalKey
+                + " exceeded "
+                + MAX_BACKWARD_WALK_STEPS
+                + " steps without a FULL entry -- corrupt history");
       }
-      final long prevBlock = prevOpt.get();
-      final Optional<Bytes> prevEntryOpt = store.get(naturalKey, prevBlock);
-      if (prevEntryOpt.isEmpty()) {
-        LOG.warn(
-            "TrieNodeHistoryReader: index references block {} for key {} but store has no entry;"
-                + " index/store mismatch — returning empty",
-            prevBlock,
-            naturalKey);
-        return Optional.empty();
+      walkBlock -= 1;
+      if (walkBlock < 0) {
+        throw new IllegalStateException(
+            "history chain for naturalKey="
+                + naturalKey
+                + " ran past block 0 without finding a FULL entry -- corrupt history (earliest"
+                + " entry mis-typed as DIFF instead of FULL/FULL_CREATION?)");
       }
-      final Bytes prevEntry = prevEntryOpt.get();
-      final TrieNodeDiffCodec.Decoded prevDecoded = TrieNodeDiffCodec.decode(prevEntry);
-
-      if (prevDecoded.isFull()) {
-        fullEntry = prevEntry;
-        break;
+      final Optional<NearestKeyValue> stepOpt =
+          storage.getNearestBeforeMatchLength(
+              TRIE_NODE_HISTORY_ARCHIVE_V2, HistoryKey.encode(domain, naturalKey, walkBlock));
+      if (stepOpt.isEmpty() || !HistoryKey.matchesNode(stepOpt.get().key(), domain, naturalKey)) {
+        throw new IllegalStateException(
+            "broken DIFF chain for naturalKey="
+                + naturalKey
+                + " walking back from block "
+                + walkBlock);
       }
-
-      if (prevDecoded.isDeletion()) {
-        LOG.warn(
-            "TrieNodeHistoryReader: tombstone in backward chain for key {} at block {}"
-                + " — returning empty",
-            naturalKey,
-            prevBlock);
-        return Optional.empty();
-      }
-
-      entriesDescending.add(prevEntry);
-      walkBlock = prevBlock;
+      current = HistoryEntryCodec.decode(Bytes.wrap(stepOpt.get().value().orElseThrow()));
+      walkBlock = HistoryKey.blockOf(stepOpt.get().key());
     }
 
-    if (fullEntry == null) {
-      LOG.warn(
-          "TrieNodeHistoryReader: could not find FULL checkpoint for key {} at or before block {}"
-              + " after {} backward steps — returning empty",
-          naturalKey,
-          bStar,
-          steps);
-      return Optional.empty();
-    }
-
-    final List<Bytes> diffEntries = new ArrayList<>(entriesDescending.size());
-    for (int i = entriesDescending.size() - 1; i >= 0; i--) {
-      diffEntries.add(entriesDescending.get(i));
-    }
-    return Optional.of(TrieNodeDiffCodec.reconstruct(fullEntry, diffEntries));
+    final Bytes reconstructed =
+        TrieNodeDiffCodec.reconstruct(
+            current.diffCodecPayload(), new ArrayList<>(diffPayloadsOldestFirst));
+    return Optional.of(new Hit(reconstructed, newestCountSinceFull));
   }
+
+  /** Reconstructed node RLP plus the newest entry's countSinceFull. */
+  public record Hit(Bytes nodeRlp, int countSinceFull) {}
 }

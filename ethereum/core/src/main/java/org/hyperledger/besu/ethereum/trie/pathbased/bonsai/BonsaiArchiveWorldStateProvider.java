@@ -24,7 +24,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMer
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveProofNodeLoader;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveReadFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
@@ -64,7 +64,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   private final boolean stateProofsEnabled;
   private volatile LongSupplier archiveMigrationProgressSupplier = () -> -1L;
 
-  private final TrieNodeHistoryReaderV2 trieNodeHistoryReader;
+  private final TrieNodeHistoryReader trieNodeHistoryReader;
 
   public BonsaiArchiveWorldStateProvider(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
@@ -109,7 +109,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
     final SegmentedKeyValueStorage archiveStorage =
         worldStateKeyValueStorage.getComposedWorldStateStorage();
-    this.trieNodeHistoryReader = new TrieNodeHistoryReaderV2(archiveStorage);
+    this.trieNodeHistoryReader = new TrieNodeHistoryReader(archiveStorage);
 
     // TRIE_NODE_HISTORY_ARCHIVE_V2 is written exclusively by ArchiveTrieBuilder (migrator-owned).
     // The live block-import path does not write to this CF, for the same reason the old index CFs

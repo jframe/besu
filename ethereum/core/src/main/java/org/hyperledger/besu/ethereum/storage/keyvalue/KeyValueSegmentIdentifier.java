@@ -53,7 +53,8 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       true,
       true),
-  // Design 5 — Trie-Node Differential Index column families
+  // Superseded 2026-07-15 by TRIE_NODE_HISTORY_ARCHIVE_V2 (append-only history redesign). No longer
+  // used but retained for DB backwards compatibility.
   TRIE_NODE_HISTORY_ARCHIVE(
       "TRIE_NODE_HISTORY_ARCHIVE".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
@@ -61,9 +62,8 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       true,
       true),
-  // Index and sub-block CFs are mutable (read-modify-write per block append): blob files cause
-  // massive write amplification from orphaned blob records. SST compaction handles dead versions
-  // correctly. containsStaticData=false disables blob storage for these two CFs.
+  // Superseded 2026-07-15 by TRIE_NODE_HISTORY_ARCHIVE_V2. No longer used but retained for DB
+  // backwards compatibility.
   TRIE_NODE_INDEX_ARCHIVE(
       "TRIE_NODE_INDEX_ARCHIVE".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
@@ -71,6 +71,8 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       false,
       true),
+  // Superseded 2026-07-15 by TRIE_NODE_HISTORY_ARCHIVE_V2. No longer used but retained for DB
+  // backwards compatibility.
   TRIE_NODE_SUBBLOCK_ARCHIVE(
       "TRIE_NODE_SUBBLOCK_ARCHIVE".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
@@ -78,8 +80,10 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       false,
       true),
-  // Persistent frontier trie CF for migration: holds one plain-key copy of the running trie
-  // during archive migration. Replaces the in-memory ConcurrentHashMap, bounding heap to O(1).
+  // Superseded 2026-07-15 by TRIE_NODE_HISTORY_ARCHIVE_V2 (migration writes go directly to the
+  // history CF; unchanged nodes are read live via HistoryNodeCache's TRIE_BRANCH_STORAGE
+  // fallthrough, so no frontier redirect CF is needed). No longer used but retained for DB
+  // backwards compatibility.
   TRIE_BRANCH_FRONTIER(
       "TRIE_BRANCH_FRONTIER".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),

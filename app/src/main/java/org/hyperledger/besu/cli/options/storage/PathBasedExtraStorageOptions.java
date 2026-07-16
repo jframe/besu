@@ -210,7 +210,6 @@ public class PathBasedExtraStorageOptions
       throw new CommandLine.ParameterException(
           commandLine, STATE_PROOFS_ENABLED + " requires --data-storage-format=X_BONSAI_ARCHIVE");
     }
-
   }
 
   /**

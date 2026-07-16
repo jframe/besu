@@ -17,7 +17,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
@@ -49,7 +49,7 @@ class ArchiveMigrationCrashResumeTest extends BonsaiFlatDbToArchiveMigratorTestB
     // The account trie root for the final block must be present in the shared history CF,
     // confirming that the second migrator correctly re-anchored from committed storage rather
     // than any discarded in-memory state.
-    final TrieNodeHistoryReaderV2 reader = new TrieNodeHistoryReaderV2(storage);
+    final TrieNodeHistoryReader reader = new TrieNodeHistoryReader(storage);
     assertThat(
             reader.nodeAt(
                 HistoryKey.DOMAIN_ACCOUNT,

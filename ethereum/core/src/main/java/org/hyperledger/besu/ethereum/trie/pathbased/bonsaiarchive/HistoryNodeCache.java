@@ -17,7 +17,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 
 import java.util.LinkedHashMap;
@@ -32,7 +32,7 @@ import org.apache.tuweni.bytes.Bytes;
  * Bounded state shared by every {@link HistoryNodeLoader} and by {@code ArchiveTrieBuilder}'s
  * capture step during one builder's lifetime (one batch, or the ongoing-migration catch-up loop).
  * Resolution order for a read: {@link #committedNodeValues} LRU (500K entries) -> {@link
- * TrieNodeHistoryReaderV2} first-touch read (seekForPrev + bounded backward walk) -> live {@code
+ * TrieNodeHistoryReader} first-touch read (seekForPrev + bounded backward walk) -> live {@code
  * TRIE_BRANCH_STORAGE} fallthrough (unchanged nodes are byte-identical at HEAD). The in-memory
  * decoded trie node objects themselves are NOT cached here -- that's the JVM object graph owned by
  * the {@code StoredMerklePatriciaTrie} instances in {@code ArchiveTrieBuilder}, dropped at batch
@@ -43,14 +43,14 @@ public final class HistoryNodeCache {
   static final int MAX_CACHE_ENTRIES = 500_000;
 
   private final SegmentedKeyValueStorage storage;
-  private final TrieNodeHistoryReaderV2 historyReader;
+  private final TrieNodeHistoryReader historyReader;
   private final long lastMigratedBlock;
   private final LinkedHashMap<Bytes, NodeState> committedNodeValues;
   private BloomFilter<byte[]> freshMigrationBloom;
 
   public HistoryNodeCache(final SegmentedKeyValueStorage storage, final long lastMigratedBlock) {
     this.storage = storage;
-    this.historyReader = new TrieNodeHistoryReaderV2(storage);
+    this.historyReader = new TrieNodeHistoryReader(storage);
     this.lastMigratedBlock = lastMigratedBlock;
     this.committedNodeValues =
         new LinkedHashMap<>(16, 0.75f, true) {
@@ -79,7 +79,7 @@ public final class HistoryNodeCache {
         && !freshMigrationBloom.mightContain(cacheKey.toArrayUnsafe())) {
       return fallThroughToLive(naturalKey, cacheKey);
     }
-    final Optional<TrieNodeHistoryReaderV2.Hit> hit =
+    final Optional<TrieNodeHistoryReader.Hit> hit =
         historyReader.nodeAtWithMeta(domain, naturalKey, lastMigratedBlock);
     if (hit.isEmpty()) {
       return fallThroughToLive(naturalKey, cacheKey);

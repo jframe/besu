@@ -22,10 +22,7 @@ import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
@@ -224,32 +221,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         new NoOpMetricsSystem(),
         new BonsaiArchiveFlatDbStrategy(new NoOpMetricsSystem(), new CodeHashCodeStorageStrategy()),
         trieNodeHistoryEnabled);
-  }
-
-  /**
-   * Index components replaced by {@link ArchiveTrieBuilder} in Task 11; use the constructor with
-   * {@code trieNodeHistoryEnabled=true} instead. The {@code historyStore}, {@code changeIndex}, and
-   * {@code progress} arguments are accepted but ignored. Kept for backward compile compatibility
-   * only; callers should migrate to the 7-arg constructor.
-   */
-  public BonsaiFlatDbToArchiveMigrator(
-      final BonsaiWorldStateKeyValueStorage worldStateStorage,
-      final TrieLogManager trieLogManager,
-      final Blockchain blockchain,
-      final ScheduledExecutorService executorService,
-      final MetricsSystem metricsSystem,
-      final BonsaiArchiveFlatDbStrategy archiveStrategy,
-      final TrieNodeHistoryStore historyStore,
-      final TrieNodeChangeIndex changeIndex,
-      final TrieNodeIndexProgress progress) {
-    // index machinery replaced by ArchiveTrieBuilder; historyStore/changeIndex/progress ignored
-    this(
-        worldStateStorage,
-        trieLogManager,
-        blockchain,
-        executorService,
-        metricsSystem,
-        archiveStrategy);
   }
 
   @VisibleForTesting
@@ -783,8 +754,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     if (block < 0) {
       return Hash.EMPTY_TRIE_HASH;
     }
-    final var reader =
-        new TrieNodeHistoryReaderV2(worldStateStorage.getComposedWorldStateStorage());
+    final var reader = new TrieNodeHistoryReader(worldStateStorage.getComposedWorldStateStorage());
     return reader
         .nodeAt(HistoryKey.DOMAIN_ACCOUNT, Bytes.EMPTY, block)
         .map(Hash::hash)

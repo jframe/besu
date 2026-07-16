@@ -45,8 +45,8 @@ import org.apache.tuweni.bytes.Bytes32;
  *       historical node at {@code targetBlock} — return it directly (1 read total). This is the
  *       common case for nodes that haven't changed since T.
  *   <li><strong>History path</strong> — hash mismatch or absent. Delegate to {@link
- *       TrieNodeHistoryReaderV2#nodeAt} which performs a single nearest-before lookup and, if
- *       needed, a bounded backward walk to reconstruct the node from DIFF entries.
+ *       TrieNodeHistoryReader#nodeAt} which performs a single nearest-before lookup and, if needed,
+ *       a bounded backward walk to reconstruct the node from DIFF entries.
  *   <li><strong>Hash verification</strong> — after history reconstruction, compute {@code
  *       keccak256(node)} and compare to {@code expectedHash}. A mismatch throws {@link
  *       IllegalStateException} (fail-closed — never serve silently incorrect proof data).
@@ -62,13 +62,13 @@ import org.apache.tuweni.bytes.Bytes32;
 public final class ArchiveProofNodeLoader {
 
   private final SegmentedKeyValueStorage liveStorage;
-  private final TrieNodeHistoryReaderV2 historyReader;
+  private final TrieNodeHistoryReader historyReader;
   private final long targetBlock;
   private final byte domain;
 
   private ArchiveProofNodeLoader(
       final SegmentedKeyValueStorage liveStorage,
-      final TrieNodeHistoryReaderV2 historyReader,
+      final TrieNodeHistoryReader historyReader,
       final long targetBlock,
       final byte domain) {
     this.liveStorage = liveStorage;
@@ -95,7 +95,7 @@ public final class ArchiveProofNodeLoader {
    */
   public static NodeLoader accountNodeLoader(
       final SegmentedKeyValueStorage liveStorage,
-      final TrieNodeHistoryReaderV2 historyReader,
+      final TrieNodeHistoryReader historyReader,
       final long targetBlock) {
     final ArchiveProofNodeLoader delegate =
         new ArchiveProofNodeLoader(
@@ -119,7 +119,7 @@ public final class ArchiveProofNodeLoader {
    */
   public static NodeLoader storageNodeLoader(
       final SegmentedKeyValueStorage liveStorage,
-      final TrieNodeHistoryReaderV2 historyReader,
+      final TrieNodeHistoryReader historyReader,
       final long targetBlock,
       final Bytes32 accountHash) {
     final ArchiveProofNodeLoader delegate =
@@ -141,8 +141,8 @@ public final class ArchiveProofNodeLoader {
    * <ol>
    *   <li><strong>Hash-first fast path</strong> — read {@code TRIE_BRANCH_STORAGE[naturalKey]}. If
    *       keccak256(live) equals {@code expectedHash}, the live version IS the T-version.
-   *   <li><strong>History path</strong> — call {@link TrieNodeHistoryReaderV2#nodeAt} which
-   *       performs a nearest-before lookup and, if needed, a bounded backward DIFF-chain walk.
+   *   <li><strong>History path</strong> — call {@link TrieNodeHistoryReader#nodeAt} which performs
+   *       a nearest-before lookup and, if needed, a bounded backward DIFF-chain walk.
    *   <li><strong>Hash verification</strong> — verify reconstructed node; throw on mismatch.
    * </ol>
    *

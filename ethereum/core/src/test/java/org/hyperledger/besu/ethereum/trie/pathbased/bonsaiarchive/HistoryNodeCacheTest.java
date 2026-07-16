@@ -49,7 +49,7 @@ class HistoryNodeCacheTest {
    * Builds a minimal valid 2-item short (leaf) node RLP so real {@link TrieNodeDiffCodec} arity
    * checks (which require an actual 2-item or 17-item RLP list, not arbitrary bytes) succeed. Only
    * the value byte varies between fixtures so distinct "versions" of the same node are
-   * distinguishable. Mirrors the fixture helper in {@code TrieNodeHistoryReaderV2Test}.
+   * distinguishable. Mirrors the fixture helper in {@code TrieNodeHistoryReaderTest}.
    */
   private static Bytes leafNode(final int valueByte) {
     final Bytes value = Bytes.of((byte) valueByte);

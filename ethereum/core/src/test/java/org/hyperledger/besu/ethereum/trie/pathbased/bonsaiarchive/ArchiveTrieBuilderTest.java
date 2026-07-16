@@ -26,7 +26,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -160,7 +160,7 @@ class ArchiveTrieBuilderTest {
   void writesReconstructableEntriesForRepeatedMutationsOfASingleAccount() {
     // A single account mutated CHECKPOINT_INTERVAL+2 times: entries are written for every block
     // and the root node (at trie location Bytes.EMPTY) must be reconstructable at each block
-    // via TrieNodeHistoryReaderV2.
+    // via TrieNodeHistoryReader.
     final Address address = Address.fromHexString("0x6666666666666666666666666666666666666666");
     Hash root = Hash.EMPTY_TRIE_HASH;
     for (long block = 1; block <= CHECKPOINT_INTERVAL + 2; block++) {
@@ -180,7 +180,7 @@ class ArchiveTrieBuilderTest {
       tx.commit();
     }
 
-    final var reader = new TrieNodeHistoryReaderV2(storage);
+    final var reader = new TrieNodeHistoryReader(storage);
     for (long block = 1; block <= CHECKPOINT_INTERVAL + 2; block++) {
       // The account trie has a single leaf at the root (location = Bytes.EMPTY); the reader must
       // reconstruct it successfully at every block in the sequence.
@@ -262,7 +262,7 @@ class ArchiveTrieBuilderTest {
     // directly.
     final var reader =
         new org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
-            .TrieNodeHistoryReaderV2(storage);
+            .TrieNodeHistoryReader(storage);
     assertThat(
             reader.nodeAt(
                 HistoryKey.DOMAIN_STORAGE,

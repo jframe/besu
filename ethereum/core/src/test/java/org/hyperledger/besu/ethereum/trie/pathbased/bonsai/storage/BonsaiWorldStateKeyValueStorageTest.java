@@ -42,14 +42,7 @@ import org.hyperledger.besu.ethereum.trie.StorageEntriesCollector;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiAccount;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFullFlatDbStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.StorageSubscriber;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
@@ -1057,95 +1050,6 @@ public class BonsaiWorldStateKeyValueStorageTest {
     storage.upgradeToArchiveFlatDbMode();
 
     assertThat(storage.getFlatDbStrategy()).isExactlyInstanceOf(BonsaiFullFlatDbStrategy.class);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Updater.commitComposedOnly() wires advanceIndexProgress for BonsaiArchiveTrieNodeStrategy
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Verifies that {@link BonsaiWorldStateKeyValueStorage.Updater#commitComposedOnly()} calls {@link
-   * BonsaiArchiveTrieNodeStrategy#advanceIndexProgress(
-   * org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction,
-   * SegmentedKeyValueStorage)} so that {@link TrieNodeIndexProgress#lastIndexedBlock()} advances
-   * after each block is persisted.
-   *
-   * <p>This is the core wiring test for the Design-5 progress advancement. Without it, a full sync
-   * with {@code --Xbonsai-archive-trie-node-index-enabled=true} captures diffs but {@code
-   * TrieNodeIndexProgress.lastIndexedBlock()} never advances and proofs fall back to the legacy
-   * path.
-   */
-  @Test
-  void updaterCommitComposedOnly_advancesProgress() {
-    // -- Storage setup --------------------------------------------------------
-    final ImmutableDataStorageConfiguration archiveConfig =
-        ImmutableDataStorageConfiguration.builder()
-            .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
-            .pathBasedExtraStorageConfiguration(
-                ImmutablePathBasedExtraStorageConfiguration.builder()
-                    .maxLayersToLoad(3L)
-                    .unstable(
-                        ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
-                            .stateProofsEnabled(true)
-                            .build())
-                    .build())
-            .build();
-
-    final InMemoryKeyValueStorageProvider provider = new InMemoryKeyValueStorageProvider();
-    final BonsaiWorldStateKeyValueStorage baseStorage =
-        (BonsaiWorldStateKeyValueStorage) provider.createWorldStateStorage(archiveConfig);
-    baseStorage.upgradeToArchiveFlatDbMode();
-    final SegmentedKeyValueStorage composedStorage = baseStorage.getComposedWorldStateStorage();
-
-    // -- Index components -----------------------------------------------------
-    final TrieNodeChangeIndex changeIndex =
-        new TrieNodeChangeIndex(composedStorage, ArchiveNodeKey.RANGE_SIZE);
-    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composedStorage);
-    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
-
-    final BonsaiArchiveTrieNodeStrategy archiveStrategy =
-        new BonsaiArchiveTrieNodeStrategy(
-            null,
-            new BonsaiTrieNodeStrategy(),
-            /* trieNodeIndexEnabled= */ true,
-            historyStore,
-            changeIndex,
-            progress);
-
-    final BonsaiFlatDbStrategyProvider flatDbProvider =
-        new BonsaiFlatDbStrategyProvider(new NoOpMetricsSystem(), archiveConfig);
-    flatDbProvider.loadFlatDbStrategy(composedStorage);
-
-    final BonsaiWorldStateKeyValueStorage indexStorage =
-        new BonsaiWorldStateKeyValueStorage(
-            flatDbProvider,
-            composedStorage,
-            baseStorage.getTrieLogStorage(),
-            baseStorage.getCacheManager(),
-            baseStorage.getCurrentVersion(),
-            archiveStrategy);
-
-    // -- Seed WORLD_BLOCK_NUMBER_KEY = 5 (so getCurrentBlockNumber returns 6) -
-    final long previousBlock = 5L;
-    updateStorageArchiveBlock(composedStorage, previousBlock);
-
-    // -- Write a trie node (causes changeIndex.append on commit) --------------
-    final Bytes location = Bytes.fromHexString("0x0102030405060708090a");
-    final Bytes32 nodeHash =
-        Bytes32.fromHexString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    final Bytes nodeRlp = Bytes.fromHexString("0xc28080"); // minimal branch-node RLP
-
-    final BonsaiWorldStateKeyValueStorage.Updater updater = indexStorage.updater();
-    updater.putAccountStateTrieNode(location, nodeHash, nodeRlp);
-
-    // Progress has not advanced yet.
-    assertThat(progress.lastIndexedBlock()).isEqualTo(TrieNodeIndexProgress.UNSET_LAST_INDEXED);
-
-    // commitComposedOnly() must advance progress atomically.
-    updater.commitComposedOnly();
-
-    // getCurrentBlockNumber reads WORLD_BLOCK_NUMBER_KEY (=5) + 1 = 6.
-    assertThat(progress.lastIndexedBlock()).isEqualTo(previousBlock + 1);
   }
 
   private static void updateStorageArchiveBlock(

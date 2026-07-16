@@ -66,14 +66,14 @@ class ArchiveProofNodeLoaderTest {
   private static final Bytes STORAGE_LOCATION = Bytes.fromHexString("0xcafebabe");
 
   private SegmentedInMemoryKeyValueStorage kv;
-  private TrieNodeHistoryReaderV2 historyReader;
+  private TrieNodeHistoryReader historyReader;
 
   @BeforeEach
   void setUp() {
     kv =
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_NODE_HISTORY_ARCHIVE_V2, KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE));
-    historyReader = new TrieNodeHistoryReaderV2(kv);
+    historyReader = new TrieNodeHistoryReader(kv);
   }
 
   // ---------------------------------------------------------------------------
