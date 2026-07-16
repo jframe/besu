@@ -73,7 +73,22 @@ public final class TrieNodeHistoryReaderV2 {
     long walkBlock = HistoryKey.blockOf(newest.key());
     int steps = 0;
     while (!current.isFull()) {
-      diffPayloadsOldestFirst.addFirst(current.diffCodecPayload());
+      final Bytes diffPayload = current.diffCodecPayload();
+      if (TrieNodeDiffCodec.decode(diffPayload).isDeletion()) {
+        // The writer (ArchiveTrieBuilder) never emits DELETION-tagged entries -- deleted nodes
+        // are simply never referenced again, no tombstone needed. If one is ever encountered
+        // here it means corrupt/legacy data; fail closed with a clear error naming the node and
+        // block, rather than let an unrelated IllegalArgumentException surface out of
+        // TrieNodeDiffCodec#reconstruct three calls away.
+        throw new IllegalStateException(
+            "history entry for naturalKey="
+                + naturalKey
+                + " at block "
+                + walkBlock
+                + " is a DELETION tombstone; cannot reconstruct through a deletion -- corrupt"
+                + " history");
+      }
+      diffPayloadsOldestFirst.addFirst(diffPayload);
       if (++steps > MAX_BACKWARD_WALK_STEPS) {
         throw new IllegalStateException(
             "history chain for naturalKey="
@@ -83,6 +98,13 @@ public final class TrieNodeHistoryReaderV2 {
                 + " steps without a FULL entry -- corrupt history");
       }
       walkBlock -= 1;
+      if (walkBlock < 0) {
+        throw new IllegalStateException(
+            "history chain for naturalKey="
+                + naturalKey
+                + " ran past block 0 without finding a FULL entry -- corrupt history (earliest"
+                + " entry mis-typed as DIFF instead of FULL/FULL_CREATION?)");
+      }
       final Optional<NearestKeyValue> stepOpt =
           storage.getNearestBeforeMatchLength(
               TRIE_NODE_HISTORY_ARCHIVE_V2, HistoryKey.encode(domain, naturalKey, walkBlock));

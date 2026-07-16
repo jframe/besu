@@ -77,6 +77,21 @@ class TrieNodeHistoryReaderV2Test {
     put(block, entry);
   }
 
+  /**
+   * Writes a DELETION tombstone entry directly (bypassing the normal writer, since no writer exists
+   * yet — per the design, ArchiveTrieBuilder never emits these; this simulates corrupt/legacy data
+   * for the defensive-guard test).
+   */
+  private void writeDeletionTombstone(
+      final long block, final int countSinceFull, final Bytes oldRlp) {
+    final Bytes entry =
+        HistoryEntryCodec.encode(
+            HistoryEntryCodec.EntryType.DIFF,
+            countSinceFull,
+            TrieNodeDiffCodec.encodeDiff(oldRlp, null));
+    put(block, entry);
+  }
+
   private void put(final long block, final Bytes entry) {
     final var tx = storage.startTransaction();
     tx.put(
@@ -139,6 +154,45 @@ class TrieNodeHistoryReaderV2Test {
     org.assertj.core.api.Assertions.assertThatThrownBy(
             () -> reader.nodeAt(HistoryKey.DOMAIN_ACCOUNT, naturalKey, 70L))
         .isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void throwsIllegalStateNotIllegalArgumentWhenChainRunsPastBlockZeroWithoutAFull() {
+    // Corrupt/missing history: the earliest entry (block 0) was mis-typed as DIFF instead of
+    // FULL/FULL_CREATION. Chain depth here (6 entries) is well within MAX_BACKWARD_WALK_STEPS
+    // (64), so this must NOT be caught by the step-count guard -- it exercises the separate
+    // block-underflow guard when the walk steps past block 0 with no FULL ever found. Before the
+    // fix, walkBlock would go negative and HistoryKey.encode's "block must be >= 0" check would
+    // throw IllegalArgumentException instead of the IllegalStateException the corruption-guard
+    // contract requires.
+    Bytes prior = leafNode(0x80);
+    writeDiff(0L, 1, prior, prior); // block 0 deliberately mis-typed as DIFF, not FULL
+    for (int i = 1; i <= 5; i++) {
+      final Bytes next = leafNode(i);
+      writeDiff(i, i + 1, prior, next);
+      prior = next;
+    }
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> reader.nodeAt(HistoryKey.DOMAIN_ACCOUNT, naturalKey, 5L))
+        .isInstanceOf(IllegalStateException.class)
+        .isNotInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void throwsIllegalStateWhenChainContainsADeletionTombstone() {
+    // No writer exists yet (ArchiveTrieBuilder is a later task) and the design says the writer
+    // never emits DELETION-tagged entries, but TrieNodeDiffCodec#decode can still produce a
+    // DELETION-shaped Decoded if ever handed corrupt/legacy data. The reader must fail closed with
+    // a clear, specific error rather than let reconstruct() throw an unrelated
+    // IllegalArgumentException three calls away.
+    final Bytes v0 = leafNode(0xaa);
+    writeFull(0L, v0);
+    writeDeletionTombstone(1L, 1, v0);
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> reader.nodeAt(HistoryKey.DOMAIN_ACCOUNT, naturalKey, 5L))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("DELETION");
   }
 
   @Test
