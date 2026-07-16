@@ -157,7 +157,7 @@ class ArchiveTrieBuilderTest {
   }
 
   @Test
-  void writesACheckpointFullEntryEveryCheckpointIntervalMutationsOfADeepNode() {
+  void writesReconstructableEntriesForRepeatedMutationsOfASingleAccount() {
     // A single account mutated CHECKPOINT_INTERVAL+2 times: entries are written for every block
     // and the root node (at trie location Bytes.EMPTY) must be reconstructable at each block
     // via TrieNodeHistoryReaderV2.
