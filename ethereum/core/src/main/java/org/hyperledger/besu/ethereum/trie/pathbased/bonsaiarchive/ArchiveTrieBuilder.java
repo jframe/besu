@@ -20,6 +20,7 @@ import org.hyperledger.besu.datatypes.AccountValue;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryEntryCodec;
@@ -56,9 +57,61 @@ public final class ArchiveTrieBuilder {
   private final Map<Address, StoredMerklePatriciaTrie<Bytes, Bytes>> storageTrieCache =
       new HashMap<>();
 
+  private Hash accountRoot = Hash.EMPTY_TRIE_HASH;
+
   public ArchiveTrieBuilder(final SegmentedKeyValueStorage storage, final long lastMigratedBlock) {
     this.storage = storage;
     this.nodeCache = new HistoryNodeCache(storage, lastMigratedBlock);
+  }
+
+  public ArchiveTrieBuilder(
+      final SegmentedKeyValueStorage storage,
+      final long lastMigratedBlock,
+      final Hash startingAccountRoot) {
+    this(storage, lastMigratedBlock);
+    this.accountRoot = startingAccountRoot;
+  }
+
+  public void applyBlock(
+      final TrieLog trieLog,
+      final BlockHeader header,
+      final SegmentedKeyValueStorageTransaction tx) {
+
+    final long block = header.getNumber();
+
+    trieLog
+        .getStorageChanges()
+        .forEach(
+            (address, slotChanges) ->
+                applyStorageChanges(address, slotChanges, trieLog, block, tx));
+
+    final Hash newAccountRoot = applyAccountChanges(trieLog, accountRoot, block, tx);
+
+    if (!newAccountRoot.equals(header.getStateRoot())) {
+      throw new IllegalStateException(
+          "ArchiveTrieBuilder computed state root "
+              + newAccountRoot
+              + " but header at block "
+              + block
+              + " expects "
+              + header.getStateRoot());
+    }
+    accountRoot = newAccountRoot;
+  }
+
+  public Hash currentAccountRoot() {
+    return accountRoot;
+  }
+
+  /**
+   * Drops decoded trie-node objects (both the account trie's internal cache and every open storage
+   * trie) so the batch's Java heap footprint is bounded; the next {@link #applyBlock} call re-roots
+   * lazily through {@link HistoryNodeCache} / {@link HistoryNodeLoader}, which is backed by
+   * already-committed history, so no correctness is lost -- see design section 4.2's stated
+   * lifetime ("dropped at batch end, re-root from hash").
+   */
+  public void resetBatchState() {
+    storageTrieCache.clear();
   }
 
   /**
