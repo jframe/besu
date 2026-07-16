@@ -97,12 +97,15 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   // TRIE_NODE_INDEX_ARCHIVE, TRIE_NODE_SUBBLOCK_ARCHIVE, and TRIE_BRANCH_FRONTIER (see Part 5 for
   // their
   // retire-in-place handling). Blob storage is safe here because keys are never overwritten.
+  // Blob GC is deliberately disabled: entries are never overwritten or deleted, so there is no
+  // garbage to collect and GC would only rewrite live blob values during compaction (pure write
+  // amplification -- measured as part of a 4.7x compaction write-amp on this CF, 2026-07-16).
   TRIE_NODE_HISTORY_ARCHIVE_V2(
       "TRIE_NODE_HISTORY_ARCHIVE_V2".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
       true,
       false,
-      true,
+      false,
       true),
 
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE
