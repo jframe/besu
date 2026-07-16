@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE_V2;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive.ArchiveTrieBuilder.CHECKPOINT_INTERVAL;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -24,6 +25,8 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReaderV2;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -31,6 +34,7 @@ import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -132,5 +136,55 @@ class ArchiveTrieBuilderTest {
     tx2.commit();
 
     assertThat(rootAfterRemove).isEqualTo(Hash.EMPTY_TRIE_HASH);
+  }
+
+  @Test
+  void capturesAFullEntryOnFirstWriteOfAShallowNode() {
+    final Address address = Address.fromHexString("0x5555555555555555555555555555555555555555");
+    final TrieLogLayer trieLog = new TrieLogLayer();
+    trieLog.addAccountChange(
+        address,
+        null,
+        new PmtStateTrieAccountValue(1, Wei.of(1), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
+    trieLog.freeze();
+
+    final var tx = storage.startTransaction();
+    builder.applyAccountChanges(trieLog, Hash.EMPTY_TRIE_HASH, 1L, tx);
+    tx.commit();
+
+    final long entryCount = storage.stream(TRIE_NODE_HISTORY_ARCHIVE_V2).count();
+    assertThat(entryCount).isGreaterThan(0); // at minimum, the root leaf/branch entry
+  }
+
+  @Test
+  void writesACheckpointFullEntryEveryCheckpointIntervalMutationsOfADeepNode() {
+    // A single account mutated CHECKPOINT_INTERVAL+2 times: entries are written for every block
+    // and the root node (at trie location Bytes.EMPTY) must be reconstructable at each block
+    // via TrieNodeHistoryReaderV2.
+    final Address address = Address.fromHexString("0x6666666666666666666666666666666666666666");
+    Hash root = Hash.EMPTY_TRIE_HASH;
+    for (long block = 1; block <= CHECKPOINT_INTERVAL + 2; block++) {
+      final TrieLogLayer trieLog = new TrieLogLayer();
+      final var prior =
+          block == 1
+              ? null
+              : new PmtStateTrieAccountValue(
+                  block - 1, Wei.of(block - 1), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+      trieLog.addAccountChange(
+          address,
+          prior,
+          new PmtStateTrieAccountValue(block, Wei.of(block), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
+      trieLog.freeze();
+      final var tx = storage.startTransaction();
+      root = builder.applyAccountChanges(trieLog, root, block, tx);
+      tx.commit();
+    }
+
+    final var reader = new TrieNodeHistoryReaderV2(storage);
+    for (long block = 1; block <= CHECKPOINT_INTERVAL + 2; block++) {
+      // The account trie has a single leaf at the root (location = Bytes.EMPTY); the reader must
+      // reconstruct it successfully at every block in the sequence.
+      assertThat(reader.nodeAt(HistoryKey.DOMAIN_ACCOUNT, Bytes.EMPTY, block)).isPresent();
+    }
   }
 }

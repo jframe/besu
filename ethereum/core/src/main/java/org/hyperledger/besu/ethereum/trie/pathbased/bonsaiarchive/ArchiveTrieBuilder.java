@@ -14,12 +14,17 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE_V2;
+
 import org.hyperledger.besu.datatypes.AccountValue;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.trie.MerkleTrie;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryEntryCodec;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.HistoryKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeDiffCodec;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -44,7 +49,7 @@ public final class ArchiveTrieBuilder {
   static final int FULL_ABOVE_DEPTH = 2;
   static final int CHECKPOINT_INTERVAL = 16;
 
-  @SuppressWarnings("UnusedVariable") // wired up for capture writes in Task 8
+  @SuppressWarnings("UnusedVariable") // retained for future use; wired through nodeCache
   private final SegmentedKeyValueStorage storage;
 
   private final HistoryNodeCache nodeCache;
@@ -168,7 +173,6 @@ public final class ArchiveTrieBuilder {
     return Hash.wrap(accountTrie.getRootHash());
   }
 
-  @SuppressWarnings("UnusedVariable") // stub -- parameters wired up in Task 8
   private void captureNode(
       final byte domain,
       final Bytes naturalKey,
@@ -177,7 +181,37 @@ public final class ArchiveTrieBuilder {
       final Bytes value,
       final long block,
       final SegmentedKeyValueStorageTransaction tx) {
-    // Implemented in Task 8.
-    throw new UnsupportedOperationException("captureNode implemented in Task 8");
+
+    if (hash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
+      return; // mirrors BonsaiWorldStateKeyValueStorage.Updater's existing empty-node skip
+    }
+
+    final var priorState = nodeCache.priorState(domain, naturalKey);
+
+    final HistoryEntryCodec.EntryType type;
+    final Bytes diffCodecPayload;
+    final int countSinceFull;
+
+    if (priorState.isEmpty()) {
+      type = HistoryEntryCodec.EntryType.FULL_CREATION;
+      diffCodecPayload = TrieNodeDiffCodec.encodeDiff(null, value);
+      countSinceFull = 0;
+    } else if (location.size() <= FULL_ABOVE_DEPTH
+        || priorState.get().countSinceFull() + 1 >= CHECKPOINT_INTERVAL) {
+      type = HistoryEntryCodec.EntryType.FULL;
+      diffCodecPayload = TrieNodeDiffCodec.encodeFull(value);
+      countSinceFull = 0;
+    } else {
+      type = HistoryEntryCodec.EntryType.DIFF;
+      diffCodecPayload = TrieNodeDiffCodec.encodeDiff(priorState.get().value(), value);
+      countSinceFull = priorState.get().countSinceFull() + 1;
+    }
+
+    final Bytes entry = HistoryEntryCodec.encode(type, countSinceFull, diffCodecPayload);
+    tx.put(
+        TRIE_NODE_HISTORY_ARCHIVE_V2,
+        HistoryKey.encode(domain, naturalKey, block).toArrayUnsafe(),
+        entry.toArrayUnsafe());
+    nodeCache.recordWrite(domain, naturalKey, value, countSinceFull);
   }
 }
