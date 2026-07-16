@@ -101,6 +101,13 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   private final WriteOptions tryDeleteOptions =
       new WriteOptions().setNoSlowdown(true).setIgnoreMissingColumnFamilies(true);
   private final ReadOptions readOptions = new ReadOptions().setVerifyChecksums(false);
+
+  // Separate ReadOptions for multiGet: async_io lets RocksDB submit all block reads to io_uring
+  // in a single batch rather than issuing sequential pread64 calls per key.
+  @SuppressWarnings("checkstyle:IllegalInstantiation")
+  private final ReadOptions multiGetReadOptions =
+      new ReadOptions().setVerifyChecksums(false).setAsyncIo(true);
+
   private final MetricsSystem metricsSystem;
   private final RocksDBMetricsFactory rocksDBMetricsFactory;
 
@@ -488,6 +495,30 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
 
     try (final OperationTimer.TimingContext ignored = metrics.getReadLatency().startTimer()) {
       return Optional.ofNullable(getDB().get(safeColumnHandle(segment), readOptions, key));
+    } catch (final RocksDBException e) {
+      throw new StorageException(e);
+    }
+  }
+
+  @Override
+  public List<Optional<byte[]>> multiGet(final SegmentIdentifier segment, final List<byte[]> keys)
+      throws StorageException {
+    throwIfClosed();
+    if (keys.isEmpty()) {
+      return List.of();
+    }
+    try {
+      final ColumnFamilyHandle cf = safeColumnHandle(segment);
+      final List<ColumnFamilyHandle> cfList = new ArrayList<>(keys.size());
+      for (int i = 0; i < keys.size(); i++) {
+        cfList.add(cf);
+      }
+      final List<byte[]> raw = getDB().multiGetAsList(multiGetReadOptions, cfList, keys);
+      final List<Optional<byte[]>> result = new ArrayList<>(raw.size());
+      for (final byte[] val : raw) {
+        result.add(Optional.ofNullable(val));
+      }
+      return result;
     } catch (final RocksDBException e) {
       throw new StorageException(e);
     }

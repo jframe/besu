@@ -20,6 +20,7 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.chain.GenesisState;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
@@ -39,9 +40,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -293,20 +297,23 @@ public class BonsaiTrieLogToForestConverter {
       }
     }
 
-    final List<Callable<Void>> tasks = new ArrayList<>(slotHashesByAccount.size());
-    for (final var entry : slotHashesByAccount.entrySet()) {
-      final Address address = entry.getKey();
-      final Set<Bytes32> slotHashes = entry.getValue();
-      tasks.add(
-          () -> {
-            warmAccount(baseRoot, address, slotHashes);
-            return null;
-          });
-    }
-    try {
-      prefetchExecutor.invokeAll(tasks);
-    } catch (final InterruptedException e) {
-      Thread.currentThread().interrupt();
+    try (final CoalescingNodeLoader coalescing =
+        new CoalescingNodeLoader(forestStorage, nodeCache)) {
+      final List<Callable<Void>> tasks = new ArrayList<>(slotHashesByAccount.size());
+      for (final var entry : slotHashesByAccount.entrySet()) {
+        final Address address = entry.getKey();
+        final Set<Bytes32> slotHashes = entry.getValue();
+        tasks.add(
+            () -> {
+              warmAccount(baseRoot, address, slotHashes, coalescing);
+              return null;
+            });
+      }
+      try {
+        prefetchExecutor.invokeAll(tasks);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
     }
   }
 
@@ -316,10 +323,13 @@ public class BonsaiTrieLogToForestConverter {
    * failure is swallowed so prefetch never aborts the conversion.
    */
   private void warmAccount(
-      final Bytes32 baseRoot, final Address address, final Set<Bytes32> slotHashes) {
+      final Bytes32 baseRoot,
+      final Address address,
+      final Set<Bytes32> slotHashes,
+      final NodeLoader nodeLoader) {
     try {
       final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
-          new StoredMerklePatriciaTrie<>(accountNodeLoader(), baseRoot, b -> b, b -> b);
+          new StoredMerklePatriciaTrie<>(nodeLoader, baseRoot, b -> b, b -> b);
       final Bytes32 addressHash = Bytes32.wrap(address.addressHash().getBytes());
       final Optional<Bytes> accountRlp = accountTrie.get(addressHash);
       if (slotHashes.isEmpty() || accountRlp.isEmpty()) {
@@ -332,7 +342,7 @@ public class BonsaiTrieLogToForestConverter {
         return;
       }
       final StoredMerklePatriciaTrie<Bytes32, Bytes> storageTrie =
-          new StoredMerklePatriciaTrie<>(storageNodeLoader(), storageRoot, b -> b, b -> b);
+          new StoredMerklePatriciaTrie<>(nodeLoader, storageRoot, b -> b, b -> b);
       for (final Bytes32 slotHash : slotHashes) {
         storageTrie.get(slotHash);
       }
@@ -483,5 +493,101 @@ public class BonsaiTrieLogToForestConverter {
           }
         });
     return storageTrie.getRootHash();
+  }
+
+  /**
+   * Aggregates concurrent per-node read requests from all prefetch threads into batched {@link
+   * ForestWorldStateKeyValueStorage#getTrieNodes} calls, reducing JNI overhead and enabling
+   * io_uring parallel block reads. A single dispatcher thread fires a batch every {@code
+   * BATCH_TIMEOUT_NS} nanoseconds, or immediately when {@code BATCH_SIZE} requests are pending.
+   * Prefetch threads block on a {@link CompletableFuture} until their request is served.
+   */
+  private static final class CoalescingNodeLoader implements NodeLoader, AutoCloseable {
+
+    private static final int BATCH_SIZE = 16;
+    private static final long BATCH_TIMEOUT_NS = 500_000L;
+
+    private record Request(Bytes32 hash, CompletableFuture<Optional<Bytes>> future) {}
+
+    private final ForestWorldStateKeyValueStorage storage;
+    private final MemoryBoundCache<Bytes32, Bytes> nodeCache;
+    private final ConcurrentLinkedQueue<Request> queue = new ConcurrentLinkedQueue<>();
+    private final AtomicInteger pending = new AtomicInteger(0);
+    private final Thread dispatchThread;
+    private volatile boolean closed = false;
+
+    CoalescingNodeLoader(
+        final ForestWorldStateKeyValueStorage storage,
+        final MemoryBoundCache<Bytes32, Bytes> nodeCache) {
+      this.storage = storage;
+      this.nodeCache = nodeCache;
+      this.dispatchThread = new Thread(this::dispatchLoop, "forest-prefetch-dispatch");
+      this.dispatchThread.setDaemon(true);
+      this.dispatchThread.start();
+    }
+
+    @Override
+    public Optional<Bytes> getNode(final Bytes location, final Bytes32 hash) {
+      if (hash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
+        return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
+      }
+      if (nodeCache != null) {
+        final Bytes cached = nodeCache.getIfPresent(hash);
+        if (cached != null) {
+          return Optional.of(cached);
+        }
+      }
+      final CompletableFuture<Optional<Bytes>> future = new CompletableFuture<>();
+      queue.add(new Request(hash, future));
+      if (pending.incrementAndGet() >= BATCH_SIZE) {
+        LockSupport.unpark(dispatchThread);
+      }
+      return future.join();
+    }
+
+    private void dispatchLoop() {
+      while (!closed) {
+        LockSupport.parkNanos(BATCH_TIMEOUT_NS);
+        flush();
+      }
+      flush();
+    }
+
+    private void flush() {
+      final List<Request> batch = new ArrayList<>();
+      Request req;
+      while ((req = queue.poll()) != null) {
+        batch.add(req);
+      }
+      if (batch.isEmpty()) {
+        return;
+      }
+      pending.addAndGet(-batch.size());
+      final List<Bytes32> hashes = new ArrayList<>(batch.size());
+      for (final Request r : batch) {
+        hashes.add(r.hash());
+      }
+      try {
+        final List<Optional<Bytes>> results = storage.getTrieNodes(hashes);
+        for (int i = 0; i < batch.size(); i++) {
+          final Optional<Bytes> result = results.get(i);
+          final Request r = batch.get(i);
+          if (nodeCache != null) {
+            result.ifPresent(node -> nodeCache.put(r.hash(), node));
+          }
+          r.future().complete(result);
+        }
+      } catch (final RuntimeException e) {
+        for (final Request r : batch) {
+          r.future().complete(Optional.empty());
+        }
+      }
+    }
+
+    @Override
+    public void close() {
+      closed = true;
+      LockSupport.unpark(dispatchThread);
+    }
   }
 }

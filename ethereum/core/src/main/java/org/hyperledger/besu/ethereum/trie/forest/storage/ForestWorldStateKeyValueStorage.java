@@ -20,9 +20,12 @@ import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
+import org.hyperledger.besu.services.kvstore.SegmentedKeyValueStorageAdapter;
 import org.hyperledger.besu.util.Subscribers;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -71,6 +74,62 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     } else {
       return keyValueStorage.get(nodeHash.toArrayUnsafe()).map(Bytes::wrap);
     }
+  }
+
+  /**
+   * Batch-fetches trie nodes by their hashes in a single RocksDB call. When the underlying storage
+   * is a {@link SegmentedKeyValueStorageAdapter} its {@code multiGet} delegates to {@link
+   * org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage#multiGet}, which on
+   * RocksDB-backed storage issues a single {@code multiGetAsList} with {@code async_io=true} so all
+   * block reads are submitted to io_uring together rather than as sequential pread64 calls. Falls
+   * back to sequential single-key lookups otherwise.
+   *
+   * <p>The special {@link MerkleTrie#EMPTY_TRIE_NODE_HASH} is resolved inline without a storage
+   * lookup; callers should still handle it but need not exclude it from the input list.
+   *
+   * @param hashes the node hashes to fetch, in order
+   * @return per-hash Optional results in the same order as {@code hashes}
+   */
+  public List<Optional<Bytes>> getTrieNodes(final List<Bytes32> hashes) {
+    final int n = hashes.size();
+    final List<byte[]> realKeys = new ArrayList<>(n);
+    final int[] positions = new int[n];
+    int realCount = 0;
+
+    for (int i = 0; i < n; i++) {
+      if (!hashes.get(i).equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
+        realKeys.add(hashes.get(i).toArrayUnsafe());
+        positions[realCount++] = i;
+      }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    final Optional<Bytes>[] results = new Optional[n];
+    for (int i = 0; i < n; i++) {
+      if (hashes.get(i).equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
+        results[i] = Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
+      }
+    }
+
+    if (realCount == 0) {
+      return List.of(results);
+    }
+
+    final List<byte[]> keysToFetch = realKeys.subList(0, realCount);
+    final List<Optional<byte[]>> raw;
+    if (keyValueStorage instanceof SegmentedKeyValueStorageAdapter adapter) {
+      raw = adapter.multiGet(keysToFetch);
+    } else {
+      raw = new ArrayList<>(realCount);
+      for (final byte[] key : keysToFetch) {
+        raw.add(keyValueStorage.get(key));
+      }
+    }
+
+    for (int k = 0; k < realCount; k++) {
+      results[positions[k]] = raw.get(k).map(Bytes::wrap);
+    }
+    return List.of(results);
   }
 
   public boolean isWorldStateAvailable(final Bytes32 rootHash) {
