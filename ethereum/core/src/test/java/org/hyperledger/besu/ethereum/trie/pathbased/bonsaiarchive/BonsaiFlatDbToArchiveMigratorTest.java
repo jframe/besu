@@ -295,7 +295,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   @Test
-  public void usesLowPriorityTransactionsForMigration() throws Exception {
+  public void usesNormalPriorityWriteBatchTransactionForMigration() throws Exception {
     appendBlocks(1);
     final SegmentedInMemoryKeyValueStorage spyStorage = spy(new SegmentedInMemoryKeyValueStorage());
     when(worldStateStorage.getComposedWorldStateStorage()).thenReturn(spyStorage);
@@ -303,7 +303,7 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final BonsaiFlatDbToArchiveMigrator migrator = createMigrator();
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-    verify(spyStorage, atLeastOnce()).startLowPriorityTransaction();
+    verify(spyStorage, atLeastOnce()).startNormalPriorityWriteBatchTransaction();
   }
 
   // -------------------------------------------------------------------------
