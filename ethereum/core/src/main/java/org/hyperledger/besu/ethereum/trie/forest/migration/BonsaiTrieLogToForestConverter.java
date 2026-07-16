@@ -39,9 +39,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -403,6 +406,59 @@ public class BonsaiTrieLogToForestConverter {
           layer.getAccountChanges();
       final Map<Address, ? extends Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>>>
           storageChangesByAddress = layer.getStorageChanges();
+
+      // Phase 1: Rebuild per-account storage tries. Each account's storage trie is independent,
+      // so when the prefetch pool is available we rebuild them in parallel — dispatching the
+      // pointer-chasing reads across all threads rather than serialising them on the apply thread.
+      final Map<Address, Bytes32> newStorageRoots;
+      if (prefetchExecutor != null) {
+        final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> collectedNodes =
+            new ConcurrentLinkedQueue<>();
+        final ConcurrentHashMap<Address, Bytes32> parallelRoots = new ConcurrentHashMap<>();
+        final List<Callable<Void>> tasks = new ArrayList<>();
+        for (final var entry : accountChanges.entrySet()) {
+          final Address address = entry.getKey();
+          final TrieLog.LogTuple<AccountValue> change = entry.getValue();
+          if (change.getUpdated() == null) {
+            continue;
+          }
+          final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges =
+              storageChangesByAddress.get(address);
+          if (slotChanges == null || slotChanges.isEmpty()) {
+            continue;
+          }
+          final AccountValue prior = change.getPrior();
+          final Bytes32 priorStorageRoot =
+              prior == null ? EMPTY_TRIE_ROOT : Bytes32.wrap(prior.getStorageRoot().getBytes());
+          final boolean cleared =
+              prior == null
+                  || slotChanges.values().stream().anyMatch(TrieLog.LogTuple::isClearedAtLeastOnce);
+          tasks.add(
+              () -> {
+                parallelRoots.put(
+                    address,
+                    rebuildStorageRootCollecting(
+                        priorStorageRoot, cleared, slotChanges, collectedNodes::add));
+                return null;
+              });
+        }
+        if (!tasks.isEmpty()) {
+          try {
+            prefetchExecutor.invokeAll(tasks);
+          } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+        }
+        for (final Map.Entry<Bytes32, Bytes> nodeEntry : collectedNodes) {
+          updater.putAccountStorageTrieNode(nodeEntry.getKey(), nodeEntry.getValue());
+        }
+        newStorageRoots = parallelRoots;
+      } else {
+        newStorageRoots = null;
+      }
+
+      // Phase 2: Update the shared account trie sequentially. Storage roots computed in phase 1
+      // are reused; accounts without a prefetch pool fall back to inline sequential rebuild.
       for (final var entry : accountChanges.entrySet()) {
         final Address address = entry.getKey();
         final TrieLog.LogTuple<AccountValue> change = entry.getValue();
@@ -417,14 +473,19 @@ public class BonsaiTrieLogToForestConverter {
         final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges =
             storageChangesByAddress.get(address);
         if (slotChanges != null && !slotChanges.isEmpty()) {
-          final AccountValue prior = change.getPrior();
-          final Bytes32 priorStorageRoot =
-              prior == null ? EMPTY_TRIE_ROOT : Bytes32.wrap(prior.getStorageRoot().getBytes());
-          final boolean cleared =
-              prior == null
-                  || slotChanges.values().stream().anyMatch(TrieLog.LogTuple::isClearedAtLeastOnce);
-          final Bytes32 storageRoot =
-              rebuildStorageRoot(updater, priorStorageRoot, cleared, slotChanges);
+          final Bytes32 storageRoot;
+          if (newStorageRoots != null) {
+            storageRoot = newStorageRoots.get(address);
+          } else {
+            final AccountValue prior = change.getPrior();
+            final Bytes32 priorStorageRoot =
+                prior == null ? EMPTY_TRIE_ROOT : Bytes32.wrap(prior.getStorageRoot().getBytes());
+            final boolean cleared =
+                prior == null
+                    || slotChanges.values().stream()
+                        .anyMatch(TrieLog.LogTuple::isClearedAtLeastOnce);
+            storageRoot = rebuildStorageRoot(updater, priorStorageRoot, cleared, slotChanges);
+          }
           if (!storageRoot.equals(Bytes32.wrap(updated.getStorageRoot().getBytes()))) {
             throw new IllegalStateException(
                 "Reconstructed storage root for "
@@ -462,11 +523,11 @@ public class BonsaiTrieLogToForestConverter {
     }
   }
 
-  private Bytes32 rebuildStorageRoot(
-      final ForestWorldStateKeyValueStorage.Updater updater,
+  private Bytes32 rebuildStorageRootCollecting(
       final Bytes32 priorStorageRoot,
       final boolean cleared,
-      final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges) {
+      final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges,
+      final Consumer<Map.Entry<Bytes32, Bytes>> nodeCollector) {
     final Bytes32 startRoot = cleared ? EMPTY_TRIE_ROOT : priorStorageRoot;
     final StoredMerklePatriciaTrie<Bytes32, Bytes> storageTrie =
         new StoredMerklePatriciaTrie<>(storageNodeLoader(), startRoot, b -> b, b -> b);
@@ -481,11 +542,23 @@ public class BonsaiTrieLogToForestConverter {
     }
     storageTrie.commit(
         (location, hash, value) -> {
-          updater.putAccountStorageTrieNode(hash, value);
+          nodeCollector.accept(Map.entry(hash, value));
           if (nodeCache != null) {
             nodeCache.put(hash, value);
           }
         });
     return storageTrie.getRootHash();
+  }
+
+  private Bytes32 rebuildStorageRoot(
+      final ForestWorldStateKeyValueStorage.Updater updater,
+      final Bytes32 priorStorageRoot,
+      final boolean cleared,
+      final Map<StorageSlotKey, ? extends TrieLog.LogTuple<UInt256>> slotChanges) {
+    return rebuildStorageRootCollecting(
+        priorStorageRoot,
+        cleared,
+        slotChanges,
+        e -> updater.putAccountStorageTrieNode(e.getKey(), e.getValue()));
   }
 }
