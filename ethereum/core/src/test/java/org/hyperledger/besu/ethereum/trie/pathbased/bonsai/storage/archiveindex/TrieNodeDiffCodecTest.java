@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hyperledger.besu.crypto.Hash.keccak256;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.RLP;
@@ -748,5 +749,80 @@ class TrieNodeDiffCodecTest {
 
     assertThatThrownBy(() -> TrieNodeDiffCodec.reconstruct(branchFull, List.of(shortDiff)))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  // -------------------------------------------------------------------------
+  // HASH_REF entries (CAS dedup, Task 1)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void encodeFullRef_roundTripsHashAndFlags() {
+    final Bytes32 hash =
+        Bytes32.fromHexString("0x1111111111111111111111111111111111111111111111111111111111111111");
+
+    final Bytes checkpointRef = TrieNodeDiffCodec.encodeFullRef(hash, false);
+    assertThat(checkpointRef.size()).isEqualTo(33);
+    final TrieNodeDiffCodec.Decoded decodedCheckpoint = TrieNodeDiffCodec.decode(checkpointRef);
+    assertThat(decodedCheckpoint.isFull()).isTrue();
+    assertThat(decodedCheckpoint.isHashRef()).isTrue();
+    assertThat(decodedCheckpoint.isCreation()).isFalse();
+    assertThat(decodedCheckpoint.refHash()).isEqualTo(hash);
+
+    final Bytes creationRef = TrieNodeDiffCodec.encodeFullRef(hash, true);
+    final TrieNodeDiffCodec.Decoded decodedCreation = TrieNodeDiffCodec.decode(creationRef);
+    assertThat(decodedCreation.isFull()).isTrue();
+    assertThat(decodedCreation.isHashRef()).isTrue();
+    assertThat(decodedCreation.isCreation()).isTrue();
+    assertThat(decodedCreation.refHash()).isEqualTo(hash);
+  }
+
+  @Test
+  void fullNode_throwsOnHashRefEntry() {
+    final Bytes32 hash =
+        Bytes32.fromHexString("0x2222222222222222222222222222222222222222222222222222222222222222");
+    final TrieNodeDiffCodec.Decoded decoded =
+        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeFullRef(hash, false));
+    assertThatThrownBy(decoded::fullNode)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("HASH_REF");
+  }
+
+  @Test
+  void refHash_throwsOnNonRefAndMalformedEntries() {
+    // Inline FULL entry: not a ref.
+    final TrieNodeDiffCodec.Decoded inline =
+        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeFull(SIMPLE_NODE_RLP));
+    assertThatThrownBy(inline::refHash).isInstanceOf(IllegalStateException.class);
+
+    // Ref entry with a truncated body: malformed.
+    final Bytes truncated =
+        Bytes.concatenate(
+            Bytes.of((byte) (TrieNodeDiffCodec.ENTRY_FULL | TrieNodeDiffCodec.HASH_REF)),
+            Bytes.fromHexString("0xdeadbeef"));
+    final TrieNodeDiffCodec.Decoded malformed = TrieNodeDiffCodec.decode(truncated);
+    assertThatThrownBy(malformed::refHash).isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void reconstruct_rejectsHashRefBase_andReconstructFromNodeMatchesReconstruct() {
+    final Bytes[] c0 = new Bytes[16];
+    c0[1] = childHash(1);
+    final Bytes baseNode = branchWith(c0);
+
+    final Bytes[] c1 = new Bytes[16];
+    c1[1] = childHash(1);
+    c1[2] = childHash(2);
+    final Bytes nextNode = branchWith(c1);
+
+    final Bytes diff = TrieNodeDiffCodec.encodeDiff(baseNode, nextNode);
+
+    // reconstructFromNode over the raw body equals reconstruct over the inline entry.
+    assertThat(TrieNodeDiffCodec.reconstructFromNode(baseNode, List.of(diff)))
+        .isEqualTo(TrieNodeDiffCodec.reconstruct(TrieNodeDiffCodec.encodeFull(baseNode), List.of(diff)));
+
+    // reconstruct() on a HASH_REF entry must fail (base body is a hash, not RLP).
+    final Bytes refEntry = TrieNodeDiffCodec.encodeFullRef(keccak256(baseNode), false);
+    assertThatThrownBy(() -> TrieNodeDiffCodec.reconstruct(refEntry, List.of(diff)))
+        .isInstanceOf(IllegalStateException.class);
   }
 }

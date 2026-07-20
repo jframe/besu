@@ -27,6 +27,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 
 /**
  * Encodes and decodes per-node history entries stored in the trie-node differential index.
@@ -66,7 +67,8 @@ import org.apache.tuweni.bytes.Bytes;
  * bit3  VALUE_CHANGED (0x08)  (short/branch) embedded value changed
  * bit4  CREATION      (0x10)  node created at this block (no prior)
  * bit5  DELETION      (0x20)  node deleted at this block (tombstone)
- * bit6-7 reserved
+ * bit6  HASH_REF      (0x40)  (FULL only) body is a 32-byte keccak256 CAS reference, not inline RLP
+ * bit7  reserved
  * </pre>
  *
  * <h2>Child-ref unit (branch DIFF entries)</h2>
@@ -129,6 +131,13 @@ public final class TrieNodeDiffCodec {
   /** bit5: this node was deleted at this block (tombstone entry). */
   public static final byte DELETION = 0x20;
 
+  /**
+   * Set (together with {@link #ENTRY_FULL}) when the entry body is a 32-byte keccak256 reference
+   * into the {@code TRIE_NODE_CAS_ARCHIVE} content-addressed body store instead of inline node
+   * RLP. Composes with {@link #CREATION}.
+   */
+  public static final byte HASH_REF = 0x40;
+
   /** Number of child slots in a branch node. */
   private static final int BRANCH_CHILDREN = 16;
 
@@ -150,6 +159,21 @@ public final class TrieNodeDiffCodec {
   public static Bytes encodeFull(final Bytes nodeRlp) {
     Objects.requireNonNull(nodeRlp, "nodeRlp must not be null");
     return Bytes.concatenate(Bytes.of(ENTRY_FULL), nodeRlp);
+  }
+
+  /**
+   * Encodes a FULL entry whose body is a 32-byte content-hash reference into the CAS body store.
+   *
+   * <p>Layout: {@code [metadata = ENTRY_FULL | HASH_REF (| CREATION)]} ‖ {@code keccak256(node)}.
+   *
+   * @param nodeHash the keccak256 of the referenced node RLP; must not be {@code null}
+   * @param creation whether this entry records the node's first appearance
+   * @return the encoded entry (33 bytes)
+   */
+  public static Bytes encodeFullRef(final Bytes32 nodeHash, final boolean creation) {
+    Objects.requireNonNull(nodeHash, "nodeHash must not be null");
+    final byte metadata = (byte) (ENTRY_FULL | HASH_REF | (creation ? CREATION : 0));
+    return Bytes.concatenate(Bytes.of(metadata), nodeHash);
   }
 
   /**
@@ -265,9 +289,23 @@ public final class TrieNodeDiffCodec {
               + Integer.toHexString(Byte.toUnsignedInt(base.metadata())));
     }
 
-    final Bytes baseNode = base.fullNode();
-    final int arity = nodeArity(baseNode);
+    final Bytes baseNode = base.fullNode(); // throws on HASH_REF — caller must resolve first
+    return reconstructFromNode(baseNode, diffEntries);
+  }
 
+  /**
+   * Reconstructs a trie node from an already-resolved base node body plus ordered DIFF entries.
+   * Same caller contract as {@link #reconstruct(Bytes, List)}, but the base is raw node RLP (e.g.
+   * fetched from the CAS store for a HASH_REF checkpoint) rather than a FULL codec entry.
+   *
+   * @param baseNode the base node RLP (raw node bytes, not a codec entry); must not be {@code null}
+   * @param diffEntries ordered list of DIFF entries to apply; same contract as {@link #reconstruct}
+   * @return the reconstructed node RLP
+   */
+  public static Bytes reconstructFromNode(final Bytes baseNode, final List<Bytes> diffEntries) {
+    Objects.requireNonNull(baseNode, "baseNode must not be null");
+    Objects.requireNonNull(diffEntries, "diffEntries must not be null");
+    final int arity = nodeArity(baseNode);
     if (arity == 17) {
       return reconstructBranch(baseNode, diffEntries);
     } else {
@@ -715,6 +753,32 @@ public final class TrieNodeDiffCodec {
       return (metadata & NODE_IS_BRANCH) != 0;
     }
 
+    /**
+     * Returns {@code true} iff this FULL entry's body is a 32-byte CAS reference ({@link
+     * TrieNodeDiffCodec#HASH_REF} set) rather than inline node RLP.
+     */
+    public boolean isHashRef() {
+      return (metadata & HASH_REF) != 0;
+    }
+
+    /**
+     * Returns the 32-byte keccak256 CAS reference of a HASH_REF FULL entry.
+     *
+     * @return the referenced body's content hash
+     * @throws IllegalStateException if this is not a HASH_REF entry, or the body is not exactly 32
+     *     bytes (malformed entry)
+     */
+    public Bytes32 refHash() {
+      if (!isFull() || !isHashRef()) {
+        throw new IllegalStateException("refHash() called on a non-HASH_REF entry");
+      }
+      if (body.size() != 32) {
+        throw new IllegalStateException(
+            "malformed HASH_REF entry: expected 32-byte body, got " + body.size());
+      }
+      return Bytes32.wrap(body);
+    }
+
     // ------------------------------------------------------------------
     // FULL-entry accessor
     // ------------------------------------------------------------------
@@ -724,12 +788,18 @@ public final class TrieNodeDiffCodec {
      *
      * @return raw RLP bytes of the trie node
      * @throws IllegalStateException if this is a diff entry (i.e. {@link #isFull()} is {@code
-     *     false})
+     *     false}), or if this is a HASH_REF entry (use {@link #refHash()} and resolve via the CAS
+     *     store instead)
      */
     public Bytes fullNode() {
       if (!isFull()) {
         throw new IllegalStateException(
             "fullNode() called on a diff entry; use diff accessors (Task 1.2–1.4)");
+      }
+      if (isHashRef()) {
+        throw new IllegalStateException(
+            "fullNode() called on a HASH_REF entry; resolve the body via the CAS store using"
+                + " refHash()");
       }
       return body;
     }
