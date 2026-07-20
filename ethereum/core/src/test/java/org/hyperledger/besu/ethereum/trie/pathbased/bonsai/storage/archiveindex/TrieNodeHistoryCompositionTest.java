@@ -229,4 +229,27 @@ class TrieNodeHistoryCompositionTest {
     assertThat(hist[0]).isEqualTo(1);
     assertThat(hist[3]).isEqualTo(1);
   }
+
+  // -------------------------------------------------------------------------
+  // HASH_REF classification (CAS dedup, Task 6)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void classify_hashRefEntries() {
+    final byte[] key = new byte[9]; // 1-byte location + 8-byte block suffix (account-trie depth 1)
+    final byte[] refBody = new byte[33];
+    refBody[0] = (byte) (TrieNodeDiffCodec.ENTRY_FULL | TrieNodeDiffCodec.HASH_REF);
+
+    assertThat(TrieNodeHistoryComposition.classify(key, refBody, 0))
+        .isEqualTo(Category.HASH_REF_CHECKPOINT);
+
+    final byte[] creationRefBody = new byte[33];
+    creationRefBody[0] =
+        (byte)
+            (TrieNodeDiffCodec.ENTRY_FULL
+                | TrieNodeDiffCodec.HASH_REF
+                | TrieNodeDiffCodec.CREATION);
+    assertThat(TrieNodeHistoryComposition.classify(key, creationRefBody, 0))
+        .isEqualTo(Category.HASH_REF_CREATION);
+  }
 }

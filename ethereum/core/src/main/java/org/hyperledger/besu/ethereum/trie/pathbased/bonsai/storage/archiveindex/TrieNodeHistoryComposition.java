@@ -63,6 +63,8 @@ public final class TrieNodeHistoryComposition {
     UPPER_TRIE_UNKNOWN,
     DIFF_BRANCH,
     DIFF_SHORT,
+    HASH_REF_CREATION,
+    HASH_REF_CHECKPOINT,
     DELETION
   }
 
@@ -205,6 +207,12 @@ public final class TrieNodeHistoryComposition {
     final boolean deletion = (md & TrieNodeDiffCodec.DELETION) != 0;
     final boolean creation = (md & TrieNodeDiffCodec.CREATION) != 0;
     final boolean branchBit = (md & TrieNodeDiffCodec.NODE_IS_BRANCH) != 0;
+    final boolean hashRef = (md & TrieNodeDiffCodec.HASH_REF) != 0;
+
+    if (full && hashRef) {
+      // Ref bodies are 32-byte hashes, not RLP — arity parsing does not apply.
+      return creation ? Category.HASH_REF_CREATION : Category.HASH_REF_CHECKPOINT;
+    }
 
     if (full) {
       final int arity = arity(value);
