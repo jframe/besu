@@ -258,7 +258,8 @@ class BonsaiArchiveTrieNodeStrategyTest {
   void flagEnabled_shallowLocation_checkpointsAtInterval32() {
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
 
-    // LOCATION_SHALLOW has size 1 (depth 1) → SHALLOW_CHECKPOINT_INTERVAL (32), no longer forced FULL.
+    // LOCATION_SHALLOW has size 1 (depth 1) → SHALLOW_CHECKPOINT_INTERVAL (32), no longer forced
+    // FULL.
     // Block 100 = creation (FULL). Block 101 = mutation 1 → DIFF (not a checkpoint).
     writeAtBlock(strategy, LOCATION_SHALLOW, SHORT_NODE_V1, 100L);
     writeAtBlock(strategy, LOCATION_SHALLOW, SHORT_NODE_V2, 101L);

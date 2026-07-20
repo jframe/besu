@@ -310,9 +310,10 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    *   <li>Deletion ({@code newNode == null}): tombstone. Not currently wired in (deletions are
    *       handled via {@link TrieNodeStrategy#removeFlatAccountStateTrieNode} which is not yet
    *       hooked); included for completeness.
-   *   <li>Depth-tiered checkpoint: {@code previousCount % checkpointIntervalForDepth(location.size())
-   *       == 0} → FULL, else DIFF. The root (depth 0) uses interval 1 and is thus always FULL; depth
-   *       1–2 use {@link #SHALLOW_CHECKPOINT_INTERVAL}; depth ≥ 3 use {@link #DEEP_CHECKPOINT_INTERVAL}.
+   *   <li>Depth-tiered checkpoint: {@code previousCount %
+   *       checkpointIntervalForDepth(location.size()) == 0} → FULL, else DIFF. The root (depth 0)
+   *       uses interval 1 and is thus always FULL; depth 1–2 use {@link
+   *       #SHALLOW_CHECKPOINT_INTERVAL}; depth ≥ 3 use {@link #DEEP_CHECKPOINT_INTERVAL}.
    * </ol>
    *
    * @param tx the transaction on which to write the history and index entries
