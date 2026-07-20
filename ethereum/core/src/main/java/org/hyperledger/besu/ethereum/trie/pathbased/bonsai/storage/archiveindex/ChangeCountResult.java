@@ -33,13 +33,28 @@ public final class ChangeCountResult {
   private final long[] mutationsByDepth;
   private final long[] upperFullByDepth;
   private final long[] deletionsByDepth;
+  // Diagnostic-only: the combined mutationsByDepth split by which trie the node lives in, to
+  // attribute per-depth over/under-counting between the account trie and per-contract storage
+  // tries.
+  private final long[] accountMutationsByDepth;
+  private final long[] storageMutationsByDepth;
   private final Map<Bytes, int[]> sampledLifetime = new HashMap<>();
   private long[] accountDeltaByRange = new long[1];
+  // Diagnostic-only per-era (100k-block) totals: node writes attributed to each trie, plus the sum
+  // and population of the per-contract storage leaf counts actually used to price storage depth.
+  // The average assumed storage-trie size per era (sum/population) reveals whether early history is
+  // being priced at head-state contract sizes (the head-vs-historical over-counting hypothesis).
+  private long[] accountWritesByRange = new long[1];
+  private long[] storageWritesByRange = new long[1];
+  private long[] assumedStorageLeafCountSumByRange = new long[1];
+  private long[] storageContractGroupsByRange = new long[1];
 
   public ChangeCountResult(final int maxDepth) {
     this.mutationsByDepth = new long[maxDepth];
     this.upperFullByDepth = new long[maxDepth];
     this.deletionsByDepth = new long[maxDepth];
+    this.accountMutationsByDepth = new long[maxDepth];
+    this.storageMutationsByDepth = new long[maxDepth];
   }
 
   public void recordMutation(final int depth, final boolean deletion) {
@@ -48,6 +63,45 @@ public final class ChangeCountResult {
     if (deletion) {
       deletionsByDepth[d]++;
     }
+  }
+
+  /**
+   * Diagnostic split of {@link #recordMutation} by owning trie (account vs per-contract storage).
+   */
+  public void recordCategoryMutation(final int depth, final boolean isAccountPath) {
+    final int d = Math.min(depth, mutationsByDepth.length - 1);
+    if (isAccountPath) {
+      accountMutationsByDepth[d]++;
+    } else {
+      storageMutationsByDepth[d]++;
+    }
+  }
+
+  /** Diagnostic per-era tally of total node writes attributed to each trie for a block. */
+  public void recordCategoryWritesForEra(
+      final long blockNumber, final long accountWrites, final long storageWrites) {
+    final int range = (int) (blockNumber / RANGE_BLOCKS);
+    accountWritesByRange = ensureRange(accountWritesByRange, range);
+    storageWritesByRange = ensureRange(storageWritesByRange, range);
+    accountWritesByRange[range] += accountWrites;
+    storageWritesByRange[range] += storageWrites;
+  }
+
+  /**
+   * Diagnostic: record that one contract's storage trie was priced at {@code leafCount} slots in a
+   * block within the block's era. Accumulates the sum and population so a per-era mean assumed
+   * storage-trie size can be reported.
+   */
+  public void recordAssumedStorageLeafCount(final long blockNumber, final long leafCount) {
+    final int range = (int) (blockNumber / RANGE_BLOCKS);
+    assumedStorageLeafCountSumByRange = ensureRange(assumedStorageLeafCountSumByRange, range);
+    storageContractGroupsByRange = ensureRange(storageContractGroupsByRange, range);
+    assumedStorageLeafCountSumByRange[range] += leafCount;
+    storageContractGroupsByRange[range]++;
+  }
+
+  private static long[] ensureRange(final long[] array, final int range) {
+    return range < array.length ? array : Arrays.copyOf(array, range + 1);
   }
 
   public void recordUpperFull(final int depth) {
@@ -79,15 +133,26 @@ public final class ChangeCountResult {
       mutationsByDepth[i] += other.mutationsByDepth[i];
       upperFullByDepth[i] += other.upperFullByDepth[i];
       deletionsByDepth[i] += other.deletionsByDepth[i];
+      accountMutationsByDepth[i] += other.accountMutationsByDepth[i];
+      storageMutationsByDepth[i] += other.storageMutationsByDepth[i];
     }
     other.sampledLifetime.forEach(
         (key, val) -> sampledLifetime.merge(key, val, (a, b) -> new int[] {a[0], a[1] + b[1]}));
-    if (other.accountDeltaByRange.length > accountDeltaByRange.length) {
-      accountDeltaByRange = Arrays.copyOf(accountDeltaByRange, other.accountDeltaByRange.length);
+    accountDeltaByRange = mergeRange(accountDeltaByRange, other.accountDeltaByRange);
+    accountWritesByRange = mergeRange(accountWritesByRange, other.accountWritesByRange);
+    storageWritesByRange = mergeRange(storageWritesByRange, other.storageWritesByRange);
+    assumedStorageLeafCountSumByRange =
+        mergeRange(assumedStorageLeafCountSumByRange, other.assumedStorageLeafCountSumByRange);
+    storageContractGroupsByRange =
+        mergeRange(storageContractGroupsByRange, other.storageContractGroupsByRange);
+  }
+
+  private static long[] mergeRange(final long[] into, final long[] from) {
+    final long[] target = into.length >= from.length ? into : Arrays.copyOf(into, from.length);
+    for (int i = 0; i < from.length; i++) {
+      target[i] += from[i];
     }
-    for (int i = 0; i < other.accountDeltaByRange.length; i++) {
-      accountDeltaByRange[i] += other.accountDeltaByRange[i];
-    }
+    return target;
   }
 
   public long[] mutationsByDepth() {
@@ -108,5 +173,29 @@ public final class ChangeCountResult {
 
   public long[] accountDeltaByRange() {
     return accountDeltaByRange;
+  }
+
+  public long[] accountMutationsByDepth() {
+    return accountMutationsByDepth;
+  }
+
+  public long[] storageMutationsByDepth() {
+    return storageMutationsByDepth;
+  }
+
+  public long[] accountWritesByRange() {
+    return accountWritesByRange;
+  }
+
+  public long[] storageWritesByRange() {
+    return storageWritesByRange;
+  }
+
+  public long[] assumedStorageLeafCountSumByRange() {
+    return assumedStorageLeafCountSumByRange;
+  }
+
+  public long[] storageContractGroupsByRange() {
+    return storageContractGroupsByRange;
   }
 }

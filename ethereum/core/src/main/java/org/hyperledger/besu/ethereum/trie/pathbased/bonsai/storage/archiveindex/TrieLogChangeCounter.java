@@ -166,6 +166,7 @@ public final class TrieLogChangeCounter {
               // under-counting depth for accounts whose slots were pruned/destructed before head.
               final long storageLeafCount =
                   Math.max(slotMap.size(), storageLeafCounts.leafCount(accountHash));
+              out.recordAssumedStorageLeafCount(blockNumber, storageLeafCount);
               final int storageCap = terminationCap(storageLeafCount);
               slotMap.forEach(
                   (slotKey, change) -> {
@@ -188,6 +189,7 @@ public final class TrieLogChangeCounter {
     for (final Bytes path : storagePaths) {
       recordPath(path, path.size() - ACCOUNT_HASH_BYTES, false, out);
     }
+    out.recordCategoryWritesForEra(blockNumber, accountPaths.size(), storagePaths.size());
   }
 
   private void recordPath(
@@ -196,6 +198,7 @@ public final class TrieLogChangeCounter {
       final boolean isAccountPath,
       final ChangeCountResult out) {
     out.recordMutation(depth, false);
+    out.recordCategoryMutation(depth, isAccountPath);
     if (depth <= fullAboveDepth) {
       out.recordUpperFull(depth);
     }

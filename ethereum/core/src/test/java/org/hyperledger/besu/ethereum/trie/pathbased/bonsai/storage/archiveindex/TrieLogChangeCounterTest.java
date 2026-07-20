@@ -126,6 +126,35 @@ class TrieLogChangeCounterTest {
   }
 
   @Test
+  void categoryDiagnosticsSplitAccountAndStorageWritesAndRecordAssumedStorageSize() {
+    final Address addr = Address.fromHexString("0x00000000000000000000000000000000000000aa");
+    final StorageSlotKey slot = new StorageSlotKey(UInt256.valueOf(7));
+    final TrieLogLayer log = new TrieLogLayer();
+    log.addAccountChange(addr, acct(1), acct(2));
+    log.addStorageChange(addr, slot, UInt256.ZERO, UInt256.valueOf(5));
+
+    final ChangeCountResult out = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+    // Block 150_000 → era 1; storage priced at 500 slots for this contract.
+    counter.countBlock(log, 150_000L, 4L, accountHash -> 500L, out);
+
+    // Every mutation is attributed to exactly one trie: the split sums back to the combined total.
+    for (int d = 0; d < out.mutationsByDepth().length; d++) {
+      assertThat(out.accountMutationsByDepth()[d] + out.storageMutationsByDepth()[d])
+          .as("depth %d account+storage split must equal combined total", d)
+          .isEqualTo(out.mutationsByDepth()[d]);
+    }
+    assertThat(out.accountMutationsByDepth()[0]).isEqualTo(1L); // one account root
+    assertThat(out.storageMutationsByDepth()[0]).isEqualTo(1L); // one storage root
+
+    // Per-era diagnostics land in era 1 (block 150_000 / 100_000).
+    assertThat(out.accountWritesByRange()[1]).isGreaterThanOrEqualTo(1L);
+    assertThat(out.storageWritesByRange()[1]).isGreaterThanOrEqualTo(1L);
+    // One contract priced this block; the recorded mean assumed storage size is 500.
+    assertThat(out.assumedStorageLeafCountSumByRange()[1]).isEqualTo(500L);
+    assertThat(out.storageContractGroupsByRange()[1]).isEqualTo(1L);
+  }
+
+  @Test
   void samplingWithNonZeroShiftDoesNotThrowAtShallowDepths() {
     final Address addr = Address.fromHexString("0x00000000000000000000000000000000000000aa");
     final TrieLogLayer log = new TrieLogLayer();

@@ -213,6 +213,8 @@ public final class HistorySizeEstimate {
 
       final ObjectNode depthNode = perDepth.putObject(Integer.toString(d));
       depthNode.put("totalWrites", totalWrites);
+      depthNode.put("accountWrites", counts.accountMutationsByDepth()[d]);
+      depthNode.put("storageWrites", counts.storageMutationsByDepth()[d]);
       depthNode.put("branchFraction", branchFraction);
       depthNode.put("fullFraction", fullFraction);
       depthNode.put("logicalBytes", fullBytes + diffBytes + keyBytes);
@@ -239,7 +241,44 @@ public final class HistorySizeEstimate {
       }
     }
 
+    addEraDiagnostics(root.putObject("diagnostics"));
+
     root.put("headline", estimatedOnDiskBytes(fullAboveDepth, checkpointInterval));
     return root;
+  }
+
+  /**
+   * Per-era (100k-block) attribution: node writes split account vs storage, and the mean
+   * per-contract storage-trie leaf count actually used to price storage depth that era. If the
+   * storage over-counting is concentrated in early eras whose mean assumed leaf count is
+   * nonetheless head-scale, that confirms the live-trie probe is pricing early history at
+   * head-state contract sizes (contracts that grew over time).
+   */
+  private void addEraDiagnostics(final ObjectNode diagnostics) {
+    final long[] accountByEra = counts.accountWritesByRange();
+    final long[] storageByEra = counts.storageWritesByRange();
+    final long[] leafSumByEra = counts.assumedStorageLeafCountSumByRange();
+    final long[] groupsByEra = counts.storageContractGroupsByRange();
+    final int eras =
+        Math.max(
+            Math.max(accountByEra.length, storageByEra.length),
+            Math.max(leafSumByEra.length, groupsByEra.length));
+    final ArrayNode byEra = diagnostics.putArray("byEra");
+    for (int e = 0; e < eras; e++) {
+      final long account = e < accountByEra.length ? accountByEra[e] : 0;
+      final long storage = e < storageByEra.length ? storageByEra[e] : 0;
+      if (account == 0 && storage == 0) {
+        continue;
+      }
+      final long groups = e < groupsByEra.length ? groupsByEra[e] : 0;
+      final long leafSum = e < leafSumByEra.length ? leafSumByEra[e] : 0;
+      final ObjectNode eraNode = byEra.addObject();
+      eraNode.put("era", e);
+      eraNode.put("firstBlock", e * ChangeCountResult.RANGE_BLOCKS);
+      eraNode.put("accountWrites", account);
+      eraNode.put("storageWrites", storage);
+      eraNode.put(
+          "meanAssumedStorageLeafCount", groups == 0 ? 0.0 : (double) leafSum / (double) groups);
+    }
   }
 }

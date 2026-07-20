@@ -70,7 +70,7 @@ class TrieNodeHistoryEstimateSubCommandTest {
 
     final ChangeCountResult result =
         TrieNodeHistoryEstimateSubCommand.countRange(
-            blockchain, trieLogStorage, 1L, 3L, counter, leafCountByRange);
+            blockchain, trieLogStorage, 1L, 3L, counter, leafCountByRange, accountHash -> 0L);
 
     // Each of the two blocks writes the account-trie root (depth 0), deduped per block.
     assertThat(result.mutationsByDepth()[0]).isGreaterThanOrEqualTo(2L);
@@ -97,7 +97,13 @@ class TrieNodeHistoryEstimateSubCommandTest {
     assertThatThrownBy(
             () ->
                 TrieNodeHistoryEstimateSubCommand.countRange(
-                    blockchain, trieLogStorage, 1L, 2L, counter, leafCountByRange))
+                    blockchain,
+                    trieLogStorage,
+                    1L,
+                    2L,
+                    counter,
+                    leafCountByRange,
+                    accountHash -> 0L))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("1");
   }
