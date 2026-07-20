@@ -396,9 +396,9 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    * when it is large enough to pay for a hash reference and not the trie root.
    *
    * <p>Routing predicate: {@code !location.isEmpty() && node.size() >= CAS_INLINE_THRESHOLD}. The
-   * root always stays inline (its body never duplicates and root reads stay one-hop). CAS puts
-   * are blind, idempotent, and issued on EVERY routed FULL — a write-skip cache would be poisoned
-   * by transaction rollback (hash marked as written, body never committed → dangling ref), so
+   * root always stays inline (its body never duplicates and root reads stay one-hop). CAS puts are
+   * blind, idempotent, and issued on EVERY routed FULL — a write-skip cache would be poisoned by
+   * transaction rollback (hash marked as written, body never committed → dangling ref), so
    * duplicate puts are accepted and collapsed by compaction (design doc §3.3).
    *
    * @param tx the transaction carrying this block's writes (CAS body joins it atomically)

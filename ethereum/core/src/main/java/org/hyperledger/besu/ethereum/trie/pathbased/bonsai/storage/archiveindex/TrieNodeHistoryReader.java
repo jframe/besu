@@ -387,9 +387,9 @@ public final class TrieNodeHistoryReader {
    * {@link #nodeAt(Bytes, long)}.
    */
   /**
-   * Materialises a FULL entry's node body: inline bodies are returned directly; HASH_REF bodies
-   * are fetched from the content-addressed store (one point read, keccak-self-verified by the
-   * store). A missing or corrupt CAS body is treated like an index/store mismatch: warn and empty.
+   * Materialises a FULL entry's node body: inline bodies are returned directly; HASH_REF bodies are
+   * fetched from the content-addressed store (one point read, keccak-self-verified by the store). A
+   * missing or corrupt CAS body is treated like an index/store mismatch: warn and empty.
    *
    * @param naturalKey the key being resolved (log context)
    * @param block the entry's block (log context)

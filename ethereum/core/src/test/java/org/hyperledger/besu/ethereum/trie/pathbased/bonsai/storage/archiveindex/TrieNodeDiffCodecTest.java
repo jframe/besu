@@ -818,7 +818,8 @@ class TrieNodeDiffCodecTest {
 
     // reconstructFromNode over the raw body equals reconstruct over the inline entry.
     assertThat(TrieNodeDiffCodec.reconstructFromNode(baseNode, List.of(diff)))
-        .isEqualTo(TrieNodeDiffCodec.reconstruct(TrieNodeDiffCodec.encodeFull(baseNode), List.of(diff)));
+        .isEqualTo(
+            TrieNodeDiffCodec.reconstruct(TrieNodeDiffCodec.encodeFull(baseNode), List.of(diff)));
 
     // reconstruct() on a HASH_REF entry must fail (base body is a hash, not RLP).
     final Bytes refEntry = TrieNodeDiffCodec.encodeFullRef(keccak256(baseNode), false);

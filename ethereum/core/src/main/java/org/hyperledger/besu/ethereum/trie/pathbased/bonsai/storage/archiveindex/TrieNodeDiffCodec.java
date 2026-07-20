@@ -133,8 +133,8 @@ public final class TrieNodeDiffCodec {
 
   /**
    * Set (together with {@link #ENTRY_FULL}) when the entry body is a 32-byte keccak256 reference
-   * into the {@code TRIE_NODE_CAS_ARCHIVE} content-addressed body store instead of inline node
-   * RLP. Composes with {@link #CREATION}.
+   * into the {@code TRIE_NODE_CAS_ARCHIVE} content-addressed body store instead of inline node RLP.
+   * Composes with {@link #CREATION}.
    */
   public static final byte HASH_REF = 0x40;
 

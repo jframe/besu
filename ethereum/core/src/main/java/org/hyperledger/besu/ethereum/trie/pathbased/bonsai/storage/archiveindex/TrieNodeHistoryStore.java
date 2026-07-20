@@ -199,9 +199,8 @@ public final class TrieNodeHistoryStore {
   }
 
   /**
-   * Retrieves a FULL node body from the content-addressed store, verifying {@code
-   * keccak256(body) == nodeHash} (the key IS the content hash, so corruption is detectable at this
-   * layer).
+   * Retrieves a FULL node body from the content-addressed store, verifying {@code keccak256(body)
+   * == nodeHash} (the key IS the content hash, so corruption is detectable at this layer).
    *
    * @param nodeHash the content hash to resolve; must not be {@code null}
    * @return the body if present and self-consistent; empty if missing or corrupt (corruption is

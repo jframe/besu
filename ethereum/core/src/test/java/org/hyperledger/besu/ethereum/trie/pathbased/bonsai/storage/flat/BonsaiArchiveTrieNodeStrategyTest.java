@@ -787,4 +787,45 @@ class BonsaiArchiveTrieNodeStrategyTest {
             TrieNodeDiffCodec.decode(historyStore.get(naturalKey, 100L + 5).orElseThrow()).isFull())
         .isFalse();
   }
+
+  // ---------------------------------------------------------------------------
+  // End-to-end write -> CAS -> read dedup chain (Task 5)
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void largeShallowNode_fullChainReconstructsThroughCas() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+    // 40 mutations of a large (CAS-routed) shallow node: creation ref at mutation 0, checkpoint
+    // ref at mutation 32, diffs everywhere else. Mirrors the depth-tier coupling test but with
+    // every FULL living in the CAS.
+    final long baseBlock = 1_000L;
+    final int mutations = 40;
+    final java.util.Map<Long, Bytes> writtenByBlock = new java.util.HashMap<>();
+    for (int i = 0; i <= mutations; i++) {
+      final Bytes node = fullBranch(1 + i);
+      writeAtBlockRealHash(strategy, LOCATION_SHALLOW, node, baseBlock + i);
+      writtenByBlock.put(baseBlock + i, node);
+    }
+
+    final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_SHALLOW);
+    final TrieNodeHistoryReader reader = new TrieNodeHistoryReader(historyStore, changeIndex);
+
+    // The creation (mutation 0) and checkpoint (mutation 32) FULLs are CAS refs.
+    assertThat(
+            TrieNodeDiffCodec.decode(historyStore.get(naturalKey, baseBlock).orElseThrow())
+                .isHashRef())
+        .isTrue();
+    assertThat(
+            TrieNodeDiffCodec.decode(historyStore.get(naturalKey, baseBlock + 32).orElseThrow())
+                .isHashRef())
+        .isTrue();
+
+    // Reconstruction is exact at a mid-chain DIFF, at both refs, and at the last mutation.
+    for (final long block :
+        new long[] {baseBlock, baseBlock + 20, baseBlock + 32, baseBlock + mutations}) {
+      assertThat(reader.nodeAt(naturalKey, block))
+          .as("reconstruction at block %s", block)
+          .hasValue(writtenByBlock.get(block));
+    }
+  }
 }
