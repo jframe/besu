@@ -180,6 +180,7 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
     }
 
     final EntrySizeTable entrySizeTable = resolveEntrySizeTable(out, calibrationFile);
+    final double[] storageCorrection = resolveStorageCorrection(calibrationFile);
     out.println(
         "Scanning trie logs for blocks ["
             + from
@@ -223,7 +224,8 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
             shape,
             leafCountByRange,
             DEFAULT_SST_COMPRESSION_RATIO,
-            DEFAULT_BLOB_OVERHEAD_RATIO);
+            DEFAULT_BLOB_OVERHEAD_RATIO,
+            storageCorrection);
 
     out.println();
     out.printf(
@@ -273,6 +275,19 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
     }
     out.println("Using calibration data from " + calibrationFile);
     return calibration.toEntrySizeTable();
+  }
+
+  /**
+   * Resolves the per-depth storage-node correction from the calibration file, or {@code null} when
+   * no calibration is given (leaving storage counts uncorrected). The file is already validated by
+   * {@link #resolveEntrySizeTable}, so any read failure here would have surfaced there; a
+   * calibration produced before the correction feature simply yields all-1.0 (no-op) factors.
+   */
+  static double[] resolveStorageCorrection(final Path calibrationFile) {
+    if (calibrationFile == null) {
+      return null;
+    }
+    return CalibrationResult.readFrom(calibrationFile).storageCorrectionByDepth();
   }
 
   /** A per-chunk scan step over {@code [fromInclusive, toExclusive)}. */

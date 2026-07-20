@@ -99,4 +99,68 @@ class CalibrationResultTest {
     assertThat(restored.toEntrySizeTable().keyBytes())
         .isEqualTo(original.toEntrySizeTable().keyBytes());
   }
+
+  @Test
+  void storageCorrectionIsRealOverAnalyticClampedAndDefaultsToOne() {
+    final CalibrationResult result = new CalibrationResult();
+    // Real (recorded) storage writes: depth 2 heavily over-counted by the analytic model.
+    result.record(2, false, 40, 40, 40, false); // storage write at depth 2
+    result.record(2, false, 40, 40, 40, false);
+    result.record(2, false, 40, 40, 40, false); // 3 real storage writes at depth 2
+    result.record(5, false, 40, 40, 40, false); // 1 real storage write at depth 5
+    final long[] analytic = new long[ChangeCountResult.MAX_DEPTH];
+    analytic[2] = 12; // analytic over-counted depth 2 4x -> correction 0.25
+    analytic[5] = 1; // analytic matched depth 5 -> correction 1.0
+    result.setAnalyticStorageWritesByDepth(analytic);
+
+    final double[] correction = result.storageCorrectionByDepth();
+    assertThat(correction[2]).isEqualTo(0.25); // 3 real / 12 analytic
+    assertThat(correction[5]).isEqualTo(1.0); // 1 / 1
+    assertThat(correction[3]).isEqualTo(1.0); // no analytic writes -> no correction
+  }
+
+  @Test
+  void storageCorrectionSurvivesRoundTripAndOldFilesDefaultToOne() {
+    final CalibrationResult original = new CalibrationResult();
+    original.record(2, false, 40, 40, 40, false);
+    original.record(2, false, 40, 40, 40, false);
+    final long[] analytic = new long[ChangeCountResult.MAX_DEPTH];
+    analytic[2] = 8; // correction 2/8 = 0.25
+    original.setAnalyticStorageWritesByDepth(analytic);
+    final Path file = tempDir.resolve("calibration-correction.json");
+    original.writeTo(file);
+
+    final CalibrationResult restored = CalibrationResult.readFrom(file);
+    assertThat(restored.storageCorrectionByDepth()[2]).isEqualTo(0.25);
+
+    // A calibration file without the correction fields (the pre-feature format) yields all-1.0.
+    final CalibrationResult legacy = recorderWithTwoWritesAtDepth2().result();
+    final Path legacyFile = tempDir.resolve("legacy.json");
+    legacy.writeTo(legacyFile);
+    stripFields(
+        legacyFile,
+        "realAccountWritesByDepth",
+        "realStorageWritesByDepth",
+        "analyticStorageWritesByDepth");
+    final double[] legacyCorrection =
+        CalibrationResult.readFrom(legacyFile).storageCorrectionByDepth();
+    for (final double c : legacyCorrection) {
+      assertThat(c).isEqualTo(1.0);
+    }
+  }
+
+  private static void stripFields(final Path file, final String... fields) {
+    try {
+      final com.fasterxml.jackson.databind.ObjectMapper mapper =
+          new com.fasterxml.jackson.databind.ObjectMapper();
+      final com.fasterxml.jackson.databind.node.ObjectNode root =
+          (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(file.toFile());
+      for (final String f : fields) {
+        root.remove(f);
+      }
+      mapper.writeValue(file.toFile(), root);
+    } catch (final java.io.IOException e) {
+      throw new java.io.UncheckedIOException(e);
+    }
+  }
 }

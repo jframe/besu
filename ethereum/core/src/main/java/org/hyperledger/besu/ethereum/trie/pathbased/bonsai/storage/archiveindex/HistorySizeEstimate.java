@@ -53,6 +53,7 @@ public final class HistorySizeEstimate {
   private final long[] leafCountByRange;
   private final double sstCompressionRatio;
   private final double blobOverheadRatio;
+  private final double[] storageCorrectionByDepth;
 
   public HistorySizeEstimate(
       final ChangeCountResult counts,
@@ -61,12 +62,51 @@ public final class HistorySizeEstimate {
       final long[] leafCountByRange,
       final double sstCompressionRatio,
       final double blobOverheadRatio) {
+    this(counts, sizes, shape, leafCountByRange, sstCompressionRatio, blobOverheadRatio, null);
+  }
+
+  /**
+   * @param storageCorrectionByDepth per-depth multiplier applied to the analytic storage-node write
+   *     counts (from {@link CalibrationResult#storageCorrectionByDepth()}), anchoring them to the
+   *     measured reality; {@code null} means no correction (all depths ×1.0). Account-trie counts
+   *     are never corrected — they already track the real migration closely.
+   */
+  public HistorySizeEstimate(
+      final ChangeCountResult counts,
+      final EntrySizeTable sizes,
+      final TrieShapeModel shape,
+      final long[] leafCountByRange,
+      final double sstCompressionRatio,
+      final double blobOverheadRatio,
+      final double[] storageCorrectionByDepth) {
     this.counts = counts;
     this.sizes = sizes;
     this.shape = shape;
     this.leafCountByRange = leafCountByRange;
     this.sstCompressionRatio = sstCompressionRatio;
     this.blobOverheadRatio = blobOverheadRatio;
+    this.storageCorrectionByDepth = storageCorrectionByDepth;
+  }
+
+  /**
+   * Total node writes expected at {@code depth}: account-trie writes as counted, plus storage-trie
+   * writes scaled by the calibration-measured per-depth correction that removes the analytic
+   * fill-every-depth over-count. With no calibration correction this equals {@code
+   * mutationsByDepth[depth]}.
+   */
+  double correctedTotalWrites(final int depth) {
+    final long accountWrites = counts.accountMutationsByDepth()[depth];
+    final long storageWrites = counts.storageMutationsByDepth()[depth];
+    // Fall back to the combined total when the account/storage split wasn't populated (e.g. counts
+    // built directly via recordMutation without the category split): no split means no correction.
+    if (accountWrites == 0 && storageWrites == 0) {
+      return counts.mutationsByDepth()[depth];
+    }
+    final double correction =
+        storageCorrectionByDepth == null || depth >= storageCorrectionByDepth.length
+            ? 1.0
+            : storageCorrectionByDepth[depth];
+    return accountWrites + storageWrites * correction;
   }
 
   public long estimatedOnDiskBytes(final int fullAboveDepth, final int checkpointInterval) {
@@ -75,8 +115,8 @@ public final class HistorySizeEstimate {
     double totalKeyBytes = 0;
     double totalValueBytes = 0;
     for (int d = 0; d < mutationsByDepth.length; d++) {
-      final long totalWrites = mutationsByDepth[d];
-      if (totalWrites == 0) {
+      final double totalWrites = correctedTotalWrites(d);
+      if (totalWrites <= 0) {
         continue;
       }
       final double branchFraction = shape.branchFraction(d, leafCount);
@@ -198,8 +238,8 @@ public final class HistorySizeEstimate {
     double totalDiffBytes = 0;
     double totalKeyBytes = 0;
     for (int d = 0; d < mutationsByDepth.length; d++) {
-      final long totalWrites = mutationsByDepth[d];
-      if (totalWrites == 0) {
+      final double totalWrites = correctedTotalWrites(d);
+      if (totalWrites <= 0) {
         continue;
       }
       final double branchFraction = shape.branchFraction(d, leafCount);
@@ -213,8 +253,14 @@ public final class HistorySizeEstimate {
 
       final ObjectNode depthNode = perDepth.putObject(Integer.toString(d));
       depthNode.put("totalWrites", totalWrites);
+      depthNode.put("analyticTotalWrites", mutationsByDepth[d]);
       depthNode.put("accountWrites", counts.accountMutationsByDepth()[d]);
       depthNode.put("storageWrites", counts.storageMutationsByDepth()[d]);
+      depthNode.put(
+          "storageCorrection",
+          storageCorrectionByDepth == null || d >= storageCorrectionByDepth.length
+              ? 1.0
+              : storageCorrectionByDepth[d]);
       depthNode.put("branchFraction", branchFraction);
       depthNode.put("fullFraction", fullFraction);
       depthNode.put("logicalBytes", fullBytes + diffBytes + keyBytes);

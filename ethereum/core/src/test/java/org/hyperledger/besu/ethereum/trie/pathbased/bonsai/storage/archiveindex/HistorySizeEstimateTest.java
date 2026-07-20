@@ -144,6 +144,47 @@ class HistorySizeEstimateTest {
   }
 
   @Test
+  void storageCorrectionScalesStorageWritesButNotAccountWrites() {
+    // Split counts: 100 account and 100 storage node writes at depth 1.
+    final ChangeCountResult counts = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+    for (int i = 0; i < 100; i++) {
+      counts.recordMutation(1, false);
+      counts.recordCategoryMutation(1, true); // account
+      counts.recordMutation(1, false);
+      counts.recordCategoryMutation(1, false); // storage
+    }
+
+    // Correction 0.5 at depth 1: storage counts halve, account counts unchanged.
+    final double[] correction = new double[ChangeCountResult.MAX_DEPTH];
+    java.util.Arrays.fill(correction, 1.0);
+    correction[1] = 0.5;
+
+    final HistorySizeEstimate corrected =
+        new HistorySizeEstimate(
+            counts,
+            EntrySizeTable.hoodiDefaults(),
+            new TrieShapeModel(16),
+            new long[] {1_000_000L},
+            1.93,
+            1.44,
+            correction);
+    final HistorySizeEstimate uncorrected =
+        new HistorySizeEstimate(
+            counts,
+            EntrySizeTable.hoodiDefaults(),
+            new TrieShapeModel(16),
+            new long[] {1_000_000L},
+            1.93,
+            1.44);
+
+    // Corrected total at depth 1 = 100 account + 100 storage×0.5 = 150; uncorrected = 200.
+    assertThat(corrected.correctedTotalWrites(1)).isEqualTo(150.0);
+    assertThat(uncorrected.correctedTotalWrites(1)).isEqualTo(200.0);
+    assertThat(corrected.estimatedOnDiskBytes(2, 16))
+        .isLessThan(uncorrected.estimatedOnDiskBytes(2, 16));
+  }
+
+  @Test
   void leverTableHasOneRowPerDepthSetting() {
     final HistorySizeEstimate est =
         new HistorySizeEstimate(

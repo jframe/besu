@@ -45,6 +45,19 @@ public final class CalibrationResult {
   private final double[] diffShortSum;
   private final long[] diffShortCount;
   private final long[] writesByDepth;
+  // Real (recorded) node writes per depth, split by owning trie. The storage split, divided by the
+  // analytic counter's storage writes over the same replay slice, yields the per-depth correction
+  // that cancels the analytic fill-every-depth over-count for the (sparse, compacted) storage trie.
+  private final long[] realAccountWritesByDepth;
+  private final long[] realStorageWritesByDepth;
+  // Analytic (TrieLogChangeCounter) storage writes per depth over the same slice, set by the
+  // calibration subcommand after replay. Zero (the default / absent-in-file) disables correction.
+  private final long[] analyticStorageWritesByDepth;
+
+  // Ceiling on the storage correction factor, so a depth with near-zero analytic writes (noisy
+  // ratio) can't blow up the estimate. Storage is over-counted (factor < 1) at the byte-dominant
+  // shallow depths and only mildly under-counted deep, so a modest ceiling loses nothing real.
+  private static final double MAX_STORAGE_CORRECTION = 8.0;
 
   private double keyBytesSum;
   private long keyBytesCount;
@@ -64,6 +77,9 @@ public final class CalibrationResult {
     this.diffShortSum = new double[maxDepth];
     this.diffShortCount = new long[maxDepth];
     this.writesByDepth = new long[maxDepth];
+    this.realAccountWritesByDepth = new long[maxDepth];
+    this.realStorageWritesByDepth = new long[maxDepth];
+    this.analyticStorageWritesByDepth = new long[maxDepth];
   }
 
   /**
@@ -83,9 +99,15 @@ public final class CalibrationResult {
       final boolean isBranch,
       final int fullSize,
       final int diffSize,
-      final int keySize) {
+      final int keySize,
+      final boolean isAccountPath) {
     final int d = Math.min(depth, maxDepth - 1);
     writesByDepth[d]++;
+    if (isAccountPath) {
+      realAccountWritesByDepth[d]++;
+    } else {
+      realStorageWritesByDepth[d]++;
+    }
     if (isBranch) {
       fullBranchSum[d] += fullSize;
       fullBranchCount[d]++;
@@ -119,6 +141,45 @@ public final class CalibrationResult {
 
   public long[] writesByDepth() {
     return writesByDepth;
+  }
+
+  public long[] realAccountWritesByDepth() {
+    return realAccountWritesByDepth;
+  }
+
+  public long[] realStorageWritesByDepth() {
+    return realStorageWritesByDepth;
+  }
+
+  /**
+   * Records the analytic ({@link TrieLogChangeCounter}) per-depth storage-node write counts
+   * measured over the same replay slice, against which the recorded (real) storage writes define
+   * the correction. Called by the calibration subcommand after the forward replay.
+   */
+  public void setAnalyticStorageWritesByDepth(final long[] analytic) {
+    System.arraycopy(
+        analytic, 0, analyticStorageWritesByDepth, 0, Math.min(analytic.length, maxDepth));
+  }
+
+  /**
+   * Per-depth multiplier that maps the estimator's analytic storage-node write count onto the
+   * measured reality: {@code realStorage[d] / analyticStorage[d]}, clamped to {@link
+   * #MAX_STORAGE_CORRECTION}. Depths where no analytic storage writes were observed in the slice
+   * return {@code 1.0} (no correction) — including every depth when the calibration file predates
+   * this field, so old files leave the estimate unchanged.
+   */
+  public double[] storageCorrectionByDepth() {
+    final double[] correction = new double[maxDepth];
+    for (int d = 0; d < maxDepth; d++) {
+      if (analyticStorageWritesByDepth[d] <= 0) {
+        correction[d] = 1.0;
+      } else {
+        final double ratio =
+            (double) realStorageWritesByDepth[d] / (double) analyticStorageWritesByDepth[d];
+        correction[d] = Math.min(MAX_STORAGE_CORRECTION, ratio);
+      }
+    }
+    return correction;
   }
 
   private static double[] means(final double[] sum, final long[] count) {
@@ -155,6 +216,9 @@ public final class CalibrationResult {
     putDepthShapeArrays(mapper, root, "diffBranch", diffBranchSum, diffBranchCount);
     putDepthShapeArrays(mapper, root, "diffShort", diffShortSum, diffShortCount);
     putLongArray(mapper, root, "writesByDepth", writesByDepth);
+    putLongArray(mapper, root, "realAccountWritesByDepth", realAccountWritesByDepth);
+    putLongArray(mapper, root, "realStorageWritesByDepth", realStorageWritesByDepth);
+    putLongArray(mapper, root, "analyticStorageWritesByDepth", analyticStorageWritesByDepth);
     try {
       mapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), root);
     } catch (final IOException e) {
@@ -180,7 +244,20 @@ public final class CalibrationResult {
     readDepthShapeArrays(root, "diffBranch", result.diffBranchSum, result.diffBranchCount);
     readDepthShapeArrays(root, "diffShort", result.diffShortSum, result.diffShortCount);
     readLongArray(root, "writesByDepth", result.writesByDepth);
+    // Fields added with the storage-correction feature; absent in older calibration files, in which
+    // case they stay zero and storageCorrectionByDepth() returns all-1.0 (no correction).
+    readLongArrayIfPresent(root, "realAccountWritesByDepth", result.realAccountWritesByDepth);
+    readLongArrayIfPresent(root, "realStorageWritesByDepth", result.realStorageWritesByDepth);
+    readLongArrayIfPresent(
+        root, "analyticStorageWritesByDepth", result.analyticStorageWritesByDepth);
     return result;
+  }
+
+  private static void readLongArrayIfPresent(
+      final JsonNode root, final String name, final long[] values) {
+    if (root.has(name)) {
+      readLongArray(root, name, values);
+    }
   }
 
   private static void putDepthShapeArrays(

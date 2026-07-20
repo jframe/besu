@@ -25,7 +25,12 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.NoopBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.CalibrationResult;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ChangeCountResult;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.FlatDbStorageLeafCountProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.RecordingTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.StorageTrieLeafCountProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieLogChangeCounter;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieShapeModel;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.CacheManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
@@ -84,6 +89,12 @@ public class TrieNodeHistoryCalibrateSubCommand implements Runnable {
   // operator is warned that the calibration slice may be too short to trust for that depth.
   private static final long MIN_SAMPLES_PER_DEPTH = 100L;
 
+  private static final int TRIE_RADIX = 16;
+
+  // Must match TrieNodeHistoryEstimateSubCommand.STORAGE_SLOT_PROBE_CAP so the analytic storage
+  // counts measured here are computed on the same terms the estimator uses.
+  private static final int STORAGE_SLOT_PROBE_CAP = 1 << 15;
+
   @SuppressWarnings("unused")
   @ParentCommand
   private StorageSubCommand parentCommand;
@@ -124,11 +135,23 @@ public class TrieNodeHistoryCalibrateSubCommand implements Runnable {
     try {
       controller = parentCommand.besuCommand.buildController();
     } catch (final RuntimeException e) {
+      final String underlying = e.getMessage();
+      if (underlying != null && underlying.contains("Database format mismatch")) {
+        throw new IllegalStateException(
+            "Failed to open the datadir for calibration: "
+                + underlying
+                + " Calibration requires a plain, pre-migration Bonsai datadir; it cannot be run"
+                + " against a datadir already migrated to X_BONSAI_ARCHIVE. Do not pass"
+                + " --data-storage-format=X_BONSAI_ARCHIVE to force past this error — doing so"
+                + " would let calibration's rollback mutate live state that the archive index"
+                + " relies on staying monotonically forward-only.",
+            e);
+      }
       throw new IllegalStateException(
           "Failed to open the datadir for calibration. This subcommand MUTATES the datadir, so"
               + " point --data-path at a disposable COPY of a stopped node's datadir, not a live"
               + " node's datadir (a running besu holds the RocksDB write lock). Underlying error: "
-              + e.getMessage(),
+              + underlying,
           e);
     }
 
@@ -203,9 +226,55 @@ public class TrieNodeHistoryCalibrateSubCommand implements Runnable {
 
     warnOnSparseCoverage(out, result);
 
+    // Anchor the estimator's analytic storage counting to reality: replay is complete and the flat
+    // DB is back at head, so run the same TrieLogChangeCounter the estimator uses over the same
+    // slice, then hand the analytic per-depth storage counts to the result. The estimator divides
+    // its (recorded) real storage writes by these to cancel the fill-every-depth over-count.
+    out.println("Measuring analytic storage counts over the slice for the correction factor...");
+    out.flush();
+    result.setAnalyticStorageWritesByDepth(
+        analyticStorageWritesByDepth(archive, blockchain, trieLogManager, target, head));
+
     result.writeTo(output);
     out.println("Wrote calibration to " + output);
     out.flush();
+  }
+
+  /**
+   * Runs {@link TrieLogChangeCounter} (the estimator's counter) over the replay slice {@code
+   * (target, head]} and returns its per-depth storage-node write counts. Storage-path counting uses
+   * a live-flat-DB {@link FlatDbStorageLeafCountProvider} exactly as the estimator does, so the
+   * ratio of recorded-real to this analytic count is the correction the estimator needs.
+   * Account-path depth is irrelevant here (only storage counts are read), so a placeholder account
+   * leaf count is used.
+   */
+  private static long[] analyticStorageWritesByDepth(
+      final BonsaiWorldStateProvider archive,
+      final MutableBlockchain blockchain,
+      final TrieLogManager trieLogManager,
+      final long target,
+      final long head) {
+    final SegmentedKeyValueStorage composedStorage =
+        archive.getWorldStateKeyValueStorage().getComposedWorldStateStorage();
+    final StorageTrieLeafCountProvider storageLeafCounts =
+        new FlatDbStorageLeafCountProvider(composedStorage, STORAGE_SLOT_PROBE_CAP);
+    final TrieLogChangeCounter counter =
+        new TrieLogChangeCounter(2, 0, new TrieShapeModel(TRIE_RADIX));
+    final ChangeCountResult counts = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+    for (long n = target + 1; n <= head; n++) {
+      final BlockHeader header = headerOrThrow(blockchain, n);
+      final TrieLog trieLog =
+          trieLogManager
+              .getTrieLogLayer(header.getHash())
+              .orElseThrow(
+                  () ->
+                      new IllegalStateException(
+                          "No trie log stored for block "
+                              + header.getNumber()
+                              + "; cannot compute the analytic storage correction."));
+      counter.countBlock(trieLog, n, 1L, storageLeafCounts, counts);
+    }
+    return counts.storageMutationsByDepth();
   }
 
   /**

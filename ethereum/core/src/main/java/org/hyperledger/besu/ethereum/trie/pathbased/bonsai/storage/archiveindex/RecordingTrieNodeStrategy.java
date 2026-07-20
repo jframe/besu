@@ -71,7 +71,7 @@ public final class RecordingTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes node) {
     final Optional<Bytes> prior =
         storage.get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe()).map(Bytes::wrap);
-    record(prior.orElse(null), node, location.size(), location.size() + 8);
+    record(prior.orElse(null), node, location.size(), location.size() + 8, true);
 
     delegate.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
   }
@@ -87,7 +87,7 @@ public final class RecordingTrieNodeStrategy implements TrieNodeStrategy {
     final Bytes accountHashLocation = Bytes.concatenate(accountHash.getBytes(), location);
     final Optional<Bytes> prior =
         storage.get(TRIE_BRANCH_STORAGE, accountHashLocation.toArrayUnsafe()).map(Bytes::wrap);
-    record(prior.orElse(null), node, location.size(), accountHashLocation.size() + 8);
+    record(prior.orElse(null), node, location.size(), accountHashLocation.size() + 8, false);
 
     delegate.putFlatStorageTrieNode(storage, transaction, accountHash, location, nodeHash, node);
   }
@@ -105,11 +105,16 @@ public final class RecordingTrieNodeStrategy implements TrieNodeStrategy {
     return result;
   }
 
-  private void record(final Bytes prior, final Bytes newNode, final int depth, final int keySize) {
+  private void record(
+      final Bytes prior,
+      final Bytes newNode,
+      final int depth,
+      final int keySize,
+      final boolean isAccountPath) {
     final int fullSize = TrieNodeDiffCodec.encodeFull(newNode).size();
     final int diffSize =
         prior == null ? fullSize : TrieNodeDiffCodec.encodeDiff(prior, newNode).size();
     final boolean isBranch = TrieNodeDiffCodec.nodeArity(newNode) == 17;
-    result.record(depth, isBranch, fullSize, diffSize, keySize);
+    result.record(depth, isBranch, fullSize, diffSize, keySize, isAccountPath);
   }
 }
