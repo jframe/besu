@@ -310,14 +310,9 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    *   <li>Deletion ({@code newNode == null}): tombstone. Not currently wired in (deletions are
    *       handled via {@link TrieNodeStrategy#removeFlatAccountStateTrieNode} which is not yet
    *       hooked); included for completeness.
-   *   <li>Upper-trie FULL ({@code location.size() <= 2}): always FULL for root-adjacent nodes. The
-   *       comparison uses the nibble-path {@code location} (not {@code naturalKey}) so that account
-   *       and storage trie nodes are treated symmetrically: for account nodes {@code location ==
-   *       naturalKey}; for storage nodes {@code naturalKey = accountHash ‖ location} (32+ bytes),
-   *       so {@code naturalKey.size()} would never be ≤ 2.
-   *   <li>Checkpoint FULL: checkpoint interval is determined by {@link
-   *       #checkpointIntervalForDepth(int)}. Every {@code interval}-th mutation is stored as FULL.
-   *   <li>DIFF: structural delta versus the prior node.
+   *   <li>Depth-tiered checkpoint: {@code previousCount % checkpointIntervalForDepth(location.size())
+   *       == 0} → FULL, else DIFF. The root (depth 0) uses interval 1 and is thus always FULL; depth
+   *       1–2 use {@link #SHALLOW_CHECKPOINT_INTERVAL}; depth ≥ 3 use {@link #DEEP_CHECKPOINT_INTERVAL}.
    * </ol>
    *
    * @param tx the transaction on which to write the history and index entries
@@ -340,27 +335,23 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes newNode,
       final SegmentedKeyValueStorage storage) {
 
-    // Determine entry type, append to the index, and write the history entry.
-    //
-    // For creation and FULL_ABOVE_DEPTH nodes the entry type is always FULL regardless of mutation
-    // count, so we call changeIndex.append directly (1 read). For DIFF/checkpoint nodes we use
-    // appendAndGetPreviousCount which returns the pre-write mutation count AND does the append in
-    // a single RocksDB read — replacing the old pattern of countMutationsUpTo + separate append
-    // (2 reads → 1 read for the common case).
+    // Creation is always FULL|CREATION (one index append). For an existing node, the depth-tiered
+    // interval decides FULL vs DIFF; appendAndGetPreviousCount returns the pre-write mutation count
+    // AND appends in a single index read.
     final Bytes entry;
     if (priorNode == null) {
       // Creation: no prior node → always FULL | CREATION.
       entry = TrieNodeDiffCodec.encodeDiff(null, newNode);
       changeIndex.append(tx, naturalKey, block);
-    } else if (location.size() <= 2) { // TEMP: removed in Task 2
-      // Upper-trie node: always FULL to keep proof lookups cheap.
-      entry = TrieNodeDiffCodec.encodeFull(newNode);
-      changeIndex.append(tx, naturalKey, block);
     } else {
-      // DIFF or checkpoint FULL: need mutation count to decide. Combined read+append.
+      // Depth-tiered checkpoint: every interval-th mutation is FULL, the rest are DIFFs.
+      // The interval is chosen from the node's nibble-path depth (location.size()); the root
+      // (depth 0) uses interval 1 and is therefore always FULL. Combined read+append returns the
+      // pre-write mutation count in a single index read.
+      final int interval = checkpointIntervalForDepth(location.size());
       final long previousCount = changeIndex.appendAndGetPreviousCount(tx, naturalKey, block);
       entry =
-          (previousCount % DEEP_CHECKPOINT_INTERVAL == 0)
+          (previousCount % interval == 0)
               ? TrieNodeDiffCodec.encodeFull(newNode)
               : TrieNodeDiffCodec.encodeDiff(priorNode, newNode);
     }

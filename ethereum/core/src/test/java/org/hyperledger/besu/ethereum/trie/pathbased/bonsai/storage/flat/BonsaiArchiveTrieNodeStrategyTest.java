@@ -53,6 +53,9 @@ class BonsaiArchiveTrieNodeStrategyTest {
   /** An upper-trie location with only 1 nibble byte (depth 2) — triggers FULL_ABOVE_DEPTH path. */
   private static final Bytes LOCATION_SHALLOW = Bytes.fromHexString("0x01");
 
+  /** The trie root: an empty nibble-path location (depth 0) → always FULL. */
+  private static final Bytes LOCATION_ROOT = Bytes.EMPTY;
+
   /** A dummy node hash (does not have to be the real hash of the RLP in unit tests). */
   private static final Bytes32 NODE_HASH =
       Bytes32.fromHexString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -235,48 +238,68 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   @Test
-  void flagEnabled_upperTrieLocation_alwaysWritesFull() {
+  void flagEnabled_shallowLocation_checkpointsAtInterval32() {
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
 
-    // LOCATION_SHALLOW has size 1 <= FULL_ABOVE_DEPTH (2) → always FULL.
+    // LOCATION_SHALLOW has size 1 (depth 1) → SHALLOW_CHECKPOINT_INTERVAL (32), no longer forced FULL.
+    // Block 100 = creation (FULL). Block 101 = mutation 1 → DIFF (not a checkpoint).
     writeAtBlock(strategy, LOCATION_SHALLOW, SHORT_NODE_V1, 100L);
     writeAtBlock(strategy, LOCATION_SHALLOW, SHORT_NODE_V2, 101L);
 
     final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_SHALLOW);
 
-    // Both block 100 and 101 should be FULL entries.
     final java.util.Optional<Bytes> entry100 = historyStore.get(naturalKey, 100L);
     assertThat(entry100).isPresent();
     assertThat(TrieNodeDiffCodec.decode(entry100.get()).isFull()).isTrue();
+    assertThat(TrieNodeDiffCodec.decode(entry100.get()).isCreation()).isTrue();
 
+    // Block 101 is now a DIFF (previously this location was forced FULL).
     final java.util.Optional<Bytes> entry101 = historyStore.get(naturalKey, 101L);
     assertThat(entry101).isPresent();
-    assertThat(TrieNodeDiffCodec.decode(entry101.get()).isFull()).isTrue();
+    assertThat(TrieNodeDiffCodec.decode(entry101.get()).isFull()).isFalse();
+    assertThat(TrieNodeDiffCodec.decode(entry101.get()).isShortNodeDiff()).isTrue();
   }
 
   @Test
-  void flagEnabled_checkpointInterval_every16thMutationIsFull() {
+  void flagEnabled_rootLocation_alwaysWritesFull() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+
+    // Root (empty location, depth 0) → interval 1 → FULL at every block.
+    writeAtBlock(strategy, LOCATION_ROOT, SHORT_NODE_V1, 100L);
+    writeAtBlock(strategy, LOCATION_ROOT, SHORT_NODE_V2, 101L);
+    writeAtBlock(strategy, LOCATION_ROOT, SHORT_NODE_V1, 102L);
+
+    final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_ROOT);
+
+    for (final long block : new long[] {100L, 101L, 102L}) {
+      final java.util.Optional<Bytes> entry = historyStore.get(naturalKey, block);
+      assertThat(entry).as("root entry at block %s", block).isPresent();
+      assertThat(TrieNodeDiffCodec.decode(entry.get()).isFull())
+          .as("root entry at block %s must be FULL", block)
+          .isTrue();
+    }
+    // Root stays indexed in this plan (skip-root is deferred): the index records every change.
+    assertThat(changeIndex.latestChangeBlock(naturalKey, 102L)).contains(102L);
+  }
+
+  @Test
+  void flagEnabled_deepNode_every16thMutationIsFull() {
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
     final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_DEEP);
 
-    // Write the first version (creation = FULL | CREATION → mutation index 0, FULL).
     writeAtBlock(strategy, LOCATION_DEEP, SHORT_NODE_V1, 100L);
 
-    // Write mutations 1 through 16. At mutation 16 (DEEP_CHECKPOINT_INTERVAL = 16) we should get FULL.
-    // Alternate between V1 and V2 to produce real diffs.
     for (int i = 1; i <= BonsaiArchiveTrieNodeStrategy.DEEP_CHECKPOINT_INTERVAL; i++) {
       final Bytes node = (i % 2 == 0) ? SHORT_NODE_V1 : SHORT_NODE_V2;
       writeAtBlock(strategy, LOCATION_DEEP, node, 100L + i);
     }
 
-    // Mutation at block 100 + DEEP_CHECKPOINT_INTERVAL (= 116) should be FULL (m=16, m%16=0).
     final long checkpointBlock = 100L + BonsaiArchiveTrieNodeStrategy.DEEP_CHECKPOINT_INTERVAL;
     final java.util.Optional<Bytes> entryAtCheckpoint =
         historyStore.get(naturalKey, checkpointBlock);
     assertThat(entryAtCheckpoint).isPresent();
     assertThat(TrieNodeDiffCodec.decode(entryAtCheckpoint.get()).isFull()).isTrue();
 
-    // Mutation just before the checkpoint (block 115) should be DIFF.
     final java.util.Optional<Bytes> entryBeforeCheckpoint =
         historyStore.get(naturalKey, checkpointBlock - 1);
     assertThat(entryBeforeCheckpoint).isPresent();
@@ -369,13 +392,13 @@ class BonsaiArchiveTrieNodeStrategyTest {
   // ---------------------------------------------------------------------------
 
   @Test
-  void storageNode_flagEnabled_shallowLocation_alwaysWritesFull() {
+  void storageNode_flagEnabled_shallowLocation_checkpointsAtInterval32() {
     final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
     final Hash accountHash =
         Address.fromHexString("0x0000000000000000000000000000000000000004").addressHash();
 
-    // LOCATION_SHALLOW (size 1) <= FULL_ABOVE_DEPTH (2) → should always be FULL even for storage
-    // trie nodes (where naturalKey = accountHash ‖ location = 33+ bytes, far above threshold).
+    // Storage-trie node at a shallow location (size 1, depth 1): the depth is taken from the
+    // nibble-path `location`, not the 33-byte naturalKey, so it too moves to interval 32.
     writeStorageAtBlock(strategy, accountHash, LOCATION_SHALLOW, SHORT_NODE_V1, 100L);
     writeStorageAtBlock(strategy, accountHash, LOCATION_SHALLOW, SHORT_NODE_V2, 101L);
 
@@ -384,12 +407,12 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final java.util.Optional<Bytes> entry100 = historyStore.get(naturalKey, 100L);
     assertThat(entry100).isPresent();
     assertThat(TrieNodeDiffCodec.decode(entry100.get()).isFull()).isTrue();
+    assertThat(TrieNodeDiffCodec.decode(entry100.get()).isCreation()).isTrue();
 
-    // Block 101: second write at a shallow location must still be FULL (not a DIFF).
     final java.util.Optional<Bytes> entry101 = historyStore.get(naturalKey, 101L);
     assertThat(entry101).isPresent();
-    assertThat(TrieNodeDiffCodec.decode(entry101.get()).isFull()).isTrue();
-    assertThat(TrieNodeDiffCodec.decode(entry101.get()).isCreation()).isFalse();
+    assertThat(TrieNodeDiffCodec.decode(entry101.get()).isFull()).isFalse();
+    assertThat(TrieNodeDiffCodec.decode(entry101.get()).isShortNodeDiff()).isTrue();
   }
 
   // ---------------------------------------------------------------------------
