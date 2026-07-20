@@ -176,6 +176,23 @@ class BonsaiArchiveTrieNodeStrategyTest {
     progressTx.commit();
   }
 
+  /** Build a branch-node RLP with a single occupied child slot to produce distinct nodes. */
+  private static Bytes branchWith(final int slotIndex, final int markerByte) {
+    return RLP.encode(
+        out -> {
+          out.startList();
+          for (int i = 0; i < 16; i++) {
+            if (i == slotIndex) {
+              out.writeBytes(Bytes32.leftPad(Bytes.of(markerByte)));
+            } else {
+              out.writeNull();
+            }
+          }
+          out.writeNull(); // branch terminal value: empty
+          out.endList();
+        });
+  }
+
   // ---------------------------------------------------------------------------
   // Account-trie tests (flag ON)
   // ---------------------------------------------------------------------------
@@ -579,5 +596,42 @@ class BonsaiArchiveTrieNodeStrategyTest {
     // reconstruction would return empty → eth_getProof would fail. Keep them coupled.
     assertThat(maxInterval).isLessThanOrEqualTo(TrieNodeHistoryReader.RECONSTRUCT_WINDOW);
     assertThat(maxInterval).isLessThanOrEqualTo(TrieNodeHistoryReader.MAX_BACKWARD_WALK_STEPS);
+  }
+
+  @Test
+  void shallowNode_reconstructsMidDiffChain_withinReconstructWindow() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+    // Depth-1 (shallow) node → interval 32. Write 40 mutations so the chain spans past one
+    // checkpoint and the target sits inside a diff run whose FULL base is up to 32 entries back —
+    // well within RECONSTRUCT_WINDOW (64).
+    final long baseBlock = 1_000L;
+    final int mutations = 40;
+    final java.util.Map<Long, Bytes> writtenByBlock = new java.util.HashMap<>();
+    for (int i = 0; i <= mutations; i++) {
+      final Bytes node = branchWith(i % 16, 1 + i); // distinct node each block
+      final long block = baseBlock + i;
+      writeAtBlock(strategy, LOCATION_SHALLOW, node, block);
+      writtenByBlock.put(block, node);
+    }
+
+    final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_SHALLOW);
+    final TrieNodeHistoryReader reader = new TrieNodeHistoryReader(historyStore, changeIndex);
+
+    // Reconstruct at a block that is a DIFF (mutation 20, not a multiple of 32) and confirm it
+    // equals exactly what was written there.
+    final long targetBlock = baseBlock + 20;
+    assertThat(TrieNodeDiffCodec.decode(historyStore.get(naturalKey, targetBlock).get()).isFull())
+        .as("mutation 20 should be a DIFF, not a checkpoint")
+        .isFalse();
+
+    final java.util.Optional<Bytes> reconstructed = reader.nodeAt(naturalKey, targetBlock);
+    assertThat(reconstructed).isPresent();
+    assertThat(reconstructed.get()).isEqualTo(writtenByBlock.get(targetBlock));
+
+    // Also reconstruct at the checkpoint block (mutation 32 = FULL) and at the last mutation.
+    assertThat(reader.nodeAt(naturalKey, baseBlock + 32))
+        .hasValue(writtenByBlock.get(baseBlock + 32));
+    assertThat(reader.nodeAt(naturalKey, baseBlock + mutations))
+        .hasValue(writtenByBlock.get(baseBlock + mutations));
   }
 }
