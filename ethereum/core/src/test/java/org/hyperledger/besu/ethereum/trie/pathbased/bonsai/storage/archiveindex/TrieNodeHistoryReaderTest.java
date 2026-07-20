@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.crypto.Hash.keccak256;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atMost;
@@ -459,5 +460,62 @@ class TrieNodeHistoryReaderTest {
     // 6. nodeAt(50) beyond the recorded range — latest change is block 49 (DIFF), reconstruct v49
     assertThat(reader.nodeAt(KEY, 50))
         .hasValueSatisfying(b -> assertThat(b).isEqualTo(versions[49]));
+  }
+
+  // -------------------------------------------------------------------------
+  // HASH_REF resolution (CAS dedup, Task 4)
+  // -------------------------------------------------------------------------
+
+  @Test
+  void nodeAt_resolvesHashRefFullTarget() {
+    final Bytes node = branchWith(1, 42);
+    final Bytes32 hash = keccak256(node);
+
+    // History entry at block 50 is a HASH_REF FULL; body lives in the CAS.
+    var tx = kv.startTransaction();
+    store.putCasBody(tx, hash, node);
+    store.put(tx, KEY, 50, TrieNodeDiffCodec.encodeFullRef(hash, false));
+    index.append(tx, KEY, 50);
+    tx.commit();
+
+    assertThat(reader.nodeAt(KEY, 60)).contains(node);
+  }
+
+  @Test
+  void nodeAt_reconstructsDiffChainOverHashRefBase() {
+    final Bytes base = branchWith(1, 1);
+    final Bytes v2 = branchWith(2, 2);
+    final Bytes v3 = branchWith(3, 3);
+    final Bytes32 baseHash = keccak256(base);
+
+    var tx = kv.startTransaction();
+    store.putCasBody(tx, baseHash, base);
+    store.put(tx, KEY, 10, TrieNodeDiffCodec.encodeFullRef(baseHash, true));
+    index.append(tx, KEY, 10);
+    store.put(tx, KEY, 11, TrieNodeDiffCodec.encodeDiff(base, v2));
+    index.append(tx, KEY, 11);
+    store.put(tx, KEY, 12, TrieNodeDiffCodec.encodeDiff(v2, v3));
+    index.append(tx, KEY, 12);
+    tx.commit();
+
+    // Target block 12 is a DIFF; the checkpoint base at 10 is a ref that must be resolved from
+    // the CAS before reconstruction.
+    assertThat(reader.nodeAt(KEY, 12)).contains(v3);
+    // And the ref'd base itself resolves at its own block.
+    assertThat(reader.nodeAt(KEY, 10)).contains(base);
+  }
+
+  @Test
+  void nodeAt_missingCasBodyReturnsEmpty() {
+    final Bytes32 danglingHash =
+        Bytes32.fromHexString("0x4444444444444444444444444444444444444444444444444444444444444444");
+
+    var tx = kv.startTransaction();
+    // Ref written, body never written (simulated corruption / partial write).
+    store.put(tx, KEY, 50, TrieNodeDiffCodec.encodeFullRef(danglingHash, false));
+    index.append(tx, KEY, 50);
+    tx.commit();
+
+    assertThat(reader.nodeAt(KEY, 60)).isEmpty();
   }
 }

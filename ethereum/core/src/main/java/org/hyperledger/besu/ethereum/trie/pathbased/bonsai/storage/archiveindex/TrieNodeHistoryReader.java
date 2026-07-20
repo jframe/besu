@@ -169,9 +169,9 @@ public final class TrieNodeHistoryReader {
       return Optional.empty();
     }
 
-    // Step 4: if FULL, return the embedded node directly — no reconstruction needed.
+    // Step 4: if FULL, return the embedded (or CAS-referenced) node — no reconstruction needed.
     if (bStarDecoded.isFull()) {
-      return Optional.of(bStarDecoded.fullNode());
+      return resolveFullBody(naturalKey, bStar, bStarDecoded);
     }
 
     // Step 5: b* is a DIFF — locate the nearest FULL checkpoint and collect the diff chain.
@@ -259,9 +259,9 @@ public final class TrieNodeHistoryReader {
       return Optional.empty();
     }
 
-    // If FULL, return the embedded node directly — no reconstruction needed.
+    // If FULL, return the embedded (or CAS-referenced) node directly — no reconstruction needed.
     if (bStarDecoded.isFull()) {
-      return Optional.of(bStarDecoded.fullNode());
+      return resolveFullBody(naturalKey, bStar, bStarDecoded);
     }
 
     // bStar is a DIFF — use the preloaded list to locate the nearest FULL checkpoint.
@@ -361,18 +361,24 @@ public final class TrieNodeHistoryReader {
       return backwardWalkFallback(naturalKey, bStar, bStarEntry);
     }
 
-    // Base is the FULL at fullPos; every entry above it up to bStar is a DIFF by construction (the
-    // backward scan stopped at the newest FULL), so apply them in ascending order.
+    // Base is the FULL at fullPos (inline or CAS-referenced); every entry above it up to bStar is
+    // a DIFF by construction, so resolve the base body and apply them in ascending order.
     final Bytes fullEntry = windowEntries.get(fullPos).get();
+    final TrieNodeDiffCodec.Decoded fullDecoded = TrieNodeDiffCodec.decode(fullEntry);
+    final Optional<Bytes> baseNodeOpt =
+        resolveFullBody(naturalKey, windowBlocks[fullPos], fullDecoded);
+    if (baseNodeOpt.isEmpty()) {
+      return Optional.empty();
+    }
     final int diffCount = windowSize - fullPos - 1;
     if (diffCount == 0) {
-      return Optional.of(TrieNodeDiffCodec.decode(fullEntry).fullNode());
+      return baseNodeOpt;
     }
     final List<Bytes> diffEntries = new ArrayList<>(diffCount);
     for (int i = fullPos + 1; i < windowSize; i++) {
       diffEntries.add(windowEntries.get(i).get());
     }
-    return Optional.of(TrieNodeDiffCodec.reconstruct(fullEntry, diffEntries));
+    return Optional.of(TrieNodeDiffCodec.reconstructFromNode(baseNodeOpt.get(), diffEntries));
   }
 
   /**
@@ -380,12 +386,40 @@ public final class TrieNodeHistoryReader {
    * checkpoint entry is unexpectedly not FULL. Identical in semantics to the original fallback in
    * {@link #nodeAt(Bytes, long)}.
    */
+  /**
+   * Materialises a FULL entry's node body: inline bodies are returned directly; HASH_REF bodies
+   * are fetched from the content-addressed store (one point read, keccak-self-verified by the
+   * store). A missing or corrupt CAS body is treated like an index/store mismatch: warn and empty.
+   *
+   * @param naturalKey the key being resolved (log context)
+   * @param block the entry's block (log context)
+   * @param decoded the decoded FULL entry
+   * @return the node RLP, or empty if the referenced body is missing/corrupt
+   */
+  private Optional<Bytes> resolveFullBody(
+      final Bytes naturalKey, final long block, final TrieNodeDiffCodec.Decoded decoded) {
+    if (!decoded.isHashRef()) {
+      return Optional.of(decoded.fullNode());
+    }
+    final Optional<Bytes> body = store.getCasBody(decoded.refHash());
+    if (body.isEmpty()) {
+      LOG.warn(
+          "TrieNodeHistoryReader: FULL entry at block {} for key {} references CAS body {} that"
+              + " is missing or corrupt — returning empty",
+          block,
+          naturalKey,
+          decoded.refHash());
+    }
+    return body;
+  }
+
   private Optional<Bytes> backwardWalkFallback(
       final Bytes naturalKey, final long bStar, final Bytes bStarEntry) {
     final List<Bytes> entriesDescending = new ArrayList<>();
     entriesDescending.add(bStarEntry);
 
     Bytes fullEntry = null;
+    long fullBlock = -1;
     long walkBlock = bStar;
     int steps = 0;
 
@@ -413,6 +447,7 @@ public final class TrieNodeHistoryReader {
 
       if (prevDecoded.isFull()) {
         fullEntry = prevEntry;
+        fullBlock = prevBlock;
         break;
       }
 
@@ -439,10 +474,15 @@ public final class TrieNodeHistoryReader {
       return Optional.empty();
     }
 
+    final Optional<Bytes> baseNodeOpt =
+        resolveFullBody(naturalKey, fullBlock, TrieNodeDiffCodec.decode(fullEntry));
+    if (baseNodeOpt.isEmpty()) {
+      return Optional.empty();
+    }
     final List<Bytes> diffEntries = new ArrayList<>(entriesDescending.size());
     for (int i = entriesDescending.size() - 1; i >= 0; i--) {
       diffEntries.add(entriesDescending.get(i));
     }
-    return Optional.of(TrieNodeDiffCodec.reconstruct(fullEntry, diffEntries));
+    return Optional.of(TrieNodeDiffCodec.reconstructFromNode(baseNodeOpt.get(), diffEntries));
   }
 }
