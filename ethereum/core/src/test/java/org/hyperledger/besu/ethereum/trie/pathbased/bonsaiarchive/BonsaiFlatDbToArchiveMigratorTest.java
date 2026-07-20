@@ -16,10 +16,12 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hyperledger.besu.crypto.Hash.keccak256;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_FRONTIER;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_CAS_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy.calculateNaturalSlotKey;
@@ -64,6 +66,8 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
@@ -92,6 +96,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
@@ -371,6 +376,85 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     tx.rollback();
     verify(sharedTx, never()).commit();
     verify(sharedTx, never()).rollback();
+  }
+
+  @Test
+  public void migrationTransactionForwardsCasBodyWritesToSharedTransaction() {
+    // Regression: MigrationTransaction's segment filter silently dropped TRIE_NODE_CAS_ARCHIVE
+    // puts, committing HASH_REF history entries whose CAS bodies never existed (dangling refs).
+    final SegmentedKeyValueStorage real = mock(SegmentedKeyValueStorage.class);
+    final SegmentedKeyValueStorageTransaction sharedTx =
+        mock(SegmentedKeyValueStorageTransaction.class);
+    final BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage trieStorage =
+        new BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage(real);
+
+    trieStorage.beginBatch(sharedTx);
+    final SegmentedKeyValueStorageTransaction tx = trieStorage.startTransaction();
+
+    final byte[] casKey = keccak256(Bytes.fromHexString("0xabcd")).toArrayUnsafe();
+    final byte[] body = Bytes.fromHexString("0xabcd").toArrayUnsafe();
+    tx.put(TRIE_NODE_CAS_ARCHIVE, casKey, body);
+    verify(sharedTx).put(eq(TRIE_NODE_CAS_ARCHIVE), eq(casKey), eq(body));
+
+    tx.remove(TRIE_NODE_CAS_ARCHIVE, casKey);
+    verify(sharedTx).remove(eq(TRIE_NODE_CAS_ARCHIVE), eq(casKey));
+
+    trieStorage.endBatch();
+  }
+
+  /**
+   * End-to-end regression for the dangling-HASH_REF bug: a CAS-routed FULL checkpoint written via
+   * {@code captureTrieNodeDiff} through a {@link
+   * BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage} batch transaction must leave BOTH the
+   * 33-byte HASH_REF history entry AND its CAS body in committed storage, so the history reader can
+   * resolve the node. Before the fix the CAS body was silently dropped by the segment filter and
+   * {@code nodeAt} returned empty ("references CAS body ... missing or corrupt").
+   */
+  @Test
+  public void casRoutedCheckpointBodyCommitsThroughMigrationTransaction() {
+    final SegmentedKeyValueStorage real = new SegmentedInMemoryKeyValueStorage();
+    final BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage trieStorage =
+        new BonsaiFlatDbToArchiveMigrator.MigrationTrieStorage(real);
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(real);
+    final TrieNodeChangeIndex changeIndex =
+        new TrieNodeChangeIndex(real, ArchiveNodeKey.RANGE_SIZE);
+    final BonsaiArchiveTrieNodeStrategy strategy =
+        new BonsaiArchiveTrieNodeStrategy(
+            null, new BonsaiTrieNodeStrategy(), true, historyStore, changeIndex);
+
+    // A depth-1 branch node over the CAS_INLINE_THRESHOLD (128 bytes): 17-item list with four
+    // 32-byte child hashes. Non-empty location + size >= threshold routes the body to the CAS.
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    out.startList();
+    for (int i = 0; i < 16; i++) {
+      if (i < 4) {
+        out.writeBytes(keccak256(Bytes.of(i)));
+      } else {
+        out.writeNull();
+      }
+    }
+    out.writeBytes(Bytes.EMPTY);
+    out.endList();
+    final Bytes node = out.encoded();
+    assertThat(node.size()).isGreaterThanOrEqualTo(128);
+    final Bytes32 nodeHash = keccak256(node);
+    final Bytes location = Bytes.of(0x03);
+
+    final SegmentedKeyValueStorageTransaction sharedTx = real.startTransaction();
+    trieStorage.beginBatch(sharedTx);
+    final SegmentedKeyValueStorageTransaction tx = trieStorage.startTransaction();
+    strategy.putFlatAccountTrieNode(trieStorage, tx, location, nodeHash, node);
+    trieStorage.endBatch();
+    sharedTx.commit();
+
+    // The CAS body must be present and self-consistent in committed storage...
+    assertThat(historyStore.getCasBody(nodeHash))
+        .withFailMessage("CAS body for %s was not committed — dangling HASH_REF", nodeHash)
+        .contains(node);
+
+    // ...and the history reader must resolve the checkpoint back to the original node RLP.
+    final TrieNodeHistoryReader reader = new TrieNodeHistoryReader(historyStore, changeIndex);
+    assertThat(reader.nodeAt(ArchiveNodeKey.account(location), 0L)).contains(node);
   }
 
   @Test
