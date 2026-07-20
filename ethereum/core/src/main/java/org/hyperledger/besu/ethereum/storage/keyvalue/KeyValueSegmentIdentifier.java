@@ -87,6 +87,19 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       false,
       true),
+  // Content-addressed FULL trie-node body store: key = keccak256(node), value = node RLP.
+  // Write-once and idempotent (same key ⇒ same value), never deleted (archive history is never
+  // pruned). containsStaticData=false: duplicate blind puts rewrite the same key, and blob files
+  // would accumulate orphaned records from those rewrites — SST compaction collapses idempotent
+  // rewrites cleanly, and bodies (~128–600 B) are fine inline in SSTs. Keys are uniformly random
+  // (no prefix locality), so cacheIndexAndFilterBlocks=true keeps bloom/index blocks hot.
+  TRIE_NODE_CAS_ARCHIVE(
+      "TRIE_NODE_CAS_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      false,
+      false,
+      false,
+      true),
 
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE
 

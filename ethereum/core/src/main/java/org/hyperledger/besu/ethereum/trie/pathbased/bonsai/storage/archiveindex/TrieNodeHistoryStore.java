@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
+import static org.hyperledger.besu.crypto.Hash.keccak256;
+
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -24,6 +26,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Stores and retrieves diff-codec entries keyed by {@code naturalKey ‖ block(8 bytes BE)} in the
@@ -51,6 +56,8 @@ import org.apache.tuweni.bytes.Bytes;
  * the caller-supplied transaction; the caller is responsible for committing the transaction.
  */
 public final class TrieNodeHistoryStore {
+
+  private static final Logger LOG = LoggerFactory.getLogger(TrieNodeHistoryStore.class);
 
   private final SegmentedKeyValueStorage storage;
 
@@ -164,5 +171,55 @@ public final class TrieNodeHistoryStore {
       results.add(value.map(Bytes::wrap));
     }
     return results;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Content-addressed body store (TRIE_NODE_CAS_ARCHIVE)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Stores a FULL node body in the content-addressed store, keyed by its keccak256.
+   *
+   * <p>Blind and idempotent: the same hash always maps to the same bytes, so re-puts are harmless
+   * and no read-before-write is performed.
+   *
+   * @param tx the transaction on which to issue the write; must not be {@code null}
+   * @param nodeHash the keccak256 of {@code body}; must not be {@code null}
+   * @param body the raw node RLP; must not be {@code null}
+   */
+  public void putCasBody(
+      final SegmentedKeyValueStorageTransaction tx, final Bytes32 nodeHash, final Bytes body) {
+    Objects.requireNonNull(tx, "tx must not be null");
+    Objects.requireNonNull(nodeHash, "nodeHash must not be null");
+    Objects.requireNonNull(body, "body must not be null");
+    tx.put(
+        KeyValueSegmentIdentifier.TRIE_NODE_CAS_ARCHIVE,
+        nodeHash.toArrayUnsafe(),
+        body.toArrayUnsafe());
+  }
+
+  /**
+   * Retrieves a FULL node body from the content-addressed store, verifying {@code
+   * keccak256(body) == nodeHash} (the key IS the content hash, so corruption is detectable at this
+   * layer).
+   *
+   * @param nodeHash the content hash to resolve; must not be {@code null}
+   * @return the body if present and self-consistent; empty if missing or corrupt (corruption is
+   *     logged at WARN)
+   */
+  public Optional<Bytes> getCasBody(final Bytes32 nodeHash) {
+    Objects.requireNonNull(nodeHash, "nodeHash must not be null");
+    final Optional<Bytes> body =
+        storage
+            .get(KeyValueSegmentIdentifier.TRIE_NODE_CAS_ARCHIVE, nodeHash.toArrayUnsafe())
+            .map(Bytes::wrap);
+    if (body.isPresent() && !keccak256(body.get()).equals(nodeHash)) {
+      LOG.warn(
+          "TrieNodeHistoryStore: CAS body for {} fails keccak self-verification — treating as"
+              + " missing (corruption)",
+          nodeHash);
+      return Optional.empty();
+    }
+    return body;
   }
 }

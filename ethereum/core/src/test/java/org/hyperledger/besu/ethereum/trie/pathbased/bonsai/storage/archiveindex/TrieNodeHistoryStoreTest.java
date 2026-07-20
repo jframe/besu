@@ -15,13 +15,16 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.crypto.Hash.keccak256;
 
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -238,5 +241,43 @@ class TrieNodeHistoryStoreTest {
 
     assertThat(store.get(ACCOUNT_KEY, 77L))
         .hasValueSatisfying(e -> assertThat(TrieNodeDiffCodec.decode(e).isDeletion()).isTrue());
+  }
+
+  // -------------------------------------------------------------------------
+  // Content-addressed body store (TRIE_NODE_CAS_ARCHIVE), Task 2
+  // -------------------------------------------------------------------------
+
+  @Test
+  void casBody_putGetRoundTrip() {
+    final Bytes body = Bytes.fromHexString("0xc28080"); // any RLP payload
+    final Bytes32 hash = keccak256(body);
+
+    final var tx = kv.startTransaction();
+    store.putCasBody(tx, hash, body);
+    tx.commit();
+
+    assertThat(store.getCasBody(hash)).contains(body);
+  }
+
+  @Test
+  void casBody_missingReturnsEmpty() {
+    assertThat(store.getCasBody(Bytes32.ZERO)).isEmpty();
+  }
+
+  @Test
+  void casBody_corruptBodyReturnsEmpty() {
+    // Write a body under a key that is NOT its keccak — simulated corruption.
+    final Bytes body = Bytes.fromHexString("0xc28080");
+    final Bytes32 wrongKey =
+        Bytes32.fromHexString("0x3333333333333333333333333333333333333333333333333333333333333333");
+    final var tx = kv.startTransaction();
+    tx.put(
+        KeyValueSegmentIdentifier.TRIE_NODE_CAS_ARCHIVE,
+        wrongKey.toArrayUnsafe(),
+        body.toArrayUnsafe());
+    tx.commit();
+
+    // Self-verification (keccak(body) != key) must reject it fail-closed.
+    assertThat(store.getCasBody(wrongKey)).isEmpty();
   }
 }
