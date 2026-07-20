@@ -67,6 +67,14 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   static final int DEEP_CHECKPOINT_INTERVAL = 16;
 
   /**
+   * FULL bodies at least this many bytes (and at depth > 0) are stored once in {@code
+   * TRIE_NODE_CAS_ARCHIVE} and referenced by hash from the history entry. Smaller bodies stay
+   * inline: a 33-byte ref plus a 32-byte CAS key cannot pay for itself on small nodes unless
+   * duplication is extreme (see the CAS design doc §5).
+   */
+  static final int CAS_INLINE_THRESHOLD = 128;
+
+  /**
    * Returns the checkpoint interval for a node at the given nibble-path depth (in {@code location}
    * bytes). Every {@code interval}-th mutation for the node is stored FULL; the rest are DIFFs.
    *
@@ -214,7 +222,14 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final long block = getCurrentBlockNumber(storage);
       final Bytes naturalKey = ArchiveNodeKey.account(location);
       captureTrieNodeDiff(
-          transaction, naturalKey, location, block, priorNode.orElse(null), node, storage);
+          transaction,
+          naturalKey,
+          location,
+          nodeHash,
+          block,
+          priorNode.orElse(null),
+          node,
+          storage);
     }
   }
 
@@ -245,7 +260,14 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final long block = getCurrentBlockNumber(storage);
       final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
       captureTrieNodeDiff(
-          transaction, naturalKey, location, block, priorNode.orElse(null), node, storage);
+          transaction,
+          naturalKey,
+          location,
+          nodeHash,
+          block,
+          priorNode.orElse(null),
+          node,
+          storage);
     }
   }
 
@@ -320,6 +342,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    * @param naturalKey the account or storage natural key from {@link ArchiveNodeKey}
    * @param location the nibble-path {@code location} bytes for this trie node (used for the depth
    *     check; equal to {@code naturalKey} for account nodes)
+   * @param nodeHash the keccak256 of {@code newNode}, as supplied by the trie commit path; used as
+   *     the CAS key when the FULL body is routed to the content-addressed store
    * @param block the block number at which the node is being written
    * @param priorNode the prior node RLP from committed storage, or {@code null} if this is a
    *     creation
@@ -331,6 +355,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorageTransaction tx,
       final Bytes naturalKey,
       final Bytes location,
+      final Bytes32 nodeHash,
       final long block,
       final Bytes priorNode,
       final Bytes newNode,
@@ -341,8 +366,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     // AND appends in a single index read.
     final Bytes entry;
     if (priorNode == null) {
-      // Creation: no prior node → always FULL | CREATION.
-      entry = TrieNodeDiffCodec.encodeDiff(null, newNode);
+      // Creation: no prior node → always FULL | CREATION (inline or CAS-referenced).
+      entry = encodeFullEntry(tx, nodeHash, newNode, location, true);
       changeIndex.append(tx, naturalKey, block);
     } else {
       // Depth-tiered checkpoint: every interval-th mutation is FULL, the rest are DIFFs.
@@ -353,7 +378,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final long previousCount = changeIndex.appendAndGetPreviousCount(tx, naturalKey, block);
       entry =
           (previousCount % interval == 0)
-              ? TrieNodeDiffCodec.encodeFull(newNode)
+              ? encodeFullEntry(tx, nodeHash, newNode, location, false)
               : TrieNodeDiffCodec.encodeDiff(priorNode, newNode);
     }
 
@@ -364,6 +389,38 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
         naturalKey,
         block,
         String.format("%02x", entry.get(0)));
+  }
+
+  /**
+   * Encodes a FULL entry for {@code node}, routing the body through the content-addressed store
+   * when it is large enough to pay for a hash reference and not the trie root.
+   *
+   * <p>Routing predicate: {@code !location.isEmpty() && node.size() >= CAS_INLINE_THRESHOLD}. The
+   * root always stays inline (its body never duplicates and root reads stay one-hop). CAS puts
+   * are blind, idempotent, and issued on EVERY routed FULL — a write-skip cache would be poisoned
+   * by transaction rollback (hash marked as written, body never committed → dangling ref), so
+   * duplicate puts are accepted and collapsed by compaction (design doc §3.3).
+   *
+   * @param tx the transaction carrying this block's writes (CAS body joins it atomically)
+   * @param nodeHash keccak256 of {@code node} (the CAS key)
+   * @param node the full node RLP
+   * @param location the nibble-path location (depth check)
+   * @param creation whether this is the node's first appearance
+   * @return the encoded history entry: a 33-byte HASH_REF or an inline FULL
+   */
+  private Bytes encodeFullEntry(
+      final SegmentedKeyValueStorageTransaction tx,
+      final Bytes32 nodeHash,
+      final Bytes node,
+      final Bytes location,
+      final boolean creation) {
+    if (!location.isEmpty() && node.size() >= CAS_INLINE_THRESHOLD) {
+      historyStore.putCasBody(tx, nodeHash, node);
+      return TrieNodeDiffCodec.encodeFullRef(nodeHash, creation);
+    }
+    return creation
+        ? TrieNodeDiffCodec.encodeDiff(null, node) // FULL | CREATION, inline
+        : TrieNodeDiffCodec.encodeFull(node);
   }
 
   /**

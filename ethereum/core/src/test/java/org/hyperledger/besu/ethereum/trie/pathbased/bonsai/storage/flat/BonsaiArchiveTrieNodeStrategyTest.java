@@ -15,12 +15,14 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.crypto.Hash.keccak256;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeDiffCodec;
@@ -194,6 +196,34 @@ class BonsaiArchiveTrieNodeStrategyTest {
           out.writeNull(); // branch terminal value: empty
           out.endList();
         });
+  }
+
+  /** Build a 17-item branch with all 16 child slots occupied (~530 B — above CAS threshold). */
+  private static Bytes fullBranch(final int markerByte) {
+    return RLP.encode(
+        out -> {
+          out.startList();
+          for (int i = 0; i < 16; i++) {
+            out.writeBytes(Bytes32.leftPad(Bytes.of(markerByte, i)));
+          }
+          out.writeNull();
+          out.endList();
+        });
+  }
+
+  /** Writes {@code node} via the strategy at {@code targetBlock} with its REAL keccak hash. */
+  private void writeAtBlockRealHash(
+      final BonsaiArchiveTrieNodeStrategy strategy,
+      final Bytes location,
+      final Bytes node,
+      final long targetBlock) {
+    setArchiveProofBlockNumber(targetBlock);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(storage, tx, location, keccak256(node), node);
+    tx.commit();
+    final SegmentedKeyValueStorageTransaction progressTx = storage.startTransaction();
+    strategy.advanceIndexProgress(progressTx, storage);
+    progressTx.commit();
   }
 
   // ---------------------------------------------------------------------------
@@ -637,5 +667,124 @@ class BonsaiArchiveTrieNodeStrategyTest {
         .hasValue(writtenByBlock.get(baseBlock + 32));
     assertThat(reader.nodeAt(naturalKey, baseBlock + mutations))
         .hasValue(writtenByBlock.get(baseBlock + mutations));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Content-addressed dedup of large FULL bodies (Task 3)
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void largeShallowNode_creationIsRoutedThroughCas() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+    final Bytes node = fullBranch(1);
+
+    // Atomicity (spec §7): the CAS body rides the SAME transaction as the ref — before commit,
+    // nothing is visible from committed storage. The probe uses a DIFFERENT location (0x02) so
+    // the rolled-back index writes never interact with the main assertions below; the CAS key is
+    // the body hash, which is location-independent, so the regression still bites.
+    setArchiveProofBlockNumber(100L);
+    final SegmentedKeyValueStorageTransaction uncommitted = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(
+        storage, uncommitted, Bytes.fromHexString("0x02"), keccak256(node), node);
+    assertThat(historyStore.getCasBody(keccak256(node))).isEmpty();
+    uncommitted.rollback();
+
+    // Rollback-poisoning regression (spec §3.3): after the rollback above, writing the SAME body
+    // (now at LOCATION_SHALLOW) must still land it in the CAS — this is exactly why v1 has no
+    // write-skip cache (it would have been poisoned by the rolled-back put).
+    writeAtBlockRealHash(strategy, LOCATION_SHALLOW, node, 100L);
+
+    final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_SHALLOW);
+    final TrieNodeDiffCodec.Decoded decoded =
+        TrieNodeDiffCodec.decode(historyStore.get(naturalKey, 100L).orElseThrow());
+    assertThat(decoded.isFull()).isTrue();
+    assertThat(decoded.isCreation()).isTrue();
+    assertThat(decoded.isHashRef()).isTrue();
+    assertThat(decoded.refHash()).isEqualTo(keccak256(node));
+    // Body lives in the CAS.
+    assertThat(historyStore.getCasBody(keccak256(node))).contains(node);
+    // History entry is the 33-byte ref, not the ~530 B body.
+    assertThat(historyStore.get(naturalKey, 100L).orElseThrow().size()).isEqualTo(33);
+  }
+
+  @Test
+  void smallNode_staysInline() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+    // SHORT_NODE_V1 (~6 B) < CAS_INLINE_THRESHOLD → inline FULL|CREATION, no CAS entry.
+    writeAtBlockRealHash(strategy, LOCATION_SHALLOW, SHORT_NODE_V1, 100L);
+
+    final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_SHALLOW);
+    final TrieNodeDiffCodec.Decoded decoded =
+        TrieNodeDiffCodec.decode(historyStore.get(naturalKey, 100L).orElseThrow());
+    assertThat(decoded.isHashRef()).isFalse();
+    assertThat(decoded.fullNode()).isEqualTo(SHORT_NODE_V1);
+    assertThat(historyStore.getCasBody(keccak256(SHORT_NODE_V1))).isEmpty();
+  }
+
+  @Test
+  void largeRootNode_staysInline() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+    final Bytes node = fullBranch(2);
+    // Root (empty location, depth 0) → always inline regardless of size.
+    writeAtBlockRealHash(strategy, LOCATION_ROOT, node, 100L);
+
+    final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_ROOT);
+    final TrieNodeDiffCodec.Decoded decoded =
+        TrieNodeDiffCodec.decode(historyStore.get(naturalKey, 100L).orElseThrow());
+    assertThat(decoded.isFull()).isTrue();
+    assertThat(decoded.isHashRef()).isFalse();
+    assertThat(decoded.fullNode()).isEqualTo(node);
+    assertThat(historyStore.getCasBody(keccak256(node))).isEmpty();
+  }
+
+  @Test
+  void identicalBodiesAcrossTwoStorageTries_shareOneCasEntry() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+    final Hash accountA =
+        Address.fromHexString("0x000000000000000000000000000000000000000a").addressHash();
+    final Hash accountB =
+        Address.fromHexString("0x000000000000000000000000000000000000000b").addressHash();
+    final Bytes node = fullBranch(3); // identical body for both accounts (clone scenario)
+
+    setArchiveProofBlockNumber(100L);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatStorageTrieNode(storage, tx, accountA, LOCATION_SHALLOW, keccak256(node), node);
+    strategy.putFlatStorageTrieNode(storage, tx, accountB, LOCATION_SHALLOW, keccak256(node), node);
+    tx.commit();
+
+    // Both keys carry refs to the SAME hash; exactly one CAS entry exists.
+    for (final Hash account : new Hash[] {accountA, accountB}) {
+      final Bytes naturalKey = ArchiveNodeKey.storage(account.getBytes(), LOCATION_SHALLOW);
+      final TrieNodeDiffCodec.Decoded decoded =
+          TrieNodeDiffCodec.decode(historyStore.get(naturalKey, 100L).orElseThrow());
+      assertThat(decoded.isHashRef()).isTrue();
+      assertThat(decoded.refHash()).isEqualTo(keccak256(node));
+    }
+    assertThat(storage.stream(KeyValueSegmentIdentifier.TRIE_NODE_CAS_ARCHIVE).count())
+        .isEqualTo(1L);
+  }
+
+  @Test
+  void checkpointFull_ofLargeShallowNode_isRoutedThroughCas() {
+    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithIndex();
+    // Creation (mutation 0, FULL ref) then 32 mutations: mutation 32 is the checkpoint FULL.
+    for (int i = 0; i <= BonsaiArchiveTrieNodeStrategy.SHALLOW_CHECKPOINT_INTERVAL; i++) {
+      writeAtBlockRealHash(strategy, LOCATION_SHALLOW, fullBranch(10 + i), 100L + i);
+    }
+    final Bytes naturalKey = ArchiveNodeKey.account(LOCATION_SHALLOW);
+    final long checkpointBlock = 100L + BonsaiArchiveTrieNodeStrategy.SHALLOW_CHECKPOINT_INTERVAL;
+    final Bytes checkpointNode =
+        fullBranch(10 + BonsaiArchiveTrieNodeStrategy.SHALLOW_CHECKPOINT_INTERVAL);
+
+    final TrieNodeDiffCodec.Decoded decoded =
+        TrieNodeDiffCodec.decode(historyStore.get(naturalKey, checkpointBlock).orElseThrow());
+    assertThat(decoded.isFull()).isTrue();
+    assertThat(decoded.isCreation()).isFalse();
+    assertThat(decoded.isHashRef()).isTrue();
+    assertThat(historyStore.getCasBody(keccak256(checkpointNode))).contains(checkpointNode);
+    // A mid-chain mutation is still a DIFF (unaffected by CAS routing).
+    assertThat(
+            TrieNodeDiffCodec.decode(historyStore.get(naturalKey, 100L + 5).orElseThrow()).isFull())
+        .isFalse();
   }
 }
