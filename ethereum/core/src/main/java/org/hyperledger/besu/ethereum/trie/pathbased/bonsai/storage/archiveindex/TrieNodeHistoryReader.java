@@ -57,9 +57,11 @@ import org.slf4j.LoggerFactory;
  *
  * <h2>Termination guarantee</h2>
  *
- * The write path (Task 3.3) emits a FULL checkpoint roughly every {@link #CHECKPOINT_INTERVAL}
- * mutations for a key, so the newest FULL is normally found within the batched window scan. The
- * {@link #MAX_BACKWARD_WALK_STEPS} guard bounds the cross-range backward-walk fallback for backfill
+ * The write path (Task 3.3) emits a FULL checkpoint at most every {@code
+ * BonsaiArchiveTrieNodeStrategy.SHALLOW_CHECKPOINT_INTERVAL} (32) mutations for a key — the largest
+ * of the depth-tiered checkpoint intervals — so as long as {@link #RECONSTRUCT_WINDOW} is at least
+ * that large, the newest FULL is normally found within the batched window scan. The {@link
+ * #MAX_BACKWARD_WALK_STEPS} guard bounds the cross-range backward-walk fallback for backfill
  * scenarios and corrupt data.
  */
 public final class TrieNodeHistoryReader {
@@ -67,27 +69,33 @@ public final class TrieNodeHistoryReader {
   private static final Logger LOG = LoggerFactory.getLogger(TrieNodeHistoryReader.class);
 
   /**
-   * Every {@code CHECKPOINT_INTERVAL}-th mutation for a node emits a FULL entry. This value must
-   * match {@code BonsaiArchiveTrieNodeStrategy.CHECKPOINT_INTERVAL} (same codebase, different
-   * package). It sets the expected spacing between FULL checkpoints, which {@link
-   * #RECONSTRUCT_WINDOW} is sized to cover so the backward window scan in {@link
-   * #reconstructFromChangeBlocks} normally finds a FULL without falling back to the walk.
+   * Deep-tier checkpoint spacing: nodes at depth &gt;= 3 emit a FULL entry every {@code
+   * CHECKPOINT_INTERVAL}-th mutation (see {@code
+   * BonsaiArchiveTrieNodeStrategy.DEEP_CHECKPOINT_INTERVAL}). This is not the binding safety
+   * invariant for this reader — the actual requirement is an upper bound, not an equality: {@link
+   * #RECONSTRUCT_WINDOW} must be greater than or equal to the largest write-path checkpoint
+   * interval across all depth tiers, which is currently {@code
+   * BonsaiArchiveTrieNodeStrategy.SHALLOW_CHECKPOINT_INTERVAL} = 32, so the backward window scan in
+   * {@link #reconstructFromChangeBlocks} normally finds a FULL without falling back to the walk.
    */
   static final int CHECKPOINT_INTERVAL = 16;
 
   /**
    * Maximum number of backward steps before giving up the walk. In steady state this bound is never
-   * reached (CHECKPOINT_INTERVAL - 1 = 15 steps suffice), but it guards against corrupt data or
-   * incomplete backfill.
+   * reached (largest write-path checkpoint interval - 1, i.e. {@code
+   * BonsaiArchiveTrieNodeStrategy.SHALLOW_CHECKPOINT_INTERVAL} - 1 = 31 steps suffice), but it
+   * guards against corrupt data or incomplete backfill.
    */
   public static final int MAX_BACKWARD_WALK_STEPS = 64;
 
   /**
    * Number of trailing change-block entries {@link #reconstructFromChangeBlocks} reads in one
-   * batched multiGet when scanning backward for the nearest FULL checkpoint. Sized well above
-   * {@link #CHECKPOINT_INTERVAL} to absorb the observed spread between where FULL entries are
-   * actually written and where a naive interval-aligned position would fall; if no FULL is found
-   * within the window the reconstruction falls back to the bounded cross-range backward walk.
+   * batched multiGet when scanning backward for the nearest FULL checkpoint. Sized well above the
+   * largest write-path checkpoint interval ({@code
+   * BonsaiArchiveTrieNodeStrategy.SHALLOW_CHECKPOINT_INTERVAL} = 32) to absorb the observed spread
+   * between where FULL entries are actually written and where a naive interval-aligned position
+   * would fall; if no FULL is found within the window the reconstruction falls back to the bounded
+   * cross-range backward walk.
    */
   public static final int RECONSTRUCT_WINDOW = 64;
 

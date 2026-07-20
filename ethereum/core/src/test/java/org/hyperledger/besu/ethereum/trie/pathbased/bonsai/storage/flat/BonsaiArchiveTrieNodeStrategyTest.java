@@ -50,7 +50,10 @@ class BonsaiArchiveTrieNodeStrategyTest {
   /** A trie node location (nibble path bytes, 5 bytes = depth 10 nibbles). */
   private static final Bytes LOCATION_DEEP = Bytes.fromHexString("0x0102030405");
 
-  /** An upper-trie location with only 1 nibble byte (depth 2) — triggers FULL_ABOVE_DEPTH path. */
+  /**
+   * An upper-trie location with only 1 nibble byte (depth 1) — exercises {@code
+   * SHALLOW_CHECKPOINT_INTERVAL} (checkpoint every 32nd mutation).
+   */
   private static final Bytes LOCATION_SHALLOW = Bytes.fromHexString("0x01");
 
   /** The trie root: an empty nibble-path location (depth 0) → always FULL. */
@@ -406,7 +409,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Storage-trie FULL_ABOVE_DEPTH uses location, not naturalKey (issue 3)
+  // Storage-trie depth-tiered interval uses location, not naturalKey (issue 3)
   // ---------------------------------------------------------------------------
 
   @Test

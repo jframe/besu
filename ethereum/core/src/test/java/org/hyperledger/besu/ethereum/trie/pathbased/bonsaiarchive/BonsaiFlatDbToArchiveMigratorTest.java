@@ -709,10 +709,11 @@ public class BonsaiFlatDbToArchiveMigratorTest {
    * <p>In the per-block-persist design, every block is persisted in sequence. Block 0 (empty trie)
    * is persisted first, committing {@code WORLD_BLOCK_NUMBER_KEY=0} to the in-memory layer. When
    * block 1 is persisted, {@code putFlatAccountTrieNode} is called for each trie node including the
-   * root (location = empty bytes). The root node location has size ≤ {@code FULL_ABOVE_DEPTH=2}, so
-   * it is always stored as a FULL codec entry. The strategy reads {@code WORLD_BLOCK_NUMBER_KEY=0}
-   * from the committed layer (before the transaction commits) and adds 1, indexing the root node at
-   * block 1. {@code nodeAt(Bytes.EMPTY, 1)} resolves directly to this entry.
+   * root (location = empty bytes, depth 0). The root is always checkpointed via {@code
+   * ROOT_CHECKPOINT_INTERVAL=1}, so it is always stored as a FULL codec entry. The strategy reads
+   * {@code WORLD_BLOCK_NUMBER_KEY=0} from the committed layer (before the transaction commits) and
+   * adds 1, indexing the root node at block 1. {@code nodeAt(Bytes.EMPTY, 1)} resolves directly to
+   * this entry.
    */
   @Test
   public void trieMigratorWithIndexEnabled_populatesDiffIndexAtCheckpoint() throws Exception {
