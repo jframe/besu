@@ -77,9 +77,10 @@ public class TrieNodeHistoryStatsSubCommand implements Runnable {
   @Option(
       names = {"--full-above-depth"},
       description =
-          "FULL_ABOVE_DEPTH threshold in location bytes; nodes this shallow are always FULL"
-              + " (default: ${DEFAULT-VALUE})")
-  private int fullAboveDepth = 2;
+          "Classification lens: location-byte depth to report as the always-FULL bucket. Under the"
+              + " depth-tiered write policy only the root (depth 0) is forced FULL; deeper nodes are"
+              + " checkpoint+diff. (default: ${DEFAULT-VALUE})")
+  private int fullAboveDepth = 0;
 
   @Option(
       names = {"--max-entries"},
