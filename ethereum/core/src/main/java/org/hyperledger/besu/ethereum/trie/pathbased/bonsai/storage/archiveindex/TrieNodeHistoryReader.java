@@ -80,7 +80,7 @@ public final class TrieNodeHistoryReader {
    * reached (CHECKPOINT_INTERVAL - 1 = 15 steps suffice), but it guards against corrupt data or
    * incomplete backfill.
    */
-  static final int MAX_BACKWARD_WALK_STEPS = 64;
+  public static final int MAX_BACKWARD_WALK_STEPS = 64;
 
   /**
    * Number of trailing change-block entries {@link #reconstructFromChangeBlocks} reads in one
@@ -89,7 +89,7 @@ public final class TrieNodeHistoryReader {
    * actually written and where a naive interval-aligned position would fall; if no FULL is found
    * within the window the reconstruction falls back to the bounded cross-range backward walk.
    */
-  static final int RECONSTRUCT_WINDOW = 64;
+  public static final int RECONSTRUCT_WINDOW = 64;
 
   private final TrieNodeHistoryStore store;
   private final TrieNodeChangeIndex index;

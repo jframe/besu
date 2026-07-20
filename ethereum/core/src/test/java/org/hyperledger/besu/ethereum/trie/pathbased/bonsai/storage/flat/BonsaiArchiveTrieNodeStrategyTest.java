@@ -24,6 +24,7 @@ import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeChangeIndex;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeDiffCodec;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeIndexProgress;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -261,15 +262,15 @@ class BonsaiArchiveTrieNodeStrategyTest {
     // Write the first version (creation = FULL | CREATION → mutation index 0, FULL).
     writeAtBlock(strategy, LOCATION_DEEP, SHORT_NODE_V1, 100L);
 
-    // Write mutations 1 through 16. At mutation 16 (CHECKPOINT_INTERVAL = 16) we should get FULL.
+    // Write mutations 1 through 16. At mutation 16 (DEEP_CHECKPOINT_INTERVAL = 16) we should get FULL.
     // Alternate between V1 and V2 to produce real diffs.
-    for (int i = 1; i <= BonsaiArchiveTrieNodeStrategy.CHECKPOINT_INTERVAL; i++) {
+    for (int i = 1; i <= BonsaiArchiveTrieNodeStrategy.DEEP_CHECKPOINT_INTERVAL; i++) {
       final Bytes node = (i % 2 == 0) ? SHORT_NODE_V1 : SHORT_NODE_V2;
       writeAtBlock(strategy, LOCATION_DEEP, node, 100L + i);
     }
 
-    // Mutation at block 100 + CHECKPOINT_INTERVAL (= 116) should be FULL (m=16, m%16=0).
-    final long checkpointBlock = 100L + BonsaiArchiveTrieNodeStrategy.CHECKPOINT_INTERVAL;
+    // Mutation at block 100 + DEEP_CHECKPOINT_INTERVAL (= 116) should be FULL (m=16, m%16=0).
+    final long checkpointBlock = 100L + BonsaiArchiveTrieNodeStrategy.DEEP_CHECKPOINT_INTERVAL;
     final java.util.Optional<Bytes> entryAtCheckpoint =
         historyStore.get(naturalKey, checkpointBlock);
     assertThat(entryAtCheckpoint).isPresent();
@@ -527,5 +528,33 @@ class BonsaiArchiveTrieNodeStrategyTest {
 
     // Index is disabled: progress must not have advanced.
     assertThat(progress.lastIndexedBlock()).isEqualTo(TrieNodeIndexProgress.UNSET_LAST_INDEXED);
+  }
+
+  @Test
+  void checkpointIntervalForDepth_mapsDepthToInterval() {
+    // Root (empty location, 0 bytes) is always FULL → interval 1.
+    assertThat(BonsaiArchiveTrieNodeStrategy.checkpointIntervalForDepth(0)).isEqualTo(1);
+    // Shallow non-root nodes (1–2 location bytes = trie levels 1–4) → interval 32.
+    assertThat(BonsaiArchiveTrieNodeStrategy.checkpointIntervalForDepth(1)).isEqualTo(32);
+    assertThat(BonsaiArchiveTrieNodeStrategy.checkpointIntervalForDepth(2)).isEqualTo(32);
+    // Deep nodes (>= 3 location bytes) → interval 16.
+    assertThat(BonsaiArchiveTrieNodeStrategy.checkpointIntervalForDepth(3)).isEqualTo(16);
+    assertThat(BonsaiArchiveTrieNodeStrategy.checkpointIntervalForDepth(5)).isEqualTo(16);
+    assertThat(BonsaiArchiveTrieNodeStrategy.checkpointIntervalForDepth(32)).isEqualTo(16);
+  }
+
+  @Test
+  void maxCheckpointInterval_fitsReconstructWindow() {
+    final int maxInterval =
+        Math.max(
+            BonsaiArchiveTrieNodeStrategy.ROOT_CHECKPOINT_INTERVAL,
+            Math.max(
+                BonsaiArchiveTrieNodeStrategy.SHALLOW_CHECKPOINT_INTERVAL,
+                BonsaiArchiveTrieNodeStrategy.DEEP_CHECKPOINT_INTERVAL));
+    // The reader scans only the trailing RECONSTRUCT_WINDOW change-blocks for a FULL. If the
+    // largest checkpoint interval exceeded that, a DIFF target could have no FULL in the window and
+    // reconstruction would return empty → eth_getProof would fail. Keep them coupled.
+    assertThat(maxInterval).isLessThanOrEqualTo(TrieNodeHistoryReader.RECONSTRUCT_WINDOW);
+    assertThat(maxInterval).isLessThanOrEqualTo(TrieNodeHistoryReader.MAX_BACKWARD_WALK_STEPS);
   }
 }

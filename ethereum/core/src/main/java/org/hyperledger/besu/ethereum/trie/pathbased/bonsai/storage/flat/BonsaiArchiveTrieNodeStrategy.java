@@ -48,23 +48,46 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiArchiveTrieNodeStrategy.class);
 
-  /**
-   * Every {@code CHECKPOINT_INTERVAL}-th mutation for a node emits a FULL entry instead of a DIFF.
-   * This bounds the backward walk in {@link
-   * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader}
-   * to at most {@code CHECKPOINT_INTERVAL - 1} steps.
-   */
-  static final int CHECKPOINT_INTERVAL = 16;
+  /** Trie root (empty location, depth 0) is always stored FULL — interval 1. */
+  static final int ROOT_CHECKPOINT_INTERVAL = 1;
 
   /**
-   * Trie nodes at locations with at most this many nibble bytes (i.e. near the trie root) always
-   * store a FULL entry rather than a DIFF. Root-adjacent nodes change frequently and are small, so
-   * storing them as FULL is cheaper than computing and applying diffs.
-   *
-   * <p>A location of 0 bytes is the root; 1 byte = depth 2 (two nibbles). {@code FULL_ABOVE_DEPTH =
-   * 2} means locations with 0, 1, or 2 bytes are stored as FULL.
+   * Shallow non-root nodes (1–2 location bytes, i.e. trie levels 1–4) checkpoint every {@code
+   * SHALLOW_CHECKPOINT_INTERVAL} mutations. These change nearly every block, so a wider interval
+   * packs more cheap DIFFs between each full branch. Capped at 32 so it stays within {@link
+   * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.archiveindex.TrieNodeHistoryReader#RECONSTRUCT_WINDOW}.
    */
-  static final int FULL_ABOVE_DEPTH = 2;
+  static final int SHALLOW_CHECKPOINT_INTERVAL = 32;
+
+  /**
+   * Deep nodes (>= 3 location bytes) checkpoint every {@code DEEP_CHECKPOINT_INTERVAL} mutations.
+   * Every {@code N}-th mutation for a node emits a FULL entry instead of a DIFF, bounding the
+   * backward reconstruction walk.
+   */
+  static final int DEEP_CHECKPOINT_INTERVAL = 16;
+
+  /**
+   * Returns the checkpoint interval for a node at the given nibble-path depth (in {@code location}
+   * bytes). Every {@code interval}-th mutation for the node is stored FULL; the rest are DIFFs.
+   *
+   * <ul>
+   *   <li>depth 0 (root) → {@link #ROOT_CHECKPOINT_INTERVAL} (always FULL)
+   *   <li>depth 1–2 → {@link #SHALLOW_CHECKPOINT_INTERVAL}
+   *   <li>depth ≥ 3 → {@link #DEEP_CHECKPOINT_INTERVAL}
+   * </ul>
+   *
+   * @param locationSizeBytes the trie node's {@code location.size()} in bytes
+   * @return the mutation interval at which a FULL entry is emitted
+   */
+  static int checkpointIntervalForDepth(final int locationSizeBytes) {
+    if (locationSizeBytes == 0) {
+      return ROOT_CHECKPOINT_INTERVAL;
+    }
+    if (locationSizeBytes <= 2) {
+      return SHALLOW_CHECKPOINT_INTERVAL;
+    }
+    return DEEP_CHECKPOINT_INTERVAL;
+  }
 
   /**
    * Plain point-lookup strategy used for the "current trie" reads/writes. Defaults to {@link
@@ -287,20 +310,20 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    *   <li>Deletion ({@code newNode == null}): tombstone. Not currently wired in (deletions are
    *       handled via {@link TrieNodeStrategy#removeFlatAccountStateTrieNode} which is not yet
    *       hooked); included for completeness.
-   *   <li>Upper-trie FULL ({@code location.size() <= FULL_ABOVE_DEPTH}): always FULL for
-   *       root-adjacent nodes. The comparison uses the nibble-path {@code location} (not {@code
-   *       naturalKey}) so that account and storage trie nodes are treated symmetrically: for
-   *       account nodes {@code location == naturalKey}; for storage nodes {@code naturalKey =
-   *       accountHash ‖ location} (32+ bytes), so {@code naturalKey.size()} would never be ≤ 2.
-   *   <li>Checkpoint FULL ({@code currentMutationCount % CHECKPOINT_INTERVAL == 0}): every {@code
-   *       CHECKPOINT_INTERVAL}-th mutation is stored as FULL.
+   *   <li>Upper-trie FULL ({@code location.size() <= 2}): always FULL for root-adjacent nodes. The
+   *       comparison uses the nibble-path {@code location} (not {@code naturalKey}) so that account
+   *       and storage trie nodes are treated symmetrically: for account nodes {@code location ==
+   *       naturalKey}; for storage nodes {@code naturalKey = accountHash ‖ location} (32+ bytes),
+   *       so {@code naturalKey.size()} would never be ≤ 2.
+   *   <li>Checkpoint FULL: checkpoint interval is determined by {@link
+   *       #checkpointIntervalForDepth(int)}. Every {@code interval}-th mutation is stored as FULL.
    *   <li>DIFF: structural delta versus the prior node.
    * </ol>
    *
    * @param tx the transaction on which to write the history and index entries
    * @param naturalKey the account or storage natural key from {@link ArchiveNodeKey}
-   * @param location the nibble-path {@code location} bytes for this trie node (used for the
-   *     FULL_ABOVE_DEPTH depth check; equal to {@code naturalKey} for account nodes)
+   * @param location the nibble-path {@code location} bytes for this trie node (used for the depth
+   *     check; equal to {@code naturalKey} for account nodes)
    * @param block the block number at which the node is being written
    * @param priorNode the prior node RLP from committed storage, or {@code null} if this is a
    *     creation
@@ -329,7 +352,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       // Creation: no prior node → always FULL | CREATION.
       entry = TrieNodeDiffCodec.encodeDiff(null, newNode);
       changeIndex.append(tx, naturalKey, block);
-    } else if (location.size() <= FULL_ABOVE_DEPTH) {
+    } else if (location.size() <= 2) { // TEMP: removed in Task 2
       // Upper-trie node: always FULL to keep proof lookups cheap.
       entry = TrieNodeDiffCodec.encodeFull(newNode);
       changeIndex.append(tx, naturalKey, block);
@@ -337,7 +360,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       // DIFF or checkpoint FULL: need mutation count to decide. Combined read+append.
       final long previousCount = changeIndex.appendAndGetPreviousCount(tx, naturalKey, block);
       entry =
-          (previousCount % CHECKPOINT_INTERVAL == 0)
+          (previousCount % DEEP_CHECKPOINT_INTERVAL == 0)
               ? TrieNodeDiffCodec.encodeFull(newNode)
               : TrieNodeDiffCodec.encodeDiff(priorNode, newNode);
     }
