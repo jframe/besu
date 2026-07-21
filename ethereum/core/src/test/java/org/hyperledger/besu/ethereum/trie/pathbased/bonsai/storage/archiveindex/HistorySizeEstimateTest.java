@@ -184,6 +184,55 @@ class HistorySizeEstimateTest {
         .isLessThan(uncorrected.estimatedOnDiskBytes(2, 16));
   }
 
+  private static EntrySizeTable tableWithUniformFullSizeAtDepth0(final double size) {
+    final double[] fullBranch = new double[ChangeCountResult.MAX_DEPTH];
+    final double[] fullShort = new double[ChangeCountResult.MAX_DEPTH];
+    // Both shapes the same size at depth 0 so the routed bytes are independent of branchFraction.
+    fullBranch[0] = size;
+    fullShort[0] = size;
+    return new EntrySizeTable(
+        fullBranch,
+        fullShort,
+        new double[ChangeCountResult.MAX_DEPTH],
+        new double[ChangeCountResult.MAX_DEPTH],
+        0.0 /* keyBytes: isolate value bytes */);
+  }
+
+  @Test
+  void blobOverheadAppliesOnlyToBlobEligibleValuesSubMinBlobUsesSstPath() {
+    final int n = 1000;
+    final ChangeCountResult counts = new ChangeCountResult(ChangeCountResult.MAX_DEPTH);
+    for (int i = 0; i < n; i++) {
+      counts.recordMutation(0, false);
+    }
+    final double sst = 1.93;
+    final double blob = 1.44;
+
+    // 500B value (>= MIN_BLOB_SIZE 100) → blob file; 50B value (< 100) → inline SST.
+    final HistorySizeEstimate big =
+        new HistorySizeEstimate(
+            counts,
+            tableWithUniformFullSizeAtDepth0(500.0),
+            new TrieShapeModel(16),
+            new long[] {1_000_000_000L},
+            sst,
+            blob);
+    final HistorySizeEstimate small =
+        new HistorySizeEstimate(
+            counts,
+            tableWithUniformFullSizeAtDepth0(50.0),
+            new TrieShapeModel(16),
+            new long[] {1_000_000_000L},
+            sst,
+            blob);
+
+    // fullAboveDepth=0 forces depth-0 writes FULL, so all n writes are FULL value bytes.
+    assertThat(big.estimatedOnDiskBytes(0, 16)).isEqualTo(Math.round(n * 500.0 * blob));
+    assertThat(small.estimatedOnDiskBytes(0, 16)).isEqualTo(Math.round(n * 50.0 / sst));
+    // The fix matters: the sub-100B value is far cheaper than if blob overhead were applied to it.
+    assertThat(small.estimatedOnDiskBytes(0, 16)).isLessThan(Math.round(n * 50.0 * blob));
+  }
+
   @Test
   void leverTableHasOneRowPerDepthSetting() {
     final HistorySizeEstimate est =

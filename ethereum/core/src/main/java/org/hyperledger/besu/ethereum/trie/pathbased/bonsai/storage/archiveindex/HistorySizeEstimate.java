@@ -47,6 +47,11 @@ public final class HistorySizeEstimate {
   private static final int[] DEFAULT_SWEEP_FULL_ABOVE_DEPTHS = {0, 1, 2};
   private static final int[] DEFAULT_SWEEP_CHECKPOINT_INTERVALS = {16, 64, 128};
 
+  // RocksDB min_blob_size for TRIE_NODE_HISTORY_ARCHIVE: values at least this large are written to
+  // blob files (incompressible hashes → blobOverhead applies); smaller values stay inline in the
+  // SST and compress with keys. Matches the value the composition scan classifies with.
+  private static final int MIN_BLOB_SIZE = 100;
+
   private final ChangeCountResult counts;
   private final EntrySizeTable sizes;
   private final TrieShapeModel shape;
@@ -113,7 +118,8 @@ public final class HistorySizeEstimate {
     final long leafCount = leafCountAtLatestEra();
     final long[] mutationsByDepth = counts.mutationsByDepth();
     double totalKeyBytes = 0;
-    double totalValueBytes = 0;
+    double inlineValueBytes = 0;
+    double blobValueBytes = 0;
     for (int d = 0; d < mutationsByDepth.length; d++) {
       final double totalWrites = correctedTotalWrites(d);
       if (totalWrites <= 0) {
@@ -124,12 +130,36 @@ public final class HistorySizeEstimate {
           d <= fullAboveDepth ? 1.0 : sampledFullFraction(d, checkpointInterval);
       final double fullWrites = totalWrites * fullFraction;
       final double diffWrites = totalWrites - fullWrites;
-      totalValueBytes +=
-          fullWrites * sizes.fullBytes(d, branchFraction)
-              + diffWrites * sizes.diffBytes(d, branchFraction);
+      // Route each (count, mean-size) bucket by shape: values >= minBlobSize live in blob files
+      // (incompressible hashes, blobOverhead); smaller values stay inline in the SST and compress
+      // like keys. Applying blobOverhead to every value byte (the old model) over-charged the many
+      // sub-100B short/diff entries that never reach a blob file.
+      final ValueBytes v = new ValueBytes();
+      v.add(fullWrites * branchFraction, sizes.fullBranchBytes(d));
+      v.add(fullWrites * (1.0 - branchFraction), sizes.fullShortBytes(d));
+      v.add(diffWrites * branchFraction, sizes.diffBranchBytes(d));
+      v.add(diffWrites * (1.0 - branchFraction), sizes.diffShortBytes(d));
+      inlineValueBytes += v.inline;
+      blobValueBytes += v.blob;
       totalKeyBytes += totalWrites * sizes.keyBytes();
     }
-    return Math.round(totalKeyBytes / sstCompressionRatio + totalValueBytes * blobOverheadRatio);
+    return Math.round(
+        (totalKeyBytes + inlineValueBytes) / sstCompressionRatio
+            + blobValueBytes * blobOverheadRatio);
+  }
+
+  /** Accumulates value bytes into blob-eligible vs inline halves against {@link #MIN_BLOB_SIZE}. */
+  private static final class ValueBytes {
+    private double blob;
+    private double inline;
+
+    void add(final double count, final double meanEntryBytes) {
+      if (meanEntryBytes >= MIN_BLOB_SIZE) {
+        blob += count * meanEntryBytes;
+      } else {
+        inline += count * meanEntryBytes;
+      }
+    }
   }
 
   public long[][] leverTable(final int[] fullAboveDepths, final int[] checkpointIntervals) {

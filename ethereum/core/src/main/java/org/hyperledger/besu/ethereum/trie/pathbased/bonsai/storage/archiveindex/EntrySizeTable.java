@@ -101,6 +101,26 @@ public final class EntrySizeTable {
         + (1.0 - branchFraction) * diffShortBytesByDepth[d];
   }
 
+  /** Mean FULL <em>branch</em>-node value size at {@code depth}. */
+  public double fullBranchBytes(final int depth) {
+    return fullBranchBytesByDepth[clampDepth(depth, fullBranchBytesByDepth.length)];
+  }
+
+  /** Mean FULL <em>short</em>-node value size at {@code depth}. */
+  public double fullShortBytes(final int depth) {
+    return fullShortBytesByDepth[clampDepth(depth, fullShortBytesByDepth.length)];
+  }
+
+  /** Mean DIFF <em>branch</em>-node value size at {@code depth}. */
+  public double diffBranchBytes(final int depth) {
+    return diffBranchBytesByDepth[clampDepth(depth, diffBranchBytesByDepth.length)];
+  }
+
+  /** Mean DIFF <em>short</em>-node value size at {@code depth}. */
+  public double diffShortBytes(final int depth) {
+    return diffShortBytesByDepth[clampDepth(depth, diffShortBytesByDepth.length)];
+  }
+
   public double keyBytes() {
     return keyBytesPerEntry;
   }
