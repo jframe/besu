@@ -234,6 +234,49 @@ class HistorySizeEstimateTest {
   }
 
   @Test
+  void depthTieredEquivalencesAndRootStaysFull() {
+    final HistorySizeEstimate est =
+        new HistorySizeEstimate(
+            countsWithUpperChurn(),
+            EntrySizeTable.hoodiDefaults(),
+            new TrieShapeModel(16),
+            new long[] {1_000_000L},
+            1.93,
+            1.44);
+
+    // A single tier of 1 clamps every depth to always-FULL == fullAboveDepth beyond every depth.
+    assertThat(est.estimatedOnDiskBytesTiered(new int[] {1}))
+        .isEqualTo(est.estimatedOnDiskBytes(ChangeCountResult.MAX_DEPTH, 16));
+    // A single tier of 16 clamps every depth to interval 16 with no forced-FULL tier (F=-1, K=16).
+    assertThat(est.estimatedOnDiskBytesTiered(new int[] {16}))
+        .isEqualTo(est.estimatedOnDiskBytes(-1, 16));
+    // The 2026-07-20 design tiers: depth-1 churn moves from forced-FULL (F=2) to interval 32, so
+    // the
+    // tiered estimate is strictly smaller than the current FULL_ABOVE_DEPTH=2, K=16 default.
+    assertThat(est.estimatedOnDiskBytesTiered(new int[] {1, 32, 32, 16}))
+        .isLessThan(est.estimatedOnDiskBytes(2, 16));
+  }
+
+  @Test
+  void renderJsonIncludesDepthTieredSectionWhenRequested() {
+    final HistorySizeEstimate est =
+        new HistorySizeEstimate(
+            countsWithUpperChurn(),
+            EntrySizeTable.hoodiDefaults(),
+            new TrieShapeModel(16),
+            new long[] {1_000_000L},
+            1.93,
+            1.44);
+    final int[] tiers = {1, 32, 32, 16};
+    final JsonNode json = est.renderJson(2, 16, tiers);
+    assertThat(json.get("depthTiered").get("onDiskBytes").asLong())
+        .isEqualTo(est.estimatedOnDiskBytesTiered(tiers));
+    assertThat(json.get("depthTiered").get("intervalByDepth").get(1).asInt()).isEqualTo(32);
+    // Omitting the tiers (2-arg overload) leaves the section out.
+    assertThat(est.renderJson(2, 16).has("depthTiered")).isFalse();
+  }
+
+  @Test
   void leverTableHasOneRowPerDepthSetting() {
     final HistorySizeEstimate est =
         new HistorySizeEstimate(

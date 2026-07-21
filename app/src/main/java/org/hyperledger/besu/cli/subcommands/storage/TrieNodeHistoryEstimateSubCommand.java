@@ -149,6 +149,16 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
   private int checkpointInterval = 16;
 
   @Option(
+      names = {"--depth-tiered-intervals"},
+      split = ",",
+      description =
+          "Per-depth checkpoint intervals for the depth-tiered scheme (2026-07-20 design), indexed"
+              + " by location depth and clamping to the last value for deeper nodes; interval 1"
+              + " means always-FULL. Estimated alongside the FULL_ABOVE_DEPTH headline (default:"
+              + " ${DEFAULT-VALUE}).")
+  private int[] depthTieredIntervals = {1, 32, 32, 16};
+
+  @Option(
       names = {"--output"},
       description = "Optional path to also write the estimate as JSON")
   private Path output = null;
@@ -233,13 +243,20 @@ public class TrieNodeHistoryEstimateSubCommand implements Runnable {
         fullAboveDepth,
         checkpointInterval,
         estimate.estimatedOnDiskBytes(fullAboveDepth, checkpointInterval));
-    out.print(estimate.renderText(fullAboveDepth, checkpointInterval));
+    out.printf(
+        "Estimate for depth-tiered checkpoint scheme (intervalByDepth=%s): %,d bytes%n",
+        java.util.Arrays.toString(depthTieredIntervals),
+        estimate.estimatedOnDiskBytesTiered(depthTieredIntervals));
+    out.print(estimate.renderText(fullAboveDepth, checkpointInterval, depthTieredIntervals));
     out.flush();
 
     if (output != null) {
       try {
         Files.writeString(
-            output, estimate.renderJson(fullAboveDepth, checkpointInterval).toPrettyString());
+            output,
+            estimate
+                .renderJson(fullAboveDepth, checkpointInterval, depthTieredIntervals)
+                .toPrettyString());
         out.println("Wrote JSON estimate to " + output);
       } catch (final java.io.IOException e) {
         throw new UncheckedIOException(e);

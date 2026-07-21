@@ -115,6 +115,33 @@ public final class HistorySizeEstimate {
   }
 
   public long estimatedOnDiskBytes(final int fullAboveDepth, final int checkpointInterval) {
+    return onDiskBytes(d -> d <= fullAboveDepth ? 1.0 : sampledFullFraction(d, checkpointInterval));
+  }
+
+  /**
+   * On-disk estimate for the depth-tiered checkpoint scheme (2026-07-20 design): each depth's
+   * FULL-vs-DIFF interval comes from {@code intervalByDepth} indexed by {@code location.size()} (==
+   * the estimator's depth), clamping to the last element for deeper nodes. An interval of {@code 1}
+   * means always-FULL (the root tier); larger intervals price FULLs at {@code
+   * sampledFullFraction(depth, interval)}. This replaces the {@code FULL_ABOVE_DEPTH} +
+   * single-{@code CHECKPOINT_INTERVAL} scheme with a per-depth lookup, so e.g. {@code {1,32,32,16}}
+   * keeps the root FULL, moves depths 1–2 off forced-FULL onto a 32-interval, and leaves depth ≥3
+   * at 16.
+   */
+  public long estimatedOnDiskBytesTiered(final int[] intervalByDepth) {
+    return onDiskBytes(
+        d -> {
+          final int interval = intervalByDepth[Math.min(d, intervalByDepth.length - 1)];
+          return interval <= 1 ? 1.0 : sampledFullFraction(d, interval);
+        });
+  }
+
+  /**
+   * Shared byte model: sums per-depth key/value bytes with the FULL fraction at each depth supplied
+   * by {@code fullFractionForDepth}, routing value bytes to blob vs inline by shape/size and
+   * applying the SST-compression and blob-overhead ratios.
+   */
+  private long onDiskBytes(final java.util.function.IntToDoubleFunction fullFractionForDepth) {
     final long leafCount = leafCountAtLatestEra();
     final long[] mutationsByDepth = counts.mutationsByDepth();
     double totalKeyBytes = 0;
@@ -126,8 +153,7 @@ public final class HistorySizeEstimate {
         continue;
       }
       final double branchFraction = shape.branchFraction(d, leafCount);
-      final double fullFraction =
-          d <= fullAboveDepth ? 1.0 : sampledFullFraction(d, checkpointInterval);
+      final double fullFraction = fullFractionForDepth.applyAsDouble(d);
       final double fullWrites = totalWrites * fullFraction;
       final double diffWrites = totalWrites - fullWrites;
       // Route each (count, mean-size) bucket by shape: values >= minBlobSize live in blob files
@@ -235,6 +261,11 @@ public final class HistorySizeEstimate {
   }
 
   public String renderText(final int fullAboveDepth, final int checkpointInterval) {
+    return renderText(fullAboveDepth, checkpointInterval, null);
+  }
+
+  public String renderText(
+      final int fullAboveDepth, final int checkpointInterval, final int[] depthTieredIntervals) {
     final StringBuilder sb = new StringBuilder();
     sb.append("Estimated on-disk TRIE_NODE_HISTORY_ARCHIVE size\n");
     sb.append(
@@ -243,6 +274,13 @@ public final class HistorySizeEstimate {
             fullAboveDepth,
             checkpointInterval,
             estimatedOnDiskBytes(fullAboveDepth, checkpointInterval)));
+    if (depthTieredIntervals != null) {
+      sb.append(
+          String.format(
+              "  depth-tiered checkpoint (intervalByDepth=%s): %d bytes%n",
+              java.util.Arrays.toString(depthTieredIntervals),
+              estimatedOnDiskBytesTiered(depthTieredIntervals)));
+    }
     sb.append("  lever sweep (fullAboveDepth x checkpointInterval), on-disk bytes:\n");
     final long[][] table =
         leverTable(DEFAULT_SWEEP_FULL_ABOVE_DEPTHS, DEFAULT_SWEEP_CHECKPOINT_INTERVALS);
@@ -258,6 +296,11 @@ public final class HistorySizeEstimate {
   }
 
   public JsonNode renderJson(final int fullAboveDepth, final int checkpointInterval) {
+    return renderJson(fullAboveDepth, checkpointInterval, null);
+  }
+
+  public JsonNode renderJson(
+      final int fullAboveDepth, final int checkpointInterval, final int[] depthTieredIntervals) {
     final ObjectMapper mapper = new ObjectMapper();
     final ObjectNode root = mapper.createObjectNode();
 
@@ -315,6 +358,15 @@ public final class HistorySizeEstimate {
       for (int j = 0; j < DEFAULT_SWEEP_CHECKPOINT_INTERVALS.length; j++) {
         byInterval.put(Integer.toString(DEFAULT_SWEEP_CHECKPOINT_INTERVALS[j]), table[i][j]);
       }
+    }
+
+    if (depthTieredIntervals != null) {
+      final ObjectNode tiered = root.putObject("depthTiered");
+      final ArrayNode intervals = tiered.putArray("intervalByDepth");
+      for (final int interval : depthTieredIntervals) {
+        intervals.add(interval);
+      }
+      tiered.put("onDiskBytes", estimatedOnDiskBytesTiered(depthTieredIntervals));
     }
 
     addEraDiagnostics(root.putObject("diagnostics"));
