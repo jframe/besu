@@ -93,6 +93,11 @@ public class ConvertToForestSubCommand implements Runnable {
 
   private static final int LOG_INTERVAL_SECONDS = 60;
 
+  // Progress "blocks/s" is reported as a trailing average over this window rather than over the
+  // whole run, so the figure reflects current throughput (and drops visibly during stalls) instead
+  // of being smoothed away by the entire run's history.
+  private static final long RATE_WINDOW_MILLIS = 5 * 60 * 1000L;
+
   private final AtomicBoolean shouldLogProgress = new AtomicBoolean(true);
 
   @CommandLine.Option(
@@ -245,6 +250,12 @@ public class ConvertToForestSubCommand implements Runnable {
         final long startMillis = System.currentTimeMillis();
         final long loopStartBlock = resumeBlock;
 
+        // Trailing-window samples of (timestampMillis, blockNumber) backing the rolling blocks/s
+        // rate. Seeded with the run's start so early logs (before the window fills) report the
+        // since-start average, then transition smoothly to the trailing window.
+        final Deque<long[]> rateSamples = new ArrayDeque<>();
+        rateSamples.addLast(new long[] {startMillis, loopStartBlock});
+
         // Process the chain in windows, pipelining cache-warming of upcoming windows with the
         // single-threaded apply so the disk stays busy continuously. With convertPrefetchLookahead
         // windows in flight simultaneously, the prefetch threads stay active even when apply takes
@@ -282,8 +293,16 @@ public class ConvertToForestSubCommand implements Runnable {
             LogUtil.throttledLog(
                 () -> {
                   final long now = System.currentTimeMillis();
-                  final double elapsedSeconds = Math.max((now - startMillis) / 1000.0, 0.001);
-                  final double blocksPerSecond = (blockNumber - loopStartBlock) / elapsedSeconds;
+                  rateSamples.addLast(new long[] {now, blockNumber});
+                  // Evict samples that have aged out of the trailing window, leaving the oldest
+                  // sample still within RATE_WINDOW_MILLIS of now as the window's start point.
+                  final long windowStart = now - RATE_WINDOW_MILLIS;
+                  while (rateSamples.size() > 1 && rateSamples.peekFirst()[0] < windowStart) {
+                    rateSamples.pollFirst();
+                  }
+                  final long[] windowOldest = rateSamples.peekFirst();
+                  final double elapsedSeconds = Math.max((now - windowOldest[0]) / 1000.0, 0.001);
+                  final double blocksPerSecond = (blockNumber - windowOldest[1]) / elapsedSeconds;
                   final double percentComplete = head > 0 ? (blockNumber * 100.0 / head) : 100.0;
                   final String eta =
                       blocksPerSecond > 0
