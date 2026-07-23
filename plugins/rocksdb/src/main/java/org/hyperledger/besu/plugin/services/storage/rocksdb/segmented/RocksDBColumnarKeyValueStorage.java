@@ -280,6 +280,12 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
       cfOptions.setHardPendingCompactionBytesLimit(
           configuration.getHardPendingCompactionBytesLimit());
     }
+    if (configuration.getMaxBytesForLevelMultiplier() > 0) {
+      cfOptions.setMaxBytesForLevelMultiplier(configuration.getMaxBytesForLevelMultiplier());
+    }
+    if (configuration.getTargetFileSizeBase() > 0) {
+      cfOptions.setTargetFileSizeBase(configuration.getTargetFileSizeBase());
+    }
     columnFamilyOptionsList.add(cfOptions);
     if (segment.containsStaticData()) {
       configureBlobDBForSegment(segment, configuration, cfOptions);

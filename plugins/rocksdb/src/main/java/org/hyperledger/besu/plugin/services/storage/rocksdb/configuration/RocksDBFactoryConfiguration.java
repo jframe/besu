@@ -35,6 +35,8 @@ public class RocksDBFactoryConfiguration {
   private final int maxBackgroundJobs;
   private final int maxSubcompactions;
   private final long recycleLogFileNum;
+  private final double maxBytesForLevelMultiplier;
+  private final long targetFileSizeBase;
 
   /**
    * Instantiates a new RocksDb factory configuration.
@@ -118,6 +120,75 @@ public class RocksDBFactoryConfiguration {
       final int maxBackgroundJobs,
       final int maxSubcompactions,
       final long recycleLogFileNum) {
+    this(
+        maxOpenFiles,
+        backgroundThreadCount,
+        cacheCapacity,
+        isHighSpec,
+        enableReadCacheForSnapshots,
+        isBlockchainGarbageCollectionEnabled,
+        blobGarbageCollectionAgeCutoff,
+        blobGarbageCollectionForceThreshold,
+        writeBufferSize,
+        blockSize,
+        maxWriteBufferNumber,
+        softPendingCompactionBytesLimit,
+        hardPendingCompactionBytesLimit,
+        maxBackgroundJobs,
+        maxSubcompactions,
+        recycleLogFileNum,
+        0.0,
+        0L);
+  }
+
+  /**
+   * Instantiates a new RocksDb factory configuration with bulk-load tuning options including
+   * leveled compaction shaping.
+   *
+   * @param maxOpenFiles the max open files
+   * @param backgroundThreadCount the background thread count
+   * @param cacheCapacity the cache capacity
+   * @param isHighSpec the is high spec
+   * @param enableReadCacheForSnapshots whether read caching is enabled for snapshots
+   * @param isBlockchainGarbageCollectionEnabled is garbage collection enabled for the BLOCKCHAIN
+   *     column family
+   * @param blobGarbageCollectionAgeCutoff the blob garbage collection age cutoff
+   * @param blobGarbageCollectionForceThreshold the blob garbage collection force threshold
+   * @param writeBufferSize write buffer size per column family in bytes (0 = use RocksDB default)
+   * @param blockSize SST block size in bytes for all column families (0 = use RocksDB default)
+   * @param maxWriteBufferNumber max write buffers per column family (0 = use RocksDB default)
+   * @param softPendingCompactionBytesLimit soft pending compaction bytes limit per CF in bytes (0 =
+   *     use RocksDB default)
+   * @param hardPendingCompactionBytesLimit hard pending compaction bytes limit per CF in bytes (0 =
+   *     use RocksDB default)
+   * @param maxBackgroundJobs maximum number of background jobs (0 = use RocksDB default)
+   * @param maxSubcompactions maximum number of subcompactions per compaction job (0 = use RocksDB
+   *     default)
+   * @param recycleLogFileNum RocksDB recycle_log_file_num (-1 = leave Besu default)
+   * @param maxBytesForLevelMultiplier RocksDB max_bytes_for_level_multiplier per CF (0 = use
+   *     RocksDB default)
+   * @param targetFileSizeBase RocksDB target_file_size_base in bytes per CF (0 = use RocksDB
+   *     default)
+   */
+  public RocksDBFactoryConfiguration(
+      final int maxOpenFiles,
+      final int backgroundThreadCount,
+      final long cacheCapacity,
+      final boolean isHighSpec,
+      final boolean enableReadCacheForSnapshots,
+      final boolean isBlockchainGarbageCollectionEnabled,
+      final Optional<Double> blobGarbageCollectionAgeCutoff,
+      final Optional<Double> blobGarbageCollectionForceThreshold,
+      final long writeBufferSize,
+      final long blockSize,
+      final int maxWriteBufferNumber,
+      final long softPendingCompactionBytesLimit,
+      final long hardPendingCompactionBytesLimit,
+      final int maxBackgroundJobs,
+      final int maxSubcompactions,
+      final long recycleLogFileNum,
+      final double maxBytesForLevelMultiplier,
+      final long targetFileSizeBase) {
     this.backgroundThreadCount = backgroundThreadCount;
     this.maxOpenFiles = maxOpenFiles;
     this.cacheCapacity = cacheCapacity;
@@ -134,6 +205,8 @@ public class RocksDBFactoryConfiguration {
     this.maxBackgroundJobs = maxBackgroundJobs;
     this.maxSubcompactions = maxSubcompactions;
     this.recycleLogFileNum = recycleLogFileNum;
+    this.maxBytesForLevelMultiplier = maxBytesForLevelMultiplier;
+    this.targetFileSizeBase = targetFileSizeBase;
   }
 
   /**
@@ -278,5 +351,23 @@ public class RocksDBFactoryConfiguration {
    */
   public long getRecycleLogFileNum() {
     return recycleLogFileNum;
+  }
+
+  /**
+   * Gets RocksDB max_bytes_for_level_multiplier per column family.
+   *
+   * @return the max bytes for level multiplier (0 = use RocksDB default)
+   */
+  public double getMaxBytesForLevelMultiplier() {
+    return maxBytesForLevelMultiplier;
+  }
+
+  /**
+   * Gets RocksDB target_file_size_base in bytes per column family.
+   *
+   * @return the target file size base (0 = use RocksDB default)
+   */
+  public long getTargetFileSizeBase() {
+    return targetFileSizeBase;
   }
 }

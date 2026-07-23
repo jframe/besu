@@ -61,6 +61,12 @@ public class RocksDBCLIOptions {
   /** The constant DEFAULT_RECYCLE_LOG_FILE_NUM (-1 = unset, leave Besu default). */
   public static final long DEFAULT_RECYCLE_LOG_FILE_NUM = -1;
 
+  /** The constant DEFAULT_MAX_BYTES_FOR_LEVEL_MULTIPLIER (0 = unset, use RocksDB default). */
+  public static final double DEFAULT_MAX_BYTES_FOR_LEVEL_MULTIPLIER = 0;
+
+  /** The constant DEFAULT_TARGET_FILE_SIZE_BASE (0 = unset, use RocksDB default). */
+  public static final long DEFAULT_TARGET_FILE_SIZE_BASE = 0;
+
   /** The constant WRITE_BUFFER_SIZE_FLAG. */
   public static final String WRITE_BUFFER_SIZE_FLAG = "--Xplugin-rocksdb-write-buffer-size";
 
@@ -87,6 +93,13 @@ public class RocksDBCLIOptions {
 
   /** The constant RECYCLE_LOG_FILE_NUM_FLAG. */
   public static final String RECYCLE_LOG_FILE_NUM_FLAG = "--Xplugin-rocksdb-recycle-log-file-num";
+
+  /** The constant MAX_BYTES_FOR_LEVEL_MULTIPLIER_FLAG. */
+  public static final String MAX_BYTES_FOR_LEVEL_MULTIPLIER_FLAG =
+      "--Xplugin-rocksdb-max-bytes-for-level-multiplier";
+
+  /** The constant TARGET_FILE_SIZE_BASE_FLAG. */
+  public static final String TARGET_FILE_SIZE_BASE_FLAG = "--Xplugin-rocksdb-target-file-size-base";
 
   /** The constant MAX_OPEN_FILES_FLAG. */
   public static final String MAX_OPEN_FILES_FLAG = "--Xplugin-rocksdb-max-open-files";
@@ -274,6 +287,26 @@ public class RocksDBCLIOptions {
           "EXPERIMENTAL: RocksDB recycle_log_file_num; -1 leaves the Besu default. Set to 0 to disable WAL log recycling, which is REQUIRED to use WAL-bypassing (disableWAL) bulk-load transactions (default: ${DEFAULT-VALUE})")
   long recycleLogFileNum;
 
+  /** RocksDB max_bytes_for_level_multiplier per column family (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {MAX_BYTES_FOR_LEVEL_MULTIPLIER_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<DOUBLE>",
+      description =
+          "EXPERIMENTAL: RocksDB max_bytes_for_level_multiplier per column family; 0 leaves the RocksDB default. A higher value (e.g. 14-16) produces fewer LSM levels and lower write amplification (default: ${DEFAULT-VALUE})")
+  double maxBytesForLevelMultiplier;
+
+  /** RocksDB target_file_size_base in bytes per column family (0 = use RocksDB default). */
+  @CommandLine.Option(
+      names = {TARGET_FILE_SIZE_BASE_FLAG},
+      hidden = true,
+      defaultValue = "0",
+      paramLabel = "<LONG>",
+      description =
+          "EXPERIMENTAL: RocksDB target_file_size_base in bytes per column family; 0 leaves the RocksDB default. Larger SST files (e.g. 134217728) reduce file count and index/filter overhead (default: ${DEFAULT-VALUE})")
+  long targetFileSizeBase;
+
   private RocksDBCLIOptions() {}
 
   /**
@@ -309,6 +342,8 @@ public class RocksDBCLIOptions {
     options.maxBackgroundJobs = config.getMaxBackgroundJobs();
     options.maxSubcompactions = config.getMaxSubcompactions();
     options.recycleLogFileNum = config.getRecycleLogFileNum();
+    options.maxBytesForLevelMultiplier = config.getMaxBytesForLevelMultiplier();
+    options.targetFileSizeBase = config.getTargetFileSizeBase();
     return options;
   }
 
@@ -334,7 +369,9 @@ public class RocksDBCLIOptions {
         hardPendingCompactionBytesLimit,
         maxBackgroundJobs,
         maxSubcompactions,
-        recycleLogFileNum);
+        recycleLogFileNum,
+        maxBytesForLevelMultiplier,
+        targetFileSizeBase);
   }
 
   /**
@@ -377,6 +414,8 @@ public class RocksDBCLIOptions {
         .add("maxBackgroundJobs", maxBackgroundJobs)
         .add("maxSubcompactions", maxSubcompactions)
         .add("recycleLogFileNum", recycleLogFileNum)
+        .add("maxBytesForLevelMultiplier", maxBytesForLevelMultiplier)
+        .add("targetFileSizeBase", targetFileSizeBase)
         .toString();
   }
 

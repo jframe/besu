@@ -38,6 +38,8 @@ public class RocksDBConfiguration {
   private final int maxBackgroundJobs;
   private final int maxSubcompactions;
   private final long recycleLogFileNum;
+  private final double maxBytesForLevelMultiplier;
+  private final long targetFileSizeBase;
 
   /**
    * Instantiates a new RocksDb configuration.
@@ -64,6 +66,10 @@ public class RocksDBConfiguration {
    * @param maxSubcompactions maximum number of subcompactions per compaction job (0 = use RocksDB
    *     default)
    * @param recycleLogFileNum RocksDB recycle_log_file_num (-1 = leave Besu default)
+   * @param maxBytesForLevelMultiplier RocksDB max_bytes_for_level_multiplier per CF (0 = use
+   *     RocksDB default)
+   * @param targetFileSizeBase RocksDB target_file_size_base in bytes per CF (0 = use RocksDB
+   *     default)
    */
   public RocksDBConfiguration(
       final Path databaseDir,
@@ -83,7 +89,9 @@ public class RocksDBConfiguration {
       final long hardPendingCompactionBytesLimit,
       final int maxBackgroundJobs,
       final int maxSubcompactions,
-      final long recycleLogFileNum) {
+      final long recycleLogFileNum,
+      final double maxBytesForLevelMultiplier,
+      final long targetFileSizeBase) {
     this.backgroundThreadCount = backgroundThreadCount;
     this.databaseDir = databaseDir;
     this.maxOpenFiles = maxOpenFiles;
@@ -102,6 +110,8 @@ public class RocksDBConfiguration {
     this.maxBackgroundJobs = maxBackgroundJobs;
     this.maxSubcompactions = maxSubcompactions;
     this.recycleLogFileNum = recycleLogFileNum;
+    this.maxBytesForLevelMultiplier = maxBytesForLevelMultiplier;
+    this.targetFileSizeBase = targetFileSizeBase;
   }
 
   /**
@@ -264,5 +274,23 @@ public class RocksDBConfiguration {
    */
   public long getRecycleLogFileNum() {
     return recycleLogFileNum;
+  }
+
+  /**
+   * Gets RocksDB max_bytes_for_level_multiplier per column family.
+   *
+   * @return the max bytes for level multiplier (0 = use RocksDB default)
+   */
+  public double getMaxBytesForLevelMultiplier() {
+    return maxBytesForLevelMultiplier;
+  }
+
+  /**
+   * Gets RocksDB target_file_size_base in bytes per column family.
+   *
+   * @return the target file size base (0 = use RocksDB default)
+   */
+  public long getTargetFileSizeBase() {
+    return targetFileSizeBase;
   }
 }

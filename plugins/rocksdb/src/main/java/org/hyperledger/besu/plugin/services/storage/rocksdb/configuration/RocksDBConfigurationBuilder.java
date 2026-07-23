@@ -21,11 +21,13 @@ import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_HARD_PENDING_COMPACTION_BYTES_LIMIT;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_IS_HIGH_SPEC;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_BACKGROUND_JOBS;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_BYTES_FOR_LEVEL_MULTIPLIER;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_OPEN_FILES;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_SUBCOMPACTIONS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_WRITE_BUFFER_NUMBER;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_RECYCLE_LOG_FILE_NUM;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_SOFT_PENDING_COMPACTION_BYTES_LIMIT;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_TARGET_FILE_SIZE_BASE;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_WRITE_BUFFER_SIZE;
 
 import java.nio.file.Path;
@@ -52,6 +54,8 @@ public class RocksDBConfigurationBuilder {
   private int maxBackgroundJobs = DEFAULT_MAX_BACKGROUND_JOBS;
   private int maxSubcompactions = DEFAULT_MAX_SUBCOMPACTIONS;
   private long recycleLogFileNum = DEFAULT_RECYCLE_LOG_FILE_NUM;
+  private double maxBytesForLevelMultiplier = DEFAULT_MAX_BYTES_FOR_LEVEL_MULTIPLIER;
+  private long targetFileSizeBase = DEFAULT_TARGET_FILE_SIZE_BASE;
 
   /** Instantiates a new Rocks db configuration builder. */
   public RocksDBConfigurationBuilder() {}
@@ -264,6 +268,31 @@ public class RocksDBConfigurationBuilder {
   }
 
   /**
+   * Max bytes for level multiplier.
+   *
+   * @param maxBytesForLevelMultiplier RocksDB max_bytes_for_level_multiplier per CF (0 = use
+   *     RocksDB default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder maxBytesForLevelMultiplier(
+      final double maxBytesForLevelMultiplier) {
+    this.maxBytesForLevelMultiplier = maxBytesForLevelMultiplier;
+    return this;
+  }
+
+  /**
+   * Target file size base.
+   *
+   * @param targetFileSizeBase RocksDB target_file_size_base in bytes per CF (0 = use RocksDB
+   *     default)
+   * @return the rocks db configuration builder
+   */
+  public RocksDBConfigurationBuilder targetFileSizeBase(final long targetFileSizeBase) {
+    this.targetFileSizeBase = targetFileSizeBase;
+    return this;
+  }
+
+  /**
    * From.
    *
    * @param configuration the configuration
@@ -286,7 +315,9 @@ public class RocksDBConfigurationBuilder {
         .hardPendingCompactionBytesLimit(configuration.getHardPendingCompactionBytesLimit())
         .maxBackgroundJobs(configuration.getMaxBackgroundJobs())
         .maxSubcompactions(configuration.getMaxSubcompactions())
-        .recycleLogFileNum(configuration.getRecycleLogFileNum());
+        .recycleLogFileNum(configuration.getRecycleLogFileNum())
+        .maxBytesForLevelMultiplier(configuration.getMaxBytesForLevelMultiplier())
+        .targetFileSizeBase(configuration.getTargetFileSizeBase());
   }
 
   /**
@@ -313,6 +344,8 @@ public class RocksDBConfigurationBuilder {
         hardPendingCompactionBytesLimit,
         maxBackgroundJobs,
         maxSubcompactions,
-        recycleLogFileNum);
+        recycleLogFileNum,
+        maxBytesForLevelMultiplier,
+        targetFileSizeBase);
   }
 }
