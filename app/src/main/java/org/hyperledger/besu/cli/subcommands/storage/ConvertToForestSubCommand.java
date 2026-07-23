@@ -308,7 +308,7 @@ public class ConvertToForestSubCommand implements Runnable {
                           ? formatDuration((long) ((head - blockNumber) / blocksPerSecond))
                           : "unknown";
                   LOG.info(
-                      "Converted {} / {} blocks ({}%), {} blocks/s, ETA {}, cache hit-rate {} ({} entries)",
+                      "Converted {} / {} blocks ({}%), {} blocks/s, ETA {}, cache hit-rate {} ({} entries), applyAcct hits/misses {}/{}, evictions {}",
                       blockNumber,
                       head,
                       String.format("%.1f", percentComplete),
@@ -317,7 +317,10 @@ public class ConvertToForestSubCommand implements Runnable {
                       converter.cacheHitRate() < 0
                           ? "disabled"
                           : String.format("%.1f%%", converter.cacheHitRate() * 100),
-                      converter.cacheEstimatedSize());
+                      converter.cacheEstimatedSize(),
+                      converter.applyAccountHits(),
+                      converter.applyAccountMisses(),
+                      converter.cacheEvictionCount());
                 },
                 shouldLogProgress,
                 LOG_INTERVAL_SECONDS);

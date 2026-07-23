@@ -44,6 +44,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -83,6 +84,15 @@ public class BonsaiTrieLogToForestConverter {
   // task-execution time so warming traverses from the freshest available root (see prefetchFrom).
   // volatile guarantees those threads see the latest published root rather than a stale snapshot.
   private volatile Bytes32 currentRootHash;
+
+  // Coverage instrumentation for the apply-phase (phase 2) account-trie walk — the reads a wall
+  // profile showed dominate the single-threaded apply. These count hits vs misses for ONLY the
+  // apply account trie (not prefetch, not storage tries), so a low apply hit rate combined with a
+  // high eviction count tells us the prefetch-warmed nodes are being evicted before apply consumes
+  // them (eviction), versus warmed-but-never-hit (timing/coverage). Cumulative; the caller diffs
+  // between log lines to see recent behaviour.
+  private final AtomicLong applyAccountHits = new AtomicLong();
+  private final AtomicLong applyAccountMisses = new AtomicLong();
 
   /**
    * Creates a converter that writes reconstructed Forest trie nodes into the given storage, with no
@@ -205,6 +215,36 @@ public class BonsaiTrieLogToForestConverter {
     return nodeCache == null ? 0L : nodeCache.estimatedSize();
   }
 
+  /**
+   * Returns the cumulative number of apply-phase account-trie reads served from the cache.
+   *
+   * @return apply-phase account-trie cache hits
+   */
+  public long applyAccountHits() {
+    return applyAccountHits.get();
+  }
+
+  /**
+   * Returns the cumulative number of apply-phase account-trie reads that missed the cache and went
+   * to disk.
+   *
+   * @return apply-phase account-trie cache misses
+   */
+  public long applyAccountMisses() {
+    return applyAccountMisses.get();
+  }
+
+  /**
+   * Returns the cumulative number of entries evicted from the cross-block node cache, or {@code 0}
+   * if the cache is disabled. A high value alongside a low apply-phase hit rate indicates
+   * prefetch-warmed nodes are evicted before apply consumes them.
+   *
+   * @return the eviction count, or 0 when disabled
+   */
+  public long cacheEvictionCount() {
+    return nodeCache == null ? 0L : nodeCache.evictionCount();
+  }
+
   private Optional<Bytes> cachingLoad(
       final Bytes32 hash, final Supplier<Optional<Bytes>> storageLoader) {
     if (nodeCache == null) {
@@ -221,6 +261,28 @@ public class BonsaiTrieLogToForestConverter {
 
   private NodeLoader accountNodeLoader() {
     return (location, hash) -> cachingLoad(hash, () -> forestStorage.getAccountStateTrieNode(hash));
+  }
+
+  /**
+   * Account node loader used only by the apply-phase account trie, instrumented to count cache hits
+   * vs misses so the coverage of prefetch warming can be measured against what apply actually
+   * reads. Behaviour is otherwise identical to {@link #accountNodeLoader()}.
+   */
+  private NodeLoader countingAccountNodeLoader() {
+    return (location, hash) -> {
+      if (nodeCache == null) {
+        return forestStorage.getAccountStateTrieNode(hash);
+      }
+      final Bytes cached = nodeCache.getIfPresent(hash);
+      if (cached != null) {
+        applyAccountHits.incrementAndGet();
+        return Optional.of(cached);
+      }
+      applyAccountMisses.incrementAndGet();
+      final Optional<Bytes> fromStorage = forestStorage.getAccountStateTrieNode(hash);
+      fromStorage.ifPresent(node -> nodeCache.put(hash, node));
+      return fromStorage;
+    };
   }
 
   private NodeLoader storageNodeLoader() {
@@ -396,7 +458,8 @@ public class BonsaiTrieLogToForestConverter {
     final ForestWorldStateKeyValueStorage.Updater updater = forestStorage.updater(true);
     try {
       final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie =
-          new StoredMerklePatriciaTrie<>(accountNodeLoader(), currentRootHash, b -> b, b -> b);
+          new StoredMerklePatriciaTrie<>(
+              countingAccountNodeLoader(), currentRootHash, b -> b, b -> b);
 
       final Map<Address, ? extends TrieLog.LogTuple<Bytes>> codeChanges = layer.getCodeChanges();
       for (final var entry : codeChanges.entrySet()) {
