@@ -280,8 +280,7 @@ public class ConvertToForestSubCommand implements Runnable {
           final WindowData upcoming =
               gatherWindow(blockchain, bonsai, trieLogFactory, nextToGather, end);
           windowQueue.addLast(upcoming);
-          prefetchQueue.addLast(
-              converter.prefetchAsync(upcoming.layers(), converter.currentRootHash()));
+          prefetchQueue.addLast(converter.prefetchAsync(upcoming.layers()));
           nextToGather = upcoming.startBlock() + upcoming.layers().size();
         }
 
@@ -330,8 +329,7 @@ public class ConvertToForestSubCommand implements Runnable {
             final WindowData upcoming =
                 gatherWindow(blockchain, bonsai, trieLogFactory, nextToGather, end);
             windowQueue.addLast(upcoming);
-            prefetchQueue.addLast(
-                converter.prefetchAsync(upcoming.layers(), converter.currentRootHash()));
+            prefetchQueue.addLast(converter.prefetchAsync(upcoming.layers()));
             nextToGather = upcoming.startBlock() + upcoming.layers().size();
           }
 

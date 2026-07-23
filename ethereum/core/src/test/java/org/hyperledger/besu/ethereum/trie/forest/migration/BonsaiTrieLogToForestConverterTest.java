@@ -437,7 +437,7 @@ class BonsaiTrieLogToForestConverterTest {
   }
 
   @Test
-  void prefetchAsyncWarmsFromExplicitBaseAndReplayMatches() throws Exception {
+  void prefetchAsyncWarmsFromCurrentRootAndReplayMatches() throws Exception {
     // Oracle: block 1 creates ALICE, block 2 bumps her nonce.
     final ForestMutableWorldState oracle = oracle(forestStorage());
     final WorldUpdater u1 = oracle.updater();
@@ -464,8 +464,9 @@ class BonsaiTrieLogToForestConverterTest {
         new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024, 4);
     try {
       assertThat(converter.applyTrieLog(layer1, root1)).isEqualTo(root1);
-      // Warm block 2 in the background from the now-on-disk root1, await it, then replay.
-      converter.prefetchAsync(List.of(layer2), root1).get();
+      // Warm block 2 in the background; tasks read the live current root (now root1), await,
+      // replay.
+      converter.prefetchAsync(List.of(layer2)).get();
       assertThat(converter.applyTrieLog(layer2, root2)).isEqualTo(root2);
     } finally {
       converter.close();
@@ -480,7 +481,7 @@ class BonsaiTrieLogToForestConverterTest {
     final BonsaiTrieLogToForestConverter converter =
         new BonsaiTrieLogToForestConverter(forestStorage(), 0, 32);
     // Disabled prefetch must still return a usable, already-complete future.
-    assertThat(converter.prefetchAsync(List.of(layer), Hash.EMPTY_TRIE_HASH).get()).isNull();
+    assertThat(converter.prefetchAsync(List.of(layer)).get()).isNull();
     converter.close();
   }
 

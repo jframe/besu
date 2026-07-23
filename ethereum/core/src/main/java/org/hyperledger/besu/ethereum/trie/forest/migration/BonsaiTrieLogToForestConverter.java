@@ -79,7 +79,10 @@ public class BonsaiTrieLogToForestConverter {
   // Single-thread coordinator that drives a window's parallel warming off the apply thread, so the
   // next window warms while the current one is replayed. Null when prefetch is disabled.
   private final ExecutorService prefetchCoordinator;
-  private Bytes32 currentRootHash;
+  // Written only by the single apply thread, but read by the background prefetch threads at
+  // task-execution time so warming traverses from the freshest available root (see prefetchFrom).
+  // volatile guarantees those threads see the latest published root rather than a stale snapshot.
+  private volatile Bytes32 currentRootHash;
 
   /**
    * Creates a converter that writes reconstructed Forest trie nodes into the given storage, with no
@@ -247,36 +250,37 @@ public class BonsaiTrieLogToForestConverter {
    * @param layers the upcoming trie logs whose changed keys should be warmed
    */
   public void prefetch(final List<TrieLog> layers) {
-    prefetchFrom(layers, currentRootHash);
+    prefetchFrom(layers);
   }
 
   /**
-   * Submits the warming of {@code layers} (from an explicit, already-on-disk {@code baseRoot}) to
-   * run on the prefetch coordinator, returning immediately so the caller can replay an earlier
-   * window while this window warms. This pipelines the parallel reads of the next window with the
-   * single-threaded apply of the current one, keeping the disk busy continuously instead of
-   * alternating disk-saturated prefetch with disk-idle apply.
+   * Submits the warming of {@code layers} to run on the prefetch coordinator, returning immediately
+   * so the caller can replay an earlier window while this window warms. This pipelines the parallel
+   * reads of the next window with the single-threaded apply of the current one, keeping the disk
+   * busy continuously instead of alternating disk-saturated prefetch with disk-idle apply.
    *
-   * <p>The caller passes a base root captured before mutating {@link #currentRootHash}, so the
-   * background warming never races the apply thread on that field. The base root is the root at the
-   * start of the window currently being applied, a window or two behind the warmed window's true
-   * pre-state root; this is harmless, as warming is best-effort and write-through during the
-   * intervening apply keeps the modified paths cached.
+   * <p>Each warming task reads {@link #currentRootHash} when it actually executes (not when the
+   * window was submitted), so it traverses from the freshest root the apply thread has reached
+   * rather than a snapshot captured windows earlier. With a deep lookahead the submission-time root
+   * lags the warmed window's true pre-state by hundreds of blocks; every account modified in that
+   * gap would be warmed along an already-orphaned path, wasting the read and never producing an
+   * apply-time hit. Reading the live root instead keeps warming aimed at nodes apply will actually
+   * touch. This is safe because warming only populates the hash-keyed cache and can never change
+   * replay output (the per-block state-root verification in {@link #applyTrieLog} is the
+   * correctness net); reading a root that is slightly ahead of the window is likewise harmless.
    *
    * @param layers the upcoming trie logs whose changed keys should be warmed
-   * @param baseRoot the (on-disk) state root to traverse from while warming
-   * @return a future that completes when warming finishes; an already-complete future when prefetch
-   *     is disabled or the window is empty
+   * @return a future that completes once warming is submitted; an already-complete future when
+   *     prefetch is disabled or the window is empty
    */
-  public Future<?> prefetchAsync(final List<TrieLog> layers, final Hash baseRoot) {
+  public Future<?> prefetchAsync(final List<TrieLog> layers) {
     if (prefetchCoordinator == null || layers.isEmpty()) {
       return CompletableFuture.completedFuture(null);
     }
-    final Bytes32 base = Bytes32.wrap(baseRoot.getBytes());
-    return prefetchCoordinator.submit(() -> prefetchFrom(layers, base));
+    return prefetchCoordinator.submit(() -> prefetchFrom(layers));
   }
 
-  private void prefetchFrom(final List<TrieLog> layers, final Bytes32 baseRoot) {
+  private void prefetchFrom(final List<TrieLog> layers) {
     if (prefetchExecutor == null || layers.isEmpty()) {
       return;
     }
@@ -303,7 +307,9 @@ public class BonsaiTrieLogToForestConverter {
       final Set<Bytes32> slotHashes = entry.getValue();
       tasks.add(
           () -> {
-            warmAccount(baseRoot, address, slotHashes, nodeLoader);
+            // Read the live root at execution time so warming follows the path apply is actually
+            // about to walk, not a root snapshotted when this window was submitted (windows ago).
+            warmAccount(currentRootHash, address, slotHashes, nodeLoader);
             return null;
           });
     }
