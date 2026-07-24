@@ -128,6 +128,13 @@ public class ConvertToForestSubCommand implements Runnable {
       hidden = true)
   private int convertPrefetchLookahead = 4;
 
+  @CommandLine.Option(
+      names = {"--Xx-convert-warm-account-paths"},
+      description =
+          "EXPERIMENTAL: pre-warm each changed account's trie path from the exact current root before replay, in the same parallel batch as storage-trie rebuild; closes coverage gaps left by window-level prefetch in high-churn regions (default: ${DEFAULT-VALUE})",
+      hidden = true)
+  private boolean convertWarmAccountPaths = true;
+
   @SuppressWarnings("unused")
   @ParentCommand
   private StorageSubCommand parentCommand;
@@ -198,7 +205,10 @@ public class ConvertToForestSubCommand implements Runnable {
 
       final BonsaiTrieLogToForestConverter converter =
           new BonsaiTrieLogToForestConverter(
-              forest, convertCacheSizeMb * 1024L * 1024L, convertPrefetchThreads);
+              forest,
+              convertCacheSizeMb * 1024L * 1024L,
+              convertPrefetchThreads,
+              convertWarmAccountPaths);
       final TrieLogFactoryImpl trieLogFactory = new TrieLogFactoryImpl();
 
       try {
