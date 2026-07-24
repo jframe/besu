@@ -111,6 +111,17 @@ class BonsaiTrieLogToForestConverterTest {
   }
 
   @Test
+  void constructorWithWarmAccountPathsFlagReportsEmptyTrieRoot() {
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024, 4, false);
+    try {
+      assertThat(converter.currentRootHash()).isEqualTo(Hash.EMPTY_TRIE_HASH);
+    } finally {
+      converter.close();
+    }
+  }
+
+  @Test
   void applyCreatesAccountAndMatchesExpectedStateRoot() {
     final ForestMutableWorldState oracle = oracle(forestStorage());
     final WorldUpdater updater = oracle.updater();

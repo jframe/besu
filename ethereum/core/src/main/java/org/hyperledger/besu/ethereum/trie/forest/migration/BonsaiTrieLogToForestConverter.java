@@ -85,6 +85,12 @@ public class BonsaiTrieLogToForestConverter {
   // volatile guarantees those threads see the latest published root rather than a stale snapshot.
   private volatile Bytes32 currentRootHash;
 
+  // Gates the JIT account-path warm tasks added to phase 1's parallel batch in applyTrieLog.
+  // Independent of prefetchThreads (which, at 0, disables ALL parallel work including the
+  // already-working storage-trie rebuild) so this specific behavior can be disabled on its own.
+  @SuppressWarnings("UnusedVariable")
+  private final boolean warmAccountPaths;
+
   // Coverage instrumentation for the apply-phase (phase 2) account-trie walk — the reads a wall
   // profile showed dominate the single-threaded apply. These count hits vs misses for ONLY the
   // apply account trie (not prefetch, not storage tries), so a low apply hit rate combined with a
@@ -137,6 +143,28 @@ public class BonsaiTrieLogToForestConverter {
       final ForestWorldStateKeyValueStorage forestStorage,
       final long cacheMaxBytes,
       final int prefetchThreads) {
+    this(forestStorage, cacheMaxBytes, prefetchThreads, true);
+  }
+
+  /**
+   * Creates a converter identical to {@link #BonsaiTrieLogToForestConverter(
+   * ForestWorldStateKeyValueStorage, long, int)}, with explicit control over whether phase 1's
+   * parallel batch also warms each changed account's trie path from the exact current root ahead of
+   * phase 2 (see {@link #applyTrieLog}).
+   *
+   * @param forestStorage the Forest world-state storage to populate
+   * @param cacheMaxBytes maximum on-heap size in bytes of the cross-block node cache; values &lt;=
+   *     0 disable the cache
+   * @param prefetchThreads number of parallel reader threads used to warm the cache ahead of
+   *     replay; values &lt;= 0 (or a disabled cache) disable all parallel warming
+   * @param warmAccountPaths whether phase 1's parallel batch also warms each changed account's trie
+   *     path from the exact current root; has no effect when parallel warming is disabled
+   */
+  public BonsaiTrieLogToForestConverter(
+      final ForestWorldStateKeyValueStorage forestStorage,
+      final long cacheMaxBytes,
+      final int prefetchThreads,
+      final boolean warmAccountPaths) {
     this.forestStorage = forestStorage;
     this.currentRootHash = EMPTY_TRIE_ROOT;
     this.nodeCache =
@@ -165,6 +193,7 @@ public class BonsaiTrieLogToForestConverter {
                   return thread;
                 })
             : null;
+    this.warmAccountPaths = warmAccountPaths;
   }
 
   /** Releases the prefetch thread pools, if any. Safe to call more than once. */
