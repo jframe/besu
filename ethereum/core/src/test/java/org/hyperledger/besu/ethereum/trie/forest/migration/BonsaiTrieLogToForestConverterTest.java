@@ -647,6 +647,67 @@ class BonsaiTrieLogToForestConverterTest {
   }
 
   @Test
+  void warmAccountPathsRecordsApplyPhaseHitsInsteadOfMisses() {
+    // Build root1 (ALICE and CONTRACT both exist) via the oracle directly, entirely OUTSIDE any
+    // converter, so a converter resumed at root1 starts with a completely empty node cache. Any
+    // cache hit recorded during the next apply can only come from THAT call's own phase-1 warm
+    // batch — not from a prior block's commit write-through — isolating the side effect we want
+    // to prove.
+    final ForestWorldStateKeyValueStorage storage = forestStorage();
+    final ForestMutableWorldState oracle = oracle(storage);
+    final WorldUpdater u1 = oracle.updater();
+    final MutableAccount a1 = u1.createAccount(ALICE);
+    a1.setNonce(1);
+    a1.setBalance(Wei.of(100));
+    final MutableAccount c1 = u1.createAccount(CONTRACT);
+    c1.setNonce(1);
+    c1.setBalance(Wei.of(200));
+    u1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+
+    final WorldUpdater u2 = oracle.updater();
+    final MutableAccount a2 = u2.getAccount(ALICE);
+    a2.setNonce(2);
+    final MutableAccount c2 = u2.getAccount(CONTRACT);
+    c2.setNonce(2);
+    u2.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+
+    final TrieLogLayer layer2 = new TrieLogLayer();
+    layer2.addAccountChange(ALICE, account(1, 100), account(2, 100));
+    layer2.addAccountChange(CONTRACT, account(1, 200), account(2, 200));
+
+    // warmAccountPaths=true: resume straight to root1 (cache starts empty) and apply the
+    // nonce-bump layer. Phase 1's batch must warm both accounts from root1 before phase 2 reads
+    // them, so every phase-2 account read is a HIT and none is a MISS.
+    final BonsaiTrieLogToForestConverter warmConverter =
+        new BonsaiTrieLogToForestConverter(storage, 1024 * 1024, 4, true);
+    try {
+      warmConverter.resumeFrom(root1);
+      assertThat(warmConverter.applyTrieLog(layer2, root2)).isEqualTo(root2);
+      assertThat(warmConverter.applyAccountMisses()).isEqualTo(0L);
+      assertThat(warmConverter.applyAccountHits()).isGreaterThan(0L);
+    } finally {
+      warmConverter.close();
+    }
+
+    // warmAccountPaths=false: identical setup and identical apply, but with warming disabled.
+    // Neither account has storage changes, so with warming off phase 1 queues no tasks at all —
+    // phase 2 must read both accounts cold, recording at least one MISS.
+    final BonsaiTrieLogToForestConverter coldConverter =
+        new BonsaiTrieLogToForestConverter(storage, 1024 * 1024, 4, false);
+    try {
+      coldConverter.resumeFrom(root1);
+      assertThat(coldConverter.applyTrieLog(layer2, root2)).isEqualTo(root2);
+      assertThat(coldConverter.applyAccountMisses()).isGreaterThan(0L);
+    } finally {
+      coldConverter.close();
+    }
+  }
+
+  @Test
   void seedGenesisMatchesGenesisStateRoot() {
     final String genesisJson =
         "{"
