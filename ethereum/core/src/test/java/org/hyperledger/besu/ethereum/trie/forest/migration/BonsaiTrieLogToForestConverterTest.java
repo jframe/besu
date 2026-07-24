@@ -559,6 +559,94 @@ class BonsaiTrieLogToForestConverterTest {
   }
 
   @Test
+  void warmAccountPathsWarmsMultipleAccountsAndReplayMatches() {
+    // Oracle: block 1 creates ALICE and CONTRACT; block 2 bumps both nonces.
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater u1 = oracle.updater();
+    final MutableAccount a1 = u1.createAccount(ALICE);
+    a1.setNonce(1);
+    a1.setBalance(Wei.of(100));
+    final MutableAccount c1 = u1.createAccount(CONTRACT);
+    c1.setNonce(1);
+    c1.setBalance(Wei.of(200));
+    u1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+
+    final WorldUpdater u2 = oracle.updater();
+    final MutableAccount a2 = u2.getAccount(ALICE);
+    a2.setNonce(2);
+    final MutableAccount c2 = u2.getAccount(CONTRACT);
+    c2.setNonce(2);
+    u2.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+
+    final TrieLogLayer layer1 = new TrieLogLayer();
+    layer1.addAccountChange(ALICE, null, account(1, 100));
+    layer1.addAccountChange(CONTRACT, null, account(1, 200));
+    final TrieLogLayer layer2 = new TrieLogLayer();
+    layer2.addAccountChange(ALICE, account(1, 100), account(2, 100));
+    layer2.addAccountChange(CONTRACT, account(1, 200), account(2, 200));
+
+    // Cache + 4 prefetch threads enabled, warmAccountPaths defaults to true — block 2's own
+    // phase-1 batch should warm BOTH ALICE's and CONTRACT's account-trie paths from root1 before
+    // phase 2 walks them. Neither account has storage changes, so this is the only work in the
+    // batch; it must still run and must not affect the reconstructed roots.
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024, 4);
+    try {
+      assertThat(converter.applyTrieLog(layer1, root1)).isEqualTo(root1);
+      assertThat(converter.applyTrieLog(layer2, root2)).isEqualTo(root2);
+    } finally {
+      converter.close();
+    }
+  }
+
+  @Test
+  void warmAccountPathsDisabledStillProducesCorrectRoots() {
+    // Same scenario as above but with warmAccountPaths=false — the kill switch must skip the new
+    // warm tasks without affecting correctness (phase 2 still reads whatever it needs, just
+    // without the JIT pre-warm).
+    final ForestMutableWorldState oracle = oracle(forestStorage());
+    final WorldUpdater u1 = oracle.updater();
+    final MutableAccount a1 = u1.createAccount(ALICE);
+    a1.setNonce(1);
+    a1.setBalance(Wei.of(100));
+    final MutableAccount c1 = u1.createAccount(CONTRACT);
+    c1.setNonce(1);
+    c1.setBalance(Wei.of(200));
+    u1.commit();
+    oracle.persist(null);
+    final Hash root1 = oracle.rootHash();
+
+    final WorldUpdater u2 = oracle.updater();
+    final MutableAccount a2 = u2.getAccount(ALICE);
+    a2.setNonce(2);
+    final MutableAccount c2 = u2.getAccount(CONTRACT);
+    c2.setNonce(2);
+    u2.commit();
+    oracle.persist(null);
+    final Hash root2 = oracle.rootHash();
+
+    final TrieLogLayer layer1 = new TrieLogLayer();
+    layer1.addAccountChange(ALICE, null, account(1, 100));
+    layer1.addAccountChange(CONTRACT, null, account(1, 200));
+    final TrieLogLayer layer2 = new TrieLogLayer();
+    layer2.addAccountChange(ALICE, account(1, 100), account(2, 100));
+    layer2.addAccountChange(CONTRACT, account(1, 200), account(2, 200));
+
+    final BonsaiTrieLogToForestConverter converter =
+        new BonsaiTrieLogToForestConverter(forestStorage(), 1024 * 1024, 4, false);
+    try {
+      assertThat(converter.applyTrieLog(layer1, root1)).isEqualTo(root1);
+      assertThat(converter.applyTrieLog(layer2, root2)).isEqualTo(root2);
+    } finally {
+      converter.close();
+    }
+  }
+
+  @Test
   void seedGenesisMatchesGenesisStateRoot() {
     final String genesisJson =
         "{"

@@ -88,7 +88,6 @@ public class BonsaiTrieLogToForestConverter {
   // Gates the JIT account-path warm tasks added to phase 1's parallel batch in applyTrieLog.
   // Independent of prefetchThreads (which, at 0, disables ALL parallel work including the
   // already-working storage-trie rebuild) so this specific behavior can be disabled on its own.
-  @SuppressWarnings("UnusedVariable")
   private final boolean warmAccountPaths;
 
   // Coverage instrumentation for the apply-phase (phase 2) account-trie walk — the reads a wall
@@ -444,6 +443,23 @@ public class BonsaiTrieLogToForestConverter {
   }
 
   /**
+   * Warms the account-trie path to {@code address} from {@code root} by traversing it with a fresh
+   * trie instance over the shared node cache. Read-only and best-effort: any failure is swallowed,
+   * since phase 2 re-reads the authoritative node by hash on a subsequent miss anyway. Unlike
+   * {@link #warmAccount}, this warms only the account path (no storage slots) and is intended to
+   * run synchronously, once per block, from the exact pre-mutation root — see the phase-1 batch in
+   * {@link #applyTrieLog}.
+   */
+  private void warmAccountPath(final Bytes32 root, final Address address, final NodeLoader loader) {
+    try {
+      new StoredMerklePatriciaTrie<>(loader, root, b -> b, b -> b)
+          .get(Bytes32.wrap(address.addressHash().getBytes()));
+    } catch (final RuntimeException e) {
+      // Best-effort warming; phase 2 re-reads authoritatively on a miss.
+    }
+  }
+
+  /**
    * Seeds the Forest storage with the genesis world state and sets the running root to the genesis
    * state root. This must be called before replaying any trie logs so that block-1 replay starts
    * from the correct base state.
@@ -538,6 +554,23 @@ public class BonsaiTrieLogToForestConverter {
                 return null;
               });
         }
+        // JIT account-path warm: read every changed account's trie path from the exact
+        // pre-mutation root (captured now, before phase 2 mutates anything), in the same parallel
+        // batch as the storage-trie rebuild above. Unlike the window-level prefetch (which warms
+        // from a root a window or more behind), this has zero staleness — it warms exactly what
+        // phase 2 is about to walk.
+        if (warmAccountPaths) {
+          final Bytes32 warmRoot = currentRootHash;
+          final NodeLoader accountLoader = accountNodeLoader();
+          for (final Address address : accountChanges.keySet()) {
+            tasks.add(
+                () -> {
+                  warmAccountPath(warmRoot, address, accountLoader);
+                  return null;
+                });
+          }
+        }
+
         if (!tasks.isEmpty()) {
           try {
             prefetchExecutor.invokeAll(tasks);
