@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -49,6 +50,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
@@ -107,6 +109,9 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     blockDataGenerator = new BlockDataGenerator();
     blockchain = createInMemoryBlockchain(blockDataGenerator.genesisBlock());
     when(worldStateStorage.getComposedWorldStateStorage()).thenReturn(storage);
+    final BonsaiFlatDbStrategy flatDbStrategy = mock(BonsaiFlatDbStrategy.class);
+    when(flatDbStrategy.isCodeByCodeHash()).thenReturn(true);
+    when(worldStateStorage.getFlatDbStrategy()).thenReturn(flatDbStrategy);
     when(trieLogManager.getTrieLogLayer(any()))
         .thenReturn(Optional.of(createAccountTrieLog(Wei.ONE)));
   }

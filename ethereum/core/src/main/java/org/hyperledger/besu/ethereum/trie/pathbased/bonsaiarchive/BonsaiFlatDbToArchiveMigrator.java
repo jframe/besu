@@ -37,6 +37,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiAr
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.AccountHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategy;
@@ -457,8 +458,15 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private void initMigrationWorldState(final MetricsSystem metricsSystem) {
     final long interval = archiveStrategy.getTrieNodeCheckpointInterval();
+    // Match the code storage layout the DB is actually using rather than assuming code-by-hash:
+    // legacy Bonsai DBs key CODE_STORAGE by account hash, and getCode() during trie log replay
+    // would otherwise never find prior code and blow up rollCodeChange's existence check.
+    final CodeStorageStrategy migrationCodeStorageStrategy =
+        worldStateStorage.getFlatDbStrategy().isCodeByCodeHash()
+            ? new CodeHashCodeStorageStrategy()
+            : new AccountHashCodeStorageStrategy();
     final BonsaiArchiveFlatDbStrategy readStrategy =
-        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy(), interval);
+        new BonsaiArchiveFlatDbStrategy(metricsSystem, migrationCodeStorageStrategy, interval);
     migrationTrieStorage =
         new MigrationTrieStorage(worldStateStorage.getComposedWorldStateStorage());
     final StaticArchiveFlatDbStrategyProvider provider =

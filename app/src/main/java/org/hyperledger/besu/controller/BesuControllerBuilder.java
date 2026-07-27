@@ -93,7 +93,9 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsaiarchive.BonsaiFlatDbToArchiveMigrator;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.AccountHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogPruner;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
@@ -1044,16 +1046,21 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             .getPathBasedExtraStorageConfiguration()
             .getUnstable()
             .getStateProofsEnabled();
+    // Match the code storage layout the DB is actually using rather than assuming code-by-hash.
+    final CodeStorageStrategy codeStorageStrategy =
+        worldStateKeyValueStorage.getFlatDbStrategy().isCodeByCodeHash()
+            ? new CodeHashCodeStorageStrategy()
+            : new AccountHashCodeStorageStrategy();
     final BonsaiArchiveFlatDbStrategy archiveStrategy =
         stateProofsEnabled
             ? new BonsaiArchiveFlatDbStrategy(
                 metricsSystem,
-                new CodeHashCodeStorageStrategy(),
+                codeStorageStrategy,
                 dataStorageConfiguration
                     .getPathBasedExtraStorageConfiguration()
                     .getUnstable()
                     .getArchiveTrieNodeCheckpointInterval())
-            : new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
+            : new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
     return new BonsaiFlatDbToArchiveMigrator(
         worldStateKeyValueStorage,
         trieLogManager,
