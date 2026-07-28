@@ -86,6 +86,16 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
   // state materialisation (e.g. eth_call/eth_getBalance at an old block).
   private Set<Address> archiveProofStorageRollFilter;
 
+  // When true, rollForward/rollBack skip code changes entirely, including the getCode() read of
+  // the "prior" value. Flat CODE_STORAGE holds only the current bytecode for currently-live
+  // contracts (populated by live block processing, or by a forest-to-bonsai conversion that only
+  // materialises present state) — it has no historical/versioned view. A contract whose code was
+  // ever cleared (self-destruct) or changed is not guaranteed to be readable at a past point, even
+  // though the account leaf's codeHash field (set directly from the account change) stays correct
+  // without it. Set for both archive proof rolls and archive migration replay, neither of which
+  // persists code into an archive CF or otherwise needs it.
+  private boolean skipCodeRoll;
+
   public PathBasedWorldStateUpdateAccumulator(
       final PathBasedWorldView world,
       final Consumer<PathBasedValue<ACCOUNT>> accountPreloader,
@@ -644,6 +654,15 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     this.archiveProofStorageRollFilter = accounts;
   }
 
+  /**
+   * See {@link #skipCodeRoll}.
+   *
+   * @param skipCodeRoll whether rollForward/rollBack should skip code changes entirely.
+   */
+  public void setSkipCodeRoll(final boolean skipCodeRoll) {
+    this.skipCodeRoll = skipCodeRoll;
+  }
+
   private boolean shouldRollStorageFor(final Address address) {
     return archiveProofStorageRollFilter == null || archiveProofStorageRollFilter.contains(address);
   }
@@ -668,8 +687,9 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
             (address, change) ->
                 rollAccountChange(address, change.getPrior(), change.getUpdated()));
     // Code is not part of an account or storage proof (the account leaf already carries the
-    // codeHash), so an archive proof roll skips code entirely — including its getCode read.
-    if (!isArchiveProofRoll()) {
+    // codeHash), and flat CODE_STORAGE has no historical view (see skipCodeRoll), so archive proof
+    // rolls and archive migration replay skip code entirely — including its getCode read.
+    if (!isArchiveProofRoll() && !skipCodeRoll) {
       layer
           .getCodeChanges()
           .forEach(
@@ -696,8 +716,9 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
             (address, change) ->
                 rollAccountChange(address, change.getUpdated(), change.getPrior()));
     // Code is not part of an account or storage proof (the account leaf already carries the
-    // codeHash), so an archive proof roll skips code entirely — including its getCode read.
-    if (!isArchiveProofRoll()) {
+    // codeHash), and flat CODE_STORAGE has no historical view (see skipCodeRoll), so archive proof
+    // rolls and archive migration replay skip code entirely — including its getCode read.
+    if (!isArchiveProofRoll() && !skipCodeRoll) {
       layer
           .getCodeChanges()
           .forEach(

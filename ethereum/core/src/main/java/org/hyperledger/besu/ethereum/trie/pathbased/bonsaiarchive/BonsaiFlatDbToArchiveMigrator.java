@@ -494,6 +494,12 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
                 .parallelStateRootComputationEnabled(false)
                 .build(),
             codeCache);
+    // Flat CODE_STORAGE only ever holds current bytecode for currently-live contracts (see
+    // PathBasedWorldStateUpdateAccumulator#skipCodeRoll), so it cannot answer "what was this
+    // account's code at block N" for a contract that has since self-destructed or changed code —
+    // exactly the trie logs migration replays across. The migrator never archives code anyway
+    // (only accounts/storage), so skip rolling it rather than fail on an unreadable prior value.
+    ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater()).setSkipCodeRoll(true);
   }
 
   private void recoverTrieState() {
