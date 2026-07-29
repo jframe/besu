@@ -69,20 +69,21 @@ public class BonsaiWorldStateUpdateAccumulator
    * — the dominant cost of an archive proof on a busy window — even though a proof only needs the
    * storage trie of the account(s) it is proving.
    *
-   * <p>For each account in {@code accountsToRebuild}: reset its storage root to the checkpoint value
-   * ({@code getPrior().storageRoot}) so persist() starts from a root whose nodes ARE in the archive
-   * CF and re-derives the target root from the slot diffs, materialising the storage-trie nodes the
-   * storage proof will traverse.
+   * <p>For each account in {@code accountsToRebuild}: reset its storage root to the checkpoint
+   * value ({@code getPrior().storageRoot}) so persist() starts from a root whose nodes ARE in the
+   * archive CF and re-derives the target root from the slot diffs, materialising the storage-trie
+   * nodes the storage proof will traverse.
    *
    * <p>For every other account (a plain update): drop its slot diffs so persist() does no
-   * storage-trie work for it. The account keeps its already-rolled target storage root, which is all
-   * the account trie needs, so the computed state root still matches the target block. Created,
+   * storage-trie work for it. The account keeps its already-rolled target storage root, which is
+   * all the account trie needs, so the computed state root still matches the target block. Created,
    * deleted and self-destruct-cleared accounts are left untouched for normal processing.
    *
    * @param accountsToRebuild the accounts whose storage tries must be materialised (typically just
    *     the account being proved, when storage keys were requested). Pass {@code null} to rebuild
-   *     <em>all</em> storage tries — required when the rolled world state must be fully materialised
-   *     (e.g. serving a historical {@code eth_call}/{@code eth_getBalance}, not a proof).
+   *     <em>all</em> storage tries — required when the rolled world state must be fully
+   *     materialised (e.g. serving a historical {@code eth_call}/{@code eth_getBalance}, not a
+   *     proof).
    */
   public void resetStorageRootsToCheckpointForArchiveProof(final Set<Address> accountsToRebuild) {
     for (final Address address : new ArrayList<>(getStorageToUpdate().keySet())) {

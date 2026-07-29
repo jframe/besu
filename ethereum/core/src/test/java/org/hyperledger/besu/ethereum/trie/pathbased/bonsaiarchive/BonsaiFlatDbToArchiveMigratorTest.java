@@ -620,7 +620,8 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     when(trieLogManager.getTrieLogLayer(hashAt(1L))).thenReturn(Optional.of(trieLog));
 
     // interval=100: (1+1)%100 != 0, so no checkpoint/persist() fires for block 1 — avoids needing
-    // a hand-crafted block header with a matching state root, per trieCheckpointWritesNodesToArchiveStorage.
+    // a hand-crafted block header with a matching state root, per
+    // trieCheckpointWritesNodesToArchiveStorage.
     final BonsaiFlatDbToArchiveMigrator migrator = createMigratorWithRealTrieLogs(100);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 

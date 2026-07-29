@@ -168,7 +168,8 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     //
     // Also reuse a single near-seek cursor per archive column family for the WHOLE proof. The base
     // getAccountProof only scopes the final proof traversal, but the bulk of the seekForPrev reads
-    // happen earlier in getWorldState() — the roll-forward/backward across the checkpoint window and
+    // happen earlier in getWorldState() — the roll-forward/backward across the checkpoint window
+    // and
     // the persist() that rebuilds the historical trie. Without a scope covering those, every
     // getNearestBefore there opens and closes its own RocksDB iterator (a superversion pin plus SST
     // metadata snapshot per call), which dominates proof latency on busy windows. Opening the scope

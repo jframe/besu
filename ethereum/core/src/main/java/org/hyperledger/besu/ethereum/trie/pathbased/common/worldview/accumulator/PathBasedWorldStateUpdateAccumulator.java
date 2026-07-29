@@ -77,12 +77,15 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
   private final Map<UInt256, Hash> storageKeyHashLookup = new ConcurrentHashMap<>();
   protected boolean isAccumulatorStateChanged;
 
-  // When non-null, rollForward/rollBack apply storage changes only for these accounts. Archive proof
-  // rolling sets it so that rolling to the target block does not read (and then discard) the storage
+  // When non-null, rollForward/rollBack apply storage changes only for these accounts. Archive
+  // proof
+  // rolling sets it so that rolling to the target block does not read (and then discard) the
+  // storage
   // slots of every account changed in the window — only the account(s) the proof actually needs its
   // storage trie for. Every storage change in a Bonsai trie log is accompanied by an account change
   // carrying the new storage root, so the account trie stays correct even when a storage roll is
-  // skipped. Null (the default) rolls all storage: normal block/reorg processing and full historical
+  // skipped. Null (the default) rolls all storage: normal block/reorg processing and full
+  // historical
   // state materialisation (e.g. eth_call/eth_getBalance at an old block).
   private Set<Address> archiveProofStorageRollFilter;
 
@@ -692,11 +695,12 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
   /**
    * True while rolling a world state to serve an archive proof (signalled by a non-null {@link
    * #archiveProofStorageRollFilter}). In this mode the roll trusts the trie log: at an account's or
-   * slot's first touch during a contiguous roll from a checkpoint, the change's "from" value already
-   * equals the checkpoint value, so it can seed the accumulator directly instead of reading it back
-   * from storage. This eliminates the first-touch flat-DB {@code seekForPrev} that otherwise
-   * dominates proof latency. Never enabled for normal block/reorg processing or for full historical
-   * state materialisation (eth_call/eth_getBalance), which keep the read-and-validate path.
+   * slot's first touch during a contiguous roll from a checkpoint, the change's "from" value
+   * already equals the checkpoint value, so it can seed the accumulator directly instead of reading
+   * it back from storage. This eliminates the first-touch flat-DB {@code seekForPrev} that
+   * otherwise dominates proof latency. Never enabled for normal block/reorg processing or for full
+   * historical state materialisation (eth_call/eth_getBalance), which keep the read-and-validate
+   * path.
    */
   private boolean isArchiveProofRoll() {
     return archiveProofStorageRollFilter != null;
@@ -705,8 +709,8 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
   /**
    * True when rollForward/rollBack should seed a first-touched account's or storage slot's value
    * directly from the trie log instead of reading the flat DB — either because this {@link
-   * #isArchiveProofRoll()}, or because {@link #trustTrieLogPriorValue} is set for archive
-   * migration replay.
+   * #isArchiveProofRoll()}, or because {@link #trustTrieLogPriorValue} is set for archive migration
+   * replay.
    */
   private boolean shouldSeedFromTrieLog() {
     return isArchiveProofRoll() || trustTrieLogPriorValue;
@@ -781,13 +785,16 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     PathBasedValue<ACCOUNT> accountValue = accountsToUpdate.get(address);
     if (accountValue == null && shouldSeedFromTrieLog() && expectedValue != null) {
       // Archive proof roll: at first touch expectedValue is the checkpoint account value, so seed
-      // prior from the trie log instead of a storage read. The assertion below then trivially holds.
+      // prior from the trie log instead of a storage read. The assertion below then trivially
+      // holds.
       final ACCOUNT seeded = createAccount(this, address, expectedValue, true);
-      accountValue = new PathBasedValue<>(seeded, createAccount(this, address, expectedValue, true));
+      accountValue =
+          new PathBasedValue<>(seeded, createAccount(this, address, expectedValue, true));
       accountsToUpdate.put(address, accountValue);
     }
     // In an archive proof roll, a still-null accountValue means expectedValue was null: the account
-    // was created within the window and did not exist at the checkpoint. Skip the loadAccountFromParent
+    // was created within the window and did not exist at the checkpoint. Skip the
+    // loadAccountFromParent
     // read and fall through to the create branch below — the read would only confirm its absence.
     if (accountValue == null && !shouldSeedFromTrieLog()) {
       accountValue = loadAccountFromParent(address, accountValue);
@@ -928,7 +935,8 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
         && shouldSeedFromTrieLog()
         && expectedValue != null
         && !expectedValue.isZero()) {
-      // Archive proof roll: at first touch a non-zero expectedValue is the checkpoint slot value, so
+      // Archive proof roll: at first touch a non-zero expectedValue is the checkpoint slot value,
+      // so
       // seed prior from the trie log instead of a flat-DB read.
       slotValue = new PathBasedValue<>(expectedValue, expectedValue);
       storageToUpdate
@@ -937,8 +945,10 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
               k -> new StorageConsumingMap<>(address, new ConcurrentHashMap<>(), storagePreloader))
           .put(storageSlotKey, slotValue);
     }
-    // Skip the flat-DB read entirely during an archive proof roll: a zero/absent expectedValue means
-    // the slot did not exist at the checkpoint, so it falls through to the create path below with no
+    // Skip the flat-DB read entirely during an archive proof roll: a zero/absent expectedValue
+    // means
+    // the slot did not exist at the checkpoint, so it falls through to the create path below with
+    // no
     // read. Reading (often for a not-yet-existent slot in a growing contract) is what dominated
     // storage-proof latency.
     if (slotValue == null && !shouldSeedFromTrieLog()) {
