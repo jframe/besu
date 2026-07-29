@@ -96,6 +96,18 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
   // persists code into an archive CF or otherwise needs it.
   private boolean skipCodeRoll;
 
+  // When true, rollForward/rollBack seed a first-touched account's or storage slot's value
+  // directly from the trie log's own recorded value instead of reading the flat DB — mirroring
+  // the archive-proof roll's shortcut (see isArchiveProofRoll) but without
+  // archiveProofStorageRollFilter's storage-roll restriction, since archive migration replay needs
+  // every account's storage rolled. Profiling a live migration run showed ~62% of the migrator
+  // thread's pread64-blocked wall time was this exact read, used only to validate the trie log
+  // against the flat DB (assertCloseEnoughForDiffing / isSlotEquals). Enabling this flag makes
+  // that validation trivially pass rather than skipping it outright, so a flat-DB/trie-log
+  // divergence during migration replay will no longer be detected. Set only for archive migration
+  // replay — see BonsaiFlatDbToArchiveMigrator#initMigrationWorldState.
+  private boolean trustTrieLogPriorValue;
+
   public PathBasedWorldStateUpdateAccumulator(
       final PathBasedWorldView world,
       final Consumer<PathBasedValue<ACCOUNT>> accountPreloader,
@@ -663,6 +675,16 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     this.skipCodeRoll = skipCodeRoll;
   }
 
+  /**
+   * See {@link #trustTrieLogPriorValue}.
+   *
+   * @param trustTrieLogPriorValue whether rollForward/rollBack should seed first-touched
+   *     accounts/slots from the trie log instead of reading the flat DB.
+   */
+  public void setTrustTrieLogPriorValue(final boolean trustTrieLogPriorValue) {
+    this.trustTrieLogPriorValue = trustTrieLogPriorValue;
+  }
+
   private boolean shouldRollStorageFor(final Address address) {
     return archiveProofStorageRollFilter == null || archiveProofStorageRollFilter.contains(address);
   }
@@ -678,6 +700,16 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
    */
   private boolean isArchiveProofRoll() {
     return archiveProofStorageRollFilter != null;
+  }
+
+  /**
+   * True when rollForward/rollBack should seed a first-touched account's or storage slot's value
+   * directly from the trie log instead of reading the flat DB — either because this {@link
+   * #isArchiveProofRoll()}, or because {@link #trustTrieLogPriorValue} is set for archive
+   * migration replay.
+   */
+  private boolean shouldSeedFromTrieLog() {
+    return isArchiveProofRoll() || trustTrieLogPriorValue;
   }
 
   public void rollForward(final TrieLog layer) {
@@ -747,7 +779,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
       return;
     }
     PathBasedValue<ACCOUNT> accountValue = accountsToUpdate.get(address);
-    if (accountValue == null && isArchiveProofRoll() && expectedValue != null) {
+    if (accountValue == null && shouldSeedFromTrieLog() && expectedValue != null) {
       // Archive proof roll: at first touch expectedValue is the checkpoint account value, so seed
       // prior from the trie log instead of a storage read. The assertion below then trivially holds.
       final ACCOUNT seeded = createAccount(this, address, expectedValue, true);
@@ -757,7 +789,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     // In an archive proof roll, a still-null accountValue means expectedValue was null: the account
     // was created within the window and did not exist at the checkpoint. Skip the loadAccountFromParent
     // read and fall through to the create branch below — the read would only confirm its absence.
-    if (accountValue == null && !isArchiveProofRoll()) {
+    if (accountValue == null && !shouldSeedFromTrieLog()) {
       accountValue = loadAccountFromParent(address, accountValue);
     }
     if (accountValue == null) {
@@ -893,7 +925,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     final Map<StorageSlotKey, PathBasedValue<UInt256>> storageMap = storageToUpdate.get(address);
     PathBasedValue<UInt256> slotValue = storageMap == null ? null : storageMap.get(storageSlotKey);
     if (slotValue == null
-        && isArchiveProofRoll()
+        && shouldSeedFromTrieLog()
         && expectedValue != null
         && !expectedValue.isZero()) {
       // Archive proof roll: at first touch a non-zero expectedValue is the checkpoint slot value, so
@@ -909,7 +941,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     // the slot did not exist at the checkpoint, so it falls through to the create path below with no
     // read. Reading (often for a not-yet-existent slot in a growing contract) is what dominated
     // storage-proof latency.
-    if (slotValue == null && !isArchiveProofRoll()) {
+    if (slotValue == null && !shouldSeedFromTrieLog()) {
       final Optional<UInt256> storageValue =
           wrappedWorldView().getStorageValueByStorageSlotKey(address, storageSlotKey);
       if (storageValue.isPresent()) {
