@@ -500,6 +500,13 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     // exactly the trie logs migration replays across. The migrator never archives code anyway
     // (only accounts/storage), so skip rolling it rather than fail on an unreadable prior value.
     ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater()).setSkipCodeRoll(true);
+    // See PathBasedWorldStateUpdateAccumulator#trustTrieLogPriorValue: migration replay trusts the
+    // trie log's recorded prior account/storage value instead of reading it back from the archive
+    // flat DB, eliminating the cold seekForPrev/get that profiling showed dominating migration
+    // throughput. Accepted trade-off: a flat-DB/trie-log divergence during replay is no longer
+    // detected here (see docs/superpowers/specs/2026-07-29-migration-trust-trie-log-design.md).
+    ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater())
+        .setTrustTrieLogPriorValue(true);
   }
 
   private void recoverTrieState() {

@@ -604,6 +604,47 @@ public class BonsaiFlatDbToArchiveMigratorTest {
   }
 
   @Test
+  public void migratesAccountUpdateWhenPriorArchiveRowIsAbsent() throws Exception {
+    // Regression test for the same failure shape fixed in 17116d27f8 (there: code; here: account
+    // state). At this migrator's very first touch of TEST_ADDRESS, ACCOUNT_INFO_STATE_ARCHIVE has
+    // no row yet — trustTrieLogPriorValue must let an UPDATE trie log entry (non-null "prior")
+    // seed from the trie log instead of throwing "Expected to update account, but the account does
+    // not exist".
+    appendBlocks(1);
+    final PmtStateTrieAccountValue prior =
+        new PmtStateTrieAccountValue(1, Wei.ONE, Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    final PmtStateTrieAccountValue updated =
+        new PmtStateTrieAccountValue(2, Wei.ONE, Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    final TrieLogLayer trieLog = new TrieLogLayer();
+    trieLog.addAccountChange(TEST_ADDRESS, prior, updated);
+    when(trieLogManager.getTrieLogLayer(hashAt(1L))).thenReturn(Optional.of(trieLog));
+
+    // interval=100: (1+1)%100 != 0, so no checkpoint/persist() fires for block 1 — avoids needing
+    // a hand-crafted block header with a matching state root, per trieCheckpointWritesNodesToArchiveStorage.
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigratorWithRealTrieLogs(100);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    assertThat(migrator.getMigrationProgress()).hasValue(1L);
+  }
+
+  @Test
+  public void migratesStorageUpdateWhenPriorArchiveRowIsAbsent() throws Exception {
+    // Same shape as migratesAccountUpdateWhenPriorArchiveRowIsAbsent, for rollStorageChange: a
+    // first-touch UPDATE (non-zero expected value) must not throw "Expected to update storage
+    // value, but the slot does not exist" when ACCOUNT_STORAGE_ARCHIVE has no row yet.
+    appendBlocks(1);
+    final StorageSlotKey slotKey = new StorageSlotKey(UInt256.ONE);
+    final TrieLogLayer trieLog = new TrieLogLayer();
+    trieLog.addStorageChange(TEST_ADDRESS, slotKey, UInt256.ONE, UInt256.valueOf(2));
+    when(trieLogManager.getTrieLogLayer(hashAt(1L))).thenReturn(Optional.of(trieLog));
+
+    final BonsaiFlatDbToArchiveMigrator migrator = createMigratorWithRealTrieLogs(100);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    assertThat(migrator.getMigrationProgress()).hasValue(1L);
+  }
+
+  @Test
   public void trieBlockMigrationCompletesWithIntervalConfigured() throws Exception {
     // With interval configured, migration must complete and advance flat-DB progress.
     // Trie archive writes cannot be directly observed in tests: createMigratorWithTrieCheckpoints
