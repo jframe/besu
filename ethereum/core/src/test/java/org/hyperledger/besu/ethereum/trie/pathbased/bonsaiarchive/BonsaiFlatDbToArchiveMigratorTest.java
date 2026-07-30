@@ -54,6 +54,7 @@ import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
@@ -1325,6 +1326,42 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     assertThat(withoutPrefetch.indexPrefetchBaseHits())
         .as("prefetch-OFF resumed run must never populate/consult the prefetch staging map")
         .isEqualTo(0L);
+  }
+
+  @Test
+  public void migrationForwardsIndexMergeAndMetadataPutThroughAllowlist() throws Exception {
+    final Hash stateRoot = computeTestAccountStateRoot();
+    final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
+    final Block block1 =
+            blockDataGenerator.block(
+                    BlockDataGenerator.BlockOptions.create()
+                            .setParentHash(genesis.getHash())
+                            .setBlockNumber(1)
+                            .setStateRoot(stateRoot));
+    blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
+
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
+    final TrieNodeChangeIndex changeIndex =
+            new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
+    final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
+
+    final BonsaiFlatDbToArchiveMigrator migrator =
+            createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
+    migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+    // Root node's natural key is Bytes.EMPTY (ArchiveNodeKey.account(Bytes.EMPTY) == Bytes.EMPTY);
+    // it was created (not mutated) at block 1, so TrieNodeChangeIndex.append() ran, which merges
+    // TRIE_NODE_INDEX_ARCHIVE and puts TRIE_NODE_INDEX_META_ARCHIVE — both must have reached
+    // committed storage through MigrationTransaction's allowlist, not been silently dropped.
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(Bytes.EMPTY, 0);
+    assertThat(storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe()))
+            .withFailMessage("MigrationTransaction must forward merge() calls for TRIE_NODE_INDEX_ARCHIVE")
+            .isPresent();
+    assertThat(
+            storage.get(
+                    KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe()))
+            .withFailMessage("MigrationTransaction must forward put() calls for TRIE_NODE_INDEX_META_ARCHIVE")
+            .isPresent();
   }
 
   /**

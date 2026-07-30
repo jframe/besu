@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.ARCHIVE_PROOF_BLOCK_NUMBER_KEY;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_HASH_KEY;
@@ -1197,6 +1198,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         }
       } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
+          || segmentId == TRIE_NODE_INDEX_META_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
         realTx.put(segmentId, key, value);
       }
@@ -1214,6 +1216,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         }
       } else if (segmentId == TRIE_NODE_HISTORY_ARCHIVE
           || segmentId == TRIE_NODE_INDEX_ARCHIVE
+          || segmentId == TRIE_NODE_INDEX_META_ARCHIVE
           || segmentId == TRIE_NODE_SUBBLOCK_ARCHIVE) {
         realTx.remove(segmentId, key);
       }
