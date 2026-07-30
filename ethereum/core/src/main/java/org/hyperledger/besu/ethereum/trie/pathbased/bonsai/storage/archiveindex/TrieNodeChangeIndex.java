@@ -652,7 +652,8 @@ public final class TrieNodeChangeIndex {
     if (rangeSize > 0x1000000L) {
       throw new IllegalArgumentException(
           "rangeSize must be <= 0x1000000 (RangeRelativeOffsetList's 3-byte packed offsets "
-              + "cannot represent a larger value), got " + rangeSize);
+              + "cannot represent a larger value), got "
+              + rangeSize);
     }
     if (subBlockThreshold <= 0) {
       throw new IllegalArgumentException("subBlockThreshold must be > 0, got " + subBlockThreshold);
