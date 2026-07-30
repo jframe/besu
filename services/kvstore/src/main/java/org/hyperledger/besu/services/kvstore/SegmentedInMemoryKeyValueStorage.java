@@ -368,6 +368,28 @@ public class SegmentedInMemoryKeyValueStorage
     }
 
     @Override
+    public void merge(
+        final SegmentIdentifier segmentIdentifier, final byte[] key, final byte[] value) {
+      final Bytes k = Bytes.wrap(key);
+      final byte[] base;
+      final Optional<byte[]> pendingPut = updatedValues.getOrDefault(segmentIdentifier, Map.of()).get(k);
+      if (pendingPut != null) {
+        base = pendingPut.orElse(new byte[0]);
+      } else if (removedKeys.getOrDefault(segmentIdentifier, Set.of()).contains(k)) {
+        base = new byte[0];
+      } else {
+        base =
+            hashValueStore
+                .computeIfAbsent(segmentIdentifier, __ -> newSegmentMap())
+                .getOrDefault(k, Optional.empty())
+                .orElse(new byte[0]);
+      }
+      final byte[] merged = Bytes.concatenate(Bytes.wrap(base), Bytes.wrap(value)).toArrayUnsafe();
+      updatedValues.computeIfAbsent(segmentIdentifier, __ -> new HashMap<>()).put(k, Optional.of(merged));
+      removedKeys.computeIfAbsent(segmentIdentifier, __ -> new HashSet<>()).remove(k);
+    }
+
+    @Override
     public void commit() throws StorageException {
       final Lock lock = rwLock.writeLock();
       lock.lock();

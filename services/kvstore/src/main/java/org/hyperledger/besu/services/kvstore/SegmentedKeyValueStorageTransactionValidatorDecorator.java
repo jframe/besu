@@ -57,6 +57,13 @@ public class SegmentedKeyValueStorageTransactionValidatorDecorator
   }
 
   @Override
+  public void merge(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
+    checkState(active, "Cannot invoke merge() on a completed transaction.");
+    checkState(!isClosed.get(), "Cannot invoke merge() on a closed storage.");
+    transaction.merge(segmentId, key, value);
+  }
+
+  @Override
   public final void commit() throws StorageException {
     checkState(active, "Cannot commit a completed transaction.");
     checkState(!isClosed.get(), "Cannot invoke commit() on a closed storage.");
