@@ -93,4 +93,25 @@ class RocksDBColumnarKeyValueStorageMergeOperatorTest {
           .contains(new byte[] {1, 2, 3, 4, 5, 6});
     }
   }
+
+  @Test
+  void writeBatchTransactionMergeAppliesStringAppendConcatenationOnCommit() throws Exception {
+    try (SegmentedKeyValueStorage storage =
+        new OptimisticRocksDBColumnarKeyValueStorage(
+            new RocksDBConfigurationBuilder()
+                .databaseDir(Files.createTempDirectory("writeBatchMergeTest"))
+                .build(),
+            List.of(MergeTestSegment.DEFAULT, MergeTestSegment.MERGE_SEGMENT),
+            List.of(),
+            new NoOpMetricsSystem(),
+            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
+      // SegmentedKeyValueStorageTransaction does not extend AutoCloseable — no try-with-resources.
+      final byte[] key = "k".getBytes(StandardCharsets.UTF_8);
+      final SegmentedKeyValueStorageTransaction tx = storage.startWriteBatchTransaction();
+      tx.merge(MergeTestSegment.MERGE_SEGMENT, key, new byte[] {1, 2, 3});
+      tx.commit();
+
+      assertThat(storage.get(MergeTestSegment.MERGE_SEGMENT, key)).contains(new byte[] {1, 2, 3});
+    }
+  }
 }

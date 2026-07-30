@@ -82,6 +82,19 @@ public class RocksDBWriteBatchTransaction implements SegmentedKeyValueStorageTra
   }
 
   @Override
+  public void merge(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
+    try (final OperationTimer.TimingContext ignored = metrics.getWriteLatency().startTimer()) {
+      writeBatch.merge(columnFamilyMapper.apply(segmentId), key, value);
+    } catch (final RocksDBException e) {
+      if (e.getMessage().contains(NO_SPACE_LEFT_ON_DEVICE)) {
+        logger.error(e.getMessage());
+        System.exit(0);
+      }
+      throw new StorageException(e);
+    }
+  }
+
+  @Override
   public void remove(final SegmentIdentifier segmentId, final byte[] key) {
     try (final OperationTimer.TimingContext ignored = metrics.getRemoveLatency().startTimer()) {
       writeBatch.delete(columnFamilyMapper.apply(segmentId), key);
