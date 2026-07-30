@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.storage.keyvalue;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.util.List;
@@ -26,8 +27,21 @@ public class KeyValueSegmentIdentifierTest {
   void trieNodeArchiveSegmentsAreRegistered() {
     for (String name :
         List.of(
-            "TRIE_NODE_HISTORY_ARCHIVE", "TRIE_NODE_INDEX_ARCHIVE", "TRIE_NODE_SUBBLOCK_ARCHIVE")) {
+            "TRIE_NODE_HISTORY_ARCHIVE",
+            "TRIE_NODE_INDEX_ARCHIVE",
+            "TRIE_NODE_INDEX_META_ARCHIVE",
+            "TRIE_NODE_SUBBLOCK_ARCHIVE")) {
       assertThatCode(() -> KeyValueSegmentIdentifier.valueOf(name)).doesNotThrowAnyException();
     }
+  }
+
+  @Test
+  void onlyIndexContentSegmentUsesAppendMergeOperator() {
+    assertThat(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE.usesAppendMergeOperator())
+        .isTrue();
+    assertThat(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE.usesAppendMergeOperator())
+        .isFalse();
+    assertThat(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE.usesAppendMergeOperator())
+        .isFalse();
   }
 }

@@ -70,6 +70,18 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       false,
       false,
+      true,
+      true),
+  // Small fixed-width [4B subCount][4B tailCount] value read/written via plain put/get — kept
+  // separate from TRIE_NODE_INDEX_ARCHIVE's merge-only packed offset content so the depth-tiered
+  // checkpoint's exact previous-mutation-count read never has to resolve accumulated merge
+  // operands over the (potentially large) offset list.
+  TRIE_NODE_INDEX_META_ARCHIVE(
+      "TRIE_NODE_INDEX_META_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+      EnumSet.of(X_BONSAI_ARCHIVE),
+      false,
+      false,
+      false,
       true),
   TRIE_NODE_SUBBLOCK_ARCHIVE(
       "TRIE_NODE_SUBBLOCK_ARCHIVE".getBytes(StandardCharsets.UTF_8),
@@ -107,6 +119,7 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   private final boolean eligibleToHighSpecFlag;
   private final boolean staticDataGarbageCollectionEnabled;
   private final boolean cacheIndexAndFilterBlocks;
+  private final boolean usesAppendMergeOperator;
 
   KeyValueSegmentIdentifier(final byte[] id) {
     this(id, EnumSet.allOf(DataStorageFormat.class));
@@ -138,12 +151,31 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       final boolean eligibleToHighSpecFlag,
       final boolean staticDataGarbageCollectionEnabled,
       final boolean cacheIndexAndFilterBlocks) {
+    this(
+        id,
+        formats,
+        containsStaticData,
+        eligibleToHighSpecFlag,
+        staticDataGarbageCollectionEnabled,
+        cacheIndexAndFilterBlocks,
+        false);
+  }
+
+  KeyValueSegmentIdentifier(
+      final byte[] id,
+      final EnumSet<DataStorageFormat> formats,
+      final boolean containsStaticData,
+      final boolean eligibleToHighSpecFlag,
+      final boolean staticDataGarbageCollectionEnabled,
+      final boolean cacheIndexAndFilterBlocks,
+      final boolean usesAppendMergeOperator) {
     this.id = id;
     this.formats = formats;
     this.containsStaticData = containsStaticData;
     this.eligibleToHighSpecFlag = eligibleToHighSpecFlag;
     this.staticDataGarbageCollectionEnabled = staticDataGarbageCollectionEnabled;
     this.cacheIndexAndFilterBlocks = cacheIndexAndFilterBlocks;
+    this.usesAppendMergeOperator = usesAppendMergeOperator;
   }
 
   @Override
@@ -174,6 +206,11 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
   @Override
   public boolean isCacheIndexAndFilterBlocks() {
     return cacheIndexAndFilterBlocks;
+  }
+
+  @Override
+  public boolean usesAppendMergeOperator() {
+    return usesAppendMergeOperator;
   }
 
   @Override
