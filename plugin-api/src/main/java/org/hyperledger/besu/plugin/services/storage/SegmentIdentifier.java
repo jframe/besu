@@ -84,4 +84,16 @@ public interface SegmentIdentifier {
   default boolean isCacheIndexAndFilterBlocks() {
     return false;
   }
+
+  /**
+   * Whether this segment's backing column family should be configured with an append-only merge
+   * operator (zero-delimiter {@code StringAppendOperator}) instead of plain overwrite semantics.
+   * When true, writers may use {@link SegmentedKeyValueStorageTransaction#merge} to append bytes
+   * to the current value without reading it first.
+   *
+   * @return true if this segment uses an append merge operator
+   */
+  default boolean usesAppendMergeOperator() {
+    return false;
+  }
 }
