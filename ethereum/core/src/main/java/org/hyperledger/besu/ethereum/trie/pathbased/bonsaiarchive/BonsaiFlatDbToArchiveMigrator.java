@@ -1221,6 +1221,17 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
 
     @Override
+    public void merge(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
+      // Only the trie-node index content CF is ever merged; everything else is dropped to match
+      // the same allowlist discipline as put()/remove() above — see the CAS-dedup incident
+      // referenced in this class's write-path javadoc for why silent, unlisted drops are
+      // dangerous here.
+      if (segmentId == TRIE_NODE_INDEX_ARCHIVE) {
+        realTx.merge(segmentId, key, value);
+      }
+    }
+
+    @Override
     public void commit() {
       if (!deferLifecycleToOwner) {
         realTx.commit();
@@ -1269,6 +1280,11 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     public void remove(final SegmentIdentifier segmentId, final byte[] key) {
       delegate.remove(segmentId, key);
       trieStorage.recordFlatRemove(segmentId, key);
+    }
+
+    @Override
+    public void merge(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
+      delegate.merge(segmentId, key, value);
     }
 
     @Override
