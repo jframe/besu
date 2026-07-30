@@ -337,6 +337,12 @@ public abstract class PathBasedWorldState
         }
 
         @Override
+        public void merge(
+            final SegmentIdentifier segmentIdentifier, final byte[] key, final byte[] value) {
+          // no-op
+        }
+
+        @Override
         public void commit() throws StorageException {
           // no-op
         }
