@@ -551,7 +551,7 @@ class RocksDBColumnarKeyValueStorageMergeOperatorTest {
 
   private enum MergeTestSegment implements SegmentIdentifier {
     MERGE_SEGMENT(new byte[] {1}, true),
-    DEFAULT(new byte[] {0}, false);
+    DEFAULT("default".getBytes(StandardCharsets.UTF_8), false); // RocksDB requires this exact name
 
     private final byte[] id;
     private final boolean usesAppendMergeOperator;
@@ -598,15 +598,15 @@ class RocksDBColumnarKeyValueStorageMergeOperatorTest {
             List.of(),
             new NoOpMetricsSystem(),
             RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
+      // SegmentedKeyValueStorageTransaction does not extend AutoCloseable — no try-with-resources.
       final byte[] key = "k".getBytes(StandardCharsets.UTF_8);
-      try (SegmentedKeyValueStorageTransaction tx = storage.startTransaction()) {
-        tx.merge(MergeTestSegment.MERGE_SEGMENT, key, new byte[] {1, 2, 3});
-        tx.commit();
-      }
-      try (SegmentedKeyValueStorageTransaction tx = storage.startTransaction()) {
-        tx.merge(MergeTestSegment.MERGE_SEGMENT, key, new byte[] {4, 5, 6});
-        tx.commit();
-      }
+      final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
+      tx1.merge(MergeTestSegment.MERGE_SEGMENT, key, new byte[] {1, 2, 3});
+      tx1.commit();
+
+      final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
+      tx2.merge(MergeTestSegment.MERGE_SEGMENT, key, new byte[] {4, 5, 6});
+      tx2.commit();
 
       assertThat(storage.get(MergeTestSegment.MERGE_SEGMENT, key))
           .contains(new byte[] {1, 2, 3, 4, 5, 6});
@@ -739,11 +739,11 @@ Task 4 (`RocksDBColumnarKeyValueStorageMergeOperatorTest.java`):
             List.of(),
             new NoOpMetricsSystem(),
             RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
+      // SegmentedKeyValueStorageTransaction does not extend AutoCloseable — no try-with-resources.
       final byte[] key = "k".getBytes(StandardCharsets.UTF_8);
-      try (SegmentedKeyValueStorageTransaction tx = storage.startWriteBatchTransaction()) {
-        tx.merge(MergeTestSegment.MERGE_SEGMENT, key, new byte[] {1, 2, 3});
-        tx.commit();
-      }
+      final SegmentedKeyValueStorageTransaction tx = storage.startWriteBatchTransaction();
+      tx.merge(MergeTestSegment.MERGE_SEGMENT, key, new byte[] {1, 2, 3});
+      tx.commit();
 
       assertThat(storage.get(MergeTestSegment.MERGE_SEGMENT, key)).contains(new byte[] {1, 2, 3});
     }
