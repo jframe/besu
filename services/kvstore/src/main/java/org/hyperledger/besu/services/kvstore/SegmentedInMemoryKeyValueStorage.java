@@ -372,7 +372,8 @@ public class SegmentedInMemoryKeyValueStorage
         final SegmentIdentifier segmentIdentifier, final byte[] key, final byte[] value) {
       final Bytes k = Bytes.wrap(key);
       final byte[] base;
-      final Optional<byte[]> pendingPut = updatedValues.getOrDefault(segmentIdentifier, Map.of()).get(k);
+      final Optional<byte[]> pendingPut =
+          updatedValues.getOrDefault(segmentIdentifier, Map.of()).get(k);
       if (pendingPut != null) {
         base = pendingPut.orElse(new byte[0]);
       } else if (removedKeys.getOrDefault(segmentIdentifier, Set.of()).contains(k)) {
@@ -385,7 +386,9 @@ public class SegmentedInMemoryKeyValueStorage
                 .orElse(new byte[0]);
       }
       final byte[] merged = Bytes.concatenate(Bytes.wrap(base), Bytes.wrap(value)).toArrayUnsafe();
-      updatedValues.computeIfAbsent(segmentIdentifier, __ -> new HashMap<>()).put(k, Optional.of(merged));
+      updatedValues
+          .computeIfAbsent(segmentIdentifier, __ -> new HashMap<>())
+          .put(k, Optional.of(merged));
       removedKeys.computeIfAbsent(segmentIdentifier, __ -> new HashSet<>()).remove(k);
     }
 
