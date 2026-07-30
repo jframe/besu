@@ -1221,12 +1221,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     }
 
     @Override
-    public void merge(
-        final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
-      realTx.merge(segmentId, key, value);
-    }
-
-    @Override
     public void commit() {
       if (!deferLifecycleToOwner) {
         realTx.commit();
@@ -1275,12 +1269,6 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
     public void remove(final SegmentIdentifier segmentId, final byte[] key) {
       delegate.remove(segmentId, key);
       trieStorage.recordFlatRemove(segmentId, key);
-    }
-
-    @Override
-    public void merge(
-        final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
-      delegate.merge(segmentId, key, value);
     }
 
     @Override
