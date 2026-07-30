@@ -41,7 +41,7 @@ anonymous no-op sentinels found by a full-sweep grep — see Task 15) and `Segme
 ## Execution Order
 
 **Dispatch tasks in this order, not their numeric order:**
-`1, 2, 3, 4, 5, 15, 16, 6, 7, 8, 13, 9, 10, 11, 12, 14`.
+`1, 2, 3, 4, 5, 15, 16, 6, 7, 8, 13, 9, 10, 11, 14` (Task 12 was removed — see its entry below).
 
 Reason: Gradle compiles a module's entire main+test source set before running any test in it, even
 a single `--tests`-filtered class. `SegmentedKeyValueStorageTransaction.merge()` is abstract
@@ -802,7 +802,7 @@ git commit -m "feat(rocksdb): implement merge() on write-batch transaction"
 **Interfaces:**
 - Consumes: `usesAppendMergeOperator()` from Task 1.
 - Produces: `KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE` — consumed by all remaining
-  tasks in `TrieNodeChangeIndex`, `TrieNodeIndexDropper`, `BonsaiFlatDbToArchiveMigrator`.
+  tasks in `TrieNodeChangeIndex` and `BonsaiFlatDbToArchiveMigrator`.
 
 - [ ] **Step 1: Add the 7-arg constructor overload and the new segment**
 
@@ -1003,7 +1003,7 @@ git commit -m "feat(bonsai-archive): add TRIE_NODE_INDEX_META_ARCHIVE segment"
 - Consumes: `TRIE_NODE_INDEX_META_ARCHIVE` from Task 6.
 - Produces: package-private `record IndexMetadata(int subCount, int tailCount)` with `EMPTY`
   constant, package-private static `readMetadataValue(byte[])`/`writeMetadataValue(int, int)` —
-  consumed by Tasks 8–11 (same class) and Task 12 (`TrieNodeIndexDropper`, same package).
+  consumed by Tasks 8–11 (same class).
 
 This task only adds the new helpers (unused by production code yet) and direct unit tests for
 their round-trip correctness — it doesn't touch `append()`/`appendAndGetPreviousCount()` or any
@@ -1185,8 +1185,7 @@ git commit -m "feat(bonsai-archive): add split content/metadata helpers to TrieN
   `SegmentedKeyValueStorageTransaction.merge()` from Task 1.
 - Produces: `append()`/`appendAndGetPreviousCount()` unchanged public signatures, new internal
   implementation via a shared `writeAndGetPreviousMetadata(...)` helper — Task 11 (buffered path)
-  and Task 12 (`TrieNodeIndexDropper`) rely on the same content/metadata split but not on this
-  specific helper.
+  relies on the same content/metadata split but not on this specific helper.
 
 This is the highest-risk task in the plan — it changes the semantics callers depend on
 (`previousCount` correctness for the depth-tiered checkpoint decision) even though the public
@@ -2042,158 +2041,16 @@ git commit -m "feat(bonsai-archive): batch buffered index appends into one merge
 
 ---
 
-### Task 12: `TrieNodeIndexDropper` — update for split format
+### Task 12: removed
 
-**Files:**
-- Modify: `ethereum/core/src/main/java/org/hyperledger/besu/ethereum/trie/pathbased/bonsai/storage/archiveindex/TrieNodeIndexDropper.java`
-- Test: `ethereum/core/src/test/java/org/hyperledger/besu/ethereum/trie/pathbased/bonsai/storage/archiveindex/TrieNodeIndexDropperTest.java`
-
-**Interfaces:**
-- Consumes: `TrieNodeChangeIndex.readMetadataValue`/`writeMetadataValue` — these are currently
-  package-private static methods on `TrieNodeChangeIndex` (Task 7), which `TrieNodeIndexDropper`
-  can call directly since it's in the same package.
-
-Offset removal is an arbitrary mid-list edit, which can never be a blind merge — this path stays a
-real read-modify-write, same as today, just updated for the split format (content has no prefix
-anymore; a removal also decrements `tailCount` in the separate metadata value).
-
-- [ ] **Step 1: Write the failing test**
-
-First read the existing `TrieNodeIndexDropperTest.java` to find its exact test setup pattern
-(`grep -n "class TrieNodeIndexDropperTest" -A 40
-ethereum/core/src/test/java/org/hyperledger/besu/ethereum/trie/pathbased/bonsai/storage/archiveindex/TrieNodeIndexDropperTest.java`)
-and add a test following that pattern:
-
-```java
-  @Test
-  void dropBlockRemovesOffsetAndDecrementsMetadataTailCount() {
-    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
-    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000);
-    final Bytes naturalKey = ArchiveNodeKey.account(Bytes.of(0x01));
-
-    var tx = kv.startTransaction();
-    index.append(tx, naturalKey, 10);
-    index.append(tx, naturalKey, 20);
-    tx.commit();
-
-    // historyKey must exist for dropBlock's history-CF scan to find this natural key at block 20.
-    tx = kv.startTransaction();
-    tx.put(
-        KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE,
-        ArchiveNodeKey.historyKey(naturalKey, 20).toArrayUnsafe(),
-        new byte[] {0x00});
-    tx.commit();
-
-    final TrieNodeIndexDropper dropper = new TrieNodeIndexDropper();
-    tx = kv.startTransaction();
-    dropper.dropBlock(20, kv, tx);
-    tx.commit();
-
-    final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, 0);
-    assertThat(kv.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe()))
-        .contains(new byte[] {0, 0, 10}); // only block 10's offset remains
-    final TrieNodeChangeIndex.IndexMetadata metadata =
-        TrieNodeChangeIndex.readMetadataValue(
-            kv.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe())
-                .orElseThrow());
-    assertThat(metadata.tailCount()).isEqualTo(1);
-    assertThat(metadata.subCount()).isZero();
-  }
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `./gradlew :ethereum:core:test --tests "*TrieNodeIndexDropperTest.dropBlockRemovesOffsetAndDecrementsMetadataTailCount*"`
-Expected: FAIL — `dropOffsetFromIndex` still reads/writes the old combined
-`[subCount][content]` format from `TRIE_NODE_INDEX_ARCHIVE` only, never touching
-`TRIE_NODE_INDEX_META_ARCHIVE`, so the metadata assertion fails (absent value).
-
-- [ ] **Step 3: Rewrite `dropOffsetFromIndex`**
-
-Replace the entire body of `dropOffsetFromIndex` (lines 198–269) with:
-
-```java
-  private void dropOffsetFromIndex(
-      final Bytes naturalKey,
-      final long rangeId,
-      final int offset,
-      final SegmentedKeyValueStorage storage,
-      final SegmentedKeyValueStorageTransaction tx) {
-
-    final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
-    final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
-
-    final byte[] packedRaw =
-        storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes).orElse(null);
-    if (packedRaw == null) {
-      // No index entry — nothing to remove.
-      return;
-    }
-    final int subCount =
-        storage
-            .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKeyBytes)
-            .map(TrieNodeChangeIndex::readMetadataValue)
-            .orElse(TrieNodeChangeIndex.IndexMetadata.EMPTY)
-            .subCount();
-    final Bytes packed = Bytes.wrap(packedRaw);
-
-    // Remove the target offset from the packed list by rebuilding without it.
-    final int n = packed.size() / ENTRY_BYTES;
-    int removed = 0;
-    final MutableBytes result = MutableBytes.create(n * ENTRY_BYTES);
-    int dst = 0;
-    for (int i = 0; i < n; i++) {
-      final int base = i * ENTRY_BYTES;
-      final int entryOffset =
-          ((packed.get(base) & 0xFF) << 16)
-              | ((packed.get(base + 1) & 0xFF) << 8)
-              | (packed.get(base + 2) & 0xFF);
-      if (entryOffset == offset && removed == 0) {
-        removed++;
-        continue;
-      }
-      result.set(dst, packed.get(base));
-      result.set(dst + 1, packed.get(base + 1));
-      result.set(dst + 2, packed.get(base + 2));
-      dst += ENTRY_BYTES;
-    }
-
-    if (removed == 0) {
-      // Offset not found in the tail — it may be in a sub-block or was never there.
-      return;
-    }
-
-    final int remainingEntries = n - removed;
-    final Bytes newPacked = result.slice(0, remainingEntries * ENTRY_BYTES);
-
-    if (remainingEntries == 0 && subCount == 0) {
-      tx.remove(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes);
-      tx.remove(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKeyBytes);
-    } else {
-      tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, newPacked.toArrayUnsafe());
-      tx.put(
-          KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE,
-          indexKeyBytes,
-          TrieNodeChangeIndex.writeMetadataValue(subCount, remainingEntries));
-    }
-  }
-```
-
-Remove the now-unused `SUBCOUNT_BYTES` constant and its javadoc (lines 76–83) — it's no longer
-referenced anywhere in this file.
-
-- [ ] **Step 4: Run the tests to verify they pass**
-
-Run: `./gradlew :ethereum:core:test --tests "*TrieNodeIndexDropperTest*"`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add ethereum/core/src/main/java/org/hyperledger/besu/ethereum/trie/pathbased/bonsai/storage/archiveindex/TrieNodeIndexDropper.java \
-        ethereum/core/src/test/java/org/hyperledger/besu/ethereum/trie/pathbased/bonsai/storage/archiveindex/TrieNodeIndexDropperTest.java
-git commit -m "fix(bonsai-archive): update TrieNodeIndexDropper for split content/metadata format"
-```
+`TrieNodeIndexDropper` (the class this task would have updated) has been deleted entirely
+(commit `f0ff27c2d7b`), not merely left unwired. Investigation during Task 8's review confirmed
+trie-node index writes happen exclusively in `BonsaiFlatDbToArchiveMigrator`, gated at
+`head - trieLogManager.getMaxLayersToLoad()` (default 512 — the same window as Besu's normal
+trie-log rollback depth). Indexed blocks are therefore always already outside the depth a normal
+reorg can reach; `TrieNodeIndexDropper` had zero production callers (confirmed via full-repo grep)
+and was solving for a scenario the actual architecture doesn't expose. Removed rather than updated
+for the new split format.
 
 ---
 
@@ -2351,7 +2208,7 @@ git commit -m "fix(bonsai-archive): forward index metadata put() through migrati
 
 - [ ] **Step 1: Run the full affected test suites**
 
-Run: `./gradlew :plugin-api:test :services:kvstore:test :plugins:rocksdb:test :ethereum:core:test --tests "*TrieNodeChangeIndex*" --tests "*TrieNodeIndexDropper*" --tests "*BonsaiFlatDbToArchiveMigrator*" --tests "*ArchiveNodeKey*" --tests "*RangeRelativeOffsetList*" --tests "*BonsaiArchiveTrieNodeIndex*" --tests "*BonsaiArchiveProofsIntegration*" --tests "*TrieNodeHistoryReader*" --tests "*TrieNodeHistoryComposition*" --tests "*ArchiveProofNodeLoader*"`
+Run: `./gradlew :plugin-api:test :services:kvstore:test :plugins:rocksdb:test :ethereum:core:test --tests "*TrieNodeChangeIndex*" --tests "*BonsaiFlatDbToArchiveMigrator*" --tests "*ArchiveNodeKey*" --tests "*RangeRelativeOffsetList*" --tests "*BonsaiArchiveTrieNodeIndex*" --tests "*BonsaiArchiveProofsIntegration*" --tests "*TrieNodeHistoryReader*" --tests "*TrieNodeHistoryComposition*" --tests "*ArchiveProofNodeLoader*"`
 Expected: PASS. If any of the integration tests fail, they are the correctness backstop the spec
 calls out — do not weaken their assertions; fix the production code path they're exercising by
 re-checking it against the transformation pattern used for the method it corresponds to in Tasks
