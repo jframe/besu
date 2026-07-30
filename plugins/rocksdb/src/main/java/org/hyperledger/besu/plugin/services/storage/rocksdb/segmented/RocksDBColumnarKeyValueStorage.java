@@ -64,6 +64,7 @@ import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.Statistics;
 import org.rocksdb.Status;
+import org.rocksdb.StringAppendOperator;
 import org.rocksdb.TransactionDBOptions;
 import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
@@ -234,6 +235,11 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
             .setCompressionType(CompressionType.LZ4_COMPRESSION)
             .setTableFormatConfig(basedTableConfig)
             .setLevelCompactionDynamicLevelBytes(dynamicLevelBytes);
+    if (segment.usesAppendMergeOperator()) {
+      // Empty-string delimiter performs pure zero-separator concatenation (verified against
+      // rocksdbjni 10.6.2), matching the packed fixed-width offset format written via merge().
+      cfOptions.setMergeOperator(new StringAppendOperator(""));
+    }
     columnFamilyOptionsList.add(cfOptions);
     if (segment.containsStaticData()) {
       configureBlobDBForSegment(segment, configuration, cfOptions);

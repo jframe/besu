@@ -71,6 +71,23 @@ public class RocksDBTransaction implements SegmentedKeyValueStorageTransaction {
   }
 
   @Override
+  public void merge(final SegmentIdentifier segmentId, final byte[] key, final byte[] value) {
+    try (final OperationTimer.TimingContext ignored = metrics.getWriteLatency().startTimer()) {
+      // mergeUntracked: unlike put(), concurrent merges to the same key are commutative appends,
+      // not conflicting writes — tracked merge() would still fail OptimisticTransactionDB's
+      // write-conflict validation for two transactions merging the same key, exactly the
+      // contention this change is meant to remove.
+      innerTx.mergeUntracked(columnFamilyMapper.apply(segmentId), key, value);
+    } catch (final RocksDBException e) {
+      if (e.getMessage().contains(NO_SPACE_LEFT_ON_DEVICE)) {
+        logger.error(e.getMessage());
+        System.exit(0);
+      }
+      throw new StorageException(e);
+    }
+  }
+
+  @Override
   public void remove(final SegmentIdentifier segmentId, final byte[] key) {
     try (final OperationTimer.TimingContext ignored = metrics.getRemoveLatency().startTimer()) {
       innerTx.delete(columnFamilyMapper.apply(segmentId), key);
