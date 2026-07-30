@@ -644,12 +644,15 @@ public final class TrieNodeChangeIndex {
     if (rangeSize <= 0) {
       throw new IllegalArgumentException("rangeSize must be > 0, got " + rangeSize);
     }
-    // The within-range ceiling (rangeSize - 1) is cast to int in latestChangeBlock, so rangeSize
-    // must fit in an int after subtracting 1 (i.e. <= Integer.MAX_VALUE + 1) to avoid silent
-    // truncation. ArchiveNodeKey.RANGE_SIZE (1,000,000) is well within this bound.
-    if (rangeSize > (long) Integer.MAX_VALUE + 1L) {
+    // The within-range ceiling (rangeSize - 1) becomes a merge-appended 3-byte offset
+    // (RangeRelativeOffsetList.ENTRY_BYTES), so rangeSize must not exceed 0x1000000 (2^24) — the
+    // blind-merge content-append path (see #append) has no way to read-time-validate an
+    // out-of-range offset before merging, unlike the old RangeRelativeOffsetList#append, which
+    // threw on offset > 0xFFFFFF. ArchiveNodeKey.RANGE_SIZE (1,000,000) is well within this bound.
+    if (rangeSize > 0x1000000L) {
       throw new IllegalArgumentException(
-          "rangeSize must be <= Integer.MAX_VALUE + 1, got " + rangeSize);
+          "rangeSize must be <= 0x1000000 (RangeRelativeOffsetList's 3-byte packed offsets "
+              + "cannot represent a larger value), got " + rangeSize);
     }
     if (subBlockThreshold <= 0) {
       throw new IllegalArgumentException("subBlockThreshold must be > 0, got " + subBlockThreshold);
@@ -755,6 +758,12 @@ public final class TrieNodeChangeIndex {
     final IndexMetadata before = readMetadataForWrite(indexKey, indexKeyBytes);
     final int newTailCount = before.tailCount() + 1;
 
+    // Precondition: at most one append per (naturalKey, rangeId) per non-buffered transaction.
+    // If two appends for the same key landed in one uncommitted tx and the second triggered a
+    // split, this storage.get (committed-storage only) would not see the first append's
+    // in-flight merge operand, and the tx.put below would silently supersede it. Not reachable
+    // today: live block processing uses one transaction per block, and the migrator always uses
+    // the buffered path (see beginBuffered/flushBuffer), never this branch.
     if (newTailCount > subBlockThreshold) {
       final byte[] rawContent =
           storage
