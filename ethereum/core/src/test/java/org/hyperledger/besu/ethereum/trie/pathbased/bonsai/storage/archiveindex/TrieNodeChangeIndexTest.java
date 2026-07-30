@@ -1366,4 +1366,37 @@ class TrieNodeChangeIndexTest {
     assertThat(full).isPresent();
     assertThat(full.get().size()).isEqualTo(5);
   }
+
+  // ===========================================================================
+  // Task 10: content-reading query methods read split content+metadata
+  // ===========================================================================
+
+  @Test
+  void latestChangeBlockFindsEntryAfterSubBlockSplit() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000, 4, 2);
+
+    for (int block = 1; block <= 5; block++) {
+      final var tx = kv.startTransaction();
+      index.append(tx, KEY, block);
+      tx.commit();
+    }
+
+    // Block 1 was split into the sub-block (oldest entries) — must still be found.
+    assertThat(index.latestChangeBlock(KEY, 1)).contains(1L);
+    assertThat(index.latestChangeBlock(KEY, 2)).contains(2L);
+    assertThat(index.latestChangeBlock(KEY, 5)).contains(5L);
+  }
+
+  @Test
+  void modifiedAfterDetectsChangeInTailOnly() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000);
+    final var tx = kv.startTransaction();
+    index.append(tx, KEY, 100);
+    tx.commit();
+
+    assertThat(index.modifiedAfter(KEY, 50, 200)).isTrue();
+    assertThat(index.modifiedAfter(KEY, 150, 200)).isFalse();
+  }
 }
