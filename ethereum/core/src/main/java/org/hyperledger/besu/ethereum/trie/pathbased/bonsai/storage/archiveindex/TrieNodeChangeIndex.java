@@ -34,7 +34,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.hash.BloomFilter;
 import com.google.common.hash.Funnels;
 import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.MutableBytes;
 
 /**
  * Per-node change-block index over a {@link SegmentedKeyValueStorage} (Design 5, Tasks 2.3–2.4).
@@ -94,11 +93,12 @@ public final class TrieNodeChangeIndex {
   static final int CACHE_MAX_SIZE = 1_000_000;
 
   /**
-   * Write-through LRU cache for {@code TRIE_NODE_INDEX_ARCHIVE} entries written during migration.
-   * Keyed by the full index key ({@link ArchiveNodeKey#rangeKey}); value is the serialised {@code
-   * [4B subCount][packed offsets]} bytes. Populated on each successful {@link #append} / {@link
-   * #appendAndGetPreviousCount} write; checked before the committed-storage read on the next call
-   * for the same key.
+   * Write-through LRU cache for {@code TRIE_NODE_INDEX_META_ARCHIVE} entries written during
+   * migration. Keyed by the full index key ({@link ArchiveNodeKey#rangeKey}); value is the
+   * serialised 8-byte {@link IndexMetadata} ({@code [4B subCount][4B tailCount]}) — <em>not</em>
+   * the packed offset content, which is only ever merge-appended and never read back on the hot
+   * write path. Populated on each successful {@link #append} / {@link #appendAndGetPreviousCount}
+   * write; checked before the committed-storage read on the next call for the same key.
    *
    * <p>Only the write path ({@code append*}) reads from and writes to this cache. The query-only
    * methods ({@link #latestChangeBlock}, {@link #modifiedAfter}, etc.) bypass it intentionally —
@@ -674,14 +674,20 @@ public final class TrieNodeChangeIndex {
   /**
    * Records that {@code naturalKey} changed at {@code block} in the given transaction.
    *
-   * <p>One write is issued on {@code tx}:
+   * <p>Two writes are issued on {@code tx}:
    *
    * <ol>
-   *   <li>Appends {@code offset(block)} to the packed offset list for {@code
-   *       TRIE_NODE_INDEX_ARCHIVE[naturalKey‖rangeId]}. If the list exceeds {@link
-   *       #subBlockThreshold}, the first {@link #subBlockSplitAt} entries (the oldest) are moved to
-   *       a new sub-block in {@code TRIE_NODE_SUBBLOCK_ARCHIVE[naturalKey‖rangeId‖subId(8B BE)]}.
+   *   <li>A {@code merge} of {@code offset(block)}'s 3-byte packed form onto {@code
+   *       TRIE_NODE_INDEX_ARCHIVE[naturalKey‖rangeId]}, which the append merge operator
+   *       concatenates onto the existing packed offset list without this method having to read it
+   *       back.
+   *   <li>A {@code put} of the updated {@link IndexMetadata} on {@code
+   *       TRIE_NODE_INDEX_META_ARCHIVE[naturalKey‖rangeId]}.
    * </ol>
+   *
+   * <p>If the tail would exceed {@link #subBlockThreshold} entries, the content is instead read,
+   * split, and re-{@code put}: the first {@link #subBlockSplitAt} entries (the oldest) move to a
+   * new sub-block in {@code TRIE_NODE_SUBBLOCK_ARCHIVE[naturalKey‖rangeId‖subId(8B BE)]}.
    *
    * @param tx the transaction on which to issue all writes
    * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})
@@ -694,8 +700,6 @@ public final class TrieNodeChangeIndex {
     }
     final long rangeId = block / rangeSize;
     final int offset = (int) (block - rangeId * rangeSize);
-
-    // Update per-node offset list
     final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, rangeId);
     final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
 
@@ -722,55 +726,73 @@ public final class TrieNodeChangeIndex {
       return;
     }
 
-    // Read current index value: check write-through cache before hitting committed storage.
-    final int[] subCountHolder = new int[1];
-    final RangeRelativeOffsetList list;
-    final byte[] cached = indexCache.get(indexKey);
-    if (cached != null) {
-      final IndexValue iv = readIndexValue(cached);
-      subCountHolder[0] = iv.subCount;
-      list = iv.list;
-    } else if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
-      // Fresh-migration mode: key is definitely absent from the DB (never written this session).
-      list = RangeRelativeOffsetList.empty();
-    } else {
-      list =
+    writeAndGetPreviousMetadata(tx, naturalKey, rangeId, indexKey, indexKeyBytes, offset);
+  }
+
+  /**
+   * Core write shared by {@link #append} and {@link #appendAndGetPreviousCount}: reads the current
+   * (cheap, fixed-width) metadata, blind-merges {@code offset} onto the content key in the common
+   * case, and performs the (rare) sub-block split — which does require reading the actual content
+   * bytes — when the new tail count would exceed {@link #subBlockThreshold}.
+   *
+   * @param tx the transaction on which to issue all writes
+   * @param naturalKey the account or storage natural key (from {@link ArchiveNodeKey})
+   * @param rangeId the range identifier for {@code block}
+   * @param indexKey the range key ({@link ArchiveNodeKey#rangeKey})
+   * @param indexKeyBytes {@code indexKey.toArrayUnsafe()}, passed in to avoid re-deriving it
+   * @param offset the within-range offset of the block being recorded
+   * @return the metadata as it was <em>before</em> this write (used by {@link
+   *     #appendAndGetPreviousCount} to compute the previous mutation count; ignored by {@link
+   *     #append})
+   */
+  private IndexMetadata writeAndGetPreviousMetadata(
+      final SegmentedKeyValueStorageTransaction tx,
+      final Bytes naturalKey,
+      final long rangeId,
+      final Bytes indexKey,
+      final byte[] indexKeyBytes,
+      final int offset) {
+    final IndexMetadata before = readMetadataForWrite(indexKey, indexKeyBytes);
+    final int newTailCount = before.tailCount() + 1;
+
+    if (newTailCount > subBlockThreshold) {
+      final byte[] rawContent =
           storage
               .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
-              .map(
-                  b -> {
-                    final IndexValue iv = readIndexValue(b);
-                    subCountHolder[0] = iv.subCount;
-                    return iv.list;
-                  })
-              .orElse(RangeRelativeOffsetList.empty());
-    }
-
-    int subCount = subCountHolder[0];
-    RangeRelativeOffsetList updated = list.append(offset);
-
-    // Split when list size exceeds the threshold.
-    if (updated.size() > subBlockThreshold) {
-      // Move the first subBlockSplitAt entries (the oldest) into a new sub-block.
-      final RangeRelativeOffsetList head = sliceHead(updated, subBlockSplitAt);
-      final RangeRelativeOffsetList tail = sliceTail(updated, subBlockSplitAt);
-
-      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subCount);
+              .orElse(new byte[0]);
+      RangeRelativeOffsetList current =
+          (rawContent.length == 0
+                  ? RangeRelativeOffsetList.empty()
+                  : RangeRelativeOffsetList.fromBytes(Bytes.wrap(rawContent)))
+              .append(offset);
+      final RangeRelativeOffsetList head = sliceHead(current, subBlockSplitAt);
+      final RangeRelativeOffsetList tail = sliceTail(current, subBlockSplitAt);
+      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, before.subCount());
       tx.put(
           KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE,
           subKey.toArrayUnsafe(),
           head.toBytes().toArrayUnsafe());
-
-      subCount++;
-      updated = tail;
+      // Fresh base value for content: resets the merge-operand chain for this key.
+      tx.put(
+          KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
+          indexKeyBytes,
+          tail.toBytes().toArrayUnsafe());
+      final byte[] newMetadata = writeMetadataValue(before.subCount() + 1, tail.size());
+      tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKeyBytes, newMetadata);
+      indexCache.put(indexKey, newMetadata);
+    } else {
+      tx.merge(
+          KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
+          indexKeyBytes,
+          threeByteOffset(offset));
+      final byte[] newMetadata = writeMetadataValue(before.subCount(), newTailCount);
+      tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKeyBytes, newMetadata);
+      indexCache.put(indexKey, newMetadata);
     }
-
-    final byte[] newValue = writeIndexValue(subCount, updated);
-    tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, newValue);
-    indexCache.put(indexKey, newValue);
     if (sessionWrittenKeys != null) {
       sessionWrittenKeys.put(indexKeyBytes);
     }
+    return before;
   }
 
   /**
@@ -826,64 +848,15 @@ public final class TrieNodeChangeIndex {
       final long previousCount =
           earlierCount
               + (long) e.baseSubCount * DEFAULT_SUBBLOCK_SPLIT_AT
-              + e.baseTail.size()
+              + e.baseTail.size() // unchanged field name for now — Task 11 replaces this
               + e.pending.size();
       e.pending.add(offset);
       return previousCount;
     }
 
-    // Read the current range once — check write-through cache before hitting committed storage.
-    final int[] subCountHolder = new int[1];
-    final RangeRelativeOffsetList list;
-    final byte[] cached = indexCache.get(indexKey);
-    if (cached != null) {
-      final IndexValue iv = readIndexValue(cached);
-      subCountHolder[0] = iv.subCount;
-      list = iv.list;
-    } else if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
-      // Fresh-migration mode: key is definitely absent from the DB (never written this session).
-      list = RangeRelativeOffsetList.empty();
-    } else {
-      list =
-          storage
-              .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
-              .map(
-                  b -> {
-                    final IndexValue iv = readIndexValue(b);
-                    subCountHolder[0] = iv.subCount;
-                    return iv.list;
-                  })
-              .orElse(RangeRelativeOffsetList.empty());
-    }
-
-    final int tailEntries = list.size();
-    final long previousCount =
-        earlierCount + (long) subCountHolder[0] * DEFAULT_SUBBLOCK_SPLIT_AT + tailEntries;
-
-    // Append and write back (same logic as append()).
-    int subCount = subCountHolder[0];
-    RangeRelativeOffsetList updated = list.append(offset);
-
-    if (updated.size() > subBlockThreshold) {
-      final RangeRelativeOffsetList head = sliceHead(updated, subBlockSplitAt);
-      final RangeRelativeOffsetList tail = sliceTail(updated, subBlockSplitAt);
-      final Bytes subKey = ArchiveNodeKey.subBlockKey(naturalKey, rangeId, subCount);
-      tx.put(
-          KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE,
-          subKey.toArrayUnsafe(),
-          head.toBytes().toArrayUnsafe());
-      subCount++;
-      updated = tail;
-    }
-
-    final byte[] newValue = writeIndexValue(subCount, updated);
-    tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, newValue);
-    indexCache.put(indexKey, newValue);
-    if (sessionWrittenKeys != null) {
-      sessionWrittenKeys.put(indexKeyBytes);
-    }
-
-    return previousCount;
+    final IndexMetadata before =
+        writeAndGetPreviousMetadata(tx, naturalKey, rangeId, indexKey, indexKeyBytes, offset);
+    return earlierCount + (long) before.subCount() * DEFAULT_SUBBLOCK_SPLIT_AT + before.tailCount();
   }
 
   /**
@@ -996,9 +969,15 @@ public final class TrieNodeChangeIndex {
       return IndexMetadata.EMPTY;
     }
     final int subCount =
-        ((raw[0] & 0xFF) << 24) | ((raw[1] & 0xFF) << 16) | ((raw[2] & 0xFF) << 8) | (raw[3] & 0xFF);
+        ((raw[0] & 0xFF) << 24)
+            | ((raw[1] & 0xFF) << 16)
+            | ((raw[2] & 0xFF) << 8)
+            | (raw[3] & 0xFF);
     final int tailCount =
-        ((raw[4] & 0xFF) << 24) | ((raw[5] & 0xFF) << 16) | ((raw[6] & 0xFF) << 8) | (raw[7] & 0xFF);
+        ((raw[4] & 0xFF) << 24)
+            | ((raw[5] & 0xFF) << 16)
+            | ((raw[6] & 0xFF) << 8)
+            | (raw[7] & 0xFF);
     return new IndexMetadata(subCount, tailCount);
   }
 
@@ -1024,8 +1003,8 @@ public final class TrieNodeChangeIndex {
   }
 
   /**
-   * Reads the current {@link IndexMetadata} for {@code indexKey}, checking the write-through
-   * {@link #indexCache} (which now caches metadata bytes, not full content) before falling back to
+   * Reads the current {@link IndexMetadata} for {@code indexKey}, checking the write-through {@link
+   * #indexCache} (which now caches metadata bytes, not full content) before falling back to
    * committed storage. Honours fresh-migration bloom short-circuiting like the old content read
    * did.
    *
@@ -1064,7 +1043,9 @@ public final class TrieNodeChangeIndex {
 
   /** Packs a single within-range offset into its 3-byte big-endian merge-operand form. */
   private static byte[] threeByteOffset(final int offset) {
-    return new byte[] {(byte) ((offset >> 16) & 0xFF), (byte) ((offset >> 8) & 0xFF), (byte) (offset & 0xFF)};
+    return new byte[] {
+      (byte) ((offset >> 16) & 0xFF), (byte) ((offset >> 8) & 0xFF), (byte) (offset & 0xFF)
+    };
   }
 
   /**

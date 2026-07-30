@@ -29,6 +29,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.util.Optional;
 import java.util.concurrent.Semaphore;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -1265,5 +1266,77 @@ class TrieNodeChangeIndexTest {
     // The observable prefetchBaseHits() counter proves the staged value was actually consumed.
     assertThat(idx.prefetchBaseHits()).isEqualTo(1L);
     tx.commit();
+  }
+
+  // ===========================================================================
+  // Merge-operator append: content and metadata are written to separate CFs
+  // ===========================================================================
+
+  @Test
+  void appendWritesContentAndMetadataSeparately() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000);
+    final var tx = kv.startTransaction();
+    index.append(tx, KEY, 5);
+    tx.commit();
+
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(KEY, 0);
+    assertThat(kv.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe()))
+        .contains(new byte[] {0, 0, 5}); // pure packed content, no subCount prefix
+    assertThat(
+            kv.get(
+                KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe()))
+        .contains(TrieNodeChangeIndex.writeMetadataValue(0, 1));
+  }
+
+  @Test
+  void appendAndGetPreviousCountReturnsCountBeforeThisWrite() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    final var tx1 = kv.startTransaction();
+    final long first = index.appendAndGetPreviousCount(tx1, KEY, 10);
+    tx1.commit();
+    assertThat(first).isZero();
+
+    final var tx2 = kv.startTransaction();
+    final long second = index.appendAndGetPreviousCount(tx2, KEY, 20);
+    tx2.commit();
+    assertThat(second).isEqualTo(1L);
+
+    final var tx3 = kv.startTransaction();
+    final long third = index.appendAndGetPreviousCount(tx3, KEY, 30);
+    tx3.commit();
+    assertThat(third).isEqualTo(2L);
+  }
+
+  @Test
+  void appendTriggersSubBlockSplitAtThreshold() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    // subBlockThreshold=4, subBlockSplitAt=2: the 5th append (list size would become 5 > 4)
+    // triggers a split moving the first 2 entries into a sub-block.
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000, 4, 2);
+
+    for (int block = 1; block <= 5; block++) {
+      final var tx = kv.startTransaction();
+      index.append(tx, KEY, block);
+      tx.commit();
+    }
+
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(KEY, 0);
+    final TrieNodeChangeIndex.IndexMetadata metadata =
+        TrieNodeChangeIndex.readMetadataValue(
+            kv.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe())
+                .orElseThrow());
+    assertThat(metadata.subCount()).isEqualTo(1);
+    assertThat(metadata.tailCount()).isEqualTo(3); // 5 entries - 2 split off
+
+    final Bytes subKey = ArchiveNodeKey.subBlockKey(KEY, 0, 0);
+    assertThat(kv.get(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE, subKey.toArrayUnsafe()))
+        .contains(new byte[] {0, 0, 1, 0, 0, 2}); // blocks 1, 2 (the oldest)
+
+    final Optional<RangeRelativeOffsetList> full = index.readRangeList(KEY, 0);
+    assertThat(full).isPresent();
+    assertThat(full.get().size()).isEqualTo(5);
   }
 }
