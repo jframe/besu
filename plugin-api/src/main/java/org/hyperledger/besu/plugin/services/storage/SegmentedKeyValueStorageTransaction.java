@@ -36,15 +36,15 @@ public interface SegmentedKeyValueStorageTransaction {
   void put(SegmentIdentifier segmentIdentifier, byte[] key, byte[] value);
 
   /**
-   * Merges the specified value into whatever is currently associated with the given key, using
-   * the column family's configured merge operator (e.g. blind concatenation via {@code
+   * Merges the specified value into whatever is currently associated with the given key, using the
+   * column family's configured merge operator (e.g. blind concatenation via {@code
    * StringAppendOperator}). Unlike {@link #put}, this does not require reading the current value
    * first — the underlying store resolves the final value lazily, either at read time or during
    * compaction.
    *
    * <p>Only meaningful for segments whose backing column family has a merge operator configured
-   * ({@link SegmentIdentifier#usesAppendMergeOperator()}); for segments without one, callers
-   * should use {@link #put} instead.
+   * ({@link SegmentIdentifier#usesAppendMergeOperator()}); for segments without one, callers should
+   * use {@link #put} instead.
    *
    * @param segmentIdentifier the segment identifier
    * @param key the key to merge a value into

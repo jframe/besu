@@ -1333,20 +1333,20 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     final Hash stateRoot = computeTestAccountStateRoot();
     final Block genesis = blockchain.getBlockByNumber(0).orElseThrow();
     final Block block1 =
-            blockDataGenerator.block(
-                    BlockDataGenerator.BlockOptions.create()
-                            .setParentHash(genesis.getHash())
-                            .setBlockNumber(1)
-                            .setStateRoot(stateRoot));
+        blockDataGenerator.block(
+            BlockDataGenerator.BlockOptions.create()
+                .setParentHash(genesis.getHash())
+                .setBlockNumber(1)
+                .setStateRoot(stateRoot));
     blockchain.appendBlock(block1, blockDataGenerator.receipts(block1));
 
     final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
     final TrieNodeChangeIndex changeIndex =
-            new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
+        new TrieNodeChangeIndex(storage, ArchiveNodeKey.RANGE_SIZE);
     final TrieNodeIndexProgress progress = new TrieNodeIndexProgress(ArchiveNodeKey.RANGE_SIZE);
 
     final BonsaiFlatDbToArchiveMigrator migrator =
-            createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
+        createMigratorWithRealTrieLogsAndIndex(historyStore, changeIndex, progress);
     migrator.migrate().get(MIGRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
     // Root node's natural key is Bytes.EMPTY (ArchiveNodeKey.account(Bytes.EMPTY) == Bytes.EMPTY);
@@ -1354,14 +1354,18 @@ public class BonsaiFlatDbToArchiveMigratorTest {
     // TRIE_NODE_INDEX_ARCHIVE and puts TRIE_NODE_INDEX_META_ARCHIVE — both must have reached
     // committed storage through MigrationTransaction's allowlist, not been silently dropped.
     final Bytes indexKey = ArchiveNodeKey.rangeKey(Bytes.EMPTY, 0);
-    assertThat(storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe()))
-            .withFailMessage("MigrationTransaction must forward merge() calls for TRIE_NODE_INDEX_ARCHIVE")
-            .isPresent();
     assertThat(
             storage.get(
-                    KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe()))
-            .withFailMessage("MigrationTransaction must forward put() calls for TRIE_NODE_INDEX_META_ARCHIVE")
-            .isPresent();
+                KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe()))
+        .withFailMessage(
+            "MigrationTransaction must forward merge() calls for TRIE_NODE_INDEX_ARCHIVE")
+        .isPresent();
+    assertThat(
+            storage.get(
+                KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe()))
+        .withFailMessage(
+            "MigrationTransaction must forward put() calls for TRIE_NODE_INDEX_META_ARCHIVE")
+        .isPresent();
   }
 
   /**
