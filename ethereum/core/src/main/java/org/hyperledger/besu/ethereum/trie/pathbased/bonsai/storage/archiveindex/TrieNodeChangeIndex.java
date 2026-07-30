@@ -71,9 +71,6 @@ public final class TrieNodeChangeIndex {
    */
   public static final int DEFAULT_SUBBLOCK_SPLIT_AT = 2048;
 
-  /** Number of bytes used to store the sub-block count at the head of each index value. */
-  private static final int SUBCOUNT_BYTES = 4;
-
   private final SegmentedKeyValueStorage storage;
 
   /**
@@ -892,17 +889,8 @@ public final class TrieNodeChangeIndex {
     long earlierCount = 0L;
     for (long r = 0; r < rangeId; r++) {
       final Bytes rKey = ArchiveNodeKey.rangeKey(naturalKey, r);
-      final Optional<byte[]> raw =
-          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, rKey.toArrayUnsafe());
-      if (raw.isPresent()) {
-        final byte[] b = raw.get();
-        if (b.length >= SUBCOUNT_BYTES) {
-          final int sc =
-              ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
-          final int te = (b.length - SUBCOUNT_BYTES) / RangeRelativeOffsetList.ENTRY_BYTES;
-          earlierCount += (long) sc * DEFAULT_SUBBLOCK_SPLIT_AT + te;
-        }
-      }
+      final IndexMetadata metadata = readCommittedMetadata(rKey.toArrayUnsafe());
+      earlierCount += (long) metadata.subCount() * DEFAULT_SUBBLOCK_SPLIT_AT + metadata.tailCount();
     }
     earlierRangeCountCache.put(cacheKey, earlierCount);
     return earlierCount;
@@ -929,24 +917,11 @@ public final class TrieNodeChangeIndex {
     }
     final long maxRangeId = block / rangeSize;
     long total = 0L;
-
     for (long r = 0; r <= maxRangeId; r++) {
       final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, r);
-      final Optional<byte[]> raw =
-          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe());
-      if (raw.isEmpty()) {
-        continue;
-      }
-      final byte[] b = raw.get();
-      if (b.length < SUBCOUNT_BYTES) {
-        continue;
-      }
-      final int subCount =
-          ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
-      final int tailEntries = (b.length - SUBCOUNT_BYTES) / RangeRelativeOffsetList.ENTRY_BYTES;
-      total += (long) subCount * DEFAULT_SUBBLOCK_SPLIT_AT + tailEntries;
+      final IndexMetadata metadata = readCommittedMetadata(indexKey.toArrayUnsafe());
+      total += (long) metadata.subCount() * DEFAULT_SUBBLOCK_SPLIT_AT + metadata.tailCount();
     }
-
     return total;
   }
 
@@ -1244,19 +1219,8 @@ public final class TrieNodeChangeIndex {
     int total = 0;
     for (long r = 0; r < rangeId; r++) {
       final Bytes indexKey = ArchiveNodeKey.rangeKey(naturalKey, r);
-      final Optional<byte[]> raw =
-          storage.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe());
-      if (raw.isEmpty()) {
-        continue;
-      }
-      final byte[] b = raw.get();
-      if (b.length < SUBCOUNT_BYTES) {
-        continue;
-      }
-      final int subCount =
-          ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
-      final int tailEntries = (b.length - SUBCOUNT_BYTES) / RangeRelativeOffsetList.ENTRY_BYTES;
-      total += subCount * DEFAULT_SUBBLOCK_SPLIT_AT + tailEntries;
+      final IndexMetadata metadata = readCommittedMetadata(indexKey.toArrayUnsafe());
+      total += metadata.subCount() * DEFAULT_SUBBLOCK_SPLIT_AT + metadata.tailCount();
     }
     return total;
   }

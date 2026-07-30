@@ -131,7 +131,8 @@ class TrieNodeChangeIndexTest {
     assertThat(prev2).isEqualTo(2L);
 
     // The range-0 index entry is read exactly once across both range-1 appends (memoised after).
-    verify(kv, times(1)).get(eq(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE), eq(range0Key));
+    verify(kv, times(1))
+        .get(eq(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE), eq(range0Key));
   }
 
   @Test
@@ -154,6 +155,32 @@ class TrieNodeChangeIndexTest {
 
     // range 0 (1) + range 1 (1) = 2 mutations before the range-2 change.
     assertThat(prevRange2).isEqualTo(2L);
+  }
+
+  // -------------------------------------------------------------------------
+  // countMutationsUpTo: must sum across multiple ranges, not just the last one.
+  // -------------------------------------------------------------------------
+
+  @Test
+  void countMutationsUpToSpansMultipleRanges() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000);
+
+    var tx = kv.startTransaction();
+    index.append(tx, KEY, 500_000); // range 0
+    index.append(tx, KEY, 1_500_000); // range 1
+    index.append(tx, KEY, 1_600_000); // range 1
+    tx.commit();
+
+    // countMutationsUpTo sums whole-range totals for every range up to and including block's
+    // range — it does not filter by within-range offset in the terminal range (documented
+    // contract: callers query with block = currentBlock - 1, i.e. in non-decreasing block order
+    // relative to what has already been appended). Range 0 already has one committed mutation
+    // (at offset 500_000), so any block within range 0 — including one below that offset — sees
+    // the whole range's total, not an offset-filtered subset.
+    assertThat(index.countMutationsUpTo(KEY, 400_000)).isEqualTo(1L);
+    assertThat(index.countMutationsUpTo(KEY, 999_999)).isEqualTo(1L);
+    assertThat(index.countMutationsUpTo(KEY, 1_600_000)).isEqualTo(3L);
   }
 
   // -------------------------------------------------------------------------
