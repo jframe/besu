@@ -151,13 +151,13 @@ public final class TrieNodeChangeIndex {
     final Bytes naturalKey;
     final long rangeId;
     int baseSubCount;
-    RangeRelativeOffsetList baseTail;
+    int baseTailCount;
 
     /**
-     * {@code true} once {@link #baseSubCount} and {@link #baseTail} have been populated (either
-     * from {@link #indexCache} on first touch or via the bulk {@link #flushBuffer} multiGet). When
-     * {@code false} the fields hold empty/zero defaults and must be loaded before the merge is
-     * written.
+     * {@code true} once {@link #baseSubCount} and {@link #baseTailCount} have been populated
+     * (either from {@link #indexCache} on first touch or via the bulk {@link #flushBuffer}
+     * multiGet). When {@code false} the fields hold zero defaults and must be loaded before the
+     * batch is written.
      */
     boolean baseLoaded;
 
@@ -166,7 +166,6 @@ public final class TrieNodeChangeIndex {
     BufferedEntry(final Bytes naturalKey, final long rangeId) {
       this.naturalKey = naturalKey;
       this.rangeId = rangeId;
-      this.baseTail = RangeRelativeOffsetList.empty();
     }
   }
 
@@ -352,15 +351,28 @@ public final class TrieNodeChangeIndex {
   }
 
   /**
-   * Writes all buffered per-node offset lists into {@code tx} using the existing packed format,
-   * applying the sub-block split logic incrementally as pending offsets are folded in. Updates the
-   * LRU index cache with the final committed values. Safe to call when not buffering (no-op).
+   * Writes all buffered per-node offsets into {@code tx}: one {@code merge} of all of a key's
+   * pending offsets onto {@code TRIE_NODE_INDEX_ARCHIVE} plus one {@code put} of the updated {@link
+   * IndexMetadata} on {@code TRIE_NODE_INDEX_META_ARCHIVE}. Updates the LRU index cache with the
+   * final metadata values. Safe to call when not buffering (no-op).
    *
-   * <p>Before merging, issues a single {@code multiGet} for all buffered entries whose base values
-   * were not available in {@link #indexCache} at first-touch time (i.e. entries with {@link
-   * BufferedEntry#baseLoaded} {@code = false}). This consolidates what would otherwise be N
-   * sequential per-key storage reads during the trie walk into one parallel batch read at flush
-   * time, eliminating the dominant I/O cost on resumed migrations.
+   * <p>Before writing, issues a single {@code multiGet} on {@code TRIE_NODE_INDEX_META_ARCHIVE} for
+   * all buffered entries whose base metadata was not available in {@link #indexCache} at
+   * first-touch time (i.e. entries with {@link BufferedEntry#baseLoaded} {@code = false}). This
+   * consolidates what would otherwise be N sequential per-key storage reads during the trie walk
+   * into one parallel batch read at flush time, eliminating the dominant I/O cost on resumed
+   * migrations. The (large) packed content is never read at all in the common case — only the
+   * fixed-width metadata is, because appends are blind merges.
+   *
+   * <p>A key whose pending offsets cross a sub-block boundary mid-batch is the one exception: the
+   * split must slice real content bytes, so that key's content is read once and then tracked purely
+   * in memory ({@code currentTail}) for the remainder of the batch — the split's own {@code tx.put}
+   * is invisible to {@code storage.get}, so a second read would see stale bytes. This makes the
+   * buffered path fully self-contained: it never calls {@link #writeAndGetPreviousMetadata}.
+   *
+   * <p>Precondition: {@code tx} must not already carry uncommitted writes for the same index keys
+   * from an earlier {@code flushBuffer} call (the migrator commits after every flush). Otherwise a
+   * split's committed-content read would miss the earlier flush's in-flight merge operands.
    *
    * @param tx the transaction into which all buffered index values are written
    */
@@ -373,7 +385,7 @@ public final class TrieNodeChangeIndex {
     // we fall back to a synchronous read for whatever remains uncovered.
     drainPrefetch();
 
-    // ── Phase 1: bulk-load base values for entries not found in indexCache at first touch ──────
+    // ── Phase 1: bulk-load metadata for entries not found in indexCache at first touch ────────
     final List<Bytes> missKeys = new ArrayList<>();
     final List<byte[]> missKeyBytes = new ArrayList<>();
     for (final Map.Entry<Bytes, BufferedEntry> entry : buffer.entrySet()) {
@@ -388,9 +400,9 @@ public final class TrieNodeChangeIndex {
           prefetchBaseHits.incrementAndGet();
           staged.ifPresent(
               bytes -> {
-                final IndexValue iv = readIndexValue(bytes);
-                be.baseSubCount = iv.subCount;
-                be.baseTail = iv.list;
+                final IndexMetadata metadata = readMetadataValue(bytes);
+                be.baseSubCount = metadata.subCount();
+                be.baseTailCount = metadata.tailCount();
                 indexCache.put(entry.getKey(), bytes);
               });
         } else if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
@@ -404,7 +416,7 @@ public final class TrieNodeChangeIndex {
     }
     if (!missKeys.isEmpty()) {
       final List<Optional<byte[]>> results =
-          storage.multiGet(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, missKeyBytes);
+          storage.multiGet(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, missKeyBytes);
       for (int i = 0; i < missKeys.size(); i++) {
         final Bytes indexKey = missKeys.get(i);
         final Optional<byte[]> raw = results.get(i);
@@ -412,40 +424,100 @@ public final class TrieNodeChangeIndex {
         be.baseLoaded = true;
         raw.ifPresent(
             bytes -> {
-              final IndexValue iv = readIndexValue(bytes);
-              be.baseSubCount = iv.subCount;
-              be.baseTail = iv.list;
+              final IndexMetadata metadata = readMetadataValue(bytes);
+              be.baseSubCount = metadata.subCount();
+              be.baseTailCount = metadata.tailCount();
               indexCache.put(indexKey, bytes);
             });
       }
     }
 
-    // ── Phase 2: merge pending offsets and write ──────────────────────────────────────────────
+    // ── Phase 2: merge pending offsets (one operand per dirty key in the common case) ─────────
     for (final Map.Entry<Bytes, BufferedEntry> entry : buffer.entrySet()) {
       final Bytes indexKey = entry.getKey();
+      final byte[] indexKeyBytes = indexKey.toArrayUnsafe();
       final BufferedEntry be = entry.getValue();
-      if (be.pending.isEmpty()) {
+      final int n = be.pending.size();
+      if (n == 0) {
         continue;
       }
+
       int subCount = be.baseSubCount;
-      RangeRelativeOffsetList current = be.baseTail;
-      for (final int offset : be.pending) {
-        current = current.append(offset);
-        if (current.size() > subBlockThreshold) {
-          final RangeRelativeOffsetList head = sliceHead(current, subBlockSplitAt);
-          final RangeRelativeOffsetList tail = sliceTail(current, subBlockSplitAt);
+      int tailCount = be.baseTailCount;
+      // Number of leading pending offsets already reflected in a content write issued below (via a
+      // split's tx.put). Offsets [flushedSoFar, n) still need a merge operand at the end.
+      int flushedSoFar = 0;
+      int pendingIdx = 0;
+      // Materialised tail content, non-null only once a split in THIS batch has forced a content
+      // read. Once set it is the sole source of truth for this key's content bytes: the splits
+      // below write it with tx.put, which storage.get (committed-storage only) cannot see, so
+      // re-reading committed content after the first split would return stale bytes.
+      RangeRelativeOffsetList currentTail = null;
+
+      while (pendingIdx < n) {
+        final int newTailCount = tailCount + 1;
+        if (newTailCount > subBlockThreshold) {
+          // Split boundary crossed by pending[pendingIdx]: the actual content bytes are needed, so
+          // read them once (first split only) and fold in every pending offset not yet written.
+          if (currentTail == null) {
+            final byte[] existingContent =
+                storage
+                    .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes)
+                    .orElse(new byte[0]);
+            currentTail =
+                existingContent.length == 0
+                    ? RangeRelativeOffsetList.empty()
+                    : RangeRelativeOffsetList.fromBytes(Bytes.wrap(existingContent));
+          }
+          // Offsets in [flushedSoFar, pendingIdx) were only counted (in tailCount) by the
+          // non-splitting branch below; fold them in now, together with the splitting offset.
+          // Deliberately NOT `append(pending.get(pendingIdx))` only: with subBlockSplitAt > 1 a
+          // second split within one batch is always non-consecutive (splitAt - 1 non-splitting
+          // iterations must intervene), so those intervening offsets would otherwise be dropped
+          // from the content entirely — they are past flushedSoFar, so no merge operand covers
+          // them either.
+          for (int i = flushedSoFar; i <= pendingIdx; i++) {
+            currentTail = currentTail.append(be.pending.get(i));
+          }
+          final RangeRelativeOffsetList head = sliceHead(currentTail, subBlockSplitAt);
+          final RangeRelativeOffsetList tail = sliceTail(currentTail, subBlockSplitAt);
           final Bytes subKey = ArchiveNodeKey.subBlockKey(be.naturalKey, be.rangeId, subCount);
           tx.put(
               KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE,
               subKey.toArrayUnsafe(),
               head.toBytes().toArrayUnsafe());
+          // Fresh base value for content: resets the merge-operand chain for this key.
+          tx.put(
+              KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
+              indexKeyBytes,
+              tail.toBytes().toArrayUnsafe());
           subCount++;
-          current = tail;
+          tailCount = tail.size();
+          currentTail = tail;
+          pendingIdx++;
+          flushedSoFar = pendingIdx;
+        } else {
+          tailCount = newTailCount;
+          pendingIdx++;
         }
       }
-      final byte[] newValue = writeIndexValue(subCount, current);
-      tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe(), newValue);
-      indexCache.put(indexKey, newValue);
+
+      if (flushedSoFar < n) {
+        final byte[] operand = new byte[(n - flushedSoFar) * RangeRelativeOffsetList.ENTRY_BYTES];
+        int pos = 0;
+        for (int i = flushedSoFar; i < n; i++) {
+          final int off = be.pending.get(i);
+          operand[pos] = (byte) ((off >> 16) & 0xFF);
+          operand[pos + 1] = (byte) ((off >> 8) & 0xFF);
+          operand[pos + 2] = (byte) (off & 0xFF);
+          pos += 3;
+        }
+        tx.merge(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKeyBytes, operand);
+      }
+
+      final byte[] newMetadata = writeMetadataValue(subCount, tailCount);
+      tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKeyBytes, newMetadata);
+      indexCache.put(indexKey, newMetadata);
     }
     buffer = null;
     prefetchQueue.clear();
@@ -536,7 +608,8 @@ public final class TrieNodeChangeIndex {
                 keyBytes.add(k.toArrayUnsafe());
               }
               final List<Optional<byte[]>> res =
-                  storage.multiGet(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, keyBytes);
+                  storage.multiGet(
+                      KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, keyBytes);
               for (int i = 0; i < batch.size(); i++) {
                 target.put(batch.get(i), res.get(i));
               }
@@ -572,9 +645,9 @@ public final class TrieNodeChangeIndex {
     final BufferedEntry e = new BufferedEntry(naturalKey, rangeId);
     final byte[] cached = indexCache.get(indexKey);
     if (cached != null) {
-      final IndexValue iv = readIndexValue(cached);
-      e.baseSubCount = iv.subCount;
-      e.baseTail = iv.list;
+      final IndexMetadata metadata = readMetadataValue(cached);
+      e.baseSubCount = metadata.subCount();
+      e.baseTailCount = metadata.tailCount();
       e.baseLoaded = true;
     }
     // baseLoaded stays false → flushBuffer will issue a multiGet for this key.
@@ -855,7 +928,7 @@ public final class TrieNodeChangeIndex {
       final long previousCount =
           earlierCount
               + (long) e.baseSubCount * DEFAULT_SUBBLOCK_SPLIT_AT
-              + e.baseTail.size() // unchanged field name for now — Task 11 replaces this
+              + e.baseTailCount
               + e.pending.size();
       e.pending.add(offset);
       return previousCount;

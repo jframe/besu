@@ -1216,9 +1216,10 @@ class TrieNodeChangeIndexTest {
   // ===========================================================================
 
   /**
-   * Writes a raw {@code TRIE_NODE_INDEX_ARCHIVE} value for {@code (key, rangeId)} directly
-   * (bypasses the normal append path), simulating a value already committed by a prior batch. The
-   * value is {@code [4B subCount=0 BE][packed offsets]}.
+   * Writes raw {@code TRIE_NODE_INDEX_ARCHIVE} content and {@code TRIE_NODE_INDEX_META_ARCHIVE}
+   * metadata for {@code (key, rangeId)} directly (bypasses the normal append path), simulating
+   * values already committed by a prior batch. Content is the pure packed offset list; metadata is
+   * {@code [4B subCount=0][4B tailCount=offsets.length]}.
    */
   private static void seedIndexValue(
       final SegmentedKeyValueStorage kv, final Bytes key, final long rangeId, final int[] offsets) {
@@ -1226,12 +1227,16 @@ class TrieNodeChangeIndexTest {
     for (final int offset : offsets) {
       list = list.append(offset);
     }
-    final Bytes packed = list.toBytes();
-    final byte[] value = new byte[4 + packed.size()];
-    System.arraycopy(packed.toArrayUnsafe(), 0, value, 4, packed.size());
     final byte[] indexKey = ArchiveNodeKey.rangeKey(key, rangeId).toArrayUnsafe();
     final var tx = kv.startTransaction();
-    tx.put(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey, value);
+    tx.put(
+        KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE,
+        indexKey,
+        list.toBytes().toArrayUnsafe());
+    tx.put(
+        KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE,
+        indexKey,
+        TrieNodeChangeIndex.writeMetadataValue(0, offsets.length));
     tx.commit();
   }
 
@@ -1398,5 +1403,101 @@ class TrieNodeChangeIndexTest {
 
     assertThat(index.modifiedAfter(KEY, 50, 200)).isTrue();
     assertThat(index.modifiedAfter(KEY, 150, 200)).isFalse();
+  }
+
+  // ===========================================================================
+  // Task 11: buffered/migration path batches pending offsets into one merge per key
+  // ===========================================================================
+
+  @Test
+  void bufferedFlushMergesAllPendingOffsetsInOneOperand() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000);
+    index.beginBuffered();
+    final long p1 = index.appendAndGetPreviousCount(null, KEY, 1);
+    final long p2 = index.appendAndGetPreviousCount(null, KEY, 2);
+    final long p3 = index.appendAndGetPreviousCount(null, KEY, 3);
+    assertThat(p1).isZero();
+    assertThat(p2).isEqualTo(1L);
+    assertThat(p3).isEqualTo(2L);
+
+    final var tx = kv.startTransaction();
+    index.flushBuffer(tx);
+    tx.commit();
+
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(KEY, 0);
+    assertThat(kv.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_ARCHIVE, indexKey.toArrayUnsafe()))
+        .contains(new byte[] {0, 0, 1, 0, 0, 2, 0, 0, 3});
+    assertThat(
+            kv.get(
+                KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe()))
+        .contains(TrieNodeChangeIndex.writeMetadataValue(0, 3));
+  }
+
+  @Test
+  void bufferedFlushSplitsMidBatchWhenThresholdCrossed() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    // threshold=4, splitAt=2: appending blocks 1..5 in one buffered batch crosses the threshold
+    // on the 5th pending offset.
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000, 4, 2);
+    index.beginBuffered();
+    for (int block = 1; block <= 5; block++) {
+      index.append(null, KEY, block);
+    }
+    final var tx = kv.startTransaction();
+    index.flushBuffer(tx);
+    tx.commit();
+
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(KEY, 0);
+    final TrieNodeChangeIndex.IndexMetadata metadata =
+        TrieNodeChangeIndex.readMetadataValue(
+            kv.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe())
+                .orElseThrow());
+    assertThat(metadata.subCount()).isEqualTo(1);
+    assertThat(metadata.tailCount()).isEqualTo(3);
+
+    final Bytes subKey = ArchiveNodeKey.subBlockKey(KEY, 0, 0);
+    assertThat(kv.get(KeyValueSegmentIdentifier.TRIE_NODE_SUBBLOCK_ARCHIVE, subKey.toArrayUnsafe()))
+        .contains(new byte[] {0, 0, 1, 0, 0, 2});
+
+    assertThat(index.readRangeList(KEY, 0).orElseThrow().size()).isEqualTo(5);
+  }
+
+  /**
+   * Two sub-block splits inside a single buffered batch. With splitAt &gt; 1 a second split is
+   * necessarily <em>non-consecutive</em> (after a split the tail holds {@code threshold + 1 -
+   * splitAt} entries, so {@code splitAt - 1} further offsets must be folded in before the next
+   * split), which is exactly the case where the in-memory {@code currentTail} must keep
+   * accumulating the offsets consumed by the non-splitting iterations. Re-reading committed content
+   * here would miss this batch's first split's {@code tx.put}, and dropping the intervening offsets
+   * would lose them entirely (no merge operand is emitted for offsets before {@code flushedSoFar}).
+   */
+  @Test
+  void bufferedFlushHandlesTwoSplitsInOneBatch() {
+    final SegmentedInMemoryKeyValueStorage kv = new SegmentedInMemoryKeyValueStorage();
+    // threshold=10, splitAt=5: split #1 on the 11th offset (tail → 6 entries), split #2 on the
+    // 16th offset, with offsets 12..15 folded in by the non-splitting iterations in between.
+    final TrieNodeChangeIndex index = new TrieNodeChangeIndex(kv, 1_000_000, 10, 5);
+    index.beginBuffered();
+    for (int block = 1; block <= 16; block++) {
+      index.append(null, KEY, block);
+    }
+    final var tx = kv.startTransaction();
+    index.flushBuffer(tx);
+    tx.commit();
+
+    final Bytes indexKey = ArchiveNodeKey.rangeKey(KEY, 0);
+    final TrieNodeChangeIndex.IndexMetadata metadata =
+        TrieNodeChangeIndex.readMetadataValue(
+            kv.get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKey.toArrayUnsafe())
+                .orElseThrow());
+    assertThat(metadata.subCount()).isEqualTo(2);
+    assertThat(metadata.tailCount()).isEqualTo(6);
+
+    final RangeRelativeOffsetList full = index.readRangeList(KEY, 0).orElseThrow();
+    assertThat(full.size()).isEqualTo(16);
+    for (int i = 0; i < 16; i++) {
+      assertThat(full.get(i)).isEqualTo(i + 1);
+    }
   }
 }
