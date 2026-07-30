@@ -79,6 +79,26 @@ class TrieNodeChangeIndexTest {
   }
 
   // -------------------------------------------------------------------------
+  // Index metadata helpers: round-trip and short-bytes defaulting.
+  // -------------------------------------------------------------------------
+
+  @Test
+  void metadataRoundTripsThroughBytes() {
+    final byte[] bytes = TrieNodeChangeIndex.writeMetadataValue(3, 517);
+    final TrieNodeChangeIndex.IndexMetadata metadata = TrieNodeChangeIndex.readMetadataValue(bytes);
+    assertThat(metadata.subCount()).isEqualTo(3);
+    assertThat(metadata.tailCount()).isEqualTo(517);
+  }
+
+  @Test
+  void metadataDefaultsToEmptyForShortBytes() {
+    final TrieNodeChangeIndex.IndexMetadata metadata =
+        TrieNodeChangeIndex.readMetadataValue(new byte[] {1, 2, 3});
+    assertThat(metadata.subCount()).isZero();
+    assertThat(metadata.tailCount()).isZero();
+  }
+
+  // -------------------------------------------------------------------------
   // Earlier-range count cache: the immutable earlier-range sum is read once per
   // (key,range), then served from memory on subsequent appends in the same range.
   // -------------------------------------------------------------------------

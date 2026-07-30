@@ -968,62 +968,103 @@ public final class TrieNodeChangeIndex {
   }
 
   // ---------------------------------------------------------------------------
-  // Index value helpers (format: [4B subCount BE][packed 3-byte offsets])
+  // Index metadata helpers (format: [4B subCount BE][4B tailCount BE])
   // ---------------------------------------------------------------------------
 
-  /**
-   * Parsed representation of a value stored in {@code TRIE_NODE_INDEX_ARCHIVE}.
-   *
-   * <p>Format: {@code [4B subCount (big-endian int)][3N bytes: packed offset list]}. The subCount
-   * is the number of sub-blocks already stored in {@code TRIE_NODE_SUBBLOCK_ARCHIVE} for this
-   * {@code (naturalKey, rangeId)} pair. The packed offsets are the current <em>tail</em> (the
-   * newest entries).
-   */
-  private record IndexValue(int subCount, RangeRelativeOffsetList list) {}
+  /** Number of bytes in a serialised {@link IndexMetadata} value. */
+  private static final int METADATA_BYTES = 8;
 
   /**
-   * Parses the {@code [4B subCount][packed offsets]} index value from raw storage bytes.
-   *
-   * @param raw the raw bytes from {@code TRIE_NODE_INDEX_ARCHIVE}
-   * @return the parsed sub-block count and tail offset list
+   * Parsed representation of a value stored in {@code TRIE_NODE_INDEX_META_ARCHIVE}: the number of
+   * sub-blocks already stored in {@code TRIE_NODE_SUBBLOCK_ARCHIVE} for a {@code (naturalKey,
+   * rangeId)} pair, and the number of entries currently in the tail (the packed offset list stored
+   * in {@code TRIE_NODE_INDEX_ARCHIVE}, which no longer carries this count itself).
    */
-  private static IndexValue readIndexValue(final byte[] raw) {
-    if (raw.length < SUBCOUNT_BYTES) {
-      // Only reachable if storage is corrupt: the 4-byte subCount prefix is written on every
-      // append since Task 2.6, and no pre-2.6 production data exists. Returning subCount=0 with
-      // an empty list is safe — the caller will treat the entry as having no changes.
-      return new IndexValue(0, RangeRelativeOffsetList.empty());
-    }
-    final int subCount =
-        ((raw[0] & 0xFF) << 24)
-            | ((raw[1] & 0xFF) << 16)
-            | ((raw[2] & 0xFF) << 8)
-            | (raw[3] & 0xFF);
-    final Bytes packedOffsets = Bytes.wrap(raw, SUBCOUNT_BYTES, raw.length - SUBCOUNT_BYTES);
-    final RangeRelativeOffsetList list =
-        packedOffsets.isEmpty()
-            ? RangeRelativeOffsetList.empty()
-            : RangeRelativeOffsetList.fromBytes(packedOffsets);
-    return new IndexValue(subCount, list);
+  record IndexMetadata(int subCount, int tailCount) {
+    static final IndexMetadata EMPTY = new IndexMetadata(0, 0);
   }
 
   /**
-   * Serialises a sub-block count and offset list into the {@code [4B subCount][packed offsets]}
-   * format used by {@code TRIE_NODE_INDEX_ARCHIVE}.
+   * Parses an {@link IndexMetadata} from raw {@code TRIE_NODE_INDEX_META_ARCHIVE} bytes. Returns
+   * {@link IndexMetadata#EMPTY} for missing or short (corrupt) values.
+   *
+   * @param raw the raw bytes from {@code TRIE_NODE_INDEX_META_ARCHIVE}
+   * @return the parsed metadata, or {@link IndexMetadata#EMPTY} if {@code raw} is too short
+   */
+  static IndexMetadata readMetadataValue(final byte[] raw) {
+    if (raw.length < METADATA_BYTES) {
+      return IndexMetadata.EMPTY;
+    }
+    final int subCount =
+        ((raw[0] & 0xFF) << 24) | ((raw[1] & 0xFF) << 16) | ((raw[2] & 0xFF) << 8) | (raw[3] & 0xFF);
+    final int tailCount =
+        ((raw[4] & 0xFF) << 24) | ((raw[5] & 0xFF) << 16) | ((raw[6] & 0xFF) << 8) | (raw[7] & 0xFF);
+    return new IndexMetadata(subCount, tailCount);
+  }
+
+  /**
+   * Serialises a sub-block count and tail entry count into the 8-byte {@code
+   * TRIE_NODE_INDEX_META_ARCHIVE} value format.
    *
    * @param subCount the number of existing sub-blocks
-   * @param list the tail offset list
-   * @return the serialised bytes
+   * @param tailCount the number of entries currently in the tail content value
+   * @return the serialised 8-byte value
    */
-  private static byte[] writeIndexValue(final int subCount, final RangeRelativeOffsetList list) {
-    final Bytes packed = list.toBytes();
-    final byte[] result = new byte[SUBCOUNT_BYTES + packed.size()];
+  static byte[] writeMetadataValue(final int subCount, final int tailCount) {
+    final byte[] result = new byte[METADATA_BYTES];
     result[0] = (byte) ((subCount >>> 24) & 0xFF);
     result[1] = (byte) ((subCount >>> 16) & 0xFF);
     result[2] = (byte) ((subCount >>> 8) & 0xFF);
     result[3] = (byte) (subCount & 0xFF);
-    packed.copyTo(MutableBytes.wrap(result, SUBCOUNT_BYTES, packed.size()));
+    result[4] = (byte) ((tailCount >>> 24) & 0xFF);
+    result[5] = (byte) ((tailCount >>> 16) & 0xFF);
+    result[6] = (byte) ((tailCount >>> 8) & 0xFF);
+    result[7] = (byte) (tailCount & 0xFF);
     return result;
+  }
+
+  /**
+   * Reads the current {@link IndexMetadata} for {@code indexKey}, checking the write-through
+   * {@link #indexCache} (which now caches metadata bytes, not full content) before falling back to
+   * committed storage. Honours fresh-migration bloom short-circuiting like the old content read
+   * did.
+   *
+   * @param indexKey the range key ({@link ArchiveNodeKey#rangeKey})
+   * @param indexKeyBytes {@code indexKey.toArrayUnsafe()}, passed in to avoid re-deriving it
+   * @return the current metadata, or {@link IndexMetadata#EMPTY} if absent
+   */
+  private IndexMetadata readMetadataForWrite(final Bytes indexKey, final byte[] indexKeyBytes) {
+    final byte[] cached = indexCache.get(indexKey);
+    if (cached != null) {
+      return readMetadataValue(cached);
+    }
+    if (sessionWrittenKeys != null && !sessionWrittenKeys.mightContain(indexKeyBytes)) {
+      return IndexMetadata.EMPTY;
+    }
+    return storage
+        .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKeyBytes)
+        .map(TrieNodeChangeIndex::readMetadataValue)
+        .orElse(IndexMetadata.EMPTY);
+  }
+
+  /**
+   * Returns the metadata for {@code (naturalKey, rangeId)} directly from committed storage,
+   * bypassing {@link #indexCache}. Used by read-only query paths that must not be affected by
+   * uncommitted write-path caching.
+   *
+   * @param indexKeyBytes the range key bytes ({@link ArchiveNodeKey#rangeKey})
+   * @return the current metadata, or {@link IndexMetadata#EMPTY} if absent
+   */
+  private IndexMetadata readCommittedMetadata(final byte[] indexKeyBytes) {
+    return storage
+        .get(KeyValueSegmentIdentifier.TRIE_NODE_INDEX_META_ARCHIVE, indexKeyBytes)
+        .map(TrieNodeChangeIndex::readMetadataValue)
+        .orElse(IndexMetadata.EMPTY);
+  }
+
+  /** Packs a single within-range offset into its 3-byte big-endian merge-operand form. */
+  private static byte[] threeByteOffset(final int offset) {
+    return new byte[] {(byte) ((offset >> 16) & 0xFF), (byte) ((offset >> 8) & 0xFF), (byte) (offset & 0xFF)};
   }
 
   /**
