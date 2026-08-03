@@ -16,10 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import org.apache.tuweni.bytes.Bytes;
 
-/**
- * Pure static key-construction helpers for trie-node history storage. No range, sub-block, or bloom
- * key concepts — this design has no change-block index (see the design spec's Non-goal #2).
- */
+/** Utility methods for constructing and deconstructing keys for the archive trie node CFs. */
 public final class ArchiveNodeKey {
 
   private ArchiveNodeKey() {}
