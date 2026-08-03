@@ -163,12 +163,59 @@ class TrieNodeDiffCodecTest {
   void branchChildRefTooLargeForOneByteLengthPrefixThrows() {
     final Bytes[] oldChildren = emptyBranchChildren();
     final Bytes[] newChildren = emptyBranchChildren();
-    // An inline node > 255 bytes raw RLP is not producible by real trie construction, but the
-    // codec must still guard the 1-byte length-prefix boundary explicitly.
-    newChildren[0] = Bytes.wrap(new byte[256]);
+    // A 254-byte content encodes to [0xb8][0xfe] + 254 bytes = 256 total, exceeding 255 boundary
+    newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[254])));
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
     assertThatThrownBy(() -> TrieNodeDiffCodec.encodeDiff(oldNode, newNode))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void branchChildRefAt255BytesIsAllowed() {
+    final Bytes[] oldChildren = emptyBranchChildren();
+    final Bytes[] newChildren = emptyBranchChildren();
+    // A 253-byte content encodes to [0xb8][0xfd] + 253 bytes = 255 total, at the boundary
+    newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[253])));
+    final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
+    final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
+    final TrieNodeDiffCodec.Decoded diff =
+        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
+    assertThat(diff.isFull()).isFalse();
+    assertThat(diff.isBranchNode()).isTrue();
+    assertThat(diff.changedChildIndices()).containsExactly(0);
+    assertThat(diff.changedChildRefs().get(0).size()).isEqualTo(255);
+  }
+
+  @Test
+  void branchChildRefAt256BytesIsRejected() {
+    final Bytes[] oldChildren = emptyBranchChildren();
+    final Bytes[] newChildren = emptyBranchChildren();
+    // A 254-byte content encodes to [0xb8][0xfe] + 254 bytes = 256 total, exceeding 255 boundary
+    newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[254])));
+    final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
+    final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
+    assertThatThrownBy(() -> TrieNodeDiffCodec.encodeDiff(oldNode, newNode))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shortNodeFieldAt65535BytesIsAllowed() {
+    final Bytes oldNode = shortNode(Bytes.fromHexString("0x01"), Bytes.EMPTY);
+    // A 65532-byte content encodes to [0xb9][0xff][0xfc] + 65532 bytes = 65535 total
+    final Bytes at65535 = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[65532]));
+    final TrieNodeDiffCodec.Decoded diff =
+        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, at65535));
+    assertThat(diff.isShortNodeDiff()).isTrue();
+    assertThat(diff.changedShortNodeValue()).isPresent();
+  }
+
+  @Test
+  void shortNodeFieldAt65536BytesIsRejected() {
+    final Bytes oldNode = shortNode(Bytes.fromHexString("0x01"), Bytes.EMPTY);
+    // A 65533-byte content encodes to [0xb9][0xff][0xfd] + 65533 bytes = 65536 total
+    final Bytes at65536 = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[65533]));
+    assertThatThrownBy(() -> TrieNodeDiffCodec.encodeDiff(oldNode, at65536))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
