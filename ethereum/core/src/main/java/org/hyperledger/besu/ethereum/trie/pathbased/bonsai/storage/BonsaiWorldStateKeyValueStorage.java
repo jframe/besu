@@ -299,6 +299,10 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
         flatDbStrategyProvider.getFlatDbStrategy(composedWorldStateStorage);
   }
 
+  public BonsaiFlatDbStrategyProvider getFlatDbStrategyProvider() {
+    return flatDbStrategyProvider;
+  }
+
   @Override
   public Updater updater() {
     return new CachedUpdater(

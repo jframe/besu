@@ -88,6 +88,11 @@ import org.hyperledger.besu.ethereum.trie.forest.ForestWorldStateArchive;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryProgress;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryReader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryStore;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryWalker;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryWalkerWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
@@ -106,6 +111,7 @@ import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 import org.hyperledger.besu.plugin.ServiceManager;
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.WorldStatePreimageStorage;
 import org.hyperledger.besu.services.BesuPluginContextImpl;
@@ -973,6 +979,42 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         // Close the migrator before storageProvider so callback finishes before RocksDB is closed
         closeables.addFirst(archiveMigrator);
       }
+    }
+
+    if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(dataStorageConfiguration.getDataStorageFormat())
+        && dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getTrieNodeHistoryEnabled()) {
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
+          worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
+      final SegmentedKeyValueStorage composedWorldStateStorage =
+          worldStateKeyValueStorage.getComposedWorldStateStorage();
+      final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composedWorldStateStorage);
+      final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
+      final TrieNodeHistoryProgress historyProgress =
+          TrieNodeHistoryProgress.load(composedWorldStateStorage);
+      final TrieNodeHistoryWalkerWorldState walkerWorldState =
+          new TrieNodeHistoryWalkerWorldState(
+              worldStateKeyValueStorage.getFlatDbStrategyProvider(),
+              composedWorldStateStorage,
+              historyReader,
+              historyStore);
+      final TrieLogManager walkerTrieLogManager =
+          ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
+      final ScheduledExecutorService walkerExecutor =
+          MonitoredExecutors.newScheduledThreadPool("trie-node-history-walker", 1, metricsSystem);
+      final TrieNodeHistoryWalker walker =
+          new TrieNodeHistoryWalker(
+              walkerWorldState,
+              walkerTrieLogManager,
+              blockchain,
+              historyProgress,
+              composedWorldStateStorage,
+              walkerExecutor);
+      walker.start();
+      // Close the walker before storageProvider so the catch-up task finishes before RocksDB closes
+      closeables.addFirst(walker);
     }
 
     return new BesuController(
