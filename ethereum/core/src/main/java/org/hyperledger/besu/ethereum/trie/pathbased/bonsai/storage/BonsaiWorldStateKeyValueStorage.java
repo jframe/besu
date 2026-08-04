@@ -299,6 +299,10 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
         flatDbStrategyProvider.getFlatDbStrategy(composedWorldStateStorage);
   }
 
+  /**
+   * Returns the flat-DB strategy provider. Exposed for {@link
+   * org.hyperledger.besu.controller.BesuControllerBuilder} wiring only; not for general use.
+   */
   public BonsaiFlatDbStrategyProvider getFlatDbStrategyProvider() {
     return flatDbStrategyProvider;
   }

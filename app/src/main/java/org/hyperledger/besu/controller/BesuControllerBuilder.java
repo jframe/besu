@@ -245,6 +245,13 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
   /** The global code cache */
   protected PathBasedCodeCache codeCache;
 
+  // Trie-node history components — populated in build() when X_BONSAI_ARCHIVE +
+  // trieNodeHistoryEnabled; exposed as fields so createWorldStateArchive() (Task 8) can pass the
+  // same instances to BonsaiArchiveWorldStateProvider without constructing duplicates.
+  private TrieNodeHistoryStore trieNodeHistoryStore;
+  private TrieNodeHistoryReader trieNodeHistoryReader;
+  private TrieNodeHistoryProgress trieNodeHistoryProgress;
+
   /** Instantiates a new Besu controller builder. */
   protected BesuControllerBuilder() {}
 
@@ -990,16 +997,15 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
           worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
       final SegmentedKeyValueStorage composedWorldStateStorage =
           worldStateKeyValueStorage.getComposedWorldStateStorage();
-      final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composedWorldStateStorage);
-      final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
-      final TrieNodeHistoryProgress historyProgress =
-          TrieNodeHistoryProgress.load(composedWorldStateStorage);
+      trieNodeHistoryStore = new TrieNodeHistoryStore(composedWorldStateStorage);
+      trieNodeHistoryReader = new TrieNodeHistoryReader(trieNodeHistoryStore);
+      trieNodeHistoryProgress = TrieNodeHistoryProgress.load(composedWorldStateStorage);
       final TrieNodeHistoryWalkerWorldState walkerWorldState =
           new TrieNodeHistoryWalkerWorldState(
               worldStateKeyValueStorage.getFlatDbStrategyProvider(),
               composedWorldStateStorage,
-              historyReader,
-              historyStore);
+              trieNodeHistoryReader,
+              trieNodeHistoryStore);
       final TrieLogManager walkerTrieLogManager =
           ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
       final ScheduledExecutorService walkerExecutor =
@@ -1009,9 +1015,10 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
               walkerWorldState,
               walkerTrieLogManager,
               blockchain,
-              historyProgress,
+              trieNodeHistoryProgress,
               composedWorldStateStorage,
               walkerExecutor);
+      LOG.info("Starting trie-node history walker");
       walker.start();
       // Close the walker before storageProvider so the catch-up task finishes before RocksDB closes
       closeables.addFirst(walker);
