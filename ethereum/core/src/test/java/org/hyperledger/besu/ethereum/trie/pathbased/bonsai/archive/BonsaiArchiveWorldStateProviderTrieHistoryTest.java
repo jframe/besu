@@ -249,7 +249,7 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
   @Test
   void historyPathNotUsedForBlocksInsideTheReorgWindow() {
     // Block inside the reorg window: chainHead - block < MAX_LAYERS (512).
-    // 10000 - 9600 = 400 < 512 → outsideReorgWindow = false → history skipped.
+    // 10000 - 9588 = 412 < 512 → outsideReorgWindow = false → history skipped.
     final long blockInsideWindow = CHAIN_HEAD - MAX_LAYERS + 100L; // 9588
 
     final BlockHeader chainHeadHeader =

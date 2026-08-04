@@ -118,7 +118,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final boolean outsideReorgWindow =
         blockchain.getChainHeadBlockNumber() - blockHeader.getNumber()
             >= trieLogManager.getMaxLayersToLoad();
-    if (trieHistoryReader != null
+    if (trieHistoryProgress != null
         && outsideReorgWindow
         && trieHistoryProgress.covers(blockHeader.getNumber())) {
       final ArchiveProofNodeLoader loader =
