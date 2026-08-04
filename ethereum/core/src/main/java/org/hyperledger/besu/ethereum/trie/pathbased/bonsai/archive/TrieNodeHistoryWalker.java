@@ -210,6 +210,13 @@ public class TrieNodeHistoryWalker implements Closeable {
               walkedBlockNumber.get());
           halted.set(true);
           return;
+        } catch (final IllegalStateException e) {
+          LOG.error(
+              "Trie node history walker halted at block {} due to unrecoverable error",
+              blockNumber,
+              e);
+          halted.set(true);
+          return;
         }
       }
     } finally {
@@ -233,7 +240,13 @@ public class TrieNodeHistoryWalker implements Closeable {
         throw new IllegalStateException("No trie log for block " + blockNumber);
       }
       // Block 0 (genesis) may have no trie log — there is no prior state to diff against.
-      // Mark it as walked without writing any history entries, then return.
+      // Persist progress so a restart does not re-walk genesis in a tight loop.
+      historyProgress.setLastIndexedBlock(0);
+      historyProgress.setIndexStartBlock(0);
+      final SegmentedKeyValueStorageTransaction genesisTx =
+          composedWorldStateStorage.startTransaction();
+      historyProgress.save(genesisTx);
+      genesisTx.commit();
       walkedBlockNumber.set(0);
       return;
     }
