@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
+import org.hyperledger.besu.ethereum.rlp.RLP;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -51,6 +53,13 @@ public final class ArchiveTrieNodeEntry {
 
   /** bit5: this node was deleted at this block (tombstone entry). */
   public static final byte DELETION = 0x20;
+
+  /**
+   * bit6: (branch node diff) exactly one child slot changed; its index follows as a single byte
+   * instead of the 2-byte {@code childMask} — the common case, since a single key update touches
+   * exactly one child slot in each branch node along its path to the root.
+   */
+  public static final byte SINGLE_CHILD_CHANGED = 0x40;
 
   /** Number of child slots in a branch node. */
   static final int BRANCH_CHILDREN = 16;
@@ -92,6 +101,9 @@ public final class ArchiveTrieNodeEntry {
 
   public List<Integer> changedChildIndices() {
     requireBranchDiff("changedChildIndices()");
+    if (isSingleChildChanged()) {
+      return List.of(Byte.toUnsignedInt(body.get(0)));
+    }
     final int mask = readChildMask();
     final List<Integer> indices = new ArrayList<>();
     for (int i = 0; i < BRANCH_CHILDREN; i++) {
@@ -104,15 +116,18 @@ public final class ArchiveTrieNodeEntry {
 
   public Map<Integer, Bytes> changedChildRefs() {
     requireBranchDiff("changedChildRefs()");
+    if (isSingleChildChanged()) {
+      final int index = Byte.toUnsignedInt(body.get(0));
+      return Map.of(index, readRlpItem(1));
+    }
     final int mask = readChildMask();
     int offset = 2;
     final Map<Integer, Bytes> result = new LinkedHashMap<>();
     for (int i = 0; i < BRANCH_CHILDREN; i++) {
       if ((mask & (1 << i)) != 0) {
-        final int len = Byte.toUnsignedInt(body.get(offset));
-        offset += 1;
-        result.put(i, body.slice(offset, len));
-        offset += len;
+        final Bytes childRlp = readRlpItem(offset);
+        result.put(i, childRlp);
+        offset += childRlp.size();
       }
     }
     return Collections.unmodifiableMap(result);
@@ -123,10 +138,9 @@ public final class ArchiveTrieNodeEntry {
     if ((metadata & VALUE_CHANGED) == 0) {
       return Optional.empty();
     }
-    int offset = offsetAfterChildRefs(readChildMask());
+    final int offset = offsetAfterChildRefs();
     final int len = Byte.toUnsignedInt(body.get(offset));
-    offset += 1;
-    return Optional.of(body.slice(offset, len));
+    return Optional.of(body.slice(offset + 1, len));
   }
 
   private void requireBranchDiff(final String methodName) {
@@ -135,18 +149,35 @@ public final class ArchiveTrieNodeEntry {
     }
   }
 
+  private boolean isSingleChildChanged() {
+    return (metadata & SINGLE_CHILD_CHANGED) != 0;
+  }
+
   private int readChildMask() {
     final int hi = Byte.toUnsignedInt(body.get(0));
     final int lo = Byte.toUnsignedInt(body.get(1));
     return (hi << 8) | lo;
   }
 
-  private int offsetAfterChildRefs(final int mask) {
+  /**
+   * Child refs are stored as raw, self-delimiting RLP (their own header encodes their length), so
+   * no external length prefix is needed — {@link RLP#input} parses exactly one item starting at
+   * {@code offset} and ignores anything after it, which is how the caller learns each item's
+   * consumed byte count ({@code .size()}) to advance to the next one.
+   */
+  private Bytes readRlpItem(final int offset) {
+    return RLP.input(body.slice(offset)).readAsRlp().raw();
+  }
+
+  private int offsetAfterChildRefs() {
+    if (isSingleChildChanged()) {
+      return 1 + readRlpItem(1).size();
+    }
+    final int mask = readChildMask();
     int offset = 2;
     for (int i = 0; i < BRANCH_CHILDREN; i++) {
       if ((mask & (1 << i)) != 0) {
-        final int len = Byte.toUnsignedInt(body.get(offset));
-        offset += 1 + len;
+        offset += readRlpItem(offset).size();
       }
     }
     return offset;
@@ -169,8 +200,10 @@ public final class ArchiveTrieNodeEntry {
     if ((metadata & VALUE_CHANGED) == 0) {
       return Optional.empty();
     }
+    // Value is stored as raw, self-delimiting RLP (no external length prefix, unlike the key
+    // field) — it is always the last field present, so no further offset bookkeeping is needed.
     final int keyFieldSize = ((metadata & KEY_CHANGED) != 0) ? (2 + readShortFieldLength(0)) : 0;
-    return Optional.of(readShortField(keyFieldSize));
+    return Optional.of(readRlpItem(keyFieldSize));
   }
 
   private void requireShortDiff(final String methodName) {

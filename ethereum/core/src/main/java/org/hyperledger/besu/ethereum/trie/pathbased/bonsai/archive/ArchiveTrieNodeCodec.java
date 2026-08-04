@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.Archiv
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.ENTRY_FULL;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.KEY_CHANGED;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.NODE_IS_BRANCH;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.SINGLE_CHILD_CHANGED;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.VALUE_CHANGED;
 
 import org.hyperledger.besu.ethereum.rlp.RLP;
@@ -51,8 +52,20 @@ import org.apache.tuweni.bytes.Bytes;
  * bit3  VALUE_CHANGED (0x08)  (short/branch) embedded value changed
  * bit4  CREATION      (0x10)  node created at this block (no prior version)
  * bit5  DELETION      (0x20)  node deleted at this block (tombstone; no body follows)
- * bit6-7 reserved
+ * bit6  SINGLE_CHILD_CHANGED (0x40) (branch diff) exactly one child slot changed; its index
+ *                            follows as 1 byte instead of the 2-byte childMask
+ * bit7  reserved
  * </pre>
+ *
+ * <h2>Field framing</h2>
+ *
+ * <p>Branch child refs and short-node values are captured as raw RLP ({@code readAsRlp().raw()}) —
+ * already self-delimiting, since an RLP item's own header encodes its length — so neither carries
+ * an external length prefix; decode re-parses them with the RLP reader to recover both the content
+ * and how many bytes it occupied. Branch terminal values and short-node paths are captured as
+ * decoded byte payloads ({@code readBytes()}), which are not self-delimiting, so those still carry
+ * an explicit length prefix (1 byte for branch values, 2 bytes for short-node paths, matching their
+ * pre-existing size limits).
  */
 public final class ArchiveTrieNodeCodec {
 
@@ -108,9 +121,13 @@ public final class ArchiveTrieNodeCodec {
     final BranchFields newFields = parseBranchFields(newNodeRlp);
 
     int childMask = 0;
+    int changedCount = 0;
+    int soleChangedIndex = -1;
     for (int i = 0; i < BRANCH_CHILDREN; i++) {
       if (!oldFields.children()[i].equals(newFields.children()[i])) {
         childMask |= (1 << i);
+        changedCount++;
+        soleChangedIndex = i;
       }
     }
     final boolean valueChanged = !oldFields.value().equals(newFields.value());
@@ -121,27 +138,37 @@ public final class ArchiveTrieNodeCodec {
     }
 
     final List<Bytes> parts = new ArrayList<>();
-    parts.add(Bytes.of(metadata));
-    parts.add(Bytes.of((byte) ((childMask >> 8) & 0xFF), (byte) (childMask & 0xFF)));
-    for (int i = 0; i < BRANCH_CHILDREN; i++) {
-      if ((childMask & (1 << i)) != 0) {
-        parts.add(frameBranchField(newFields.children()[i], "Child ref raw RLP"));
+    if (changedCount == 1) {
+      // Common case: a single key update touches exactly one child slot in each branch node
+      // along its path — encode the index directly instead of spending 2 bytes on a bitmask.
+      parts.add(Bytes.of((byte) (metadata | SINGLE_CHILD_CHANGED)));
+      parts.add(Bytes.of((byte) soleChangedIndex));
+      parts.add(newFields.children()[soleChangedIndex]); // raw RLP, self-delimiting
+    } else {
+      parts.add(Bytes.of(metadata));
+      parts.add(Bytes.of((byte) ((childMask >> 8) & 0xFF), (byte) (childMask & 0xFF)));
+      for (int i = 0; i < BRANCH_CHILDREN; i++) {
+        if ((childMask & (1 << i)) != 0) {
+          parts.add(newFields.children()[i]); // raw RLP, self-delimiting
+        }
       }
     }
     if (valueChanged) {
-      parts.add(frameBranchField(newFields.value(), "Branch value"));
+      parts.add(frameBranchValue(newFields.value()));
     }
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
   }
 
-  /** Frames a branch-diff field (child ref or terminal value) with a 1-byte length prefix. */
-  private static Bytes frameBranchField(final Bytes field, final String errorContext) {
-    final int len = field.size();
+  /**
+   * Frames the branch terminal value (decoded payload, not self-delimiting) with a 1-byte length
+   * prefix.
+   */
+  private static Bytes frameBranchValue(final Bytes value) {
+    final int len = value.size();
     if (len > 255) {
-      throw new IllegalArgumentException(
-          errorContext + " too large for 1-byte length prefix: " + len);
+      throw new IllegalArgumentException("Branch value too large for 1-byte length prefix: " + len);
     }
-    return Bytes.concatenate(Bytes.of((byte) len), field);
+    return Bytes.concatenate(Bytes.of((byte) len), value);
   }
 
   private static BranchFields parseBranchFields(final Bytes nodeRlp) {
@@ -179,14 +206,18 @@ public final class ArchiveTrieNodeCodec {
     final List<Bytes> parts = new ArrayList<>();
     parts.add(Bytes.of(metadata));
     if (keyChanged) parts.add(frameShortField(newFields.path));
-    if (valueChanged) parts.add(frameShortField(newFields.valueRlp));
+    if (valueChanged) parts.add(newFields.valueRlp); // raw RLP, self-delimiting, no length prefix
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
   }
 
+  /**
+   * Frames the short-node path (decoded payload, not self-delimiting) with a 2-byte length prefix.
+   */
   private static Bytes frameShortField(final Bytes field) {
     final int len = field.size();
     if (len > 65535) {
-      throw new IllegalArgumentException("Short-node field too large: " + len);
+      throw new IllegalArgumentException(
+          "Short-node path too large for 2-byte length prefix: " + len);
     }
     return Bytes.concatenate(Bytes.of((byte) ((len >> 8) & 0xFF), (byte) (len & 0xFF)), field);
   }

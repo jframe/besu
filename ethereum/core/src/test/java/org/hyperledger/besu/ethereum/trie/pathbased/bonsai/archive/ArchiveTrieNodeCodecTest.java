@@ -125,6 +125,9 @@ class ArchiveTrieNodeCodecTest {
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.isBranchNode()).isTrue();
+    // Exactly one child changed: the single-changed-child fast path must be used (index encoded
+    // directly, not the 2-byte bitmask) — this is the dominant real-world case.
+    assertThat(diff.metadata() & ArchiveTrieNodeEntry.SINGLE_CHILD_CHANGED).isNotZero();
     assertThat(diff.changedChildIndices()).containsExactly(3);
     assertThat(diff.changedChildRefs()).containsEntry(3, newChildren[3]);
     assertThat(diff.changedValue()).isEmpty();
@@ -142,6 +145,8 @@ class ArchiveTrieNodeCodecTest {
 
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
+    // Two children changed: must fall back to the 2-byte bitmask, not the single-child fast path.
+    assertThat(diff.metadata() & ArchiveTrieNodeEntry.SINGLE_CHILD_CHANGED).isZero();
     assertThat(diff.changedChildIndices()).containsExactly(0, 5);
     assertThat(diff.changedChildRefs().get(0)).isEqualTo(newChildren[0]);
     assertThat(diff.changedChildRefs().get(5)).isEqualTo(Bytes.fromHexString("0x80")); // RLP null
@@ -160,22 +165,27 @@ class ArchiveTrieNodeCodecTest {
   }
 
   @Test
-  void branchChildRefTooLargeForOneByteLengthPrefixThrows() {
+  void branchChildRefLargerThan255BytesRoundTripsSinceItIsNoLongerLengthPrefixed() {
+    // Child refs are self-delimiting raw RLP now (Optimization #2): unlike the old external
+    // 1-byte length prefix, there is no longer a 255-byte cap on a changed child ref's size.
     final Bytes[] oldChildren = emptyBranchChildren();
     final Bytes[] newChildren = emptyBranchChildren();
-    // A 254-byte content encodes to [0xb8][0xfe] + 254 bytes = 256 total, exceeding 255 boundary
-    newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[254])));
+    newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[300])));
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode))
-        .isInstanceOf(IllegalArgumentException.class);
+
+    final ArchiveTrieNodeEntry diff =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
+    assertThat(diff.changedChildIndices()).containsExactly(0);
+    assertThat(diff.changedChildRefs().get(0)).isEqualTo(newChildren[0]);
   }
 
   @Test
-  void branchChildRefAt255BytesIsAllowed() {
+  void branchChildRefAt255BytesRoundTrips() {
+    // Retained as a regression check at what used to be the length-prefix boundary — no longer a
+    // meaningful limit, but still a real size worth covering.
     final Bytes[] oldChildren = emptyBranchChildren();
     final Bytes[] newChildren = emptyBranchChildren();
-    // A 253-byte content encodes to [0xb8][0xfd] + 253 bytes = 255 total, at the boundary
     newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[253])));
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
@@ -188,35 +198,30 @@ class ArchiveTrieNodeCodecTest {
   }
 
   @Test
-  void branchChildRefAt256BytesIsRejected() {
-    final Bytes[] oldChildren = emptyBranchChildren();
-    final Bytes[] newChildren = emptyBranchChildren();
-    // A 254-byte content encodes to [0xb8][0xfe] + 254 bytes = 256 total, exceeding 255 boundary
-    newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[254])));
-    final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
-    final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode))
-        .isInstanceOf(IllegalArgumentException.class);
-  }
-
-  @Test
-  void shortNodeFieldAt65535BytesIsAllowed() {
+  void shortNodePathAt65535BytesIsAllowedAnd65536Throws() {
+    // The path field is a decoded byte payload (readBytes(), not self-delimiting RLP), so it
+    // still carries an explicit 2-byte length prefix and its 65535-byte limit is unchanged.
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x01"), Bytes.EMPTY);
-    // A 65532-byte content encodes to [0xb9][0xff][0xfc] + 65532 bytes = 65535 total
-    final Bytes at65535 = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[65532]));
+    final Bytes at65535 = shortNode(Bytes.wrap(new byte[65535]), Bytes.EMPTY);
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, at65535));
-    assertThat(diff.isShortNodeDiff()).isTrue();
-    assertThat(diff.changedShortNodeValue()).isPresent();
+    assertThat(diff.changedKey()).isPresent();
+
+    final Bytes at65536 = shortNode(Bytes.wrap(new byte[65536]), Bytes.EMPTY);
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(oldNode, at65536))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
-  void shortNodeFieldAt65536BytesIsRejected() {
+  void shortNodeValueLargerThan65535BytesRoundTripsSinceItIsNoLongerLengthPrefixed() {
+    // The value field is self-delimiting raw RLP now (Optimization #2): unlike the old external
+    // 2-byte length prefix, there is no longer a 65535-byte cap on a changed value's size.
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x01"), Bytes.EMPTY);
-    // A 65533-byte content encodes to [0xb9][0xff][0xfd] + 65533 bytes = 65536 total
-    final Bytes at65536 = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[65533]));
-    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(oldNode, at65536))
-        .isInstanceOf(IllegalArgumentException.class);
+    final Bytes largeValue = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[70000]));
+    final ArchiveTrieNodeEntry diff =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, largeValue));
+    assertThat(diff.isShortNodeDiff()).isTrue();
+    assertThat(diff.changedShortNodeValue()).isPresent();
   }
 
   @Test
@@ -281,6 +286,12 @@ class ArchiveTrieNodeCodecTest {
     mutated[7] = Bytes.fromHexString("0xa0" + "55".repeat(32));
     final Bytes next = branchNode(mutated, Bytes.EMPTY);
     final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(base, next);
+    // Exactly one child changed, so this diff goes through the single-changed-child fast path —
+    // reconstruct() must handle that encoding, not just the multi-child bitmask form.
+    assertThat(
+            ArchiveTrieNodeCodec.decode(diffEntry).metadata()
+                & ArchiveTrieNodeEntry.SINGLE_CHILD_CHANGED)
+        .isNotZero();
 
     final Bytes reconstructed =
         ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(base), List.of(diffEntry));
