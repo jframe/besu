@@ -14,11 +14,15 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.proof.WorldStateProof;
+import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
@@ -26,15 +30,23 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWo
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
+import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.ServiceManager;
+import org.hyperledger.besu.plugin.data.BlockHeader;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
+import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,6 +58,12 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   private final PathBasedCodeCache codeCache;
   private final WorldStateConfig archiveWorldStateConfig;
   private volatile LongSupplier archiveMigrationProgressSupplier = () -> -1L;
+
+  /** Null unless Task 12 installed the archive strategy (i.e. archive format + flag enabled). */
+  private final TrieNodeHistoryReader trieHistoryReader;
+
+  /** The SAME instance the write path advances — never a second {@code load(...)}. Null if off. */
+  private final TrieNodeHistoryProgress trieHistoryProgress;
 
   public BonsaiArchiveWorldStateProvider(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
@@ -79,6 +97,75 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             worldStateKeyValueStorage.getTrieLogStorage(),
             worldStateKeyValueStorage.getCacheManager(),
             worldStateKeyValueStorage.getCurrentVersion());
+    // Derive from the installed strategy so writer and reader share one TrieNodeHistoryProgress.
+    // If Task 12 did not install the archive strategy, both fields stay null and getAccountProof
+    // delegates to super unchanged.
+    if (worldStateKeyValueStorage.getTrieNodeStrategy()
+        instanceof BonsaiArchiveTrieNodeStrategy archiveStrategy) {
+      this.trieHistoryReader = new TrieNodeHistoryReader(archiveStrategy.getHistoryStore());
+      this.trieHistoryProgress = archiveStrategy.getHistoryProgress();
+    } else {
+      this.trieHistoryReader = null;
+      this.trieHistoryProgress = null;
+    }
+  }
+
+  @Override
+  public <U> Optional<U> getAccountProof(
+      final BlockHeader blockHeader,
+      final Address accountAddress,
+      final List<UInt256> accountStorageKeys,
+      final Function<Optional<WorldStateProof>, ? extends Optional<U>> mapper) {
+    if (trieHistoryProgress != null && trieHistoryProgress.covers(blockHeader.getNumber())) {
+      final ArchiveProofNodeLoader loader =
+          new ArchiveProofNodeLoader(
+              trieHistoryReader,
+              worldStateKeyValueStorage.getComposedWorldStateStorage(),
+              blockHeader.getNumber());
+      final WorldStateStorageCoordinator historyCoordinator =
+          new HistoryBackedWorldStateStorageCoordinator(worldStateKeyValueStorage, loader);
+      final WorldStateProofProvider proofProvider = new WorldStateProofProvider(historyCoordinator);
+      return mapper.apply(
+          proofProvider.getAccountProof(
+              blockHeader.getStateRoot(), accountAddress, accountStorageKeys));
+    }
+    return super.getAccountProof(blockHeader, accountAddress, accountStorageKeys, mapper);
+  }
+
+  /**
+   * Routes trie-node reads through {@link ArchiveProofNodeLoader} instead of live storage, so
+   * {@link WorldStateProofProvider}'s trie walk reconstructs historical nodes without needing the
+   * trie disabled or any other world-state-level change.
+   */
+  private static final class HistoryBackedWorldStateStorageCoordinator
+      extends WorldStateStorageCoordinator {
+    private final ArchiveProofNodeLoader loader;
+
+    HistoryBackedWorldStateStorageCoordinator(
+        final WorldStateKeyValueStorage delegate, final ArchiveProofNodeLoader loader) {
+      super(delegate);
+      this.loader = loader;
+    }
+
+    @Override
+    public boolean isWorldStateAvailable(final Bytes32 nodeHash, final Hash blockHash) {
+      // Availability is already gated by TrieNodeHistoryProgress.covers() before this class is
+      // ever constructed (see getAccountProof above) — always available from here on.
+      return true;
+    }
+
+    @Override
+    public Optional<Bytes> getAccountStateTrieNode(final Bytes location, final Bytes32 nodeHash) {
+      return loader.accountNodeLoader().getNode(location, nodeHash);
+    }
+
+    @Override
+    public Optional<Bytes> getAccountStorageTrieNode(
+        final Hash accountHash, final Bytes location, final Bytes32 nodeHash) {
+      return loader
+          .storageNodeLoader(Bytes32.wrap(accountHash.getBytes()))
+          .getNode(location, nodeHash);
+    }
   }
 
   @Override
