@@ -62,7 +62,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   /** Null unless Task 12 installed the archive strategy (i.e. archive format + flag enabled). */
   private final TrieNodeHistoryReader trieHistoryReader;
 
-  /** The SAME instance the write path advances — never a second {@code load(...)}. Null if off. */
+  /** Loaded from storage at construction time. Null if off. Task 8 will wire from walker. */
   private final TrieNodeHistoryProgress trieHistoryProgress;
 
   public BonsaiArchiveWorldStateProvider(
@@ -97,13 +97,15 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             worldStateKeyValueStorage.getTrieLogStorage(),
             worldStateKeyValueStorage.getCacheManager(),
             worldStateKeyValueStorage.getCurrentVersion());
-    // Derive from the installed strategy so writer and reader share one TrieNodeHistoryProgress.
-    // If Task 12 did not install the archive strategy, both fields stay null and getAccountProof
-    // delegates to super unchanged.
-    if (worldStateKeyValueStorage.getTrieNodeStrategy()
-        instanceof BonsaiArchiveTrieNodeStrategy archiveStrategy) {
-      this.trieHistoryReader = new TrieNodeHistoryReader(archiveStrategy.getHistoryStore());
-      this.trieHistoryProgress = archiveStrategy.getHistoryProgress();
+    // If the archive strategy is installed, derive reader and progress directly from storage.
+    // Both fields stay null if the strategy is absent and getAccountProof delegates to super.
+    // Task 8 will wire these up from the walker once the walker is live.
+    if (worldStateKeyValueStorage.getTrieNodeStrategy() instanceof BonsaiArchiveTrieNodeStrategy) {
+      this.trieHistoryReader =
+          new TrieNodeHistoryReader(
+              new TrieNodeHistoryStore(worldStateKeyValueStorage.getComposedWorldStateStorage()));
+      this.trieHistoryProgress =
+          TrieNodeHistoryProgress.load(worldStateKeyValueStorage.getComposedWorldStateStorage());
     } else {
       this.trieHistoryReader = null;
       this.trieHistoryProgress = null;

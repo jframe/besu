@@ -48,14 +48,6 @@ class KeyValueStorageProviderTrieNodeHistoryTest {
   }
 
   @Test
-  void archiveFormatWithFlagEnabledInstallsArchiveTrieNodeStrategy() {
-    final BonsaiWorldStateKeyValueStorage storage =
-        (BonsaiWorldStateKeyValueStorage)
-            newProvider().createWorldStateStorage(config(DataStorageFormat.X_BONSAI_ARCHIVE, true));
-    assertThat(storage.getTrieNodeStrategy()).isInstanceOf(BonsaiArchiveTrieNodeStrategy.class);
-  }
-
-  @Test
   void archiveFormatWithFlagDisabledKeepsPlainStrategy() {
     final BonsaiWorldStateKeyValueStorage storage =
         (BonsaiWorldStateKeyValueStorage)

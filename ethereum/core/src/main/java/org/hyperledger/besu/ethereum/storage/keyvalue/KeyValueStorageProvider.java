@@ -20,15 +20,10 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ScheduleBasedBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryProgress;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
-import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -88,41 +83,11 @@ public class KeyValueStorageProvider implements StorageProvider {
   public WorldStateKeyValueStorage createWorldStateStorage(
       final DataStorageConfiguration dataStorageConfiguration) {
     if (dataStorageConfiguration.getDataStorageFormat().isBonsaiFormat()) {
-      final BonsaiWorldStateKeyValueStorage bonsaiStorage =
-          new BonsaiWorldStateKeyValueStorage(this, metricsSystem, dataStorageConfiguration);
-      maybeInstallTrieNodeHistoryStrategy(bonsaiStorage, dataStorageConfiguration);
-      return bonsaiStorage;
+      return new BonsaiWorldStateKeyValueStorage(this, metricsSystem, dataStorageConfiguration);
     } else {
       return new ForestWorldStateKeyValueStorage(
           getStorageBySegmentIdentifier(KeyValueSegmentIdentifier.WORLD_STATE));
     }
-  }
-
-  /**
-   * Swaps the plain trie-node strategy for the history-capturing archive strategy when the archive
-   * storage format is in use and {@code --Xbonsai-trie-node-history-enabled} is set. The strategy
-   * owns the single {@link TrieNodeHistoryStore} / {@link TrieNodeHistoryProgress} pair that the
-   * proof read path later shares (see Task 13), so writer and reader observe one coverage window.
-   */
-  private void maybeInstallTrieNodeHistoryStrategy(
-      final BonsaiWorldStateKeyValueStorage bonsaiStorage,
-      final DataStorageConfiguration dataStorageConfiguration) {
-    final boolean archiveFormat =
-        dataStorageConfiguration.getDataStorageFormat() == DataStorageFormat.X_BONSAI_ARCHIVE;
-    final boolean historyEnabled =
-        dataStorageConfiguration
-            .getPathBasedExtraStorageConfiguration()
-            .getUnstable()
-            .getTrieNodeHistoryEnabled();
-    if (!archiveFormat || !historyEnabled) {
-      return;
-    }
-    final SegmentedKeyValueStorage composed = bonsaiStorage.getComposedWorldStateStorage();
-    bonsaiStorage.setTrieNodeStrategy(
-        new BonsaiArchiveTrieNodeStrategy(
-            new BonsaiTrieNodeStrategy(),
-            new TrieNodeHistoryStore(composed),
-            TrieNodeHistoryProgress.load(composed)));
   }
 
   @Override

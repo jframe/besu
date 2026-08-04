@@ -18,7 +18,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
@@ -36,16 +35,13 @@ import org.junit.jupiter.api.Test;
 class BonsaiArchiveTrieNodeHistoryIntegrationTest {
 
   private SegmentedKeyValueStorage storage;
-  private BonsaiArchiveTrieNodeStrategy strategy;
+  private TrieNodeHistoryStore historyStore;
   private TrieNodeHistoryReader reader;
 
   @BeforeEach
   void setUp() {
     storage = new SegmentedInMemoryKeyValueStorage();
-    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(storage);
-    strategy =
-        new BonsaiArchiveTrieNodeStrategy(
-            new BonsaiTrieNodeStrategy(), historyStore, new TrieNodeHistoryProgress());
+    historyStore = new TrieNodeHistoryStore(storage);
     reader = new TrieNodeHistoryReader(historyStore);
   }
 
@@ -67,29 +63,12 @@ class BonsaiArchiveTrieNodeHistoryIntegrationTest {
         });
   }
 
-  private void setCommittedWorldBlockNumber(final long block) {
+  /** Writes {@code node} at the given {@code blockNumber} via a fresh strategy instance. */
+  private void writeAtBlock(final long blockNumber, final Bytes location, final Bytes node) {
+    final BonsaiArchiveTrieNodeStrategy s =
+        new BonsaiArchiveTrieNodeStrategy(reader, historyStore, blockNumber);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    tx.put(
-        org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier
-            .TRIE_BRANCH_STORAGE,
-        org.hyperledger.besu.ethereum.trie.pathbased.common.storage
-            .PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
-        Bytes.ofUnsignedLong(block).toArrayUnsafe());
-    tx.commit();
-  }
-
-  /**
-   * Writes {@code node} as the block after {@code priorWorldBlockNumber}. Pass a negative value to
-   * model genesis (the committed-block-number key is simply not written, which is what production
-   * genesis looks like — production never stores a negative block number).
-   */
-  private void writeAtBlock(
-      final long priorWorldBlockNumber, final Bytes location, final Bytes node) {
-    if (priorWorldBlockNumber >= 0) {
-      setCommittedWorldBlockNumber(priorWorldBlockNumber);
-    }
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    strategy.putFlatAccountTrieNode(
+    s.putFlatAccountTrieNode(
         storage, tx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
     tx.commit();
   }
@@ -100,16 +79,17 @@ class BonsaiArchiveTrieNodeHistoryIntegrationTest {
     final Bytes naturalKey = ArchiveNodeKey.account(location);
 
     // Block 0: creation.
-    writeAtBlock(-1L, location, leafNode(0x00));
+    writeAtBlock(0L, location, leafNode(0x00));
     // Blocks 1..CHECKPOINT_INTERVAL: enough mutations to cross exactly one checkpoint boundary.
     for (int i = 1; i <= TrieNodeHistoryReader.CHECKPOINT_INTERVAL; i++) {
-      writeAtBlock(i - 1L, location, leafNode(i));
+      writeAtBlock((long) i, location, leafNode(i));
     }
     // One block after the checkpoint: deletion.
     final long deletionBlock = TrieNodeHistoryReader.CHECKPOINT_INTERVAL + 1L;
-    setCommittedWorldBlockNumber(deletionBlock - 1L);
+    final BonsaiArchiveTrieNodeStrategy deleteStrategy =
+        new BonsaiArchiveTrieNodeStrategy(reader, historyStore, deletionBlock);
     final SegmentedKeyValueStorageTransaction deleteTx = storage.startTransaction();
-    strategy.removeFlatAccountStateTrieNode(storage, deleteTx, location);
+    deleteStrategy.removeFlatAccountStateTrieNode(storage, deleteTx, location);
     deleteTx.commit();
 
     // Reconstruction at every intermediate block must match what was actually written then.
@@ -131,56 +111,34 @@ class BonsaiArchiveTrieNodeHistoryIntegrationTest {
     final Bytes location = Bytes.fromHexString("0x0203");
     final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
 
-    // Genesis: no committed block number written, so the next write lands at block 0.
     final Bytes node11 = leafNode(0x11);
     final Bytes node22 = leafNode(0x22);
+
+    // Block 0: creation.
     SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    strategy.putFlatStorageTrieNode(
-        storage,
-        tx,
-        accountHash,
-        location,
-        org.hyperledger.besu.crypto.Hash.keccak256(node11),
-        node11);
+    new BonsaiArchiveTrieNodeStrategy(reader, historyStore, 0L)
+        .putFlatStorageTrieNode(
+            storage,
+            tx,
+            accountHash,
+            location,
+            org.hyperledger.besu.crypto.Hash.keccak256(node11),
+            node11);
     tx.commit();
 
-    setCommittedWorldBlockNumber(0L);
+    // Block 1: update.
     tx = storage.startTransaction();
-    strategy.putFlatStorageTrieNode(
-        storage,
-        tx,
-        accountHash,
-        location,
-        org.hyperledger.besu.crypto.Hash.keccak256(node22),
-        node22);
+    new BonsaiArchiveTrieNodeStrategy(reader, historyStore, 1L)
+        .putFlatStorageTrieNode(
+            storage,
+            tx,
+            accountHash,
+            location,
+            org.hyperledger.besu.crypto.Hash.keccak256(node22),
+            node22);
     tx.commit();
 
     assertThat(reader.nodeAt(naturalKey, 0L)).contains(node11);
     assertThat(reader.nodeAt(naturalKey, 1L)).contains(node22);
-  }
-
-  @Test
-  void progressCoversOnlyBlocksActuallyWritten() {
-    // Uses its own strategy/progress pair (not setUp's) so progress can be inspected directly.
-    final TrieNodeHistoryProgress progress = new TrieNodeHistoryProgress();
-    final TrieNodeHistoryStore trackedHistoryStore = new TrieNodeHistoryStore(storage);
-    final BonsaiArchiveTrieNodeStrategy trackedStrategy =
-        new BonsaiArchiveTrieNodeStrategy(
-            new BonsaiTrieNodeStrategy(), trackedHistoryStore, progress);
-
-    assertThat(progress.covers(0L)).as("nothing written yet").isFalse();
-
-    // Genesis: no committed block number written, so this write lands at block 0.
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    trackedStrategy.putFlatAccountTrieNode(
-        storage,
-        tx,
-        Bytes.fromHexString("0x02"),
-        org.hyperledger.besu.crypto.Hash.keccak256(Bytes.fromHexString("0xbb")),
-        Bytes.fromHexString("0xbb"));
-    tx.commit();
-
-    assertThat(progress.covers(0L)).isTrue();
-    assertThat(progress.covers(1L)).isFalse();
   }
 }
