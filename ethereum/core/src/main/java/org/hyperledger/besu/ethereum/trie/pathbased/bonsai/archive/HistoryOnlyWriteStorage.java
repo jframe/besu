@@ -40,6 +40,10 @@ import org.apache.tuweni.bytes.Bytes;
  * replays historical blocks. {@code persist()} emits flat account/storage/code writes and
  * world-metadata keys alongside trie-node writes; without this filter those writes would overwrite
  * chain-head state and corrupt the live node.
+ *
+ * <p>Note: non-transactional mutations ({@link #tryDelete} and {@link #clear}) are forwarded to the
+ * delegate unconditionally. Callers must not invoke these methods on non-history segments through
+ * this wrapper.
  */
 public class HistoryOnlyWriteStorage implements SegmentedKeyValueStorage {
 

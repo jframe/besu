@@ -81,4 +81,14 @@ class HistoryOnlyWriteStorageTest {
     seed.commit();
     assertThat(filtered.get(TRIE_BRANCH_STORAGE, new byte[] {1})).contains(new byte[] {2});
   }
+
+  @Test
+  void lowPriorityTransactionAlsoFiltersWrites() {
+    final SegmentedKeyValueStorageTransaction tx = filtered.startLowPriorityTransaction();
+    tx.put(TRIE_NODE_HISTORY_ARCHIVE, new byte[] {1}, new byte[] {2});
+    tx.put(TRIE_BRANCH_STORAGE, new byte[] {3}, new byte[] {4});
+    tx.commit();
+    assertThat(delegate.get(TRIE_NODE_HISTORY_ARCHIVE, new byte[] {1})).contains(new byte[] {2});
+    assertThat(delegate.get(TRIE_BRANCH_STORAGE, new byte[] {3})).isEmpty();
+  }
 }
