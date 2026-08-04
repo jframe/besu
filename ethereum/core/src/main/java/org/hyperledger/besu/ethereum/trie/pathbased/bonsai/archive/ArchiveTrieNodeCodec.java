@@ -69,6 +69,15 @@ import org.apache.tuweni.bytes.Bytes;
  */
 public final class ArchiveTrieNodeCodec {
 
+  /** RLP list arity of a short node (extension or leaf): {@code [encodedPath, value]}. */
+  private static final int SHORT_NODE_ARITY = 2;
+
+  /**
+   * RLP list arity of a branch node: {@link ArchiveTrieNodeEntry#BRANCH_CHILDREN} child slots (one
+   * per hex nibble, 0-F) plus one terminal value slot.
+   */
+  private static final int BRANCH_NODE_ARITY = BRANCH_CHILDREN + 1;
+
   private ArchiveTrieNodeCodec() {}
 
   /** Layout: {@code [ENTRY_FULL]} ‖ {@code nodeRlp}. */
@@ -92,7 +101,7 @@ public final class ArchiveTrieNodeCodec {
     if (oldArity != newArity) {
       return encodeFull(newNodeRlp);
     }
-    if (oldArity == 17) {
+    if (oldArity == BRANCH_NODE_ARITY) {
       return encodeBranchDiff(oldNodeRlp, newNodeRlp);
     }
     return encodeShortDiff(oldNodeRlp, newNodeRlp);
@@ -101,9 +110,15 @@ public final class ArchiveTrieNodeCodec {
   static int nodeArity(final Bytes nodeRlp) {
     final RLPInput in = RLP.input(nodeRlp);
     final int count = in.enterList();
-    if (count != 2 && count != 17) {
+    if (count != SHORT_NODE_ARITY && count != BRANCH_NODE_ARITY) {
       throw new IllegalArgumentException(
-          "Expected a 2-item short node or 17-item branch node RLP list, got " + count + " items");
+          "Expected a "
+              + SHORT_NODE_ARITY
+              + "-item short node or "
+              + BRANCH_NODE_ARITY
+              + "-item branch node RLP list, got "
+              + count
+              + " items");
     }
     return count;
   }
@@ -174,8 +189,9 @@ public final class ArchiveTrieNodeCodec {
   private static BranchFields parseBranchFields(final Bytes nodeRlp) {
     final RLPInput in = RLP.input(nodeRlp);
     final int count = in.enterList();
-    if (count != 17) {
-      throw new IllegalArgumentException("Expected 17-item branch node RLP list, got " + count);
+    if (count != BRANCH_NODE_ARITY) {
+      throw new IllegalArgumentException(
+          "Expected " + BRANCH_NODE_ARITY + "-item branch node RLP list, got " + count);
     }
     final Bytes[] children = new Bytes[BRANCH_CHILDREN];
     for (int i = 0; i < BRANCH_CHILDREN; i++) {
@@ -244,7 +260,7 @@ public final class ArchiveTrieNodeCodec {
       throw new IllegalArgumentException("reconstruct: fullEntry must be a FULL entry");
     }
     final Bytes baseNode = base.fullNode();
-    return nodeArity(baseNode) == 17
+    return nodeArity(baseNode) == BRANCH_NODE_ARITY
         ? reconstructBranch(baseNode, diffEntries)
         : reconstructShort(baseNode, diffEntries);
   }
@@ -268,13 +284,12 @@ public final class ArchiveTrieNodeCodec {
         value = newVal.get();
       }
     }
-    final Bytes[] finalChildren = children;
     final Bytes finalValue = value;
     return RLP.encode(
         out -> {
           out.startList();
           for (int i = 0; i < BRANCH_CHILDREN; i++) {
-            out.writeRaw(finalChildren[i]);
+            out.writeRaw(children[i]);
           }
           out.writeBytes(finalValue);
           out.endList();
@@ -312,8 +327,8 @@ public final class ArchiveTrieNodeCodec {
         });
   }
 
-  private static void requireDiffEntry(final ArchiveTrieNodeEntry d) {
-    if (d.isFull() || d.isDeletion()) {
+  private static void requireDiffEntry(final ArchiveTrieNodeEntry entry) {
+    if (entry.isFull() || entry.isDeletion()) {
       throw new IllegalArgumentException("reconstruct expects DIFF entries only");
     }
   }
