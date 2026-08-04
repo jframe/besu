@@ -240,6 +240,8 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
         .filter(b -> Hash.hash(b).getBytes().equals(nodeHash));
   }
 
+  // Intentionally bypasses trieNodeStrategy: callers need the raw stored bytes, not history-aware
+  // lookup.
   public Optional<Bytes> getTrieNodeUnsafe(final Bytes key) {
     return composedWorldStateStorage.get(TRIE_BRANCH_STORAGE, key.toArrayUnsafe()).map(Bytes::wrap);
   }
