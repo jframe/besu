@@ -139,6 +139,31 @@ public class DataStorageOptionsTest
   }
 
   @Test
+  public void trieNodeHistoryEnabledCanBeEnabled() {
+    internalTestSuccess(
+        dataStorageConfiguration ->
+            assertThat(
+                    dataStorageConfiguration
+                        .getPathBasedExtraStorageConfiguration()
+                        .getUnstable()
+                        .getTrieNodeHistoryEnabled())
+                .isEqualTo(true),
+        "--Xbonsai-trie-node-history-enabled=true");
+  }
+
+  @Test
+  public void trieNodeHistoryEnabledDisabledByDefault() {
+    internalTestSuccess(
+        dataStorageConfiguration ->
+            assertThat(
+                    dataStorageConfiguration
+                        .getPathBasedExtraStorageConfiguration()
+                        .getUnstable()
+                        .getTrieNodeHistoryEnabled())
+                .isEqualTo(false));
+  }
+
+  @Test
   public void parallelTxProcessingEnabledByDefault() {
     internalTestSuccess(
         dataStorageConfiguration ->
