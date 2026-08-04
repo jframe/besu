@@ -109,11 +109,11 @@ public final class ArchiveTrieNodeCodec {
 
     int childMask = 0;
     for (int i = 0; i < BRANCH_CHILDREN; i++) {
-      if (!oldFields.children[i].equals(newFields.children[i])) {
+      if (!oldFields.children()[i].equals(newFields.children()[i])) {
         childMask |= (1 << i);
       }
     }
-    final boolean valueChanged = !oldFields.value.equals(newFields.value);
+    final boolean valueChanged = !oldFields.value().equals(newFields.value());
 
     byte metadata = NODE_IS_BRANCH;
     if (valueChanged) {
@@ -125,25 +125,23 @@ public final class ArchiveTrieNodeCodec {
     parts.add(Bytes.of((byte) ((childMask >> 8) & 0xFF), (byte) (childMask & 0xFF)));
     for (int i = 0; i < BRANCH_CHILDREN; i++) {
       if ((childMask & (1 << i)) != 0) {
-        final Bytes ref = newFields.children[i];
-        if (ref.size() > 255) {
-          throw new IllegalArgumentException(
-              "Child ref raw RLP too large for 1-byte length prefix: " + ref.size());
-        }
-        parts.add(Bytes.of((byte) ref.size()));
-        parts.add(ref);
+        parts.add(frameBranchField(newFields.children()[i], "Child ref raw RLP"));
       }
     }
     if (valueChanged) {
-      final Bytes val = newFields.value;
-      if (val.size() > 255) {
-        throw new IllegalArgumentException(
-            "Branch value too large for 1-byte length prefix: " + val.size());
-      }
-      parts.add(Bytes.of((byte) val.size()));
-      parts.add(val);
+      parts.add(frameBranchField(newFields.value(), "Branch value"));
     }
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
+  }
+
+  /** Frames a branch-diff field (child ref or terminal value) with a 1-byte length prefix. */
+  private static Bytes frameBranchField(final Bytes field, final String errorContext) {
+    final int len = field.size();
+    if (len > 255) {
+      throw new IllegalArgumentException(
+          errorContext + " too large for 1-byte length prefix: " + len);
+    }
+    return Bytes.concatenate(Bytes.of((byte) len), field);
   }
 
   private static BranchFields parseBranchFields(final Bytes nodeRlp) {
@@ -166,15 +164,7 @@ public final class ArchiveTrieNodeCodec {
     return Bytes.EMPTY;
   }
 
-  private static final class BranchFields {
-    final Bytes[] children;
-    final Bytes value;
-
-    BranchFields(final Bytes[] children, final Bytes value) {
-      this.children = children;
-      this.value = value;
-    }
-  }
+  private record BranchFields(Bytes[] children, Bytes value) {}
 
   private static Bytes encodeShortDiff(final Bytes oldNodeRlp, final Bytes newNodeRlp) {
     final ShortFields oldFields = parseShortFields(oldNodeRlp);
@@ -230,8 +220,8 @@ public final class ArchiveTrieNodeCodec {
 
   private static Bytes reconstructBranch(final Bytes baseNode, final List<Bytes> diffEntries) {
     final BranchFields base = parseBranchFields(baseNode);
-    final Bytes[] children = Arrays.copyOf(base.children, BRANCH_CHILDREN);
-    Bytes value = base.value;
+    final Bytes[] children = Arrays.copyOf(base.children(), BRANCH_CHILDREN);
+    Bytes value = base.value();
     for (final Bytes diffEntry : diffEntries) {
       final ArchiveTrieNodeEntry d = decode(diffEntry);
       requireDiffEntry(d);
