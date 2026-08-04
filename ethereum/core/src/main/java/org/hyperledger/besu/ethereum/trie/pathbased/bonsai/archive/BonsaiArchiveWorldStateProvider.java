@@ -22,7 +22,6 @@ import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
@@ -59,10 +58,16 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   private final WorldStateConfig archiveWorldStateConfig;
   private volatile LongSupplier archiveMigrationProgressSupplier = () -> -1L;
 
-  /** Null unless Task 12 installed the archive strategy (i.e. archive format + flag enabled). */
+  /**
+   * Null unless archive format + flag enabled. Wired by {@code BesuControllerBuilder} at
+   * construction time so the same instance is shared with the walker.
+   */
   private final TrieNodeHistoryReader trieHistoryReader;
 
-  /** Loaded from storage at construction time. Null if off. Task 8 will wire from walker. */
+  /**
+   * Live reference shared with the walker; {@code volatile} internally so walker advances are
+   * immediately visible to proof-query threads without reloading. Null if off.
+   */
   private final TrieNodeHistoryProgress trieHistoryProgress;
 
   public BonsaiArchiveWorldStateProvider(
@@ -74,7 +79,9 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       final EvmConfiguration evmConfiguration,
       final Supplier<WorldStateHealer> worldStateHealerSupplier,
       final PathBasedCodeCache codeCache,
-      final MetricsSystem metricsSystem) {
+      final MetricsSystem metricsSystem,
+      final TrieNodeHistoryReader trieNodeHistoryReader,
+      final TrieNodeHistoryProgress trieNodeHistoryProgress) {
     super(
         worldStateKeyValueStorage,
         blockchain,
@@ -97,19 +104,9 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             worldStateKeyValueStorage.getTrieLogStorage(),
             worldStateKeyValueStorage.getCacheManager(),
             worldStateKeyValueStorage.getCurrentVersion());
-    // If the archive strategy is installed, derive reader and progress directly from storage.
-    // Both fields stay null if the strategy is absent and getAccountProof delegates to super.
-    // Task 8 will wire these up from the walker once the walker is live.
-    if (worldStateKeyValueStorage.getTrieNodeStrategy() instanceof BonsaiArchiveTrieNodeStrategy) {
-      this.trieHistoryReader =
-          new TrieNodeHistoryReader(
-              new TrieNodeHistoryStore(worldStateKeyValueStorage.getComposedWorldStateStorage()));
-      this.trieHistoryProgress =
-          TrieNodeHistoryProgress.load(worldStateKeyValueStorage.getComposedWorldStateStorage());
-    } else {
-      this.trieHistoryReader = null;
-      this.trieHistoryProgress = null;
-    }
+    // Both null when the feature flag is off; getAccountProof delegates entirely to super.
+    this.trieHistoryReader = trieNodeHistoryReader;
+    this.trieHistoryProgress = trieNodeHistoryProgress;
   }
 
   @Override
@@ -118,7 +115,12 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       final Address accountAddress,
       final List<UInt256> accountStorageKeys,
       final Function<Optional<WorldStateProof>, ? extends Optional<U>> mapper) {
-    if (trieHistoryProgress != null && trieHistoryProgress.covers(blockHeader.getNumber())) {
+    final boolean outsideReorgWindow =
+        blockchain.getChainHeadBlockNumber() - blockHeader.getNumber()
+            >= trieLogManager.getMaxLayersToLoad();
+    if (trieHistoryReader != null
+        && outsideReorgWindow
+        && trieHistoryProgress.covers(blockHeader.getNumber())) {
       final ArchiveProofNodeLoader loader =
           new ArchiveProofNodeLoader(
               trieHistoryReader,
@@ -127,9 +129,17 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       final WorldStateStorageCoordinator historyCoordinator =
           new HistoryBackedWorldStateStorageCoordinator(worldStateKeyValueStorage, loader);
       final WorldStateProofProvider proofProvider = new WorldStateProofProvider(historyCoordinator);
-      return mapper.apply(
-          proofProvider.getAccountProof(
-              blockHeader.getStateRoot(), accountAddress, accountStorageKeys));
+      try {
+        return mapper.apply(
+            proofProvider.getAccountProof(
+                blockHeader.getStateRoot(), accountAddress, accountStorageKeys));
+      } catch (final Exception e) {
+        LOG.error(
+            "Trie-node history reconstruction failed for block {}; falling back to the trie-log path",
+            blockHeader.getNumber(),
+            e);
+        // fall through to super
+      }
     }
     return super.getAccountProof(blockHeader, accountAddress, accountStorageKeys, mapper);
   }

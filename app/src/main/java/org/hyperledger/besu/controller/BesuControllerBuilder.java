@@ -997,9 +997,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
           worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
       final SegmentedKeyValueStorage composedWorldStateStorage =
           worldStateKeyValueStorage.getComposedWorldStateStorage();
-      trieNodeHistoryStore = new TrieNodeHistoryStore(composedWorldStateStorage);
-      trieNodeHistoryReader = new TrieNodeHistoryReader(trieNodeHistoryStore);
-      trieNodeHistoryProgress = TrieNodeHistoryProgress.load(composedWorldStateStorage);
+      // trieNodeHistoryStore/Reader/Progress already initialised by createWorldStateArchive().
       final TrieNodeHistoryWalkerWorldState walkerWorldState =
           new TrieNodeHistoryWalkerWorldState(
               worldStateKeyValueStorage.getFlatDbStrategyProvider(),
@@ -1436,7 +1434,18 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       case X_BONSAI_ARCHIVE -> {
         final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
             worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
-
+        // Initialise trie-node history fields when the flag is on, so the provider and the walker
+        // (set up further down in build()) share the same live TrieNodeHistoryProgress reference.
+        if (dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getTrieNodeHistoryEnabled()) {
+          final SegmentedKeyValueStorage composedWorldStateStorage =
+              worldStateKeyValueStorage.getComposedWorldStateStorage();
+          trieNodeHistoryStore = new TrieNodeHistoryStore(composedWorldStateStorage);
+          trieNodeHistoryReader = new TrieNodeHistoryReader(trieNodeHistoryStore);
+          trieNodeHistoryProgress = TrieNodeHistoryProgress.load(composedWorldStateStorage);
+        }
         yield new BonsaiArchiveWorldStateProvider(
             worldStateKeyValueStorage,
             blockchain,
@@ -1446,7 +1455,9 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             evmConfiguration,
             worldStateHealerSupplier,
             codeCache,
-            metricsSystem);
+            metricsSystem,
+            trieNodeHistoryReader,
+            trieNodeHistoryProgress);
       }
       case FOREST -> {
         final WorldStatePreimageStorage preimageStorage =

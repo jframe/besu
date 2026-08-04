@@ -91,7 +91,6 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
     // One strategy instance per block: write history entries at block 50.
     final BonsaiArchiveTrieNodeStrategy archiveStrategy =
         new BonsaiArchiveTrieNodeStrategy(historyReader, historyStore, 50L);
-    worldStateStorage.setTrieNodeStrategy(archiveStrategy);
 
     accountTrie.commit(
         (location, nodeHash, value) -> {
@@ -100,17 +99,13 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
           tx.commit();
         });
 
-    // Strategy no longer advances TrieNodeHistoryProgress; save it to storage manually so the
-    // provider (which loads progress from disk at construction time) sees block 50 as covered.
+    // Pass the progress object directly to the provider — no disk round-trip needed.
     final TrieNodeHistoryProgress progress = new TrieNodeHistoryProgress();
     progress.setLastIndexedBlock(50L);
     progress.setIndexStartBlock(50L);
-    final SegmentedKeyValueStorageTransaction progressTx = composed.startTransaction();
-    progress.save(progressTx);
-    progressTx.commit();
 
     final BonsaiArchiveWorldStateProvider provider =
-        newProvider(worldStateStorage, blockchain, chainHeadHeader);
+        newProvider(worldStateStorage, blockchain, chainHeadHeader, historyReader, progress);
 
     final Optional<WorldStateProof> result =
         provider.getAccountProof(headerAtBlock50, address, List.of(), Function.identity());
@@ -133,25 +128,23 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
     final BonsaiWorldStateKeyValueStorage worldStateStorage = newStorage();
     final SegmentedKeyValueStorage composed = worldStateStorage.getComposedWorldStateStorage();
     final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composed);
-    // Archive strategy installed, but no TrieNodeHistoryProgress has been saved to storage:
-    // the provider loads an empty progress → covers() is false for every block.
-    worldStateStorage.setTrieNodeStrategy(
-        new BonsaiArchiveTrieNodeStrategy(
-            new TrieNodeHistoryReader(historyStore), historyStore, 0L));
-
-    final BonsaiArchiveWorldStateProvider provider =
-        newProvider(worldStateStorage, blockchain, chainHeadHeader);
+    final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
+    // Empty progress: covers() returns false for every block number.
+    final TrieNodeHistoryProgress progress = new TrieNodeHistoryProgress();
 
     // A query far enough in the past that super's own (unmodified) path cannot serve it either:
     // beyond maxLayersToLoad via trie-log rollback, and the archive-migration-progress supplier
     // defaults to -1 (see BonsaiArchiveWorldStateProviderTest's identical
-    // "migratorBehindQueryBlock"
-    // scenario). getAccountProof must fall through to that existing, already-empty behaviour.
+    // "migratorBehindQueryBlock" scenario). getAccountProof must fall through to that existing,
+    // already-empty behaviour.
     final long queryBlockNumber = CHAIN_HEAD - MAX_LAYERS - 1;
     final BlockHeader historicalHeader =
         new BlockHeaderTestFixture().number(queryBlockNumber).buildHeader();
     when(blockchain.getBlockHeader(historicalHeader.getHash()))
         .thenReturn(Optional.of(historicalHeader));
+
+    final BonsaiArchiveWorldStateProvider provider =
+        newProvider(worldStateStorage, blockchain, chainHeadHeader, historyReader, progress);
 
     final Optional<WorldStateProof> result =
         provider.getAccountProof(
@@ -169,18 +162,18 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
         new BlockHeaderTestFixture().number(CHAIN_HEAD).buildHeader();
     final Blockchain blockchain = mockBlockchain(chainHeadHeader);
 
-    // Plain BonsaiTrieNodeStrategy left in place (the storage's own default) -- flag off, per
-    // Task 12 -- so trieHistoryReader/trieHistoryProgress stay null and the override never engages.
+    // Plain BonsaiTrieNodeStrategy left in place (the storage's own default) -- flag off --
+    // so trieHistoryReader/trieHistoryProgress are null and the override never engages.
     final BonsaiWorldStateKeyValueStorage worldStateStorage = newStorage();
-
-    final BonsaiArchiveWorldStateProvider provider =
-        newProvider(worldStateStorage, blockchain, chainHeadHeader);
 
     final long queryBlockNumber = CHAIN_HEAD - MAX_LAYERS - 1;
     final BlockHeader historicalHeader =
         new BlockHeaderTestFixture().number(queryBlockNumber).buildHeader();
     when(blockchain.getBlockHeader(historicalHeader.getHash()))
         .thenReturn(Optional.of(historicalHeader));
+
+    final BonsaiArchiveWorldStateProvider provider =
+        newProvider(worldStateStorage, blockchain, chainHeadHeader, null, null);
 
     final Optional<WorldStateProof> result =
         provider.getAccountProof(
@@ -189,6 +182,156 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
             List.of(),
             Function.identity());
 
+    assertThat(result).isEmpty();
+  }
+
+  /**
+   * Verifies the live-reference property: the provider holds the same {@link
+   * TrieNodeHistoryProgress} object that the walker writes. Advancing the progress after
+   * construction is immediately visible to proof queries without reloading from disk.
+   */
+  @Test
+  void readPathObservesWriteSideProgressAdvancesWithoutReconstruction() {
+    final Address address = Address.fromHexString("0x6666666666666666666666666666666666666666");
+    final PmtStateTrieAccountValue accountValue =
+        new PmtStateTrieAccountValue(1L, Wei.of(3L), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    final MerkleTrie<Bytes, Bytes> accountTrie =
+        new StoredMerklePatriciaTrie<>((location, hash) -> Optional.empty(), b -> b, b -> b);
+    accountTrie.put(address.addressHash().getBytes(), RLP.encode(accountValue::writeTo));
+    final Bytes32 rootHashAtBlock50 = accountTrie.getRootHash();
+
+    final BlockHeader headerAtBlock50 =
+        new BlockHeaderTestFixture()
+            .number(50L)
+            .stateRoot(Hash.wrap(rootHashAtBlock50))
+            .buildHeader();
+    final BlockHeader chainHeadHeader =
+        new BlockHeaderTestFixture().number(CHAIN_HEAD).buildHeader();
+    final Blockchain blockchain = mockBlockchain(chainHeadHeader);
+
+    final BonsaiWorldStateKeyValueStorage worldStateStorage = newStorage();
+    final SegmentedKeyValueStorage composed = worldStateStorage.getComposedWorldStateStorage();
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composed);
+    final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
+    final BonsaiArchiveTrieNodeStrategy archiveStrategy =
+        new BonsaiArchiveTrieNodeStrategy(historyReader, historyStore, 50L);
+
+    // Write history entries for block 50 BEFORE constructing the provider.
+    accountTrie.commit(
+        (location, nodeHash, value) -> {
+          final SegmentedKeyValueStorageTransaction tx = composed.startTransaction();
+          archiveStrategy.putFlatAccountTrieNode(composed, tx, location, nodeHash, value);
+          tx.commit();
+        });
+
+    // Start with empty progress — provider initially sees no covered blocks.
+    final TrieNodeHistoryProgress progress = new TrieNodeHistoryProgress();
+
+    final BonsaiArchiveWorldStateProvider provider =
+        newProvider(worldStateStorage, blockchain, chainHeadHeader, historyReader, progress);
+
+    // Before the walker advances: progress doesn't cover block 50 → falls through to super.
+    final Optional<WorldStateProof> beforeAdvance =
+        provider.getAccountProof(headerAtBlock50, address, List.of(), Function.identity());
+    assertThat(beforeAdvance).isEmpty();
+
+    // Simulate the walker advancing the shared progress object (no disk reload).
+    progress.setLastIndexedBlock(50L);
+    progress.setIndexStartBlock(50L);
+
+    // After the advance: the provider sees the update via the live reference → history path taken.
+    final Optional<WorldStateProof> afterAdvance =
+        provider.getAccountProof(headerAtBlock50, address, List.of(), Function.identity());
+    assertThat(afterAdvance).isPresent();
+    assertThat(afterAdvance.get().getStateTrieAccountValue()).contains(accountValue);
+  }
+
+  @Test
+  void historyPathNotUsedForBlocksInsideTheReorgWindow() {
+    // Block inside the reorg window: chainHead - block < MAX_LAYERS (512).
+    // 10000 - 9600 = 400 < 512 → outsideReorgWindow = false → history skipped.
+    final long blockInsideWindow = CHAIN_HEAD - MAX_LAYERS + 100L; // 9588
+
+    final BlockHeader chainHeadHeader =
+        new BlockHeaderTestFixture().number(CHAIN_HEAD).buildHeader();
+    final Blockchain blockchain = mockBlockchain(chainHeadHeader);
+
+    final BonsaiWorldStateKeyValueStorage worldStateStorage = newStorage();
+    final SegmentedKeyValueStorage composed = worldStateStorage.getComposedWorldStateStorage();
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composed);
+    final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
+
+    // Progress explicitly covers the block inside the window.
+    final TrieNodeHistoryProgress progress = new TrieNodeHistoryProgress();
+    progress.setLastIndexedBlock(blockInsideWindow);
+    progress.setIndexStartBlock(blockInsideWindow);
+
+    final BlockHeader historicalHeader =
+        new BlockHeaderTestFixture().number(blockInsideWindow).buildHeader();
+    when(blockchain.getBlockHeader(historicalHeader.getHash()))
+        .thenReturn(Optional.of(historicalHeader));
+
+    final BonsaiArchiveWorldStateProvider provider =
+        newProvider(worldStateStorage, blockchain, chainHeadHeader, historyReader, progress);
+
+    // History covers the block, but the depth gate blocks it — falls through to super (empty).
+    final Optional<WorldStateProof> result =
+        provider.getAccountProof(
+            historicalHeader,
+            Address.fromHexString("0x4444444444444444444444444444444444444444"),
+            List.of(),
+            Function.identity());
+
+    assertThat(result).isEmpty();
+  }
+
+  @Test
+  void hashMismatchFallsBackToSuperRatherThanThrowing() {
+    final BlockHeader chainHeadHeader =
+        new BlockHeaderTestFixture().number(CHAIN_HEAD).buildHeader();
+    final Blockchain blockchain = mockBlockchain(chainHeadHeader);
+
+    final BonsaiWorldStateKeyValueStorage worldStateStorage = newStorage();
+    final SegmentedKeyValueStorage composed = worldStateStorage.getComposedWorldStateStorage();
+    final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composed);
+    final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
+
+    // Write a FULL history entry for the account trie root (location = Bytes.EMPTY) at block 50
+    // with garbage bytes whose keccak256 will NOT match the stateRoot below.
+    final Bytes garbageNodeRlp = Bytes.of(1, 2, 3, 4, 5);
+    final SegmentedKeyValueStorageTransaction historyTx = composed.startTransaction();
+    historyStore.put(
+        historyTx, Bytes.EMPTY, 50L, 0, ArchiveTrieNodeCodec.encodeFull(garbageNodeRlp));
+    historyTx.commit();
+
+    // A stateRoot that will never equal keccak256(garbageNodeRlp), triggering the mismatch.
+    final Hash stateRoot =
+        Hash.wrap(
+            Bytes32.fromHexString(
+                "0x1111111111111111111111111111111111111111111111111111111111111111"));
+    final BlockHeader headerAtBlock50 =
+        new BlockHeaderTestFixture().number(50L).stateRoot(stateRoot).buildHeader();
+    when(blockchain.getBlockHeader(headerAtBlock50.getHash()))
+        .thenReturn(Optional.of(headerAtBlock50));
+
+    // Progress covers block 50; block is outside the reorg window (10000 - 50 = 9950 >= 512).
+    final TrieNodeHistoryProgress progress = new TrieNodeHistoryProgress();
+    progress.setLastIndexedBlock(50L);
+    progress.setIndexStartBlock(50L);
+
+    final BonsaiArchiveWorldStateProvider provider =
+        newProvider(worldStateStorage, blockchain, chainHeadHeader, historyReader, progress);
+
+    // The history path triggers a hash mismatch in ArchiveProofNodeLoader; the try/catch logs
+    // the error and falls through to super. No exception escapes to the caller.
+    final Optional<WorldStateProof> result =
+        provider.getAccountProof(
+            headerAtBlock50,
+            Address.fromHexString("0x5555555555555555555555555555555555555555"),
+            List.of(),
+            Function.identity());
+
+    // Fell back to super, which cannot serve the block → empty rather than thrown exception.
     assertThat(result).isEmpty();
   }
 
@@ -219,13 +362,14 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
   /**
    * Mirrors {@code BonsaiArchiveWorldStateProviderTest#createProvider}: seeds the chain head block
    * hash so non-historical queries can find the cached head world state, then constructs the
-   * provider (which reads {@code worldStateKeyValueStorage.getTrieNodeStrategy()} at construction
-   * time, per Task 13's wiring).
+   * provider with the supplied reader and progress (both null when the feature flag is off).
    */
   private BonsaiArchiveWorldStateProvider newProvider(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final Blockchain blockchain,
-      final BlockHeader chainHeadHeader) {
+      final BlockHeader chainHeadHeader,
+      final TrieNodeHistoryReader trieNodeHistoryReader,
+      final TrieNodeHistoryProgress trieNodeHistoryProgress) {
     final SegmentedKeyValueStorageTransaction tx =
         worldStateStorage.getComposedWorldStateStorage().startTransaction();
     tx.put(
@@ -243,6 +387,8 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
         EvmConfiguration.DEFAULT,
         () -> null,
         new PathBasedCodeCache(),
-        new NoOpMetricsSystem());
+        new NoOpMetricsSystem(),
+        trieNodeHistoryReader,
+        trieNodeHistoryProgress);
   }
 }
