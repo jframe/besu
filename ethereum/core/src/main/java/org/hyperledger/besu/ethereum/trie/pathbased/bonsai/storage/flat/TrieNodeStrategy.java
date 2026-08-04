@@ -26,9 +26,21 @@ import org.apache.tuweni.bytes.Bytes32;
 /** Strategy for reading and writing Merkle Patricia Trie nodes to flat storage. */
 public interface TrieNodeStrategy {
 
+  /**
+   * {@code nodeHash} may be null: callers that don't know the hash at read time (e.g. an
+   * archive-aware decorator's removal path, which reads the prior node before deleting it) pass
+   * null. Implementations must tolerate a null {@code nodeHash} and must not throw a {@link
+   * NullPointerException} because of it.
+   */
   Optional<Bytes> getFlatAccountTrieNode(
       Bytes location, Bytes32 nodeHash, SegmentedKeyValueStorage storage);
 
+  /**
+   * {@code nodeHash} may be null: callers that don't know the hash at read time (e.g. an
+   * archive-aware decorator's removal path, which reads the prior node before deleting it) pass
+   * null. Implementations must tolerate a null {@code nodeHash} and must not throw a {@link
+   * NullPointerException} because of it.
+   */
   Optional<Bytes> getFlatStorageTrieNode(
       Hash accountHash, Bytes location, Bytes32 nodeHash, SegmentedKeyValueStorage storage);
 
