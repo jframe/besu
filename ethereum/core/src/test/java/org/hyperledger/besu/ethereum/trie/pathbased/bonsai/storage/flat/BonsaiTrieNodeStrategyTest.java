@@ -102,5 +102,8 @@ class BonsaiTrieNodeStrategyTest {
         altStorage, tx, location, Bytes32.leftPad(Bytes.EMPTY), node);
     tx.commit();
     assertThat(altStorage.get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe())).isEmpty();
+    assertThat(
+            altStrategy.getFlatAccountTrieNode(location, Bytes32.leftPad(Bytes.EMPTY), altStorage))
+        .contains(node);
   }
 }
