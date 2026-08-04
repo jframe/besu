@@ -62,7 +62,7 @@ class TrieNodeDiffCodecTest {
   void encodeFullProducesEntryFullBitWithNodeBytesAppended() {
     final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0x03"));
     final Bytes entry = TrieNodeDiffCodec.encodeFull(node);
-    final TrieNodeDiffCodec.Decoded decoded = TrieNodeDiffCodec.decode(entry);
+    final ArchiveTrieNodeEntry decoded = TrieNodeDiffCodec.decode(entry);
     assertThat(decoded.isFull()).isTrue();
     assertThat(decoded.isCreation()).isFalse();
     assertThat(decoded.fullNode()).isEqualTo(node);
@@ -71,7 +71,7 @@ class TrieNodeDiffCodecTest {
   @Test
   void encodeDiffWithNullOldNodeIsCreationFull() {
     final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
-    final TrieNodeDiffCodec.Decoded decoded =
+    final ArchiveTrieNodeEntry decoded =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(null, node));
     assertThat(decoded.isFull()).isTrue();
     assertThat(decoded.isCreation()).isTrue();
@@ -83,7 +83,7 @@ class TrieNodeDiffCodecTest {
     final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
     final Bytes entry = TrieNodeDiffCodec.encodeDiff(node, null);
     assertThat(entry.size()).isEqualTo(1); // metadata byte only
-    final TrieNodeDiffCodec.Decoded decoded = TrieNodeDiffCodec.decode(entry);
+    final ArchiveTrieNodeEntry decoded = TrieNodeDiffCodec.decode(entry);
     assertThat(decoded.isDeletion()).isTrue();
     assertThat(decoded.isFull()).isFalse();
   }
@@ -100,13 +100,13 @@ class TrieNodeDiffCodecTest {
     final Bytes branch = branchNode(children, Bytes.EMPTY);
     final Bytes shortN = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
 
-    final TrieNodeDiffCodec.Decoded branchToShort =
+    final ArchiveTrieNodeEntry branchToShort =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(branch, shortN));
     assertThat(branchToShort.isFull()).isTrue();
     assertThat(branchToShort.isCreation()).isFalse();
     assertThat(branchToShort.fullNode()).isEqualTo(shortN);
 
-    final TrieNodeDiffCodec.Decoded shortToBranch =
+    final ArchiveTrieNodeEntry shortToBranch =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(shortN, branch));
     assertThat(shortToBranch.isFull()).isTrue();
     assertThat(shortToBranch.fullNode()).isEqualTo(branch);
@@ -121,7 +121,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
 
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.isBranchNode()).isTrue();
@@ -140,7 +140,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
 
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedChildIndices()).containsExactly(0, 5);
     assertThat(diff.changedChildRefs().get(0)).isEqualTo(newChildren[0]);
@@ -153,7 +153,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = branchNode(children, Bytes.fromHexString("0xaa"));
     final Bytes newNode = branchNode(children, Bytes.fromHexString("0xbb"));
 
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedChildIndices()).isEmpty();
     assertThat(diff.changedValue()).contains(Bytes.fromHexString("0xbb"));
@@ -179,7 +179,7 @@ class TrieNodeDiffCodecTest {
     newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[253])));
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.isBranchNode()).isTrue();
@@ -204,7 +204,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x01"), Bytes.EMPTY);
     // A 65532-byte content encodes to [0xb9][0xff][0xfc] + 65532 bytes = 65535 total
     final Bytes at65535 = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[65532]));
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, at65535));
     assertThat(diff.isShortNodeDiff()).isTrue();
     assertThat(diff.changedShortNodeValue()).isPresent();
@@ -223,7 +223,7 @@ class TrieNodeDiffCodecTest {
   void shortNodeDiffCapturesKeyOnlyChange() {
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final Bytes newNode = shortNode(Bytes.fromHexString("0x0103"), Bytes.fromHexString("0xaa"));
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isShortNodeDiff()).isTrue();
     assertThat(diff.changedKey()).contains(Bytes.fromHexString("0x0103"));
@@ -234,7 +234,7 @@ class TrieNodeDiffCodecTest {
   void shortNodeDiffCapturesValueOnlyChange() {
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final Bytes newNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xbb"));
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedKey()).isEmpty();
     assertThat(
@@ -248,7 +248,7 @@ class TrieNodeDiffCodecTest {
   void shortNodeDiffCapturesBothKeyAndValueChange() {
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final Bytes newNode = shortNode(Bytes.fromHexString("0x0103"), Bytes.fromHexString("0xbb"));
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedKey()).contains(Bytes.fromHexString("0x0103"));
     assertThat(diff.changedShortNodeValue()).isPresent();
@@ -258,7 +258,7 @@ class TrieNodeDiffCodecTest {
   void shortNodeDiffWithNeitherKeyNorValueChangedEncodesAndDecodesCleanly() {
     // Callers should avoid producing a true no-op diff, but the codec must still handle it.
     final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
-    final TrieNodeDiffCodec.Decoded diff =
+    final ArchiveTrieNodeEntry diff =
         TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(node, node));
     assertThat(diff.isShortNodeDiff()).isTrue();
     assertThat(diff.changedKey()).isEmpty();

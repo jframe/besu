@@ -14,13 +14,19 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.BRANCH_CHILDREN;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.CREATION;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.DELETION;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.ENTRY_FULL;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.KEY_CHANGED;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.NODE_IS_BRANCH;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.VALUE_CHANGED;
+
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,6 +37,10 @@ import org.apache.tuweni.bytes.Bytes;
 /**
  * Encodes/decodes a trie node's history entry as FULL (complete node RLP), DIFF (structural delta
  * vs. the prior version), or a deletion tombstone. Pure codec: no I/O, no storage dependency.
+ *
+ * <p>The decoded, typed view of an entry is {@link ArchiveTrieNodeEntry}, which also owns the
+ * metadata-byte bit-layout constants (wire format), since it represents "what does an entry look
+ * like" — this class owns "how do you produce/reconstruct one."
  *
  * <h2>Metadata byte (first byte of every entry)</h2>
  *
@@ -45,15 +55,6 @@ import org.apache.tuweni.bytes.Bytes;
  * </pre>
  */
 public final class TrieNodeDiffCodec {
-
-  public static final byte ENTRY_FULL = 0x01;
-  public static final byte NODE_IS_BRANCH = 0x02;
-  public static final byte KEY_CHANGED = 0x04;
-  public static final byte VALUE_CHANGED = 0x08;
-  public static final byte CREATION = 0x10;
-  public static final byte DELETION = 0x20;
-
-  private static final int BRANCH_CHILDREN = 16;
 
   private TrieNodeDiffCodec() {}
 
@@ -94,16 +95,13 @@ public final class TrieNodeDiffCodec {
     return count;
   }
 
-  public static Decoded decode(final Bytes entry) {
+  public static ArchiveTrieNodeEntry decode(final Bytes entry) {
     Objects.requireNonNull(entry, "entry must not be null");
     if (entry.isEmpty()) {
       throw new IllegalArgumentException("Entry must be at least 1 byte (metadata byte)");
     }
-    return new Decoded(entry.get(0), entry.slice(1));
+    return new ArchiveTrieNodeEntry(entry.get(0), entry.slice(1));
   }
-
-  // encodeBranchDiff, encodeShortDiff, reconstruct, and their parsing helpers: Steps 5, 7, 9 below.
-  // Decoded class: Step 5 below (branch accessors), Step 7 (short-node accessors).
 
   private static Bytes encodeBranchDiff(final Bytes oldNodeRlp, final Bytes newNodeRlp) {
     final BranchFields oldFields = parseBranchFields(oldNodeRlp);
@@ -228,7 +226,7 @@ public final class TrieNodeDiffCodec {
   public static Bytes reconstruct(final Bytes fullEntry, final List<Bytes> diffEntries) {
     Objects.requireNonNull(fullEntry, "fullEntry must not be null");
     Objects.requireNonNull(diffEntries, "diffEntries must not be null");
-    final Decoded base = decode(fullEntry);
+    final ArchiveTrieNodeEntry base = decode(fullEntry);
     if (!base.isFull()) {
       throw new IllegalArgumentException("reconstruct: fullEntry must be a FULL entry");
     }
@@ -243,7 +241,7 @@ public final class TrieNodeDiffCodec {
     final Bytes[] children = Arrays.copyOf(base.children, BRANCH_CHILDREN);
     Bytes value = base.value;
     for (final Bytes diffEntry : diffEntries) {
-      final Decoded d = decode(diffEntry);
+      final ArchiveTrieNodeEntry d = decode(diffEntry);
       requireDiffEntry(d);
       if (!d.isBranchNode()) {
         throw new IllegalArgumentException(
@@ -275,7 +273,7 @@ public final class TrieNodeDiffCodec {
     Bytes path = base.path;
     Bytes valueRlp = base.valueRlp;
     for (final Bytes diffEntry : diffEntries) {
-      final Decoded d = decode(diffEntry);
+      final ArchiveTrieNodeEntry d = decode(diffEntry);
       requireDiffEntry(d);
       if (d.isBranchNode()) {
         throw new IllegalArgumentException(
@@ -301,146 +299,9 @@ public final class TrieNodeDiffCodec {
         });
   }
 
-  private static void requireDiffEntry(final Decoded d) {
+  private static void requireDiffEntry(final ArchiveTrieNodeEntry d) {
     if (d.isFull() || d.isDeletion()) {
       throw new IllegalArgumentException("reconstruct expects DIFF entries only");
-    }
-  }
-
-  public static final class Decoded {
-    private final byte metadata;
-    private final Bytes body;
-
-    private Decoded(final byte metadata, final Bytes body) {
-      this.metadata = metadata;
-      this.body = body;
-    }
-
-    public byte metadata() {
-      return metadata;
-    }
-
-    public boolean isFull() {
-      return (metadata & ENTRY_FULL) != 0;
-    }
-
-    public boolean isCreation() {
-      return (metadata & CREATION) != 0;
-    }
-
-    public boolean isDeletion() {
-      return (metadata & DELETION) != 0;
-    }
-
-    public boolean isBranchNode() {
-      return (metadata & NODE_IS_BRANCH) != 0;
-    }
-
-    public Bytes fullNode() {
-      if (!isFull()) {
-        throw new IllegalStateException("fullNode() called on a diff entry");
-      }
-      return body;
-    }
-
-    public List<Integer> changedChildIndices() {
-      requireBranchDiff("changedChildIndices()");
-      final int mask = readChildMask();
-      final List<Integer> indices = new ArrayList<>();
-      for (int i = 0; i < BRANCH_CHILDREN; i++) {
-        if ((mask & (1 << i)) != 0) {
-          indices.add(i);
-        }
-      }
-      return Collections.unmodifiableList(indices);
-    }
-
-    public Map<Integer, Bytes> changedChildRefs() {
-      requireBranchDiff("changedChildRefs()");
-      final int mask = readChildMask();
-      int offset = 2;
-      final Map<Integer, Bytes> result = new LinkedHashMap<>();
-      for (int i = 0; i < BRANCH_CHILDREN; i++) {
-        if ((mask & (1 << i)) != 0) {
-          final int len = Byte.toUnsignedInt(body.get(offset));
-          offset += 1;
-          result.put(i, body.slice(offset, len));
-          offset += len;
-        }
-      }
-      return Collections.unmodifiableMap(result);
-    }
-
-    public Optional<Bytes> changedValue() {
-      requireBranchDiff("changedValue()");
-      if ((metadata & VALUE_CHANGED) == 0) {
-        return Optional.empty();
-      }
-      int offset = offsetAfterChildRefs(readChildMask());
-      final int len = Byte.toUnsignedInt(body.get(offset));
-      offset += 1;
-      return Optional.of(body.slice(offset, len));
-    }
-
-    private void requireBranchDiff(final String methodName) {
-      if (isFull() || !isBranchNode()) {
-        throw new IllegalStateException(methodName + " called on a non-branch DIFF entry");
-      }
-    }
-
-    private int readChildMask() {
-      final int hi = Byte.toUnsignedInt(body.get(0));
-      final int lo = Byte.toUnsignedInt(body.get(1));
-      return (hi << 8) | lo;
-    }
-
-    private int offsetAfterChildRefs(final int mask) {
-      int offset = 2;
-      for (int i = 0; i < BRANCH_CHILDREN; i++) {
-        if ((mask & (1 << i)) != 0) {
-          final int len = Byte.toUnsignedInt(body.get(offset));
-          offset += 1 + len;
-        }
-      }
-      return offset;
-    }
-
-    public boolean isShortNodeDiff() {
-      return !isFull() && !isBranchNode() && !isDeletion();
-    }
-
-    public Optional<Bytes> changedKey() {
-      requireShortDiff("changedKey()");
-      if ((metadata & KEY_CHANGED) == 0) {
-        return Optional.empty();
-      }
-      return Optional.of(readShortField(0));
-    }
-
-    public Optional<Bytes> changedShortNodeValue() {
-      requireShortDiff("changedShortNodeValue()");
-      if ((metadata & VALUE_CHANGED) == 0) {
-        return Optional.empty();
-      }
-      final int keyFieldSize = ((metadata & KEY_CHANGED) != 0) ? (2 + readShortFieldLength(0)) : 0;
-      return Optional.of(readShortField(keyFieldSize));
-    }
-
-    private void requireShortDiff(final String methodName) {
-      if (isFull() || isBranchNode() || isDeletion()) {
-        throw new IllegalStateException(methodName + " called on a non-short-node DIFF entry");
-      }
-    }
-
-    private Bytes readShortField(final int offset) {
-      final int len = readShortFieldLength(offset);
-      return body.slice(offset + 2, len);
-    }
-
-    private int readShortFieldLength(final int offset) {
-      final int hi = Byte.toUnsignedInt(body.get(offset));
-      final int lo = Byte.toUnsignedInt(body.get(offset + 1));
-      return (hi << 8) | lo;
     }
   }
 }
