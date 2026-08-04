@@ -101,6 +101,8 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     updatedAccounts.putAll(source.updatedAccounts);
     deletedAccounts.addAll(source.deletedAccounts);
     this.isAccumulatorStateChanged = true;
+    this.trustTrieLogPriorValue = source.trustTrieLogPriorValue;
+    this.skipCodeRoll = source.skipCodeRoll;
   }
 
   /**
