@@ -23,6 +23,7 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.Archiv
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.SINGLE_CHILD_CHANGED;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeEntry.VALUE_CHANGED;
 
+import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 
@@ -77,6 +78,13 @@ public final class ArchiveTrieNodeCodec {
    * per hex nibble, 0-F) plus one terminal value slot.
    */
   private static final int BRANCH_NODE_ARITY = BRANCH_CHILDREN + 1;
+
+  /**
+   * Largest length a 2-byte big-endian length prefix can represent ({@code 2^16 - 1}) — the size
+   * ceiling for the short-node path field, the only field still framed this way (see the class
+   * javadoc's "Field framing" section).
+   */
+  private static final int SHORT_NODE_PATH_MAX_LENGTH = 0xFFFF;
 
   private ArchiveTrieNodeCodec() {}
 
@@ -231,7 +239,7 @@ public final class ArchiveTrieNodeCodec {
    */
   private static Bytes frameShortField(final Bytes field) {
     final int len = field.size();
-    if (len > 65535) {
+    if (len > SHORT_NODE_PATH_MAX_LENGTH) {
       throw new IllegalArgumentException(
           "Short-node path too large for 2-byte length prefix: " + len);
     }
@@ -270,30 +278,29 @@ public final class ArchiveTrieNodeCodec {
     final Bytes[] children = Arrays.copyOf(base.children(), BRANCH_CHILDREN);
     Bytes value = base.value();
     for (final Bytes diffEntry : diffEntries) {
-      final ArchiveTrieNodeEntry d = decode(diffEntry);
-      requireDiffEntry(d);
-      if (!d.isBranchNode()) {
+      final ArchiveTrieNodeEntry entry = decode(diffEntry);
+      requireDiffEntry(entry);
+      if (!entry.isBranchNode()) {
         throw new IllegalArgumentException(
             "reconstruct type mismatch: base is branch, diff is not");
       }
-      for (final Map.Entry<Integer, Bytes> e : d.changedChildRefs().entrySet()) {
+      for (final Map.Entry<Integer, Bytes> e : entry.changedChildRefs().entrySet()) {
         children[e.getKey()] = e.getValue();
       }
-      final Optional<Bytes> newVal = d.changedValue();
+      final Optional<Bytes> newVal = entry.changedValue();
       if (newVal.isPresent()) {
         value = newVal.get();
       }
     }
-    final Bytes finalValue = value;
-    return RLP.encode(
-        out -> {
-          out.startList();
-          for (int i = 0; i < BRANCH_CHILDREN; i++) {
-            out.writeRaw(children[i]);
-          }
-          out.writeBytes(finalValue);
-          out.endList();
-        });
+
+    final BytesValueRLPOutput rlpOutput = new BytesValueRLPOutput();
+    rlpOutput.startList();
+    for (int i = 0; i < BRANCH_CHILDREN; i++) {
+      rlpOutput.writeRaw(children[i]);
+    }
+    rlpOutput.writeBytes(value);
+    rlpOutput.endList();
+    return rlpOutput.encoded();
   }
 
   private static Bytes reconstructShort(final Bytes baseNode, final List<Bytes> diffEntries) {
@@ -301,30 +308,28 @@ public final class ArchiveTrieNodeCodec {
     Bytes path = base.path;
     Bytes valueRlp = base.valueRlp;
     for (final Bytes diffEntry : diffEntries) {
-      final ArchiveTrieNodeEntry d = decode(diffEntry);
-      requireDiffEntry(d);
-      if (d.isBranchNode()) {
+      final ArchiveTrieNodeEntry entry = decode(diffEntry);
+      requireDiffEntry(entry);
+      if (entry.isBranchNode()) {
         throw new IllegalArgumentException(
             "reconstruct type mismatch: base is short, diff is branch");
       }
-      final Optional<Bytes> newPath = d.changedKey();
+      final Optional<Bytes> newPath = entry.changedKey();
       if (newPath.isPresent()) {
         path = newPath.get();
       }
-      final Optional<Bytes> newVal = d.changedShortNodeValue();
+      final Optional<Bytes> newVal = entry.changedShortNodeValue();
       if (newVal.isPresent()) {
         valueRlp = newVal.get();
       }
     }
-    final Bytes finalPath = path;
-    final Bytes finalValueRlp = valueRlp;
-    return RLP.encode(
-        out -> {
-          out.startList();
-          out.writeBytes(finalPath);
-          out.writeRaw(finalValueRlp);
-          out.endList();
-        });
+
+    final BytesValueRLPOutput rlpOutput = new BytesValueRLPOutput();
+    rlpOutput.startList();
+    rlpOutput.writeBytes(path);
+    rlpOutput.writeRaw(valueRlp);
+    rlpOutput.endList();
+    return rlpOutput.encoded();
   }
 
   private static void requireDiffEntry(final ArchiveTrieNodeEntry entry) {
