@@ -24,7 +24,7 @@ import java.util.List;
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 
-class TrieNodeDiffCodecTest {
+class ArchiveTrieNodeCodecTest {
 
   private static Bytes shortNode(final Bytes path, final Bytes value) {
     return RLP.encode(
@@ -61,8 +61,8 @@ class TrieNodeDiffCodecTest {
   @Test
   void encodeFullProducesEntryFullBitWithNodeBytesAppended() {
     final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0x03"));
-    final Bytes entry = TrieNodeDiffCodec.encodeFull(node);
-    final ArchiveTrieNodeEntry decoded = TrieNodeDiffCodec.decode(entry);
+    final Bytes entry = ArchiveTrieNodeCodec.encodeFull(node);
+    final ArchiveTrieNodeEntry decoded = ArchiveTrieNodeCodec.decode(entry);
     assertThat(decoded.isFull()).isTrue();
     assertThat(decoded.isCreation()).isFalse();
     assertThat(decoded.fullNode()).isEqualTo(node);
@@ -72,7 +72,7 @@ class TrieNodeDiffCodecTest {
   void encodeDiffWithNullOldNodeIsCreationFull() {
     final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
     final ArchiveTrieNodeEntry decoded =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(null, node));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(null, node));
     assertThat(decoded.isFull()).isTrue();
     assertThat(decoded.isCreation()).isTrue();
     assertThat(decoded.fullNode()).isEqualTo(node);
@@ -81,16 +81,16 @@ class TrieNodeDiffCodecTest {
   @Test
   void encodeDiffWithNullNewNodeIsDeletionTombstoneWithNoBody() {
     final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
-    final Bytes entry = TrieNodeDiffCodec.encodeDiff(node, null);
+    final Bytes entry = ArchiveTrieNodeCodec.encodeDiff(node, null);
     assertThat(entry.size()).isEqualTo(1); // metadata byte only
-    final ArchiveTrieNodeEntry decoded = TrieNodeDiffCodec.decode(entry);
+    final ArchiveTrieNodeEntry decoded = ArchiveTrieNodeCodec.decode(entry);
     assertThat(decoded.isDeletion()).isTrue();
     assertThat(decoded.isFull()).isFalse();
   }
 
   @Test
   void encodeDiffWithBothNullThrows() {
-    assertThatThrownBy(() -> TrieNodeDiffCodec.encodeDiff(null, null))
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(null, null))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -101,13 +101,13 @@ class TrieNodeDiffCodecTest {
     final Bytes shortN = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
 
     final ArchiveTrieNodeEntry branchToShort =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(branch, shortN));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(branch, shortN));
     assertThat(branchToShort.isFull()).isTrue();
     assertThat(branchToShort.isCreation()).isFalse();
     assertThat(branchToShort.fullNode()).isEqualTo(shortN);
 
     final ArchiveTrieNodeEntry shortToBranch =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(shortN, branch));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(shortN, branch));
     assertThat(shortToBranch.isFull()).isTrue();
     assertThat(shortToBranch.fullNode()).isEqualTo(branch);
   }
@@ -122,7 +122,7 @@ class TrieNodeDiffCodecTest {
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
 
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.isBranchNode()).isTrue();
     assertThat(diff.changedChildIndices()).containsExactly(3);
@@ -141,7 +141,7 @@ class TrieNodeDiffCodecTest {
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
 
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedChildIndices()).containsExactly(0, 5);
     assertThat(diff.changedChildRefs().get(0)).isEqualTo(newChildren[0]);
     assertThat(diff.changedChildRefs().get(5)).isEqualTo(Bytes.fromHexString("0x80")); // RLP null
@@ -154,7 +154,7 @@ class TrieNodeDiffCodecTest {
     final Bytes newNode = branchNode(children, Bytes.fromHexString("0xbb"));
 
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedChildIndices()).isEmpty();
     assertThat(diff.changedValue()).contains(Bytes.fromHexString("0xbb"));
   }
@@ -167,7 +167,7 @@ class TrieNodeDiffCodecTest {
     newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[254])));
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-    assertThatThrownBy(() -> TrieNodeDiffCodec.encodeDiff(oldNode, newNode))
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -180,7 +180,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.isBranchNode()).isTrue();
     assertThat(diff.changedChildIndices()).containsExactly(0);
@@ -195,7 +195,7 @@ class TrieNodeDiffCodecTest {
     newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[254])));
     final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
     final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-    assertThatThrownBy(() -> TrieNodeDiffCodec.encodeDiff(oldNode, newNode))
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -205,7 +205,7 @@ class TrieNodeDiffCodecTest {
     // A 65532-byte content encodes to [0xb9][0xff][0xfc] + 65532 bytes = 65535 total
     final Bytes at65535 = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[65532]));
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, at65535));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, at65535));
     assertThat(diff.isShortNodeDiff()).isTrue();
     assertThat(diff.changedShortNodeValue()).isPresent();
   }
@@ -215,7 +215,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x01"), Bytes.EMPTY);
     // A 65533-byte content encodes to [0xb9][0xff][0xfd] + 65533 bytes = 65536 total
     final Bytes at65536 = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[65533]));
-    assertThatThrownBy(() -> TrieNodeDiffCodec.encodeDiff(oldNode, at65536))
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(oldNode, at65536))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -224,7 +224,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final Bytes newNode = shortNode(Bytes.fromHexString("0x0103"), Bytes.fromHexString("0xaa"));
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isShortNodeDiff()).isTrue();
     assertThat(diff.changedKey()).contains(Bytes.fromHexString("0x0103"));
     assertThat(diff.changedShortNodeValue()).isEmpty();
@@ -235,7 +235,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final Bytes newNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xbb"));
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedKey()).isEmpty();
     assertThat(
             diff.changedShortNodeValue()
@@ -249,7 +249,7 @@ class TrieNodeDiffCodecTest {
     final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final Bytes newNode = shortNode(Bytes.fromHexString("0x0103"), Bytes.fromHexString("0xbb"));
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(oldNode, newNode));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedKey()).contains(Bytes.fromHexString("0x0103"));
     assertThat(diff.changedShortNodeValue()).isPresent();
   }
@@ -259,7 +259,7 @@ class TrieNodeDiffCodecTest {
     // Callers should avoid producing a true no-op diff, but the codec must still handle it.
     final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final ArchiveTrieNodeEntry diff =
-        TrieNodeDiffCodec.decode(TrieNodeDiffCodec.encodeDiff(node, node));
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(node, node));
     assertThat(diff.isShortNodeDiff()).isTrue();
     assertThat(diff.changedKey()).isEmpty();
     assertThat(diff.changedShortNodeValue()).isEmpty();
@@ -269,7 +269,7 @@ class TrieNodeDiffCodecTest {
   void reconstructWithNoDiffsReturnsFullNodeByteExact() {
     final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final Bytes result =
-        TrieNodeDiffCodec.reconstruct(TrieNodeDiffCodec.encodeFull(node), List.of());
+        ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(node), List.of());
     assertThat(result).isEqualTo(node);
   }
 
@@ -280,10 +280,10 @@ class TrieNodeDiffCodecTest {
     final Bytes[] mutated = children.clone();
     mutated[7] = Bytes.fromHexString("0xa0" + "55".repeat(32));
     final Bytes next = branchNode(mutated, Bytes.EMPTY);
-    final Bytes diffEntry = TrieNodeDiffCodec.encodeDiff(base, next);
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(base, next);
 
     final Bytes reconstructed =
-        TrieNodeDiffCodec.reconstruct(TrieNodeDiffCodec.encodeFull(base), List.of(diffEntry));
+        ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(base), List.of(diffEntry));
     assertThat(reconstructed).isEqualTo(next);
   }
 
@@ -292,30 +292,31 @@ class TrieNodeDiffCodecTest {
     final Bytes v1 = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xaa"));
     final Bytes v2 = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xbb"));
     final Bytes v3 = shortNode(Bytes.fromHexString("0x02"), Bytes.fromHexString("0xbb"));
-    final Bytes diff1 = TrieNodeDiffCodec.encodeDiff(v1, v2);
-    final Bytes diff2 = TrieNodeDiffCodec.encodeDiff(v2, v3);
+    final Bytes diff1 = ArchiveTrieNodeCodec.encodeDiff(v1, v2);
+    final Bytes diff2 = ArchiveTrieNodeCodec.encodeDiff(v2, v3);
 
     final Bytes reconstructed =
-        TrieNodeDiffCodec.reconstruct(TrieNodeDiffCodec.encodeFull(v1), List.of(diff1, diff2));
+        ArchiveTrieNodeCodec.reconstruct(
+            ArchiveTrieNodeCodec.encodeFull(v1), List.of(diff1, diff2));
     assertThat(reconstructed).isEqualTo(v3);
   }
 
   @Test
   void reconstructRejectsNonFullBaseEntry() {
     final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xaa"));
-    final Bytes diffEntry = TrieNodeDiffCodec.encodeDiff(node, node);
-    assertThatThrownBy(() -> TrieNodeDiffCodec.reconstruct(diffEntry, List.of()))
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(node, node);
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.reconstruct(diffEntry, List.of()))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
   void reconstructRejectsFullOrTombstoneEntryInDiffList() {
     final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xaa"));
-    final Bytes fullEntry = TrieNodeDiffCodec.encodeFull(node);
+    final Bytes fullEntry = ArchiveTrieNodeCodec.encodeFull(node);
     assertThatThrownBy(
             () ->
-                TrieNodeDiffCodec.reconstruct(
-                    fullEntry, List.of(TrieNodeDiffCodec.encodeDiff(node, null))))
+                ArchiveTrieNodeCodec.reconstruct(
+                    fullEntry, List.of(ArchiveTrieNodeCodec.encodeDiff(node, null))))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -325,11 +326,11 @@ class TrieNodeDiffCodecTest {
     final Bytes branch = branchNode(children, Bytes.EMPTY);
     final Bytes shortN = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xaa"));
     // A short-node diff (no type-change bits set) fed against a branch base.
-    final Bytes shortDiff = TrieNodeDiffCodec.encodeDiff(shortN, shortN);
+    final Bytes shortDiff = ArchiveTrieNodeCodec.encodeDiff(shortN, shortN);
     assertThatThrownBy(
             () ->
-                TrieNodeDiffCodec.reconstruct(
-                    TrieNodeDiffCodec.encodeFull(branch), List.of(shortDiff)))
+                ArchiveTrieNodeCodec.reconstruct(
+                    ArchiveTrieNodeCodec.encodeFull(branch), List.of(shortDiff)))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }

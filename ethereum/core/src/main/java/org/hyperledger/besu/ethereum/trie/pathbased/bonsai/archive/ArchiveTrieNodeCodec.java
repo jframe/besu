@@ -54,9 +54,9 @@ import org.apache.tuweni.bytes.Bytes;
  * bit6-7 reserved
  * </pre>
  */
-public final class TrieNodeDiffCodec {
+public final class ArchiveTrieNodeCodec {
 
-  private TrieNodeDiffCodec() {}
+  private ArchiveTrieNodeCodec() {}
 
   /** Layout: {@code [ENTRY_FULL]} ‖ {@code nodeRlp}. */
   public static Bytes encodeFull(final Bytes nodeRlp) {
@@ -213,15 +213,7 @@ public final class TrieNodeDiffCodec {
     return new ShortFields(path, valueRlp);
   }
 
-  private static final class ShortFields {
-    final Bytes path;
-    final Bytes valueRlp;
-
-    ShortFields(final Bytes path, final Bytes valueRlp) {
-      this.path = path;
-      this.valueRlp = valueRlp;
-    }
-  }
+  private record ShortFields(Bytes path, Bytes valueRlp) {}
 
   public static Bytes reconstruct(final Bytes fullEntry, final List<Bytes> diffEntries) {
     Objects.requireNonNull(fullEntry, "fullEntry must not be null");

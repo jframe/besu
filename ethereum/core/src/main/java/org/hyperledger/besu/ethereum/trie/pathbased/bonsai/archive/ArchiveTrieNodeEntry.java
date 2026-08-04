@@ -25,7 +25,7 @@ import org.apache.tuweni.bytes.Bytes;
 
 /**
  * The decoded, typed view of one archived trie-node history entry, produced by {@link
- * TrieNodeDiffCodec#decode(Bytes)}. An instance is one of three shapes, distinguished by the
+ * ArchiveTrieNodeCodec#decode(Bytes)}. An instance is one of three shapes, distinguished by the
  * predicates below: FULL (the complete node RLP, via {@link #fullNode()}), a branch or short-node
  * DIFF (a structural delta against the prior version), or a deletion tombstone (no body at all).
  * Only the codec constructs instances and only it knows which accessors are valid for a given
