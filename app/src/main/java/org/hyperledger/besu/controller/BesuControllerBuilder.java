@@ -955,9 +955,20 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       final long maxLayers =
           ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager().getMaxLayersToLoad();
       final SyncState effectiveSyncState = syncState;
+      final AtomicLong highestSafeBlock = new AtomicLong(Long.MIN_VALUE);
       trieNodeHistoryWriteStrategy.setHighestSafeBlockSupplier(
-          () -> effectiveSyncState.bestChainHeight() - maxLayers);
+          () ->
+              highestSafeBlock.accumulateAndGet(
+                  effectiveSyncState.bestChainHeight() - maxLayers, Math::max));
       LOG.info("Live trie-node history capture enabled (trailing head by {} blocks)", maxLayers);
+      if (trieNodeHistoryProgress != null
+          && trieNodeHistoryProgress.lastIndexedBlock() < 0
+          && blockchain.getChainHeadBlockNumber() > 0) {
+        LOG.warn(
+            "Trie-node history capture is enabled but genesis was not written in this session. "
+                + "eth_getProof for genesis-allocated, never-touched accounts will fail. "
+                + "This configuration is unsupported; start from a fresh datadir to capture genesis.");
+      }
     }
 
     if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(

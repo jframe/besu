@@ -18,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryProgress;
@@ -30,6 +31,7 @@ import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 import java.util.function.LongSupplier;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -184,5 +186,29 @@ class BonsaiArchiveTrieNodeStrategyTest {
 
     assertThat(progress.lastIndexedBlock()).isEqualTo(3L);
     assertThat(progress.indexStartBlock()).isLessThanOrEqualTo(3L);
+  }
+
+  @Test
+  void storageWriteCapturesHistoryAndWritesLiveNode() {
+    final Hash accountHash =
+        Hash.wrap(
+            Bytes32.fromHexString(
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    final Bytes location = Bytes.fromHexString("0x0304");
+    final Bytes node = shortNodeRlp(3);
+    // No WORLD_BLOCK_NUMBER_KEY => block 0.
+    final BonsaiArchiveTrieNodeStrategy strat = strategy(() -> Long.MAX_VALUE);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strat.putFlatStorageTrieNode(storage, tx, accountHash, location, null, node);
+    tx.commit();
+
+    // History captured under the storage natural key.
+    assertThat(historyStore.get(ArchiveNodeKey.storage(accountHash.getBytes(), location), 0L))
+        .isPresent();
+    // Live node written to flat DB.
+    assertThat(
+            new BonsaiTrieNodeStrategy()
+                .getFlatStorageTrieNode(accountHash, location, null, storage))
+        .contains(node);
   }
 }

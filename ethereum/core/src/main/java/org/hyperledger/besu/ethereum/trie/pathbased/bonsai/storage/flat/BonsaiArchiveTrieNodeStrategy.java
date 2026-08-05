@@ -56,6 +56,10 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   private final TrieNodeHistoryProgress historyProgress;
   private volatile LongSupplier highestSafeBlockSupplier;
   private volatile long lastSavedProgressBlock = Long.MIN_VALUE;
+  // Gate decision cached per block: block-import is single-threaded, so no synchronisation needed.
+  // Invalidated when highestSafeBlockSupplier changes and on each block transition.
+  private long gatedBlockNumber = Long.MIN_VALUE;
+  private boolean gatedCapture = false;
 
   public BonsaiArchiveTrieNodeStrategy(
       final TrieNodeStrategy baseStrategy,
@@ -75,10 +79,19 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
    */
   public void setHighestSafeBlockSupplier(final LongSupplier supplier) {
     this.highestSafeBlockSupplier = Objects.requireNonNull(supplier);
+    this.gatedBlockNumber = Long.MIN_VALUE; // Invalidate gate cache on supplier change
   }
 
   private boolean shouldCapture(final long block) {
     return block == 0L || block <= highestSafeBlockSupplier.getAsLong();
+  }
+
+  private boolean shouldCaptureBlock(final long block) {
+    if (block != gatedBlockNumber) {
+      gatedCapture = shouldCapture(block);
+      gatedBlockNumber = block;
+    }
+    return gatedCapture;
   }
 
   @Override
@@ -104,7 +117,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final Bytes node) {
     final long block = currentBlockNumber(storage);
-    final boolean capture = shouldCapture(block);
+    final boolean capture = shouldCaptureBlock(block);
     final Bytes priorNode =
         capture
             ? baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage).orElse(null)
@@ -126,7 +139,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final Bytes node) {
     final long block = currentBlockNumber(storage);
-    final boolean capture = shouldCapture(block);
+    final boolean capture = shouldCaptureBlock(block);
     final Bytes priorNode =
         capture
             ? baseStrategy
@@ -153,7 +166,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final Bytes location) {
     final long block = currentBlockNumber(storage);
-    final boolean capture = shouldCapture(block);
+    final boolean capture = shouldCaptureBlock(block);
     // nodeHash is unknown at removal time; BonsaiTrieNodeStrategy ignores it (plain point lookup).
     final Bytes priorNode =
         capture ? baseStrategy.getFlatAccountTrieNode(location, null, storage).orElse(null) : null;
