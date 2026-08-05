@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
+import org.hyperledger.besu.util.log.LogUtil;
 
 import java.io.Closeable;
 import java.util.Optional;
@@ -63,7 +64,7 @@ import org.slf4j.LoggerFactory;
 public class TrieNodeHistoryWalker implements Closeable {
 
   private static final Logger LOG = LoggerFactory.getLogger(TrieNodeHistoryWalker.class);
-  private static final long CATCHUP_LOG_THRESHOLD = 32;
+  private static final int LOG_INTERVAL_SECONDS = 60;
 
   private final TrieNodeHistoryWalkerWorldState walkerWorldState;
   private final TrieLogManager realTrieLogManager;
@@ -78,6 +79,7 @@ public class TrieNodeHistoryWalker implements Closeable {
   protected final AtomicLong ongoingTarget = new AtomicLong(0);
   protected final AtomicBoolean catchUpRunning = new AtomicBoolean(false);
   protected final AtomicBoolean halted = new AtomicBoolean(false);
+  private final AtomicBoolean shouldLogCatchUp = new AtomicBoolean(true);
   protected volatile OptionalLong blockObserverId = OptionalLong.empty();
   private boolean closed = false;
 
@@ -194,13 +196,12 @@ public class TrieNodeHistoryWalker implements Closeable {
       if (startBlock > targetSnapshot) {
         return;
       }
-      final boolean shouldLog = (targetSnapshot - startBlock + 1) >= CATCHUP_LOG_THRESHOLD;
-      if (shouldLog) {
-        LOG.info(
-            "Trie node history walker catch-up starting: blocks {} to {}",
-            startBlock,
-            targetSnapshot);
-      }
+      LogUtil.throttledLog(
+          () ->
+              LOG.info(
+                  "Trie node history walker catch-up: blocks {} to {}", startBlock, targetSnapshot),
+          shouldLogCatchUp,
+          LOG_INTERVAL_SECONDS);
       for (long blockNumber = startBlock; blockNumber <= ongoingTarget.get(); blockNumber++) {
         if (halted.get()) {
           return;
@@ -220,6 +221,13 @@ public class TrieNodeHistoryWalker implements Closeable {
         } catch (final IllegalStateException e) {
           LOG.error(
               "Trie node history walker halted at block {} due to unrecoverable error",
+              blockNumber,
+              e);
+          halted.set(true);
+          return;
+        } catch (final Exception e) {
+          LOG.error(
+              "Trie node history walker halted at block {} due to unexpected error",
               blockNumber,
               e);
           halted.set(true);
