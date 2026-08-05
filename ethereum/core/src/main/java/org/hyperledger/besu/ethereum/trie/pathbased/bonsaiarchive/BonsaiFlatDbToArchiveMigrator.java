@@ -44,7 +44,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiAr
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.BonsaiContext;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.FlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.NoOpTrieLogManager;
@@ -790,12 +789,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
   }
 
   private void initMigrationWorldState(final MetricsSystem metricsSystem) {
-    final BonsaiArchiveFlatDbStrategy readStrategy =
-        new BonsaiArchiveFlatDbStrategy(metricsSystem, new CodeHashCodeStorageStrategy());
     migrationTrieStorage =
         new MigrationTrieStorage(worldStateStorage.getComposedWorldStateStorage());
     final StaticArchiveFlatDbStrategyProvider provider =
-        new StaticArchiveFlatDbStrategyProvider(metricsSystem, readStrategy);
+        new StaticArchiveFlatDbStrategyProvider(metricsSystem);
     provider.loadFlatDbStrategy(migrationTrieStorage);
     migrationTrieLoader = new NoopBonsaiCachedMerkleTrieLoader();
     migrationTrieNodeStrategy =
@@ -1308,12 +1305,9 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private static final class StaticArchiveFlatDbStrategyProvider
       extends BonsaiFlatDbStrategyProvider {
-    private final BonsaiArchiveFlatDbStrategy strategy;
 
-    StaticArchiveFlatDbStrategyProvider(
-        final MetricsSystem metricsSystem, final BonsaiArchiveFlatDbStrategy strategy) {
+    StaticArchiveFlatDbStrategyProvider(final MetricsSystem metricsSystem) {
       super(metricsSystem, DataStorageConfiguration.DEFAULT_BONSAI_ARCHIVE_CONFIG);
-      this.strategy = strategy;
     }
 
     @Override
@@ -1321,7 +1315,7 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
         final FlatDbMode flatDbMode,
         final MetricsSystem metricsSystem,
         final CodeStorageStrategy codeStorageStrategy) {
-      return strategy;
+      return new BonsaiArchiveFlatDbStrategy(metricsSystem, codeStorageStrategy);
     }
   }
 }
