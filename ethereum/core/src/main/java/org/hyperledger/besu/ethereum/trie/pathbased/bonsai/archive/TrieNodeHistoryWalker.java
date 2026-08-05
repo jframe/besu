@@ -273,6 +273,11 @@ public class TrieNodeHistoryWalker implements Closeable {
     final TrieLog trieLog = maybeTrieLog.get();
 
     walkerWorldState.setStrategyForBlock(blockNumber);
+    // Block 0's genesis trie nodes don't exist in live storage (superseded by chain head).
+    // Start from an empty trie so persist() builds it from scratch.
+    if (blockNumber == 0) {
+      walkerWorldState.getWorldState().resetWorldStateRootHash(Hash.EMPTY_TRIE_HASH);
+    }
     ((PathBasedWorldStateUpdateAccumulator<?>) walkerWorldState.getWorldState().updater())
         .rollForward(trieLog);
     walkerWorldState
