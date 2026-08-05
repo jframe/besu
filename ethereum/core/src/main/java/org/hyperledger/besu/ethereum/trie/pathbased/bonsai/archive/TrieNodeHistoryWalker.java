@@ -208,6 +208,12 @@ public class TrieNodeHistoryWalker implements Closeable {
         }
         try {
           processBlock(blockNumber);
+          final long bn = blockNumber;
+          final long target = ongoingTarget.get();
+          LogUtil.throttledLog(
+              () -> LOG.info("Trie node history walker progress: block {}/{}", bn, target),
+              shouldLogCatchUp,
+              LOG_INTERVAL_SECONDS);
         } catch (final StateRootMismatchException e) {
           LOG.error(
               "Trie node history walker halted at block {}: state root mismatch "
