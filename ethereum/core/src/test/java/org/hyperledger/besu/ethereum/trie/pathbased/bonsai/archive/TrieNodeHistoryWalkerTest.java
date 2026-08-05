@@ -274,6 +274,7 @@ class TrieNodeHistoryWalkerTest {
     final ExecutorService executor = Executors.newSingleThreadExecutor();
     executors.add(executor);
 
+    // null GenesisState is safe: all test fixtures use Hash.EMPTY_TRIE_HASH genesis.
     final TrieNodeHistoryWalker walker =
         new TrieNodeHistoryWalker(
             walkerWorldState,
@@ -281,7 +282,8 @@ class TrieNodeHistoryWalkerTest {
             fixture.blockchain,
             progress,
             fixture.composedStorage,
-            executor);
+            executor,
+            /* genesisState= */ null);
     walkers.add(walker);
     return walker;
   }

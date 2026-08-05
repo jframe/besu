@@ -455,6 +455,8 @@ class TrieNodeHistoryWalkerIntegrationTest {
     final ExecutorService executor = Executors.newSingleThreadExecutor();
     executors.add(executor);
 
+    // null GenesisState is safe here: all test fixtures use Hash.EMPTY_TRIE_HASH genesis so
+    // bootstrapGenesis() is never invoked.
     final TrieNodeHistoryWalker walker =
         new TrieNodeHistoryWalker(
             walkerWorldState,
@@ -462,7 +464,8 @@ class TrieNodeHistoryWalkerIntegrationTest {
             fixture.blockchain,
             progress,
             fixture.composedStorage,
-            executor);
+            executor,
+            /* genesisState= */ null);
     walkers.add(walker);
     return walker;
   }

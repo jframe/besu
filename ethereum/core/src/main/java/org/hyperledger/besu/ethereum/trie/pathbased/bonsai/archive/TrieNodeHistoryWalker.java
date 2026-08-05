@@ -16,8 +16,10 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.chain.GenesisState;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.trie.common.StateRootMismatchException;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -69,6 +71,7 @@ public class TrieNodeHistoryWalker implements Closeable {
   private final TrieNodeHistoryProgress historyProgress;
   private final SegmentedKeyValueStorage composedWorldStateStorage;
   private final ExecutorService executorService;
+  private final GenesisState genesisState;
 
   protected final AtomicLong walkedBlockNumber =
       new AtomicLong(TrieNodeHistoryProgress.UNSET_LAST_INDEXED);
@@ -89,6 +92,7 @@ public class TrieNodeHistoryWalker implements Closeable {
    * @param composedWorldStateStorage the node's live composed storage; used only to durably persist
    *     the progress record alongside each block's history writes
    * @param executorService the executor on which catch-up tasks run; caller owns its lifecycle
+   * @param genesisState the genesis state, used to bootstrap history for non-empty genesis chains
    */
   public TrieNodeHistoryWalker(
       final TrieNodeHistoryWalkerWorldState walkerWorldState,
@@ -96,13 +100,15 @@ public class TrieNodeHistoryWalker implements Closeable {
       final Blockchain blockchain,
       final TrieNodeHistoryProgress historyProgress,
       final SegmentedKeyValueStorage composedWorldStateStorage,
-      final ExecutorService executorService) {
+      final ExecutorService executorService,
+      final GenesisState genesisState) {
     this.walkerWorldState = walkerWorldState;
     this.realTrieLogManager = realTrieLogManager;
     this.blockchain = blockchain;
     this.historyProgress = historyProgress;
     this.composedWorldStateStorage = composedWorldStateStorage;
     this.executorService = executorService;
+    this.genesisState = genesisState;
   }
 
   /**
@@ -119,24 +125,6 @@ public class TrieNodeHistoryWalker implements Closeable {
     }
     if (blockObserverId.isPresent()) {
       LOG.debug("TrieNodeHistoryWalker.start called while already running; skipping");
-      return;
-    }
-
-    // Reject non-empty genesis: live TRIE_BRANCH_STORAGE holds chain-head values, not genesis
-    // values. A genesis bootstrapping step (not yet implemented) would be required to seed history
-    // for nodes that exist before any trie log. Without it, block 1 would compute the wrong state
-    // root and halt with a misleading "History is invalid" message.
-    final boolean nonEmptyGenesis =
-        blockchain
-            .getBlockHeader(0)
-            .map(h -> !Hash.EMPTY_TRIE_HASH.equals(h.getStateRoot()))
-            .orElse(false);
-    if (nonEmptyGenesis) {
-      LOG.error(
-          "Trie node history walker cannot start: genesis block has a non-empty state root. "
-              + "Genesis state bootstrapping is not yet implemented. "
-              + "The trie-node history feature currently supports only chains with an empty-state genesis.");
-      halted.set(true);
       return;
     }
 
@@ -259,6 +247,11 @@ public class TrieNodeHistoryWalker implements Closeable {
         throw new IllegalStateException("No trie log for block " + blockNumber);
       }
       // Block 0 (genesis) may have no trie log — there is no prior state to diff against.
+      // For non-empty genesis, bootstrap all genesis trie nodes into history at block 0 so
+      // that block 1's priorVersionOf(key, 0) reads return correct genesis values.
+      if (!Hash.EMPTY_TRIE_HASH.equals(header.getStateRoot())) {
+        bootstrapGenesis();
+      }
       // Persist progress so a restart does not re-walk genesis in a tight loop.
       historyProgress.setLastIndexedBlock(0);
       historyProgress.setIndexStartBlock(0);
@@ -285,6 +278,40 @@ public class TrieNodeHistoryWalker implements Closeable {
     tx.commit();
 
     walkedBlockNumber.set(blockNumber);
+  }
+
+  /**
+   * Bootstraps genesis trie nodes into the history archive at block 0.
+   *
+   * <p>Genesis has no trie log, so the walker cannot use its normal rollForward path. Instead this
+   * method drives the genesis state directly through the walker world state:
+   *
+   * <ol>
+   *   <li>Installs the block-0 {@link BonsaiArchiveTrieNodeStrategy}, which returns {@code
+   *       Optional.empty()} for all prior-value reads (there is no prior state before genesis).
+   *   <li>Resets the accumulator so no stale chain-head data contaminates genesis derivation.
+   *   <li>Calls {@link GenesisState#writeStateTo} on the walker world state. {@code writeStateTo}
+   *       creates all genesis accounts in the accumulator then calls {@code
+   *       persist(genesisHeader)}, which builds the genesis MPT from scratch and — via the block-0
+   *       strategy — captures every genesis trie node as a CREATION history entry in {@code
+   *       TRIE_NODE_HISTORY_ARCHIVE}.
+   *   <li>Resets the accumulator again so block 1's {@code rollForward} starts clean.
+   * </ol>
+   *
+   * <p>If {@code persist()} throws {@link StateRootMismatchException}, the genesis derivation
+   * produced the wrong state root; the exception propagates and the walker halts via the normal
+   * catch in {@link #catchUp}.
+   */
+  private void bootstrapGenesis() {
+    LOG.info("Bootstrapping genesis trie nodes into history archive (one-time initialization)…");
+    walkerWorldState.setStrategyForBlock(0L);
+    final PathBasedWorldStateUpdateAccumulator<?> accumulator =
+        (PathBasedWorldStateUpdateAccumulator<?>) walkerWorldState.getWorldState().updater();
+    accumulator.reset();
+    genesisState.writeStateTo(walkerWorldState.getWorldState());
+    // Reset so block 1's rollForward starts from a clean accumulator.
+    accumulator.reset();
+    LOG.info("Genesis trie node bootstrap complete.");
   }
 
   private long walkerTarget(final long blockNumber) {

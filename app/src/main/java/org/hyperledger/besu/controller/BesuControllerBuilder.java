@@ -1015,7 +1015,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
               blockchain,
               trieNodeHistoryProgress,
               composedWorldStateStorage,
-              walkerExecutor);
+              walkerExecutor,
+              genesisState);
       LOG.info("Starting trie-node history walker");
       walker.start();
       // Close the walker before storageProvider so the catch-up task finishes before RocksDB closes
