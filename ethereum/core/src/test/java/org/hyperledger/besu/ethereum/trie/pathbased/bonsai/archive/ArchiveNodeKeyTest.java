@@ -24,17 +24,21 @@ import org.junit.jupiter.api.Test;
 class ArchiveNodeKeyTest {
 
   @Test
-  void accountNaturalKeyIsLocationUnchanged() {
+  void accountNaturalKeyIsLengthPrefixedLocation() {
     final Bytes location = Bytes.fromHexString("0x0102");
-    assertThat(ArchiveNodeKey.account(location)).isEqualTo(location);
+    // format: [len: 1 byte] | location
+    assertThat(ArchiveNodeKey.account(location))
+        .isEqualTo(Bytes.concatenate(Bytes.of((byte) location.size()), location));
   }
 
   @Test
-  void storageNaturalKeyIsAccountHashConcatLocation() {
+  void storageNaturalKeyIsAccountHashThenLengthPrefixedLocation() {
     final Bytes32 accountHash = Bytes32.random();
     final Bytes location = Bytes.fromHexString("0x0a0b");
+    // format: accountHash(32) | [len: 1 byte] | location
     assertThat(ArchiveNodeKey.storage(accountHash, location))
-        .isEqualTo(Bytes.concatenate(accountHash, location));
+        .isEqualTo(
+            Bytes.concatenate(accountHash, Bytes.of((byte) location.size()), location));
   }
 
   @Test
@@ -60,6 +64,23 @@ class ArchiveNodeKeyTest {
     final Bytes key = ArchiveNodeKey.historyKey(naturalKey, Long.MAX_VALUE);
     assertThat(ArchiveNodeKey.blockFromHistoryKey(key)).isEqualTo(Long.MAX_VALUE);
     assertThat(ArchiveNodeKey.naturalKeyFromHistoryKey(key)).isEqualTo(naturalKey);
+  }
+
+  @Test
+  void accountNaturalKeyNoPrefixCollisionBetweenShallowAndDeepPaths() {
+    // Without the length prefix, [0x0e][block=0] < [0x0e,0x00][block=0] < [0x0e][block=9],
+    // so a deeper path's genesis entry would shadow a shallower path's getLatestBefore lookup.
+    // With the length prefix: [0x01,0x0e,...] < [0x01,0x0e,block=9] < [0x02,0x0e,0x00,...],
+    // so the deeper path's entries are always strictly greater than the shallower path's seek key.
+    final Bytes shallow = ArchiveNodeKey.account(Bytes.fromHexString("0x0e"));
+    final Bytes deep = ArchiveNodeKey.account(Bytes.fromHexString("0x0e00"));
+    final Bytes shallowBlock0 = ArchiveNodeKey.historyKey(shallow, 0L);
+    final Bytes shallowBlock9 = ArchiveNodeKey.historyKey(shallow, 9L);
+    final Bytes deepBlock0 = ArchiveNodeKey.historyKey(deep, 0L);
+    // shallowBlock0 < shallowBlock9 (ascending blocks)
+    assertThat(shallowBlock0.compareTo(shallowBlock9)).isLessThan(0);
+    // deepBlock0 > shallowBlock9 (deeper path sorts entirely after shallower path's entries)
+    assertThat(deepBlock0.compareTo(shallowBlock9)).isGreaterThan(0);
   }
 
   @Test

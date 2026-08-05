@@ -47,17 +47,18 @@ public final class ArchiveProofNodeLoader {
 
   public NodeLoader accountNodeLoader() {
     return (location, expectedHash) ->
-        resolveNodeAt(ArchiveNodeKey.account(location), expectedHash);
+        resolveNodeAt(location, ArchiveNodeKey.account(location), expectedHash);
   }
 
   public NodeLoader storageNodeLoader(final Bytes32 accountHash) {
     return (location, expectedHash) ->
-        resolveNodeAt(ArchiveNodeKey.storage(accountHash, location), expectedHash);
+        resolveNodeAt(location, ArchiveNodeKey.storage(accountHash, location), expectedHash);
   }
 
-  private Optional<Bytes> resolveNodeAt(final Bytes naturalKey, final Bytes32 expectedHash) {
+  private Optional<Bytes> resolveNodeAt(
+      final Bytes location, final Bytes naturalKey, final Bytes32 expectedHash) {
     final Optional<Bytes> liveNode =
-        liveStorage.get(TRIE_BRANCH_STORAGE, naturalKey.toArrayUnsafe()).map(Bytes::wrap);
+        liveStorage.get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe()).map(Bytes::wrap);
     if (liveNode.isPresent() && keccak256(liveNode.get()).equals(expectedHash)) {
       return liveNode;
     }

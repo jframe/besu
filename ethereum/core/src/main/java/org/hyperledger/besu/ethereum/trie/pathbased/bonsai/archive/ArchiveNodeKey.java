@@ -16,26 +16,59 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import org.apache.tuweni.bytes.Bytes;
 
-/** Utility methods for constructing and deconstructing keys for the archive trie node CFs. */
+/**
+ * Utility methods for constructing and deconstructing keys for the archive trie node CFs.
+ *
+ * <h2>Key encoding</h2>
+ *
+ * <p>Natural keys include a 1-byte length prefix before the location segment. This prevents a
+ * prefix-collision bug in {@link TrieNodeHistoryStore#getLatestBefore}: without the prefix, a
+ * shallower location like {@code [0x0e]} and a deeper one like {@code [0x0e, 0x00]} share the same
+ * byte prefix, causing the deeper path's genesis entry to sort lexicographically <em>between</em>
+ * the shallower path's genesis entry and a later block's seek key — making {@code getNearestBefore}
+ * return the wrong entry. With the 1-byte length prefix the first byte differs ({@code 0x01} vs
+ * {@code 0x02}), so the entries for different locations never interleave.
+ *
+ * <p><strong>Schema note:</strong> this length prefix is a breaking change relative to any data
+ * written without it. Existing history data must be wiped when this version is first deployed.
+ */
 public final class ArchiveNodeKey {
 
   private ArchiveNodeKey() {}
 
   /**
-   * Returns the natural key for an account-trie node: the compact path {@code location} bytes,
-   * unchanged. Exists for call-site clarity and symmetry with {@link #storage}.
+   * Returns the natural key for an account-trie node: {@code [len: 1 byte] ‖ location}.
+   *
+   * <p>The 1-byte length prefix guarantees that no two account natural keys are byte-prefixes of
+   * each other (see class-level javadoc), which is required for correct {@code seekForPrev}
+   * behaviour in {@link TrieNodeHistoryStore}.
    */
   public static Bytes account(final Bytes location) {
-    return location;
+    if (location.size() > 255) {
+      throw new IllegalArgumentException(
+          "account location too long for 1-byte length prefix: " + location.size());
+    }
+    return Bytes.concatenate(Bytes.of((byte) location.size()), location);
   }
 
-  /** Returns the natural key for a storage-trie node: {@code accountHash(32) ‖ location}. */
+  /**
+   * Returns the natural key for a storage-trie node: {@code accountHash(32) ‖ [len: 1 byte] ‖
+   * location}.
+   *
+   * <p>The account hash prefix (fixed 32 bytes) keeps different accounts separate. The 1-byte
+   * location-length prefix prevents the same prefix-collision issue within a single account's
+   * storage trie (see {@link #account}).
+   */
   public static Bytes storage(final Bytes accountHash, final Bytes location) {
     if (accountHash.size() != 32) {
       throw new IllegalArgumentException(
           "accountHash must be exactly 32 bytes, got " + accountHash.size());
     }
-    return Bytes.concatenate(accountHash, location);
+    if (location.size() > 255) {
+      throw new IllegalArgumentException(
+          "storage location too long for 1-byte length prefix: " + location.size());
+    }
+    return Bytes.concatenate(accountHash, Bytes.of((byte) location.size()), location);
   }
 
   /** Constructs a history-CF key: {@code naturalKey ‖ block(8 bytes BE)}. */
