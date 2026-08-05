@@ -90,8 +90,21 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
     final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composed);
     final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
     // One strategy instance per block: write history entries at block 50.
+    final SegmentedKeyValueStorageTransaction blockNumberTx = composed.startTransaction();
+    blockNumberTx.put(
+        org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier
+            .TRIE_BRANCH_STORAGE,
+        org.hyperledger.besu.ethereum.trie.pathbased.common.storage
+            .PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
+        org.apache.tuweni.bytes.Bytes.ofUnsignedLong(49L).toArrayUnsafe());
+    blockNumberTx.commit();
     final BonsaiArchiveTrieNodeStrategy archiveStrategy =
-        new BonsaiArchiveTrieNodeStrategy(historyReader, historyStore, 50L);
+        new BonsaiArchiveTrieNodeStrategy(
+            new org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat
+                .BonsaiTrieNodeStrategy(),
+            historyStore,
+            new TrieNodeHistoryProgress(),
+            () -> Long.MAX_VALUE);
 
     accountTrie.commit(
         (location, nodeHash, value) -> {
@@ -214,8 +227,21 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
     final SegmentedKeyValueStorage composed = worldStateStorage.getComposedWorldStateStorage();
     final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(composed);
     final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
+    final SegmentedKeyValueStorageTransaction blockNumberTx2 = composed.startTransaction();
+    blockNumberTx2.put(
+        org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier
+            .TRIE_BRANCH_STORAGE,
+        org.hyperledger.besu.ethereum.trie.pathbased.common.storage
+            .PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY,
+        org.apache.tuweni.bytes.Bytes.ofUnsignedLong(49L).toArrayUnsafe());
+    blockNumberTx2.commit();
     final BonsaiArchiveTrieNodeStrategy archiveStrategy =
-        new BonsaiArchiveTrieNodeStrategy(historyReader, historyStore, 50L);
+        new BonsaiArchiveTrieNodeStrategy(
+            new org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat
+                .BonsaiTrieNodeStrategy(),
+            historyStore,
+            new TrieNodeHistoryProgress(),
+            () -> Long.MAX_VALUE);
 
     // Write history entries for block 50 BEFORE constructing the provider.
     accountTrie.commit(

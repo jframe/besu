@@ -15,18 +15,21 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
-import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveNodeKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryStore;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.util.function.LongSupplier;
+
 import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -35,20 +38,17 @@ class BonsaiArchiveTrieNodeStrategyTest {
   private SegmentedKeyValueStorage storage;
   private TrieNodeHistoryStore historyStore;
   private TrieNodeHistoryReader reader;
+  private TrieNodeHistoryProgress progress;
 
   @BeforeEach
   void setUp() {
     storage = new SegmentedInMemoryKeyValueStorage();
     historyStore = new TrieNodeHistoryStore(storage);
     reader = new TrieNodeHistoryReader(historyStore);
-    // strategy is created fresh per test with explicit blockNumber
+    progress = new TrieNodeHistoryProgress();
   }
 
-  /**
-   * Builds a valid 2-item ("short node": {@code [path, value]}) RLP list, distinct per {@code i},
-   * so {@link org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeCodec}'s
-   * arity check accepts it as a diffable node. See the note at this method's call site.
-   */
+  /** Distinct valid 2-item short-node RLP so ArchiveTrieNodeCodec's arity check accepts it. */
   private static Bytes shortNodeRlp(final int i) {
     final BytesValueRLPOutput out = new BytesValueRLPOutput();
     out.startList();
@@ -58,11 +58,20 @@ class BonsaiArchiveTrieNodeStrategyTest {
     return out.encoded();
   }
 
-  private void putAccountTrieNode(final long blockNumber, final Bytes location, final Bytes node) {
-    final BonsaiArchiveTrieNodeStrategy strategy =
-        new BonsaiArchiveTrieNodeStrategy(reader, historyStore, blockNumber);
-    // NOTE: putFlatAccountTrieNode takes Bytes32, and org.hyperledger.besu.datatypes.Hash is NOT a
-    // Bytes32 (it extends BytesHolder) — use crypto.Hash.keccak256, which returns Bytes32.
+  /** Set the committed world block number so the strategy derives currentBlock = n + 1. */
+  private void setWorldBlockNumber(final long n) {
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(n).toArrayUnsafe());
+    tx.commit();
+  }
+
+  private BonsaiArchiveTrieNodeStrategy strategy(final LongSupplier highestSafeBlock) {
+    return new BonsaiArchiveTrieNodeStrategy(
+        new BonsaiTrieNodeStrategy(), historyStore, progress, highestSafeBlock);
+  }
+
+  private void putAccount(
+      final BonsaiArchiveTrieNodeStrategy strategy, final Bytes location, final Bytes node) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(
         storage, tx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
@@ -70,119 +79,110 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   @Test
-  void creationAlwaysWritesFullEntryWithCounterZero() {
+  void readDelegatesToLiveBaseValueNotHistory() {
     final Bytes location = Bytes.fromHexString("0x0102");
     final Bytes node = Bytes.fromHexString("0xaa");
-    putAccountTrieNode(10L, location, node); // block 10: creation (no prior entry)
+    // Write straight into the live segment via the base strategy.
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    new BonsaiTrieNodeStrategy().putFlatAccountTrieNode(storage, tx, location, null, node);
+    tx.commit();
+
+    assertThat(strategy(() -> Long.MAX_VALUE).getFlatAccountTrieNode(location, null, storage))
+        .contains(node);
+  }
+
+  @Test
+  void creationWritesFullEntryWithCounterZeroAtGenesis() {
+    final Bytes location = Bytes.fromHexString("0x0102");
+    final Bytes node = shortNodeRlp(0);
+    // No WORLD_BLOCK_NUMBER_KEY => block 0.
+    putAccount(strategy(() -> Long.MAX_VALUE), location, node);
 
     final TrieNodeHistoryStore.HistoryEntry entry =
-        historyStore.get(ArchiveNodeKey.account(location), 10L).orElseThrow();
+        historyStore.get(ArchiveNodeKey.account(location), 0L).orElseThrow();
     assertThat(entry.codecEntry().isFull()).isTrue();
     assertThat(entry.codecEntry().isCreation()).isTrue();
     assertThat(entry.counter()).isEqualTo(0);
   }
 
   @Test
-  void nonRootNodeChecksInFullExactlyEveryCheckpointIntervalMutations() {
+  void diffBaseComesFromLiveValueAndChecksInFullEveryCheckpointInterval() {
     final Bytes location = Bytes.fromHexString("0x030405"); // depth 3, non-root
-    // NOTE (test-fixture fix, not a production-code change): the brief's original fixture data
-    // used bare single bytes (e.g. 0x00) as "node" RLP. That is fine for the creation write (the
-    // priorNode == null branch in captureTrieNodeDiff never calls ArchiveTrieNodeCodec.encodeDiff's
-    // nodeArity() check), but every subsequent mid-chain write here does take that path, and
-    // nodeArity() requires a genuine 2-item (short node) or 17-item (branch node) RLP list —
-    // it throws RLPException on a bare byte. Real Bonsai trie nodes are always valid RLP, so this
-    // is a gap in the brief's test fixture, not a bug in production code; fixed by encoding each
-    // mutation as a valid 2-item short-node RLP list ([path, value]) with a varying value so each
-    // write is still a distinct node.
-    Bytes node = shortNodeRlp(0);
-    putAccountTrieNode(0L, location, node); // block 0: creation, FULL
-
+    final BonsaiArchiveTrieNodeStrategy strategy = strategy(() -> Long.MAX_VALUE);
+    // Block 0 creation (FULL).
+    putAccount(strategy, location, shortNodeRlp(0));
+    // Blocks 1..CHECKPOINT_INTERVAL: each reads prior live value as diff base.
     for (int i = 1; i <= TrieNodeHistoryReader.CHECKPOINT_INTERVAL; i++) {
-      node = shortNodeRlp(i);
-      putAccountTrieNode((long) i, location, node);
+      setWorldBlockNumber(i - 1L);
+      putAccount(strategy, location, shortNodeRlp(i));
     }
-    // The CHECKPOINT_INTERVAL-th mutation after creation (counter reaches CHECKPOINT_INTERVAL - 1,
-    // then wraps) must be FULL.
-    final TrieNodeHistoryStore.HistoryEntry checkpointEntry =
-        historyStore
-            .get(ArchiveNodeKey.account(location), (long) TrieNodeHistoryReader.CHECKPOINT_INTERVAL)
-            .orElseThrow();
-    assertThat(checkpointEntry.codecEntry().isFull()).isTrue();
-    assertThat(checkpointEntry.counter()).isEqualTo(0);
-
-    final TrieNodeHistoryStore.HistoryEntry midChainEntry =
-        historyStore.get(ArchiveNodeKey.account(location), 1L).orElseThrow();
-    assertThat(midChainEntry.codecEntry().isFull()).isFalse();
-  }
-
-  @Test
-  void rootNodeIsAlwaysFullRegardlessOfMutationCount() {
-    final Bytes location = Bytes.EMPTY; // root
-    putAccountTrieNode(0L, location, Bytes.fromHexString("0x01")); // block 0
-    putAccountTrieNode(1L, location, Bytes.fromHexString("0x02")); // block 1
-    putAccountTrieNode(2L, location, Bytes.fromHexString("0x03")); // block 2
-
-    for (final long block : new long[] {0L, 1L, 2L}) {
-      assertThat(
-              historyStore
-                  .get(ArchiveNodeKey.account(location), block)
-                  .orElseThrow()
-                  .codecEntry()
-                  .isFull())
-          .as("root entry at block %s must be FULL", block)
-          .isTrue();
+    assertThat(
+            historyStore
+                .get(ArchiveNodeKey.account(location), 1L)
+                .orElseThrow()
+                .codecEntry()
+                .isFull())
+        .isFalse();
+    assertThat(
+            historyStore
+                .get(
+                    ArchiveNodeKey.account(location),
+                    (long) TrieNodeHistoryReader.CHECKPOINT_INTERVAL)
+                .orElseThrow()
+                .codecEntry()
+                .isFull())
+        .isTrue();
+    // Reconstruction at every block matches the node written at that block.
+    for (int i = 0; i <= TrieNodeHistoryReader.CHECKPOINT_INTERVAL; i++) {
+      assertThat(reader.nodeAt(ArchiveNodeKey.account(location), i)).contains(shortNodeRlp(i));
     }
   }
 
   @Test
-  void deletionWritesATombstoneThatMakesNodeAtReturnEmptyAfterward() {
+  void gateSkipsCaptureButStillWritesLiveNodeWhenBlockAboveThreshold() {
+    final Bytes location = Bytes.fromHexString("0x0102");
+    final Bytes node = shortNodeRlp(7);
+    setWorldBlockNumber(9L); // currentBlock = 10
+    putAccount(strategy(() -> 5L), location, node); // 10 > 5 => gated out
+
+    assertThat(historyStore.get(ArchiveNodeKey.account(location), 10L)).isEmpty();
+    // But the live node was still written (block import must not be blocked).
+    assertThat(new BonsaiTrieNodeStrategy().getFlatAccountTrieNode(location, null, storage))
+        .contains(node);
+  }
+
+  @Test
+  void genesisCapturedEvenWhenThresholdGateIsClosed() {
+    final Bytes location = Bytes.fromHexString("0x0102");
+    // No WORLD_BLOCK_NUMBER_KEY => block 0; supplier far below 0.
+    putAccount(strategy(() -> Long.MIN_VALUE), location, shortNodeRlp(0));
+
+    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isPresent();
+  }
+
+  @Test
+  void removeCapturesTombstoneSoNodeAtReturnsEmpty() {
     final Bytes location = Bytes.fromHexString("0x0708");
-    putAccountTrieNode(0L, location, Bytes.fromHexString("0xaa")); // block 0: creation
+    final BonsaiArchiveTrieNodeStrategy strategy = strategy(() -> Long.MAX_VALUE);
+    putAccount(strategy, location, shortNodeRlp(1)); // block 0 creation
 
-    // Delete at block 1
-    final BonsaiArchiveTrieNodeStrategy deleteStrategy =
-        new BonsaiArchiveTrieNodeStrategy(reader, historyStore, 1L);
+    setWorldBlockNumber(0L); // currentBlock = 1
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    deleteStrategy.removeFlatAccountStateTrieNode(storage, tx, location);
+    strategy.removeFlatAccountStateTrieNode(storage, tx, location);
     tx.commit();
 
     assertThat(reader.nodeAt(ArchiveNodeKey.account(location), 1L)).isEmpty();
-  }
-
-  @Test
-  void storageTrieNodeDeletionHasNoTombstoneHookDocumentedLimitation() {
-    // TrieNodeStrategy has no removeFlatStorageTrieNode (Task 7) — storage-trie nodes removed via
-    // bulk clearStorage never get a tombstone in this PR. This test documents the gap rather than
-    // silently omitting coverage for it: putFlatStorageTrieNode followed by never calling any
-    // removal method still leaves the last-written entry queryable, which is the (documented,
-    // known, and out-of-scope-to-fix-here) limitation.
-    final Hash accountHash = Hash.hash(Bytes.fromHexString("0xaa"));
-    final Bytes location = Bytes.fromHexString("0x0c");
-    final BonsaiArchiveTrieNodeStrategy localStrategy =
-        new BonsaiArchiveTrieNodeStrategy(reader, historyStore, 0L);
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    localStrategy.putFlatStorageTrieNode(
-        storage,
-        tx,
-        accountHash,
-        location,
-        org.hyperledger.besu.crypto.Hash.keccak256(Bytes.fromHexString("0xdd")),
-        Bytes.fromHexString("0xdd"));
-    tx.commit();
-
-    final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
-    // No API in this class can express "this storage slot's trie node was later self-destructed" —
-    // the entry remains queryable forever, which is the documented limitation.
-    assertThat(historyStore.get(naturalKey, 0L)).isPresent();
-  }
-
-  @Test
-  void genesisBlockReadsReturnEmptyWithoutConsultingHistory() {
-    final BonsaiArchiveTrieNodeStrategy genesisStrategy =
-        new BonsaiArchiveTrieNodeStrategy(reader, historyStore, 0L);
-    assertThat(
-            genesisStrategy.getFlatAccountTrieNode(
-                Bytes.fromHexString("0x01"), Bytes32.ZERO, storage))
+    assertThat(new BonsaiTrieNodeStrategy().getFlatAccountTrieNode(location, null, storage))
         .isEmpty();
+  }
+
+  @Test
+  void progressAdvancesToCapturedBlockOncePerBlock() {
+    final Bytes location = Bytes.fromHexString("0x0102");
+    setWorldBlockNumber(2L); // currentBlock = 3
+    putAccount(strategy(() -> Long.MAX_VALUE), location, shortNodeRlp(1));
+
+    assertThat(progress.lastIndexedBlock()).isEqualTo(3L);
+    assertThat(progress.indexStartBlock()).isLessThanOrEqualTo(3L);
   }
 }

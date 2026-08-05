@@ -14,9 +14,13 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
+
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.ArchiveTrieNodeCodec;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryStore;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -24,49 +28,63 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.LongSupplier;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
 /**
- * Archive-aware trie node strategy: reads resolve the node as of the previous block via {@link
- * TrieNodeHistoryReader}; writes capture a FULL/DIFF history entry via {@link
- * TrieNodeHistoryStore}. One immutable instance per block — the block number is explicit in the
- * constructor rather than inferred from live storage.
+ * Archive-aware trie node strategy for the live block-import path. Reads and writes delegate to a
+ * base {@link TrieNodeStrategy} (the live flat DB); writes additionally capture a FULL/DIFF history
+ * entry and advance {@link TrieNodeHistoryProgress}.
+ *
+ * <p>Capture is gated so a block {@code N} is only recorded when {@code N == 0} (genesis, always
+ * final) or {@code N <= highestSafeBlock}, where {@code highestSafeBlock = bestChainHeight -
+ * maxLayersToLoad}. This trails the head by {@code maxLayersToLoad}, matching {@link
+ * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator}, and
+ * never records a reorg-window block. The gate never suppresses the delegated live write — block
+ * import must always proceed.
+ *
+ * <p>The diff base is the value read from the base strategy <em>before</em> the put. During
+ * sequential import the live flat DB still holds block {@code N-1}'s value at that moment, so the
+ * live read is the correct previous-block diff base.
  */
 public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
-  private final TrieNodeHistoryReader historyReader;
+  private final TrieNodeStrategy baseStrategy;
   private final TrieNodeHistoryStore historyStore;
-  private final long blockNumber;
+  private final TrieNodeHistoryProgress historyProgress;
+  private volatile LongSupplier highestSafeBlockSupplier;
+  private volatile long lastSavedProgressBlock = Long.MIN_VALUE;
 
   public BonsaiArchiveTrieNodeStrategy(
-      final TrieNodeHistoryReader historyReader,
+      final TrieNodeStrategy baseStrategy,
       final TrieNodeHistoryStore historyStore,
-      final long blockNumber) {
-    this.historyReader = Objects.requireNonNull(historyReader);
+      final TrieNodeHistoryProgress historyProgress,
+      final LongSupplier highestSafeBlockSupplier) {
+    this.baseStrategy = Objects.requireNonNull(baseStrategy);
     this.historyStore = Objects.requireNonNull(historyStore);
-    if (blockNumber < 0) {
-      throw new IllegalArgumentException("blockNumber must be >= 0, got " + blockNumber);
-    }
-    this.blockNumber = blockNumber;
+    this.historyProgress = Objects.requireNonNull(historyProgress);
+    this.highestSafeBlockSupplier = Objects.requireNonNull(highestSafeBlockSupplier);
   }
 
   /**
-   * Reads resolve the node as of the PREVIOUS block, which is the base this block diffs against.
+   * Replaces the "highest safe block to capture" supplier. Used during startup wiring once {@code
+   * syncState} exists; before that a placeholder keeps the gate closed for all blocks except
+   * genesis.
    */
-  private Optional<Bytes> priorVersionOf(final Bytes naturalKey) {
-    if (blockNumber == 0) {
-      // Genesis has no prior version, and nodeAt rejects negative blocks.
-      return Optional.empty();
-    }
-    return historyReader.nodeAt(naturalKey, blockNumber - 1);
+  public void setHighestSafeBlockSupplier(final LongSupplier supplier) {
+    this.highestSafeBlockSupplier = Objects.requireNonNull(supplier);
+  }
+
+  private boolean shouldCapture(final long block) {
+    return block == 0L || block <= highestSafeBlockSupplier.getAsLong();
   }
 
   @Override
   public Optional<Bytes> getFlatAccountTrieNode(
       final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
-    return priorVersionOf(ArchiveNodeKey.account(location));
+    return baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage);
   }
 
   @Override
@@ -75,7 +93,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final SegmentedKeyValueStorage storage) {
-    return priorVersionOf(ArchiveNodeKey.storage(accountHash.getBytes(), location));
+    return baseStrategy.getFlatStorageTrieNode(accountHash, location, nodeHash, storage);
   }
 
   @Override
@@ -85,14 +103,18 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final Bytes node) {
-    final Bytes naturalKey = ArchiveNodeKey.account(location);
-    captureTrieNodeDiff(
-        transaction,
-        naturalKey,
-        location,
-        blockNumber,
-        priorVersionOf(naturalKey).orElse(null),
-        node);
+    final long block = currentBlockNumber(storage);
+    final boolean capture = shouldCapture(block);
+    final Bytes priorNode =
+        capture
+            ? baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage).orElse(null)
+            : null;
+    baseStrategy.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
+    if (capture) {
+      captureTrieNodeDiff(
+          transaction, ArchiveNodeKey.account(location), location, block, priorNode, node);
+      advanceHistoryProgress(transaction, block);
+    }
   }
 
   @Override
@@ -103,14 +125,26 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final Bytes node) {
-    final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
-    captureTrieNodeDiff(
-        transaction,
-        naturalKey,
-        location,
-        blockNumber,
-        priorVersionOf(naturalKey).orElse(null),
-        node);
+    final long block = currentBlockNumber(storage);
+    final boolean capture = shouldCapture(block);
+    final Bytes priorNode =
+        capture
+            ? baseStrategy
+                .getFlatStorageTrieNode(accountHash, location, nodeHash, storage)
+                .orElse(null)
+            : null;
+    baseStrategy.putFlatStorageTrieNode(
+        storage, transaction, accountHash, location, nodeHash, node);
+    if (capture) {
+      captureTrieNodeDiff(
+          transaction,
+          ArchiveNodeKey.storage(accountHash.getBytes(), location),
+          location,
+          block,
+          priorNode,
+          node);
+      advanceHistoryProgress(transaction, block);
+    }
   }
 
   @Override
@@ -118,16 +152,31 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Bytes location) {
-    final Bytes naturalKey = ArchiveNodeKey.account(location);
-    priorVersionOf(naturalKey)
-        .ifPresent(
-            priorNode ->
-                historyStore.put(
-                    transaction,
-                    naturalKey,
-                    blockNumber,
-                    0,
-                    ArchiveTrieNodeCodec.encodeDiff(priorNode, null)));
+    final long block = currentBlockNumber(storage);
+    final boolean capture = shouldCapture(block);
+    // nodeHash is unknown at removal time; BonsaiTrieNodeStrategy ignores it (plain point lookup).
+    final Bytes priorNode =
+        capture ? baseStrategy.getFlatAccountTrieNode(location, null, storage).orElse(null) : null;
+    baseStrategy.removeFlatAccountStateTrieNode(storage, transaction, location);
+    if (capture && priorNode != null) {
+      historyStore.put(
+          transaction,
+          ArchiveNodeKey.account(location),
+          block,
+          0,
+          ArchiveTrieNodeCodec.encodeDiff(priorNode, null));
+      advanceHistoryProgress(transaction, block);
+    }
+  }
+
+  private long currentBlockNumber(final SegmentedKeyValueStorage storage) {
+    // Established pattern, mirrored from
+    // BonsaiArchiveFlatDbStrategy.getStateArchiveContextForWrite:
+    // current committed WORLD_BLOCK_NUMBER_KEY + 1, or 0 if absent (genesis).
+    return storage
+        .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
+        .map(b -> Bytes.wrap(b).toLong() + 1L)
+        .orElse(0L);
   }
 
   private void captureTrieNodeDiff(
@@ -161,6 +210,18 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
           block,
           priorCounter + 1,
           ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode));
+    }
+  }
+
+  private void advanceHistoryProgress(
+      final SegmentedKeyValueStorageTransaction tx, final long block) {
+    historyProgress.setLastIndexedBlock(block);
+    historyProgress.setIndexStartBlock(block);
+    // A block writes thousands of trie nodes; persist the (16-byte, idempotent) progress record
+    // once per block rather than once per node.
+    if (block != lastSavedProgressBlock) {
+      historyProgress.save(tx);
+      lastSavedProgressBlock = block;
     }
   }
 }
