@@ -76,6 +76,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
 
   private final Map<UInt256, Hash> storageKeyHashLookup = new ConcurrentHashMap<>();
   protected boolean isAccumulatorStateChanged;
+  private boolean skipCodeRoll;
 
   public PathBasedWorldStateUpdateAccumulator(
       final PathBasedWorldView world,
@@ -97,7 +98,18 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     storageToUpdate.putAll(source.storageToUpdate);
     updatedAccounts.putAll(source.updatedAccounts);
     deletedAccounts.addAll(source.deletedAccounts);
+    this.skipCodeRoll = source.skipCodeRoll;
     this.isAccumulatorStateChanged = true;
+  }
+
+  /**
+   * Skips code rolling entirely. Flat {@code CODE_STORAGE} only ever holds current bytecode for
+   * currently-live contracts, so it cannot answer "what was this account's code at block N" for a
+   * contract that has since self-destructed or changed code. Consumers that never archive code
+   * (such as the archive migrator) skip the roll rather than fail on an unreadable prior value.
+   */
+  public void setSkipCodeRoll(final boolean skipCodeRoll) {
+    this.skipCodeRoll = skipCodeRoll;
   }
 
   /**
@@ -735,6 +747,9 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
 
   private void rollCodeChange(
       final Address address, final Bytes expectedCode, final Bytes replacementCode) {
+    if (skipCodeRoll) {
+      return;
+    }
     if (Objects.equals(expectedCode, replacementCode)) {
       // non-change, a cached read.
       return;

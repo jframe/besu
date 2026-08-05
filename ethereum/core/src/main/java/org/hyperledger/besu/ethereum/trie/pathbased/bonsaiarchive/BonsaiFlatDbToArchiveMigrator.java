@@ -859,7 +859,10 @@ public class BonsaiFlatDbToArchiveMigrator implements Closeable {
 
   private void migrateTrieBlock(
       final TrieLog trieLog, final long blockNumber, final SegmentedKeyValueStorageTransaction tx) {
-    ((PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater()).rollForward(trieLog);
+    final PathBasedWorldStateUpdateAccumulator<?> accumulator =
+        (PathBasedWorldStateUpdateAccumulator<?>) migrationWorldState.updater();
+    accumulator.setSkipCodeRoll(true);
+    accumulator.rollForward(trieLog);
 
     if (migrationHistoryStore != null) {
       // Index mode: persist every block so the differential index gets per-block entries. persist()
