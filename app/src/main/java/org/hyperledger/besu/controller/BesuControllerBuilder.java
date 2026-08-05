@@ -93,6 +93,8 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHisto
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
@@ -249,6 +251,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
   private TrieNodeHistoryStore trieNodeHistoryStore;
   private TrieNodeHistoryReader trieNodeHistoryReader;
   private TrieNodeHistoryProgress trieNodeHistoryProgress;
+  private BonsaiArchiveTrieNodeStrategy trieNodeHistoryWriteStrategy;
 
   /** Instantiates a new Besu controller builder. */
   protected BesuControllerBuilder() {}
@@ -943,6 +946,20 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
     closeables.add(protocolContext.getWorldStateArchive());
     closeables.add(storageProvider);
 
+    if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(dataStorageConfiguration.getDataStorageFormat())
+        && dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getTrieNodeHistoryEnabled()
+        && trieNodeHistoryWriteStrategy != null) {
+      final long maxLayers =
+          ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager().getMaxLayersToLoad();
+      final SyncState effectiveSyncState = syncState;
+      trieNodeHistoryWriteStrategy.setHighestSafeBlockSupplier(
+          () -> effectiveSyncState.bestChainHeight() - maxLayers);
+      LOG.info("Live trie-node history capture enabled (trailing head by {} blocks)", maxLayers);
+    }
+
     if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(
         dataStorageConfiguration.getDataStorageFormat())) {
       if (worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)
@@ -1409,6 +1426,15 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
           trieNodeHistoryStore = new TrieNodeHistoryStore(composedWorldStateStorage);
           trieNodeHistoryReader = new TrieNodeHistoryReader(trieNodeHistoryStore);
           trieNodeHistoryProgress = TrieNodeHistoryProgress.load(composedWorldStateStorage);
+          trieNodeHistoryWriteStrategy =
+              new BonsaiArchiveTrieNodeStrategy(
+                  new BonsaiTrieNodeStrategy(),
+                  trieNodeHistoryStore,
+                  trieNodeHistoryProgress,
+                  // Placeholder until build() wires syncState: gate closed for all blocks except
+                  // genesis (N==0), which must be captured while it is written just below.
+                  () -> Long.MIN_VALUE);
+          worldStateKeyValueStorage.setTrieNodeStrategy(trieNodeHistoryWriteStrategy);
         }
         yield new BonsaiArchiveWorldStateProvider(
             worldStateKeyValueStorage,
