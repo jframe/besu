@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.trie.common.StateRootMismatchException;
@@ -118,6 +119,24 @@ public class TrieNodeHistoryWalker implements Closeable {
     }
     if (blockObserverId.isPresent()) {
       LOG.debug("TrieNodeHistoryWalker.start called while already running; skipping");
+      return;
+    }
+
+    // Reject non-empty genesis: live TRIE_BRANCH_STORAGE holds chain-head values, not genesis
+    // values. A genesis bootstrapping step (not yet implemented) would be required to seed history
+    // for nodes that exist before any trie log. Without it, block 1 would compute the wrong state
+    // root and halt with a misleading "History is invalid" message.
+    final boolean nonEmptyGenesis =
+        blockchain
+            .getBlockHeader(0)
+            .map(h -> !Hash.EMPTY_TRIE_HASH.equals(h.getStateRoot()))
+            .orElse(false);
+    if (nonEmptyGenesis) {
+      LOG.error(
+          "Trie node history walker cannot start: genesis block has a non-empty state root. "
+              + "Genesis state bootstrapping is not yet implemented. "
+              + "The trie-node history feature currently supports only chains with an empty-state genesis.");
+      halted.set(true);
       return;
     }
 

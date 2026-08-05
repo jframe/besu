@@ -137,8 +137,8 @@ public class HistoryOnlyWriteStorage implements SegmentedKeyValueStorage {
   }
 
   @Override
-  public void close() throws IOException {
-    delegate.close();
+  public void close() {
+    // Non-owning decorator: do not close the delegate.
   }
 
   private record FilteringTransaction(SegmentedKeyValueStorageTransaction delegate)
