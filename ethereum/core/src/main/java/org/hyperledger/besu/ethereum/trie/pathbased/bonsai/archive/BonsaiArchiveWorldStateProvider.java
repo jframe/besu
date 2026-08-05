@@ -38,6 +38,7 @@ import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -86,7 +87,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         worldStateKeyValueStorage,
         blockchain,
         dataStorageConfiguration.getPathBasedExtraStorageConfiguration(),
-        bonsaiCachedMerkleTrieLoader,
+        requireNonNullLoader(bonsaiCachedMerkleTrieLoader),
         pluginContext,
         evmConfiguration,
         worldStateHealerSupplier,
@@ -107,6 +108,22 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     // Both null when the feature flag is off; getAccountProof delegates entirely to super.
     this.trieHistoryReader = trieNodeHistoryReader;
     this.trieHistoryProgress = trieNodeHistoryProgress;
+  }
+
+  /**
+   * Validates that {@code loader} is non-null before it reaches {@code super()}, where a null would
+   * be silently stored and only surface as a NullPointerException inside trie-log rollback lambdas
+   * — making misconfiguration look like proof unavailability.
+   *
+   * <p>This method is called as an argument to {@code super()} so that the check runs before the
+   * superclass constructor stores the value.
+   */
+  private static BonsaiCachedMerkleTrieLoader requireNonNullLoader(
+      final BonsaiCachedMerkleTrieLoader loader) {
+    return Objects.requireNonNull(
+        loader,
+        "bonsaiCachedMerkleTrieLoader must not be null; "
+            + "pass NoOpBonsaiCachedMerkleTrieLoader if no preloading is desired");
   }
 
   @Override

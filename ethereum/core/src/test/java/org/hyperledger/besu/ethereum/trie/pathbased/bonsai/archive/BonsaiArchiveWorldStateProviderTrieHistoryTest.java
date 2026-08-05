@@ -33,6 +33,7 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.NoOpBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableDataStorageConfiguration;
@@ -382,7 +383,7 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
         worldStateStorage,
         blockchain,
         archiveConfig(),
-        null,
+        new NoOpBonsaiCachedMerkleTrieLoader(),
         null,
         EvmConfiguration.DEFAULT,
         () -> null,

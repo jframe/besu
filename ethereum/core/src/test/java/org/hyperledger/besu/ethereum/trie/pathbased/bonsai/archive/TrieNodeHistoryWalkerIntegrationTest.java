@@ -49,6 +49,7 @@ import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
@@ -75,8 +76,8 @@ import org.junit.jupiter.api.Test;
  *
  * <ol>
  *   <li><b>Full lifecycle</b> — account created, mutated across a {@link
- *       TrieNodeHistoryReader#CHECKPOINT_INTERVAL} boundary, correct proof at every intermediate
- *       block.
+ *       TrieNodeHistoryReader#CHECKPOINT_INTERVAL} boundary, then deleted; correct proof at every
+ *       intermediate block (membership for mutation blocks, non-membership for the deletion block).
  *   <li><b>Storage slots</b> — an account with storage mutated over several blocks; correct storage
  *       proof at each.
  *   <li><b>Reorg immunity</b> — a real fork that reorgs the chain <em>within</em> the reorg window;
@@ -123,38 +124,46 @@ class TrieNodeHistoryWalkerIntegrationTest {
 
   /**
    * Verifies that the walker correctly reconstructs proofs for every block it processes, including
-   * those that require a backward walk through DIFF entries to a FULL checkpoint.
+   * those that require a backward walk through DIFF entries to a FULL checkpoint, and that the
+   * proof for a deletion block shows the account as absent.
    *
-   * <p>Block structure (20 blocks, maxLayersToLoad=2):
+   * <p>Block structure (23 blocks, maxLayersToLoad=2):
    *
    * <ul>
    *   <li>Blocks 1–18: ADDRESS_A balance set to {@code blockNum * 100} (18 mutations). Block 1
    *       writes FULL|CREATION; blocks 2–16 write DIFFs (counter 1–15); block 17 hits the
    *       CHECKPOINT_INTERVAL threshold and writes a new FULL; block 18 writes a DIFF.
    *   <li>Blocks 19–20: ADDRESS_B mutated to advance the head (keeps the reorg window above 18).
+   *   <li>Block 21: ADDRESS_A deleted.
+   *   <li>Blocks 22–23: ADDRESS_B mutated to keep the reorg window above block 21.
    * </ul>
    *
-   * The walker processes blocks 1–18. A proof for ADDRESS_A must be non-empty and its account-proof
-   * first node must hash to the block's state root.
+   * The walker processes blocks 1–21. Proofs for ADDRESS_A at blocks 1–18 must show membership; the
+   * proof at block 21 must show non-membership ({@code stateTrieAccountValue().isEmpty()}).
    */
   @Test
   void fullLifecycle_proofCorrectAcrossCheckpointIntervalBoundary() {
-    // 20 blocks total; blocks 1..18 mutate ADDRESS_A, blocks 19..20 mutate ADDRESS_B.
+    // Blocks 1..18 mutate ADDRESS_A; blocks 19..20 are head pads; block 21 deletes ADDRESS_A;
+    // blocks 22..23 are more pads to keep the reorg window above block 21.
     final ChainFixture fixture = buildChain(20, MAX_LAYERS);
+    fixture.appendDeleteBlock(ADDRESS_A); // block 21
+    fixture.appendPadBlock(); // block 22
+    fixture.appendPadBlock(); // block 23
+
     final TrieNodeHistoryWalker walker = createAndRegisterWalker(fixture, MAX_LAYERS);
     walker.start();
 
-    final long expectedTarget = 20L - MAX_LAYERS; // = 18
+    final long expectedTarget = 23L - MAX_LAYERS; // = 21
     awaitWalkerBlock(walker, expectedTarget);
 
-    // Verify proofs at blocks 1..18 (the blocks the walker processed).
+    // Verify proofs at blocks 1..18 (ADDRESS_A mutation blocks).
     final TrieNodeHistoryStore historyStore = new TrieNodeHistoryStore(fixture.composedStorage);
     final TrieNodeHistoryReader historyReader = new TrieNodeHistoryReader(historyStore);
     final TrieNodeHistoryProgress progress = TrieNodeHistoryProgress.load(fixture.composedStorage);
     final BonsaiArchiveWorldStateProvider provider =
         newProvider(fixture.sourceStorage, fixture.blockchain, historyReader, progress, MAX_LAYERS);
 
-    for (int i = 1; i <= (int) expectedTarget; i++) {
+    for (int i = 1; i <= 18; i++) {
       final BlockHeader header = fixture.headers[i - 1];
       final Optional<WorldStateProof> result =
           provider.getAccountProof(header, ADDRESS_A, List.of(), Function.identity());
@@ -164,6 +173,16 @@ class TrieNodeHistoryWalkerIntegrationTest {
           .isPresent();
       assertProofRootMatchesStateRoot(result.get(), header, i);
     }
+
+    // Block 21: ADDRESS_A deleted — proof must show non-membership.
+    final BlockHeader deleteHeader = fixture.headers[20]; // 0-indexed: block 21 → index 20
+    final Optional<WorldStateProof> deleteProof =
+        provider.getAccountProof(deleteHeader, ADDRESS_A, List.of(), Function.identity());
+    assertThat(deleteProof).as("deletion proof at block 21 must be present").isPresent();
+    assertThat(deleteProof.get().getStateTrieAccountValue())
+        .as("ADDRESS_A must be absent at block 21 (deleted)")
+        .isEmpty();
+    assertProofRootMatchesStateRoot(deleteProof.get(), deleteHeader, 21);
   }
 
   // -------------------------------------------------------------------------------------
@@ -714,6 +733,76 @@ class TrieNodeHistoryWalkerIntegrationTest {
       // 4. Register in the blockchain.
       blockchain.appendBlock(new Block(header, BlockBody.empty()), List.of());
 
+      headers[blockNum - 1] = header;
+      lastParentHash = header.getHash();
+    }
+
+    /**
+     * Appends one block that deletes {@code address} from the state. Grows the {@code headers}
+     * array by one slot so the new header is accessible at index {@code headers.length - 1}.
+     */
+    void appendDeleteBlock(final Address address) {
+      final int blockNum = headers.length + 1;
+      headers = Arrays.copyOf(headers, headers.length + 1);
+
+      // 1. Pre-compute: delete the account and derive the new state root.
+      final WorldUpdater preUp = preComputeWorldState.updater();
+      preUp.deleteAccount(address);
+      preUp.commit();
+      preComputeWorldState.persist(null);
+      final Hash stateRoot = preComputeWorldState.rootHash();
+
+      // 2. Build the canonical header.
+      final BlockHeader header =
+          new BlockHeaderTestFixture()
+              .number(blockNum)
+              .parentHash(lastParentHash)
+              .stateRoot(stateRoot)
+              .buildHeader();
+
+      // 3. Source world state: same deletion + trie log.
+      final WorldUpdater srcUp = sourceWorldState.updater();
+      srcUp.deleteAccount(address);
+      srcUp.commit();
+      sourceWorldState.persist(header);
+
+      // 4. Register in the blockchain.
+      blockchain.appendBlock(new Block(header, BlockBody.empty()), List.of());
+      headers[blockNum - 1] = header;
+      lastParentHash = header.getHash();
+    }
+
+    /**
+     * Appends one pad block that mutates ADDRESS_B without changing ADDRESS_A. Grows the {@code
+     * headers} array by one slot.
+     */
+    void appendPadBlock() {
+      final int blockNum = headers.length + 1;
+      headers = Arrays.copyOf(headers, headers.length + 1);
+
+      // 1. Pre-compute.
+      final WorldUpdater preUp = preComputeWorldState.updater();
+      preUp.getOrCreate(ADDRESS_B).setBalance(Wei.of((long) blockNum * 10));
+      preUp.commit();
+      preComputeWorldState.persist(null);
+      final Hash stateRoot = preComputeWorldState.rootHash();
+
+      // 2. Build the canonical header.
+      final BlockHeader header =
+          new BlockHeaderTestFixture()
+              .number(blockNum)
+              .parentHash(lastParentHash)
+              .stateRoot(stateRoot)
+              .buildHeader();
+
+      // 3. Source world state.
+      final WorldUpdater srcUp = sourceWorldState.updater();
+      srcUp.getOrCreate(ADDRESS_B).setBalance(Wei.of((long) blockNum * 10));
+      srcUp.commit();
+      sourceWorldState.persist(header);
+
+      // 4. Register in the blockchain.
+      blockchain.appendBlock(new Block(header, BlockBody.empty()), List.of());
       headers[blockNum - 1] = header;
       lastParentHash = header.getHash();
     }
