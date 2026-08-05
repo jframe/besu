@@ -37,8 +37,7 @@ class ArchiveNodeKeyTest {
     final Bytes location = Bytes.fromHexString("0x0a0b");
     // format: accountHash(32) | [len: 1 byte] | location
     assertThat(ArchiveNodeKey.storage(accountHash, location))
-        .isEqualTo(
-            Bytes.concatenate(accountHash, Bytes.of((byte) location.size()), location));
+        .isEqualTo(Bytes.concatenate(accountHash, Bytes.of((byte) location.size()), location));
   }
 
   @Test
