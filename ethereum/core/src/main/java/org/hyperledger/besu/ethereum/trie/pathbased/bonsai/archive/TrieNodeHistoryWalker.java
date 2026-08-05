@@ -28,6 +28,8 @@ import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.util.log.LogUtil;
 
 import java.io.Closeable;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ExecutorService;
@@ -36,6 +38,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.commons.lang3.time.DurationFormatUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -196,6 +199,7 @@ public class TrieNodeHistoryWalker implements Closeable {
       if (startBlock > targetSnapshot) {
         return;
       }
+      final Instant catchUpStart = Instant.now();
       LogUtil.throttledLog(
           () ->
               LOG.info(
@@ -239,6 +243,14 @@ public class TrieNodeHistoryWalker implements Closeable {
           halted.set(true);
           return;
         }
+      }
+      final long walked = walkedBlockNumber.get() - startBlock + 1;
+      if (walked > 0) {
+        final String duration =
+            DurationFormatUtils.formatDurationWords(
+                Duration.between(catchUpStart, Instant.now()).toMillis(), true, true);
+        LOG.info(
+            "Trie node history walker catch-up complete: {} blocks in {}", walked, duration);
       }
     } finally {
       catchUpRunning.set(false);
