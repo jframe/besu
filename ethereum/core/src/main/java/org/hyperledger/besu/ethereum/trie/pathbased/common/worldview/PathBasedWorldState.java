@@ -156,6 +156,16 @@ public abstract class PathBasedWorldState
     worldStateRootHash = blockHeader.getStateRoot();
   }
 
+  /**
+   * Reset the world state root hash without requiring a full block header. Used when only the trie
+   * root needs to change (e.g. genesis bootstrap from an empty trie).
+   *
+   * @param stateRoot the root hash to set
+   */
+  public void resetWorldStateRootHash(final Hash stateRoot) {
+    worldStateRootHash = stateRoot;
+  }
+
   @Override
   public PathBasedWorldStateKeyValueStorage getWorldStateStorage() {
     return worldStateKeyValueStorage;

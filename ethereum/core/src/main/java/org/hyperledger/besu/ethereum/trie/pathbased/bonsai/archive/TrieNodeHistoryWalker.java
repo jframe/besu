@@ -316,6 +316,11 @@ public class TrieNodeHistoryWalker implements Closeable {
     final PathBasedWorldStateUpdateAccumulator<?> accumulator =
         (PathBasedWorldStateUpdateAccumulator<?>) walkerWorldState.getWorldState().updater();
     accumulator.reset();
+    // The walker world state's root was reset to the genesis block's state root in start(), but
+    // persist() needs to BUILD the genesis trie from scratch (those nodes no longer exist in live
+    // storage — that's the whole point of this archive). Starting from EMPTY_TRIE_HASH tells
+    // BonsaiWorldState to construct the MPT fresh rather than trying to load non-existent nodes.
+    walkerWorldState.getWorldState().resetWorldStateRootHash(Hash.EMPTY_TRIE_HASH);
     genesisState.writeStateTo(walkerWorldState.getWorldState());
     // Reset so block 1's rollForward starts from a clean accumulator.
     accumulator.reset();
