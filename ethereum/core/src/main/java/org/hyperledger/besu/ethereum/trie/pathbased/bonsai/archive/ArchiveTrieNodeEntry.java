@@ -16,10 +16,8 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import org.hyperledger.besu.ethereum.rlp.RLP;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -72,16 +70,8 @@ public final class ArchiveTrieNodeEntry {
     this.body = body;
   }
 
-  public byte metadata() {
-    return metadata;
-  }
-
   public boolean isFull() {
     return (metadata & ENTRY_FULL) != 0;
-  }
-
-  public boolean isCreation() {
-    return (metadata & CREATION) != 0;
   }
 
   public boolean isDeletion() {
@@ -97,21 +87,6 @@ public final class ArchiveTrieNodeEntry {
       throw new IllegalStateException("fullNode() called on a diff entry");
     }
     return body;
-  }
-
-  public List<Integer> changedChildIndices() {
-    requireBranchDiff("changedChildIndices()");
-    if (isSingleChildChanged()) {
-      return List.of(Byte.toUnsignedInt(body.get(0)));
-    }
-    final int mask = readChildMask();
-    final List<Integer> indices = new ArrayList<>();
-    for (int i = 0; i < BRANCH_CHILDREN; i++) {
-      if ((mask & (1 << i)) != 0) {
-        indices.add(i);
-      }
-    }
-    return Collections.unmodifiableList(indices);
   }
 
   public Map<Integer, Bytes> changedChildRefs() {
@@ -181,10 +156,6 @@ public final class ArchiveTrieNodeEntry {
       }
     }
     return offset;
-  }
-
-  public boolean isShortNodeDiff() {
-    return !isFull() && !isBranchNode() && !isDeletion();
   }
 
   public Optional<Bytes> changedKey() {

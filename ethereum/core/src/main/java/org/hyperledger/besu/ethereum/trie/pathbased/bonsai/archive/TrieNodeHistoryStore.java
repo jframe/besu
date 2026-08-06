@@ -37,16 +37,6 @@ public final class TrieNodeHistoryStore {
     this.storage = Objects.requireNonNull(storage, "storage must not be null");
   }
 
-  public void put(
-      final SegmentedKeyValueStorageTransaction tx,
-      final Bytes naturalKey,
-      final long block,
-      final int counter,
-      final Bytes codecEntry) {
-    putEncoded(
-        tx, ArchiveNodeKey.historyKey(naturalKey, block), encodeStoredValue(counter, codecEntry));
-  }
-
   /** Builds the stored wire value: {@code [counter: 1 byte] ‖ codecEntry}. */
   public static Bytes encodeStoredValue(final int counter, final Bytes codecEntry) {
     return Bytes.concatenate(Bytes.of((byte) counter), codecEntry);
@@ -58,19 +48,6 @@ public final class TrieNodeHistoryStore {
       final Bytes historyKey,
       final Bytes storedValue) {
     tx.put(TRIE_BRANCH_STORAGE_ARCHIVE, historyKey.toArrayUnsafe(), storedValue.toArrayUnsafe());
-  }
-
-  public void delete(
-      final SegmentedKeyValueStorageTransaction tx, final Bytes naturalKey, final long block) {
-    tx.remove(
-        TRIE_BRANCH_STORAGE_ARCHIVE, ArchiveNodeKey.historyKey(naturalKey, block).toArrayUnsafe());
-  }
-
-  public Optional<HistoryEntry> get(final Bytes naturalKey, final long block) {
-    final Bytes key = ArchiveNodeKey.historyKey(naturalKey, block);
-    return storage
-        .get(TRIE_BRANCH_STORAGE_ARCHIVE, key.toArrayUnsafe())
-        .map(raw -> decodeStoredValue(Bytes.wrap(raw), block));
   }
 
   public Optional<HistoryEntry> getLatestBefore(final Bytes naturalKey, final long block) {

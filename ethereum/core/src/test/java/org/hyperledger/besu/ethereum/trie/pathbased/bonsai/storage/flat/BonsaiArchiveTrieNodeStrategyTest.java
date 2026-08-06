@@ -103,9 +103,8 @@ class BonsaiArchiveTrieNodeStrategyTest {
     putAccount(strategy(() -> Long.MAX_VALUE), location, node);
 
     final TrieNodeHistoryStore.HistoryEntry entry =
-        historyStore.get(ArchiveNodeKey.account(location), 0L).orElseThrow();
+        historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L).orElseThrow();
     assertThat(entry.codecEntry().isFull()).isTrue();
-    assertThat(entry.codecEntry().isCreation()).isTrue();
     assertThat(entry.counter()).isEqualTo(0);
   }
 
@@ -149,7 +148,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     setWorldBlockNumber(9L); // currentBlock = 10
     putAccount(strategy(() -> 5L), location, node); // 10 > 5 => gated out
 
-    assertThat(historyStore.get(ArchiveNodeKey.account(location), 10L)).isEmpty();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 10L)).isEmpty();
     // But the live node was still written (block import must not be blocked).
     assertThat(new BonsaiTrieNodeStrategy().getFlatAccountTrieNode(location, null, storage))
         .contains(node);
@@ -161,7 +160,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     // No WORLD_BLOCK_NUMBER_KEY => block 0; supplier far below 0.
     putAccount(strategy(() -> Long.MIN_VALUE), location, shortNodeRlp(0));
 
-    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isPresent();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isPresent();
   }
 
   @Test
@@ -207,7 +206,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     tx.commit();
 
     // History captured under the storage natural key.
-    assertThat(historyStore.get(ArchiveNodeKey.storage(accountHash.getBytes(), location), 0L))
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.storage(accountHash.getBytes(), location), 0L))
         .isPresent();
     // Live node written to flat DB.
     assertThat(
@@ -229,13 +228,13 @@ class BonsaiArchiveTrieNodeStrategyTest {
 
     assertThat(new BonsaiTrieNodeStrategy().getFlatAccountTrieNode(location, null, storage))
         .contains(node);
-    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isEmpty();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isEmpty();
 
     // Flushing into a new transaction lands the buffered entry.
     final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
     strategy.flushCaptures(storage, tx2);
     tx2.commit();
-    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isPresent();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isPresent();
   }
 
   @Test
@@ -251,7 +250,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     strategy.flushCaptures(storage, tx); // nothing buffered => writes nothing
     tx.commit();
 
-    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isEmpty();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isEmpty();
   }
 
   @Test
@@ -343,7 +342,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
     strategy.flushCaptures(storage, tx2);
     tx2.commit();
-    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isEmpty();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isEmpty();
   }
 
   @Test

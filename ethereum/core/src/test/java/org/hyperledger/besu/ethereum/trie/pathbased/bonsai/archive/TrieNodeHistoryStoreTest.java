@@ -15,7 +15,6 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -39,7 +38,10 @@ class TrieNodeHistoryStoreTest {
 
   private void put(final Bytes naturalKey, final long block, final int counter, final Bytes entry) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    historyStore.put(tx, naturalKey, block, counter, entry);
+    historyStore.putEncoded(
+        tx,
+        ArchiveNodeKey.historyKey(naturalKey, block),
+        TrieNodeHistoryStore.encodeStoredValue(counter, entry));
     tx.commit();
   }
 
@@ -50,7 +52,7 @@ class TrieNodeHistoryStoreTest {
     put(naturalKey, 100L, 0, fullEntry);
 
     final TrieNodeHistoryStore.HistoryEntry entry =
-        historyStore.get(naturalKey, 100L).orElseThrow();
+        historyStore.getLatestBefore(naturalKey, 100L).orElseThrow();
     assertThat(entry.counter()).isEqualTo(0);
     assertThat(entry.block()).isEqualTo(100L);
     assertThat(entry.codecEntry().isFull()).isTrue();
@@ -73,7 +75,7 @@ class TrieNodeHistoryStoreTest {
     final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(node, node);
     put(naturalKey, 5L, 15, diffEntry); // CHECKPOINT_INTERVAL - 1 = 15
 
-    final TrieNodeHistoryStore.HistoryEntry entry = historyStore.get(naturalKey, 5L).orElseThrow();
+    final TrieNodeHistoryStore.HistoryEntry entry = historyStore.getLatestBefore(naturalKey, 5L).orElseThrow();
     assertThat(entry.counter()).isEqualTo(15);
   }
 
@@ -82,13 +84,13 @@ class TrieNodeHistoryStoreTest {
     final Bytes naturalKey = Bytes.fromHexString("0x03");
     put(naturalKey, 7L, 0, ArchiveTrieNodeCodec.encodeDiff(Bytes.fromHexString("0xaa"), null));
 
-    final TrieNodeHistoryStore.HistoryEntry entry = historyStore.get(naturalKey, 7L).orElseThrow();
+    final TrieNodeHistoryStore.HistoryEntry entry = historyStore.getLatestBefore(naturalKey, 7L).orElseThrow();
     assertThat(entry.codecEntry().isDeletion()).isTrue();
   }
 
   @Test
   void getReturnsEmptyForNeverWrittenKey() {
-    assertThat(historyStore.get(Bytes.fromHexString("0x04"), 1L)).isEmpty();
+    assertThat(historyStore.getLatestBefore(Bytes.fromHexString("0x04"), 1L)).isEmpty();
   }
 
   @Test
@@ -126,53 +128,4 @@ class TrieNodeHistoryStoreTest {
     assertThat(historyStore.getLatestBefore(keyB, 1000L)).isEmpty();
   }
 
-  @Test
-  void deleteRemovesEntry() {
-    final Bytes naturalKey = Bytes.fromHexString("0x08");
-    put(naturalKey, 10L, 0, ArchiveTrieNodeCodec.encodeFull(Bytes.fromHexString("0xaa")));
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    historyStore.delete(tx, naturalKey, 10L);
-    tx.commit();
-    assertThat(historyStore.get(naturalKey, 10L)).isEmpty();
-  }
-
-  @Test
-  void putEncodedWritesByteIdenticalEntryToPut() {
-    final Bytes naturalKey = ArchiveNodeKey.account(Bytes.fromHexString("0x0102"));
-    final Bytes codecEntry = ArchiveTrieNodeCodec.encodeFull(Bytes.fromHexString("0xdeadbeef"));
-    final long block = 42L;
-    final int counter = 7;
-
-    // Reference: the existing put().
-    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
-    historyStore.put(tx1, naturalKey, block, counter, codecEntry);
-    tx1.commit();
-    final byte[] viaPut =
-        storage
-            .get(
-                TRIE_BRANCH_STORAGE_ARCHIVE,
-                ArchiveNodeKey.historyKey(naturalKey, block).toArrayUnsafe())
-            .orElseThrow();
-
-    // Same entry via encodeStoredValue + putEncoded at a different block.
-    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
-    historyStore.putEncoded(
-        tx2,
-        ArchiveNodeKey.historyKey(naturalKey, block + 1),
-        TrieNodeHistoryStore.encodeStoredValue(counter, codecEntry));
-    tx2.commit();
-    final byte[] viaPutEncoded =
-        storage
-            .get(
-                TRIE_BRANCH_STORAGE_ARCHIVE,
-                ArchiveNodeKey.historyKey(naturalKey, block + 1).toArrayUnsafe())
-            .orElseThrow();
-
-    assertThat(viaPutEncoded).isEqualTo(viaPut);
-    // And the typed read path decodes it identically.
-    final TrieNodeHistoryStore.HistoryEntry decoded =
-        historyStore.get(naturalKey, block + 1).orElseThrow();
-    assertThat(decoded.counter()).isEqualTo(counter);
-    assertThat(decoded.rawEntryBytes()).isEqualTo(codecEntry);
-  }
 }

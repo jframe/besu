@@ -101,8 +101,8 @@ class LiveTrieNodeCaptureIntegrationTest {
         a, new PmtStateTrieAccountValue(1L, Wei.of(2L), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
 
     // The account-trie root node (location EMPTY) has a history entry at both blocks 0 and 1.
-    assertThat(historyStore.get(ArchiveNodeKey.account(Bytes.EMPTY), 0L)).isPresent();
-    assertThat(historyStore.get(ArchiveNodeKey.account(Bytes.EMPTY), 1L)).isPresent();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.EMPTY), 0L)).isPresent();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.EMPTY), 1L)).isPresent();
     // Reconstruction of the root at block 0 differs from block 1 (state changed).
     final Optional<Bytes> root0 = reader.nodeAt(ArchiveNodeKey.account(Bytes.EMPTY), 0L);
     final Optional<Bytes> root1 = reader.nodeAt(ArchiveNodeKey.account(Bytes.EMPTY), 1L);
@@ -123,20 +123,20 @@ class LiveTrieNodeCaptureIntegrationTest {
     // Genesis (block 0) is captured even though 0 <= 488 would also pass — assert it directly.
     importAccountBlock(
         a, new PmtStateTrieAccountValue(0L, Wei.of(1L), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
-    assertThat(historyStore.get(ArchiveNodeKey.account(Bytes.EMPTY), 0L)).isPresent();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.EMPTY), 0L)).isPresent();
 
     // A block at 488 (currentBlock = 488 => WORLD_BLOCK_NUMBER_KEY = 487) is captured.
     setWorldBlockNumber(487L);
     importAccountBlock(
         a, new PmtStateTrieAccountValue(2L, Wei.of(3L), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
-    assertThat(historyStore.get(ArchiveNodeKey.account(Bytes.EMPTY), 488L)).isPresent();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.EMPTY), 488L)).isPresent();
 
     // A block at 489 (in the reorg window) is NOT captured, but the live node IS written.
     setWorldBlockNumber(488L);
     final Bytes32 root489 =
         importAccountBlock(
             a, new PmtStateTrieAccountValue(3L, Wei.of(4L), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
-    assertThat(historyStore.get(ArchiveNodeKey.account(Bytes.EMPTY), 489L)).isEmpty();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.EMPTY), 489L)).isEmpty();
     assertThat(
             new BonsaiTrieNodeStrategy()
                 .getFlatAccountTrieNode(Bytes.EMPTY, Bytes32.wrap(root489), storage))

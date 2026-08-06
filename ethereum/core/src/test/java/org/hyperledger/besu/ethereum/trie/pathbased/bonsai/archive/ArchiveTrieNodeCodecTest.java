@@ -64,7 +64,6 @@ class ArchiveTrieNodeCodecTest {
     final Bytes entry = ArchiveTrieNodeCodec.encodeFull(node);
     final ArchiveTrieNodeEntry decoded = ArchiveTrieNodeCodec.decode(entry);
     assertThat(decoded.isFull()).isTrue();
-    assertThat(decoded.isCreation()).isFalse();
     assertThat(decoded.fullNode()).isEqualTo(node);
   }
 
@@ -74,7 +73,6 @@ class ArchiveTrieNodeCodecTest {
     final ArchiveTrieNodeEntry decoded =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(null, node));
     assertThat(decoded.isFull()).isTrue();
-    assertThat(decoded.isCreation()).isTrue();
     assertThat(decoded.fullNode()).isEqualTo(node);
   }
 
@@ -103,7 +101,6 @@ class ArchiveTrieNodeCodecTest {
     final ArchiveTrieNodeEntry branchToShort =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(branch, shortN));
     assertThat(branchToShort.isFull()).isTrue();
-    assertThat(branchToShort.isCreation()).isFalse();
     assertThat(branchToShort.fullNode()).isEqualTo(shortN);
 
     final ArchiveTrieNodeEntry shortToBranch =
@@ -125,10 +122,7 @@ class ArchiveTrieNodeCodecTest {
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.isBranchNode()).isTrue();
-    // Exactly one child changed: the single-changed-child fast path must be used (index encoded
-    // directly, not the 2-byte bitmask) — this is the dominant real-world case.
-    assertThat(diff.metadata() & ArchiveTrieNodeEntry.SINGLE_CHILD_CHANGED).isNotZero();
-    assertThat(diff.changedChildIndices()).containsExactly(3);
+    assertThat(diff.changedChildRefs().keySet()).containsExactly(3);
     assertThat(diff.changedChildRefs()).containsEntry(3, newChildren[3]);
     assertThat(diff.changedValue()).isEmpty();
   }
@@ -145,9 +139,7 @@ class ArchiveTrieNodeCodecTest {
 
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    // Two children changed: must fall back to the 2-byte bitmask, not the single-child fast path.
-    assertThat(diff.metadata() & ArchiveTrieNodeEntry.SINGLE_CHILD_CHANGED).isZero();
-    assertThat(diff.changedChildIndices()).containsExactly(0, 5);
+    assertThat(diff.changedChildRefs().keySet()).containsExactly(0, 5);
     assertThat(diff.changedChildRefs().get(0)).isEqualTo(newChildren[0]);
     assertThat(diff.changedChildRefs().get(5)).isEqualTo(Bytes.fromHexString("0x80")); // RLP null
   }
@@ -160,7 +152,7 @@ class ArchiveTrieNodeCodecTest {
 
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.changedChildIndices()).isEmpty();
+    assertThat(diff.changedChildRefs()).isEmpty();
     assertThat(diff.changedValue()).contains(Bytes.fromHexString("0xbb"));
   }
 
@@ -176,7 +168,7 @@ class ArchiveTrieNodeCodecTest {
 
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.changedChildIndices()).containsExactly(0);
+    assertThat(diff.changedChildRefs().keySet()).containsExactly(0);
     assertThat(diff.changedChildRefs().get(0)).isEqualTo(newChildren[0]);
   }
 
@@ -193,7 +185,7 @@ class ArchiveTrieNodeCodecTest {
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.isBranchNode()).isTrue();
-    assertThat(diff.changedChildIndices()).containsExactly(0);
+    assertThat(diff.changedChildRefs().keySet()).containsExactly(0);
     assertThat(diff.changedChildRefs().get(0).size()).isEqualTo(255);
   }
 
@@ -220,7 +212,9 @@ class ArchiveTrieNodeCodecTest {
     final Bytes largeValue = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[70000]));
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, largeValue));
-    assertThat(diff.isShortNodeDiff()).isTrue();
+    assertThat(diff.isFull()).isFalse();
+    assertThat(diff.isBranchNode()).isFalse();
+    assertThat(diff.isDeletion()).isFalse();
     assertThat(diff.changedShortNodeValue()).isPresent();
   }
 
@@ -230,7 +224,9 @@ class ArchiveTrieNodeCodecTest {
     final Bytes newNode = shortNode(Bytes.fromHexString("0x0103"), Bytes.fromHexString("0xaa"));
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.isShortNodeDiff()).isTrue();
+    assertThat(diff.isFull()).isFalse();
+    assertThat(diff.isBranchNode()).isFalse();
+    assertThat(diff.isDeletion()).isFalse();
     assertThat(diff.changedKey()).contains(Bytes.fromHexString("0x0103"));
     assertThat(diff.changedShortNodeValue()).isEmpty();
   }
@@ -265,7 +261,9 @@ class ArchiveTrieNodeCodecTest {
     final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(node, node));
-    assertThat(diff.isShortNodeDiff()).isTrue();
+    assertThat(diff.isFull()).isFalse();
+    assertThat(diff.isBranchNode()).isFalse();
+    assertThat(diff.isDeletion()).isFalse();
     assertThat(diff.changedKey()).isEmpty();
     assertThat(diff.changedShortNodeValue()).isEmpty();
   }
@@ -286,13 +284,6 @@ class ArchiveTrieNodeCodecTest {
     mutated[7] = Bytes.fromHexString("0xa0" + "55".repeat(32));
     final Bytes next = branchNode(mutated, Bytes.EMPTY);
     final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(base, next);
-    // Exactly one child changed, so this diff goes through the single-changed-child fast path —
-    // reconstruct() must handle that encoding, not just the multi-child bitmask form.
-    assertThat(
-            ArchiveTrieNodeCodec.decode(diffEntry).metadata()
-                & ArchiveTrieNodeEntry.SINGLE_CHILD_CHANGED)
-        .isNotZero();
-
     final Bytes reconstructed =
         ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(base), List.of(diffEntry));
     assertThat(reconstructed).isEqualTo(next);

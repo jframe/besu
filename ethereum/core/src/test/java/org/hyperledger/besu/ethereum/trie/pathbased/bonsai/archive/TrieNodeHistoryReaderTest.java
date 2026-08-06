@@ -51,7 +51,10 @@ class TrieNodeHistoryReaderTest {
 
   private void write(final long block, final int counter, final Bytes codecEntry) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    historyStore.put(tx, naturalKey, block, counter, codecEntry);
+    historyStore.putEncoded(
+        tx,
+        ArchiveNodeKey.historyKey(naturalKey, block),
+        TrieNodeHistoryStore.encodeStoredValue(counter, codecEntry));
     tx.commit();
   }
 
