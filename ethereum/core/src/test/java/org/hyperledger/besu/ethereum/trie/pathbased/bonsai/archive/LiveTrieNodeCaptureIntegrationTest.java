@@ -136,7 +136,9 @@ class LiveTrieNodeCaptureIntegrationTest {
     final Bytes32 root489 =
         importAccountBlock(
             a, new PmtStateTrieAccountValue(3L, Wei.of(4L), Hash.EMPTY_TRIE_HASH, Hash.EMPTY));
-    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.EMPTY), 489L)).isEmpty();
+    // Block 489 is in the reorg window — not captured; the latest visible entry is still from 488.
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.EMPTY), 489L))
+        .hasValueSatisfying(entry -> assertThat(entry.block()).isEqualTo(488L));
     assertThat(
             new BonsaiTrieNodeStrategy()
                 .getFlatAccountTrieNode(Bytes.EMPTY, Bytes32.wrap(root489), storage))
