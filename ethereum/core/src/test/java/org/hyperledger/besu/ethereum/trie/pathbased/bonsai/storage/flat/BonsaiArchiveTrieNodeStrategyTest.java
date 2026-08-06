@@ -121,14 +121,14 @@ class BonsaiArchiveTrieNodeStrategyTest {
     }
     assertThat(
             historyStore
-                .get(ArchiveNodeKey.account(location), 1L)
+                .getLatestBefore(ArchiveNodeKey.account(location), 1L)
                 .orElseThrow()
                 .codecEntry()
                 .isFull())
         .isFalse();
     assertThat(
             historyStore
-                .get(
+                .getLatestBefore(
                     ArchiveNodeKey.account(location),
                     (long) TrieNodeHistoryReader.CHECKPOINT_INTERVAL)
                 .orElseThrow()
