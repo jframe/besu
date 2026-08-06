@@ -67,7 +67,11 @@ class LiveTrieNodeCaptureIntegrationTest {
     tx.commit();
   }
 
-  /** Applies {@code address -> value} to a fresh trie built on the current live nodes at block. */
+  /**
+   * Applies {@code address -> value} to a fresh trie built on the current live nodes. All node puts
+   * land in a single transaction; {@code flushCaptures} is called before commit — mirroring the
+   * real {@code BonsaiWorldStateKeyValueStorage.Updater} lifecycle that Task 1 wires.
+   */
   private Bytes32 importAccountBlock(final Address address, final PmtStateTrieAccountValue value) {
     final MerkleTrie<Bytes, Bytes> trie =
         new StoredMerklePatriciaTrie<>(
@@ -76,12 +80,12 @@ class LiveTrieNodeCaptureIntegrationTest {
             b -> b,
             b -> b);
     trie.put(address.addressHash().getBytes(), RLP.encode(value::writeTo));
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     trie.commit(
-        (location, nodeHash, nodeValue) -> {
-          final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-          strategy.putFlatAccountTrieNode(storage, tx, location, nodeHash, nodeValue);
-          tx.commit();
-        });
+        (location, nodeHash, nodeValue) ->
+            strategy.putFlatAccountTrieNode(storage, tx, location, nodeHash, nodeValue));
+    strategy.flushCaptures(storage, tx);
+    tx.commit();
     return trie.getRootHash();
   }
 

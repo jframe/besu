@@ -77,6 +77,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(
         storage, tx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
+    strategy.flushCaptures(storage, tx);
     tx.commit();
   }
 
@@ -171,6 +172,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     setWorldBlockNumber(0L); // currentBlock = 1
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.removeFlatAccountStateTrieNode(storage, tx, location);
+    strategy.flushCaptures(storage, tx);
     tx.commit();
 
     assertThat(reader.nodeAt(ArchiveNodeKey.account(location), 1L)).isEmpty();
@@ -200,6 +202,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final BonsaiArchiveTrieNodeStrategy strat = strategy(() -> Long.MAX_VALUE);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strat.putFlatStorageTrieNode(storage, tx, accountHash, location, null, node);
+    strat.flushCaptures(storage, tx);
     tx.commit();
 
     // History captured under the storage natural key.
@@ -210,5 +213,52 @@ class BonsaiArchiveTrieNodeStrategyTest {
             new BonsaiTrieNodeStrategy()
                 .getFlatStorageTrieNode(accountHash, location, null, storage))
         .contains(node);
+  }
+
+  @Test
+  void captureIsBufferedUntilFlush() {
+    final Bytes location = Bytes.fromHexString("0x0102");
+    final Bytes node = shortNodeRlp(0);
+    final BonsaiArchiveTrieNodeStrategy strategy = strategy(() -> Long.MAX_VALUE);
+
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(
+        storage, tx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
+    tx.commit(); // committed WITHOUT flush: live node visible, history entry absent
+
+    assertThat(new BonsaiTrieNodeStrategy().getFlatAccountTrieNode(location, null, storage))
+        .contains(node);
+    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isEmpty();
+
+    // Flushing into a new transaction lands the buffered entry.
+    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
+    strategy.flushCaptures(storage, tx2);
+    tx2.commit();
+    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isPresent();
+  }
+
+  @Test
+  void discardDropsBufferedCaptures() {
+    final Bytes location = Bytes.fromHexString("0x0102");
+    final Bytes node = shortNodeRlp(0);
+    final BonsaiArchiveTrieNodeStrategy strategy = strategy(() -> Long.MAX_VALUE);
+
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(
+        storage, tx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
+    strategy.discardCaptures();
+    strategy.flushCaptures(storage, tx); // nothing buffered => writes nothing
+    tx.commit();
+
+    assertThat(historyStore.get(ArchiveNodeKey.account(location), 0L)).isEmpty();
+  }
+
+  @Test
+  void progressAdvancesOnceAtFlush() {
+    final Bytes location = Bytes.fromHexString("0x0102");
+    final BonsaiArchiveTrieNodeStrategy strategy = strategy(() -> Long.MAX_VALUE);
+    putAccount(strategy, location, shortNodeRlp(0)); // helper flushes then commits
+    assertThat(progress.lastIndexedBlock()).isEqualTo(0L);
+    assertThat(TrieNodeHistoryProgress.load(storage).lastIndexedBlock()).isEqualTo(0L);
   }
 }

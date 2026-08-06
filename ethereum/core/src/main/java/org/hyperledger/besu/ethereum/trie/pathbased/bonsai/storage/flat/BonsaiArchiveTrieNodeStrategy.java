@@ -26,6 +26,10 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.TrieNodeHisto
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.LongSupplier;
@@ -45,21 +49,45 @@ import org.apache.tuweni.bytes.Bytes32;
  * never records a reorg-window block. The gate never suppresses the delegated live write — block
  * import must always proceed.
  *
- * <p>The diff base is the value read from the base strategy <em>before</em> the put. During
- * sequential import the live flat DB still holds block {@code N-1}'s value at that moment, so the
- * live read is the correct previous-block diff base.
+ * <p>Capture is buffered per block and applied at {@link #flushCaptures}, which the Updater invokes
+ * before every composed-tx commit. The diff base is read from committed storage at flush time;
+ * during sequential import the live flat DB still holds block {@code N-1}'s value at that moment
+ * (the block's own writes sit in the uncommitted transaction), so the read is the correct
+ * previous-block diff base — same value the prior inline implementation read.
  */
 public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
+
+  /**
+   * One buffered write awaiting capture computation. accountHash null => account trie; newNode null
+   * => removal.
+   */
+  record CaptureRequest(
+      Bytes naturalKey,
+      Bytes location,
+      long block,
+      Hash accountHash,
+      Bytes32 nodeHash,
+      Bytes newNode) {}
+
+  /** A computed history entry ready to apply to the transaction. */
+  record CaptureResult(Bytes historyKey, Bytes storedValue) {}
 
   private final TrieNodeStrategy baseStrategy;
   private final TrieNodeHistoryStore historyStore;
   private final TrieNodeHistoryProgress historyProgress;
   private volatile LongSupplier highestSafeBlockSupplier;
-  private volatile long lastSavedProgressBlock = Long.MIN_VALUE;
   // Gate decision cached per block: block-import is single-threaded, so no synchronisation needed.
   // Invalidated when highestSafeBlockSupplier changes and on each block transition.
   private long gatedBlockNumber = Long.MIN_VALUE;
   private boolean gatedCapture = false;
+
+  private final List<CaptureRequest> pendingRequests = new ArrayList<>();
+  private long bufferedBlock = Long.MIN_VALUE;
+
+  // WORLD_BLOCK_NUMBER_KEY is constant within a block (only this import thread's uncommitted tx
+  // changes it); cache it between flush/discard boundaries instead of reading it on every put.
+  private long cachedBlockNumber = Long.MIN_VALUE;
+  private boolean blockNumberCached = false;
 
   public BonsaiArchiveTrieNodeStrategy(
       final TrieNodeStrategy baseStrategy,
@@ -117,16 +145,11 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final Bytes node) {
     final long block = currentBlockNumber(storage);
-    final boolean capture = shouldCaptureBlock(block);
-    final Bytes priorNode =
-        capture
-            ? baseStrategy.getFlatAccountTrieNode(location, nodeHash, storage).orElse(null)
-            : null;
     baseStrategy.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
-    if (capture) {
-      captureTrieNodeDiff(
-          transaction, ArchiveNodeKey.account(location), location, block, priorNode, node);
-      advanceHistoryProgress(transaction, block);
+    if (shouldCaptureBlock(block)) {
+      enqueue(
+          new CaptureRequest(
+              ArchiveNodeKey.account(location), location, block, null, nodeHash, node));
     }
   }
 
@@ -139,24 +162,17 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final Bytes node) {
     final long block = currentBlockNumber(storage);
-    final boolean capture = shouldCaptureBlock(block);
-    final Bytes priorNode =
-        capture
-            ? baseStrategy
-                .getFlatStorageTrieNode(accountHash, location, nodeHash, storage)
-                .orElse(null)
-            : null;
     baseStrategy.putFlatStorageTrieNode(
         storage, transaction, accountHash, location, nodeHash, node);
-    if (capture) {
-      captureTrieNodeDiff(
-          transaction,
-          ArchiveNodeKey.storage(accountHash.getBytes(), location),
-          location,
-          block,
-          priorNode,
-          node);
-      advanceHistoryProgress(transaction, block);
+    if (shouldCaptureBlock(block)) {
+      enqueue(
+          new CaptureRequest(
+              ArchiveNodeKey.storage(accountHash.getBytes(), location),
+              location,
+              block,
+              accountHash,
+              nodeHash,
+              node));
     }
   }
 
@@ -166,75 +182,122 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorageTransaction transaction,
       final Bytes location) {
     final long block = currentBlockNumber(storage);
-    final boolean capture = shouldCaptureBlock(block);
-    // nodeHash is unknown at removal time; BonsaiTrieNodeStrategy ignores it (plain point lookup).
-    final Bytes priorNode =
-        capture ? baseStrategy.getFlatAccountTrieNode(location, null, storage).orElse(null) : null;
     baseStrategy.removeFlatAccountStateTrieNode(storage, transaction, location);
-    if (capture && priorNode != null) {
-      historyStore.put(
-          transaction,
-          ArchiveNodeKey.account(location),
-          block,
-          0,
-          ArchiveTrieNodeCodec.encodeDiff(priorNode, null));
-      advanceHistoryProgress(transaction, block);
+    if (shouldCaptureBlock(block)) {
+      enqueue(
+          new CaptureRequest(ArchiveNodeKey.account(location), location, block, null, null, null));
     }
   }
 
   private long currentBlockNumber(final SegmentedKeyValueStorage storage) {
-    // Established pattern, mirrored from
-    // BonsaiArchiveFlatDbStrategy.getStateArchiveContextForWrite:
-    // current committed WORLD_BLOCK_NUMBER_KEY + 1, or 0 if absent (genesis).
-    return storage
-        .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
-        .map(b -> Bytes.wrap(b).toLong() + 1L)
-        .orElse(0L);
+    if (!blockNumberCached) {
+      cachedBlockNumber =
+          storage
+              .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
+              .map(b -> Bytes.wrap(b).toLong() + 1L)
+              .orElse(0L);
+      blockNumberCached = true;
+    }
+    return cachedBlockNumber;
   }
 
-  private void captureTrieNodeDiff(
-      final SegmentedKeyValueStorageTransaction tx,
-      final Bytes naturalKey,
-      final Bytes location,
-      final long block,
-      final Bytes priorNode,
-      final Bytes newNode) {
+  private void enqueue(final CaptureRequest request) {
+    if (!pendingRequests.isEmpty() && bufferedBlock != request.block()) {
+      throw new IllegalStateException(
+          "trie-node capture buffer holds block "
+              + bufferedBlock
+              + " but received a write for block "
+              + request.block()
+              + " — previous block was neither flushed nor discarded");
+    }
+    bufferedBlock = request.block();
+    pendingRequests.add(request);
+  }
+
+  /**
+   * Computes the history entry for one buffered write. Reads only committed storage (the block's
+   * own writes sit in the uncommitted transaction), so during sequential import the flat DB still
+   * holds block N-1's value — the correct diff base. Safe to call from any thread; never touches
+   * the transaction. Returns empty for a removal of a node with no live prior (nothing to record).
+   */
+  private Optional<CaptureResult> computeCapture(
+      final CaptureRequest request, final SegmentedKeyValueStorage storage) {
+    final Bytes priorNode =
+        request.accountHash() == null
+            ? baseStrategy
+                .getFlatAccountTrieNode(request.location(), request.nodeHash(), storage)
+                .orElse(null)
+            : baseStrategy
+                .getFlatStorageTrieNode(
+                    request.accountHash(), request.location(), request.nodeHash(), storage)
+                .orElse(null);
+
+    if (request.newNode() == null) { // removal
+      if (priorNode == null) {
+        return Optional.empty();
+      }
+      return Optional.of(result(request, 0, ArchiveTrieNodeCodec.encodeDiff(priorNode, null)));
+    }
     if (priorNode == null) {
-      historyStore.put(tx, naturalKey, block, 0, ArchiveTrieNodeCodec.encodeDiff(null, newNode));
-      return;
+      return Optional.of(
+          result(request, 0, ArchiveTrieNodeCodec.encodeDiff(null, request.newNode())));
+    }
+    if (request.location().isEmpty()) { // roots are always FULL — no seek needed
+      return Optional.of(result(request, 0, ArchiveTrieNodeCodec.encodeFull(request.newNode())));
     }
     final Optional<TrieNodeHistoryStore.HistoryEntry> priorEntryOpt =
-        historyStore.getLatestBefore(naturalKey, block);
+        historyStore.getLatestBefore(request.naturalKey(), request.block());
     if (priorEntryOpt.isEmpty() || priorEntryOpt.get().codecEntry().isDeletion()) {
-      historyStore.put(tx, naturalKey, block, 0, ArchiveTrieNodeCodec.encodeFull(newNode));
-      return;
-    }
-    if (location.isEmpty()) {
-      historyStore.put(tx, naturalKey, block, 0, ArchiveTrieNodeCodec.encodeFull(newNode));
-      return;
+      return Optional.of(result(request, 0, ArchiveTrieNodeCodec.encodeFull(request.newNode())));
     }
     final int priorCounter = priorEntryOpt.get().counter();
     if (priorCounter + 1 >= TrieNodeHistoryReader.CHECKPOINT_INTERVAL) {
-      historyStore.put(tx, naturalKey, block, 0, ArchiveTrieNodeCodec.encodeFull(newNode));
-    } else {
-      historyStore.put(
-          tx,
-          naturalKey,
-          block,
-          priorCounter + 1,
-          ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode));
+      return Optional.of(result(request, 0, ArchiveTrieNodeCodec.encodeFull(request.newNode())));
     }
+    return Optional.of(
+        result(
+            request,
+            priorCounter + 1,
+            ArchiveTrieNodeCodec.encodeDiff(priorNode, request.newNode())));
   }
 
-  private void advanceHistoryProgress(
-      final SegmentedKeyValueStorageTransaction tx, final long block) {
+  private static CaptureResult result(
+      final CaptureRequest request, final int counter, final Bytes codecEntry) {
+    return new CaptureResult(
+        ArchiveNodeKey.historyKey(request.naturalKey(), request.block()),
+        TrieNodeHistoryStore.encodeStoredValue(counter, codecEntry));
+  }
+
+  @Override
+  public void flushCaptures(
+      final SegmentedKeyValueStorage storage,
+      final SegmentedKeyValueStorageTransaction transaction) {
+    blockNumberCached = false; // the commit this precedes will change WORLD_BLOCK_NUMBER_KEY
+    if (pendingRequests.isEmpty()) {
+      return;
+    }
+    final long block = bufferedBlock;
+    try {
+      // Belt-and-braces: keyed by historyKey, last write wins — matches sequential tx.put order.
+      final Map<Bytes, Bytes> results = new LinkedHashMap<>();
+      for (final CaptureRequest request : pendingRequests) {
+        computeCapture(request, storage)
+            .ifPresent(r -> results.put(r.historyKey(), r.storedValue()));
+      }
+      results.forEach((key, value) -> historyStore.putEncoded(transaction, key, value));
+    } finally {
+      pendingRequests.clear();
+      bufferedBlock = Long.MIN_VALUE;
+    }
     historyProgress.setLastIndexedBlock(block);
     historyProgress.setIndexStartBlock(block);
-    // A block writes thousands of trie nodes; persist the (16-byte, idempotent) progress record
-    // once per block rather than once per node.
-    if (block != lastSavedProgressBlock) {
-      historyProgress.save(tx);
-      lastSavedProgressBlock = block;
-    }
+    historyProgress.save(transaction);
+  }
+
+  @Override
+  public void discardCaptures() {
+    pendingRequests.clear();
+    bufferedBlock = Long.MIN_VALUE;
+    blockNumberCached = false;
   }
 }
