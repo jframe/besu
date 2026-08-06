@@ -77,8 +77,6 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
 
   private final Map<UInt256, Hash> storageKeyHashLookup = new ConcurrentHashMap<>();
   protected boolean isAccumulatorStateChanged;
-  private boolean trustTrieLogPriorValue;
-  private boolean skipCodeRoll;
 
   public PathBasedWorldStateUpdateAccumulator(
       final PathBasedWorldView world,
@@ -101,8 +99,6 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     updatedAccounts.putAll(source.updatedAccounts);
     deletedAccounts.addAll(source.deletedAccounts);
     this.isAccumulatorStateChanged = true;
-    this.trustTrieLogPriorValue = source.trustTrieLogPriorValue;
-    this.skipCodeRoll = source.skipCodeRoll;
   }
 
   /**
@@ -660,31 +656,6 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     return wrappedWorldView().getWorldStateStorage();
   }
 
-  /**
-   * Seeds the accumulator's prior value from the trie log's recorded {@code expectedValue} instead
-   * of reading it back from the flat DB. Required by the trailing trie-node history walker, whose
-   * flat DB sits at chain head while it replays a block {@code maxLayersToLoad} behind — those
-   * reads would return the wrong values and fail validation.
-   *
-   * <p><strong>Accepted risk:</strong> this disables the only check that compares the flat DB
-   * against the trie log during replay, which has historically caught real corruption bugs in this
-   * codebase. Callers must provide their own downstream verification; the walker relies on {@code
-   * persist()}'s state-root check. Do not enable on the live block-import path.
-   */
-  public void setTrustTrieLogPriorValue(final boolean trustTrieLogPriorValue) {
-    this.trustTrieLogPriorValue = trustTrieLogPriorValue;
-  }
-
-  /**
-   * Skips code rolling entirely. Flat {@code CODE_STORAGE} only ever holds current bytecode for
-   * currently-live contracts, so it cannot answer "what was this account's code at block N" for a
-   * contract that has since self-destructed or changed code. Consumers that never archive code (the
-   * trie-node history walker) skip the roll rather than fail on an unreadable prior value.
-   */
-  public void setSkipCodeRoll(final boolean skipCodeRoll) {
-    this.skipCodeRoll = skipCodeRoll;
-  }
-
   public void rollForward(final TrieLog layer) {
     layer
         .getAccountChanges()
@@ -734,14 +705,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
       return;
     }
     PathBasedValue<ACCOUNT> accountValue = accountsToUpdate.get(address);
-    if (accountValue == null && trustTrieLogPriorValue && expectedValue != null) {
-      // Seed from the trie log rather than the flat DB. assertCloseEnoughForDiffing below then
-      // holds trivially, since the value it compares was seeded from the same expectedValue.
-      final ACCOUNT seeded = createAccount(wrappedWorldView(), address, expectedValue, true);
-      accountValue = new PathBasedValue<>(copyAccount(seeded), seeded);
-      accountsToUpdate.put(address, accountValue);
-    }
-    if (accountValue == null && !trustTrieLogPriorValue) {
+    if (accountValue == null) {
       accountValue = loadAccountFromParent(address, accountValue);
     }
     if (accountValue == null) {
@@ -804,9 +768,6 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
       final Address address, final Bytes expectedCode, final Bytes replacementCode) {
     if (Objects.equals(expectedCode, replacementCode)) {
       // non-change, a cached read.
-      return;
-    }
-    if (skipCodeRoll) {
       return;
     }
     PathBasedValue<Bytes> codeValue = codeToUpdate.get(address);
@@ -879,15 +840,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends PathB
     }
     final Map<StorageSlotKey, PathBasedValue<UInt256>> storageMap = storageToUpdate.get(address);
     PathBasedValue<UInt256> slotValue = storageMap == null ? null : storageMap.get(storageSlotKey);
-    if (slotValue == null && trustTrieLogPriorValue && expectedValue != null) {
-      slotValue = new PathBasedValue<>(expectedValue, expectedValue);
-      storageToUpdate
-          .computeIfAbsent(
-              address,
-              k -> new StorageConsumingMap<>(address, new ConcurrentHashMap<>(), storagePreloader))
-          .put(storageSlotKey, slotValue);
-    }
-    if (slotValue == null && !trustTrieLogPriorValue) {
+    if (slotValue == null) {
       final Optional<UInt256> storageValue =
           wrappedWorldView().getStorageValueByStorageSlotKey(address, storageSlotKey);
       if (storageValue.isPresent()) {
