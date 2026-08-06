@@ -15,7 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -150,7 +150,7 @@ class TrieNodeHistoryStoreTest {
     final byte[] viaPut =
         storage
             .get(
-                TRIE_NODE_HISTORY_ARCHIVE,
+                TRIE_BRANCH_STORAGE_ARCHIVE,
                 ArchiveNodeKey.historyKey(naturalKey, block).toArrayUnsafe())
             .orElseThrow();
 
@@ -164,7 +164,7 @@ class TrieNodeHistoryStoreTest {
     final byte[] viaPutEncoded =
         storage
             .get(
-                TRIE_NODE_HISTORY_ARCHIVE,
+                TRIE_BRANCH_STORAGE_ARCHIVE,
                 ArchiveNodeKey.historyKey(naturalKey, block + 1).toArrayUnsafe())
             .orElseThrow();
 

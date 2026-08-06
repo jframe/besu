@@ -90,7 +90,7 @@ public interface PathBasedExtraStorageConfiguration {
     boolean DEFAULT_BONSAI_CROSS_BLOCK_CACHE_ENABLED = false;
     long DEFAULT_BONSAI_CROSS_BLOCK_CACHE_ACCOUNT_SIZE = 100_000L;
     long DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE = 500_000L;
-    boolean DEFAULT_TRIE_NODE_HISTORY_ENABLED = false;
+    boolean DEFAULT_ARCHIVE_STATE_PROOFS_ENABLED = false;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -118,8 +118,8 @@ public interface PathBasedExtraStorageConfiguration {
     }
 
     @Value.Default
-    default boolean getTrieNodeHistoryEnabled() {
-      return DEFAULT_TRIE_NODE_HISTORY_ENABLED;
+    default boolean getArchiveStateProofsEnabled() {
+      return DEFAULT_ARCHIVE_STATE_PROOFS_ENABLED;
     }
   }
 }

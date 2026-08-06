@@ -94,7 +94,7 @@ class BonsaiTrieNodeStrategyTest {
     final BonsaiTrieNodeStrategy altStrategy =
         new BonsaiTrieNodeStrategy(
             org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier
-                .TRIE_NODE_HISTORY_ARCHIVE);
+                .TRIE_BRANCH_STORAGE_ARCHIVE);
     final Bytes location = Bytes.fromHexString("0x06");
     final Bytes node = Bytes.fromHexString("0xbb");
     final SegmentedKeyValueStorageTransaction tx = altStorage.startTransaction();

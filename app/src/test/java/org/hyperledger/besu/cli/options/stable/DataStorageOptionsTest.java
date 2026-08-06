@@ -139,27 +139,27 @@ public class DataStorageOptionsTest
   }
 
   @Test
-  public void trieNodeHistoryEnabledCanBeEnabled() {
+  public void archiveStateProofsEnabledCanBeEnabled() {
     internalTestSuccess(
         dataStorageConfiguration ->
             assertThat(
                     dataStorageConfiguration
                         .getPathBasedExtraStorageConfiguration()
                         .getUnstable()
-                        .getTrieNodeHistoryEnabled())
+                        .getArchiveStateProofsEnabled())
                 .isEqualTo(true),
-        "--Xbonsai-trie-node-history-enabled=true");
+        "--Xbonsai-archive-state-proofs-enabled=true");
   }
 
   @Test
-  public void trieNodeHistoryEnabledDisabledByDefault() {
+  public void archiveStateProofsEnabledDisabledByDefault() {
     internalTestSuccess(
         dataStorageConfiguration ->
             assertThat(
                     dataStorageConfiguration
                         .getPathBasedExtraStorageConfiguration()
                         .getUnstable()
-                        .getTrieNodeHistoryEnabled())
+                        .getArchiveStateProofsEnabled())
                 .isEqualTo(false));
   }
 

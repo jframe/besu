@@ -26,7 +26,7 @@ class KeyValueSegmentIdentifierTest {
 
   @Test
   void trieNodeHistoryArchiveIsScopedToXBonsaiArchiveFormatOnly() {
-    final KeyValueSegmentIdentifier segment = KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
+    final KeyValueSegmentIdentifier segment = KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
     assertThat(segment.includeInDatabaseFormat(DataStorageFormat.X_BONSAI_ARCHIVE)).isTrue();
     assertThat(segment.includeInDatabaseFormat(DataStorageFormat.BONSAI)).isFalse();
     assertThat(segment.includeInDatabaseFormat(DataStorageFormat.FOREST)).isFalse();
@@ -36,9 +36,9 @@ class KeyValueSegmentIdentifierTest {
   void trieNodeHistoryArchiveUsesItsNameAsItsSegmentId() {
     // Matches the string-id convention of the other archive segments (ACCOUNT_INFO_STATE_ARCHIVE,
     // ACCOUNT_STORAGE_ARCHIVE) rather than the single-byte ids used by the older segments.
-    final KeyValueSegmentIdentifier segment = KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
+    final KeyValueSegmentIdentifier segment = KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
     assertThat(segment.getId())
-        .isEqualTo("TRIE_NODE_HISTORY_ARCHIVE".getBytes(StandardCharsets.UTF_8));
-    assertThat(segment.getName()).isEqualTo("TRIE_NODE_HISTORY_ARCHIVE");
+        .isEqualTo("TRIE_BRANCH_STORAGE_ARCHIVE".getBytes(StandardCharsets.UTF_8));
+    assertThat(segment.getName()).isEqualTo("TRIE_BRANCH_STORAGE_ARCHIVE");
   }
 }

@@ -70,7 +70,7 @@ class LiveTrieNodeCaptureIntegrationTest {
   /**
    * Applies {@code address -> value} to a fresh trie built on the current live nodes. All node puts
    * land in a single transaction; {@code flushCaptures} is called before commit — mirroring the
-   * real {@code BonsaiWorldStateKeyValueStorage.Updater} lifecycle that Task 1 wires.
+   * real {@code BonsaiWorldStateKeyValueStorage.Updater} lifecycle.
    */
   private Bytes32 importAccountBlock(final Address address, final PmtStateTrieAccountValue value) {
     final MerkleTrie<Bytes, Bytes> trie =

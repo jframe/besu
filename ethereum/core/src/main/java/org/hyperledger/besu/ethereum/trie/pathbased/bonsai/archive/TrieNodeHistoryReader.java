@@ -33,7 +33,7 @@ public final class TrieNodeHistoryReader {
 
   private static final Logger LOG = LoggerFactory.getLogger(TrieNodeHistoryReader.class);
 
-  /** Uniform checkpoint interval for all non-root nodes (root is always FULL — see Task 9). */
+  /** Uniform checkpoint interval for all non-root nodes (root is always FULL). */
   public static final int CHECKPOINT_INTERVAL = 16;
 
   /** Corrupt-data guard only; should never bind in correct operation (see design spec). */

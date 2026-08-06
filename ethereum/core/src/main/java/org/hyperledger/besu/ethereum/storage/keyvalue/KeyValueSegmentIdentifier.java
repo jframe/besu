@@ -53,13 +53,13 @@ public enum KeyValueSegmentIdentifier implements SegmentIdentifier {
       false,
       true,
       true),
-  TRIE_NODE_HISTORY_ARCHIVE(
-      "TRIE_NODE_HISTORY_ARCHIVE".getBytes(StandardCharsets.UTF_8),
+  TRIE_BRANCH_STORAGE_ARCHIVE(
+      "TRIE_BRANCH_STORAGE_ARCHIVE".getBytes(StandardCharsets.UTF_8),
       EnumSet.of(X_BONSAI_ARCHIVE),
-      true, // containsStaticData
-      false, // eligibleToHighSpecFlag
-      true, // staticDataGarbageCollectionEnabled
-      true), // cacheIndexAndFilterBlocks
+      true,
+      false,
+      true,
+      true),
   VARIABLES(new byte[] {11}), // formerly GOQUORUM_PRIVATE_WORLD_STATE
 
   // previously supported GoQuorum private states

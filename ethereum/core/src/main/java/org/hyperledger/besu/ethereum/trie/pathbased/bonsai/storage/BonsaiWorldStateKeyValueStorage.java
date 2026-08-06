@@ -69,9 +69,9 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
    * Not {@code final}: {@link
    * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy}
    * needs this storage's own {@code composedWorldStateStorage} to build its history store, so it
-   * can only be constructed <em>after</em> this object exists (see Task 12's wiring). {@code
-   * volatile} because the swap happens once during startup wiring while later reads occur on
-   * block-import and proof-serving threads.
+   * can only be constructed <em>after</em> this object exists. {@code volatile} because the swap
+   * happens once during startup wiring while later reads occur on block-import and proof-serving
+   * threads.
    */
   protected volatile TrieNodeStrategy trieNodeStrategy;
 
@@ -343,8 +343,8 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
   }
 
   /**
-   * Replaces the trie-node strategy. Called exactly once, during startup wiring (Task 10), to swap
-   * in the archive strategy — which cannot be passed to the constructor because it depends on this
+   * Replaces the trie-node strategy. Called exactly once during startup wiring to swap in the
+   * archive strategy — which cannot be passed to the constructor because it depends on this
    * object's {@code composedWorldStateStorage}. Not for use after block import has begun.
    */
   public void setTrieNodeStrategy(final TrieNodeStrategy trieNodeStrategy) {

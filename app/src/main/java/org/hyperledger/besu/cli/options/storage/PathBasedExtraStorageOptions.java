@@ -25,7 +25,7 @@ import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConf
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_FULL_FLAT_DB_ENABLED;
-import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_TRIE_NODE_HISTORY_ENABLED;
+import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ARCHIVE_STATE_PROOFS_ENABLED;
 
 import org.hyperledger.besu.cli.options.CLIOptions;
 import org.hyperledger.besu.cli.util.CommandLineUtils;
@@ -146,11 +146,11 @@ public class PathBasedExtraStorageOptions
 
     @Option(
         hidden = true,
-        names = "--Xbonsai-trie-node-history-enabled",
+        names = "--Xbonsai-archive-state-proofs-enabled",
         description =
             "Enables trie-node history capture for archive nodes, backing historical eth_getProof (default: ${DEFAULT-VALUE}).",
         fallbackValue = "false")
-    private Boolean trieNodeHistoryEnabled = DEFAULT_TRIE_NODE_HISTORY_ENABLED;
+    private Boolean archiveStateProofsEnabled = DEFAULT_ARCHIVE_STATE_PROOFS_ENABLED;
 
     /** Default Constructor. */
     Unstable() {}
@@ -225,8 +225,8 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getBonsaiCrossBlockCacheAccountSize();
     dataStorageOptions.unstableOptions.bonsaiCrossBlockCacheStorageSize =
         domainObject.getUnstable().getBonsaiCrossBlockCacheStorageSize();
-    dataStorageOptions.unstableOptions.trieNodeHistoryEnabled =
-        domainObject.getUnstable().getTrieNodeHistoryEnabled();
+    dataStorageOptions.unstableOptions.archiveStateProofsEnabled =
+        domainObject.getUnstable().getArchiveStateProofsEnabled();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
     dataStorageOptions.isParallelStateRootComputationEnabled =
@@ -250,7 +250,7 @@ public class PathBasedExtraStorageOptions
                 .bonsaiCrossBlockCacheEnabled(unstableOptions.bonsaiCrossBlockCacheEnabled)
                 .bonsaiCrossBlockCacheAccountSize(unstableOptions.bonsaiCrossBlockCacheAccountSize)
                 .bonsaiCrossBlockCacheStorageSize(unstableOptions.bonsaiCrossBlockCacheStorageSize)
-                .trieNodeHistoryEnabled(unstableOptions.trieNodeHistoryEnabled)
+                .archiveStateProofsEnabled(unstableOptions.archiveStateProofsEnabled)
                 .build())
         .build();
   }

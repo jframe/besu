@@ -247,8 +247,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
   protected PathBasedCodeCache codeCache;
 
   // Trie-node history components — populated in build() when X_BONSAI_ARCHIVE +
-  // trieNodeHistoryEnabled; exposed as fields so createWorldStateArchive() can pass the
-  // same instances to BonsaiArchiveWorldStateProvider without constructing duplicates.
+  // archiveStateProofsEnabled; shared with createWorldStateArchive() to avoid duplicate instances.
   private TrieNodeHistoryStore trieNodeHistoryStore;
   private TrieNodeHistoryReader trieNodeHistoryReader;
   private TrieNodeHistoryProgress trieNodeHistoryProgress;
@@ -950,7 +949,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         && dataStorageConfiguration
             .getPathBasedExtraStorageConfiguration()
             .getUnstable()
-            .getTrieNodeHistoryEnabled()
+            .getArchiveStateProofsEnabled()
         && trieNodeHistoryWriteStrategy != null) {
       final long maxLayers =
           ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager().getMaxLayersToLoad();
@@ -1463,7 +1462,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         if (dataStorageConfiguration
             .getPathBasedExtraStorageConfiguration()
             .getUnstable()
-            .getTrieNodeHistoryEnabled()) {
+            .getArchiveStateProofsEnabled()) {
           final SegmentedKeyValueStorage composedWorldStateStorage =
               worldStateKeyValueStorage.getComposedWorldStateStorage();
           trieNodeHistoryStore = new TrieNodeHistoryStore(composedWorldStateStorage);

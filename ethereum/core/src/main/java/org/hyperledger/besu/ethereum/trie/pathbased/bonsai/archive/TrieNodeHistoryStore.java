@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -25,7 +25,7 @@ import java.util.Optional;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
- * Point storage for {@code TRIE_NODE_HISTORY_ARCHIVE}. Owns the wire format: {@code
+ * Point storage for {@code TRIE_BRANCH_STORAGE_ARCHIVE}. Owns the wire format: {@code
  * [distanceSinceFull: 1 byte] ‖ [ArchiveTrieNodeCodec entry]}. The counter is a
  * TrieNodeHistoryStore-level concern (see the design spec's rationale) — the codec never sees it.
  */
@@ -57,19 +57,19 @@ public final class TrieNodeHistoryStore {
       final SegmentedKeyValueStorageTransaction tx,
       final Bytes historyKey,
       final Bytes storedValue) {
-    tx.put(TRIE_NODE_HISTORY_ARCHIVE, historyKey.toArrayUnsafe(), storedValue.toArrayUnsafe());
+    tx.put(TRIE_BRANCH_STORAGE_ARCHIVE, historyKey.toArrayUnsafe(), storedValue.toArrayUnsafe());
   }
 
   public void delete(
       final SegmentedKeyValueStorageTransaction tx, final Bytes naturalKey, final long block) {
     tx.remove(
-        TRIE_NODE_HISTORY_ARCHIVE, ArchiveNodeKey.historyKey(naturalKey, block).toArrayUnsafe());
+        TRIE_BRANCH_STORAGE_ARCHIVE, ArchiveNodeKey.historyKey(naturalKey, block).toArrayUnsafe());
   }
 
   public Optional<HistoryEntry> get(final Bytes naturalKey, final long block) {
     final Bytes key = ArchiveNodeKey.historyKey(naturalKey, block);
     return storage
-        .get(TRIE_NODE_HISTORY_ARCHIVE, key.toArrayUnsafe())
+        .get(TRIE_BRANCH_STORAGE_ARCHIVE, key.toArrayUnsafe())
         .map(raw -> decodeStoredValue(Bytes.wrap(raw), block));
   }
 
@@ -80,7 +80,7 @@ public final class TrieNodeHistoryStore {
     // value() is itself Optional: a matched key with no value shouldn't occur for this CF (every
     // put() always writes a non-empty value), but is filtered defensively rather than assumed.
     return storage
-        .getNearestBefore(TRIE_NODE_HISTORY_ARCHIVE, seekKey)
+        .getNearestBefore(TRIE_BRANCH_STORAGE_ARCHIVE, seekKey)
         .filter(nearest -> naturalKeyMatches(naturalKey, nearest.key()))
         .flatMap(
             nearest ->
@@ -107,7 +107,7 @@ public final class TrieNodeHistoryStore {
    * When the longer key's entry sorts between our target and our own latest entry, this filter
    * rejects it and {@code getLatestBefore} returns empty even though a valid earlier entry for the
    * queried key exists — a missed reconstruction, not a wrong one (the fail-closed hash check in
-   * Task 10 would still reject any bad node). It requires a location that is a strict prefix of
+   * the fail-closed hash check would still reject any bad node). It requires a location that is a strict prefix of
    * another location with colliding block-suffix bytes, so it is rare but not impossible. Fixing it
    * properly needs an unambiguous key encoding (e.g. a fixed-width natural-key length field); that
    * is a schema change and is deliberately out of scope here. Record it in the PR description.

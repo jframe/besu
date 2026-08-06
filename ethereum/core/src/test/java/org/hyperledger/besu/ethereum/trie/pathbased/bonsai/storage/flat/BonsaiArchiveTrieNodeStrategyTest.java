@@ -362,7 +362,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     assertThat(
             storage.stream(
                 org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier
-                    .TRIE_NODE_HISTORY_ARCHIVE))
+                    .TRIE_BRANCH_STORAGE_ARCHIVE))
         .isEmpty();
   }
 }
