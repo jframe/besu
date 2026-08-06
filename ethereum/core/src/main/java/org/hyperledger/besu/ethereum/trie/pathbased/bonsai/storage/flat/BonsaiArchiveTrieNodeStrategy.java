@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -355,10 +356,26 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   @Override
   public void discardCaptures() {
-    inFlight.forEach(future -> future.cancel(true));
+    // Join rather than cancel: cancel(true) only sets the interrupt flag and
+    // does not prevent a worker mid-read from accessing storage that gets closed
+    // during a pipeline-abort rollback. Joining ensures every worker has finished
+    // reading committed storage before we return and the storage layer tears down.
+    boolean interrupted = false;
+    for (final Future<List<CaptureResult>> future : inFlight) {
+      try {
+        future.get();
+      } catch (final InterruptedException e) {
+        interrupted = true;
+      } catch (final CancellationException | ExecutionException ignored) {
+        // already cancelled or failed — results discarded either way
+      }
+    }
     inFlight.clear();
     pendingRequests.clear();
     bufferedBlock = Long.MIN_VALUE;
     blockNumberCached = false;
+    if (interrupted) {
+      Thread.currentThread().interrupt();
+    }
   }
 }
