@@ -84,10 +84,11 @@ public final class TrieNodeHistoryStore {
    * When the longer key's entry sorts between our target and our own latest entry, this filter
    * rejects it and {@code getLatestBefore} returns empty even though a valid earlier entry for the
    * queried key exists — a missed reconstruction, not a wrong one (the fail-closed hash check in
-   * the fail-closed hash check would still reject any bad node). It requires a location that is a strict prefix of
-   * another location with colliding block-suffix bytes, so it is rare but not impossible. Fixing it
-   * properly needs an unambiguous key encoding (e.g. a fixed-width natural-key length field); that
-   * is a schema change and is deliberately out of scope here. Record it in the PR description.
+   * the fail-closed hash check would still reject any bad node). It requires a location that is a
+   * strict prefix of another location with colliding block-suffix bytes, so it is rare but not
+   * impossible. Fixing it properly needs an unambiguous key encoding (e.g. a fixed-width
+   * natural-key length field); that is a schema change and is deliberately out of scope here.
+   * Record it in the PR description.
    */
   private static boolean naturalKeyMatches(final Bytes naturalKey, final Bytes foundKey) {
     return foundKey.size() >= naturalKey.size()

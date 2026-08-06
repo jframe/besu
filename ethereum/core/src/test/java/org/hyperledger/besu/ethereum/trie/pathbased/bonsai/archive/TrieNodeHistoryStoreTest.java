@@ -75,7 +75,8 @@ class TrieNodeHistoryStoreTest {
     final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(node, node);
     put(naturalKey, 5L, 15, diffEntry); // CHECKPOINT_INTERVAL - 1 = 15
 
-    final TrieNodeHistoryStore.HistoryEntry entry = historyStore.getLatestBefore(naturalKey, 5L).orElseThrow();
+    final TrieNodeHistoryStore.HistoryEntry entry =
+        historyStore.getLatestBefore(naturalKey, 5L).orElseThrow();
     assertThat(entry.counter()).isEqualTo(15);
   }
 
@@ -84,7 +85,8 @@ class TrieNodeHistoryStoreTest {
     final Bytes naturalKey = Bytes.fromHexString("0x03");
     put(naturalKey, 7L, 0, ArchiveTrieNodeCodec.encodeDiff(Bytes.fromHexString("0xaa"), null));
 
-    final TrieNodeHistoryStore.HistoryEntry entry = historyStore.getLatestBefore(naturalKey, 7L).orElseThrow();
+    final TrieNodeHistoryStore.HistoryEntry entry =
+        historyStore.getLatestBefore(naturalKey, 7L).orElseThrow();
     assertThat(entry.codecEntry().isDeletion()).isTrue();
   }
 
@@ -127,5 +129,4 @@ class TrieNodeHistoryStoreTest {
     // keyB has no entry at all before block 1000 — must not see keyA's block 500 entry.
     assertThat(historyStore.getLatestBefore(keyB, 1000L)).isEmpty();
   }
-
 }

@@ -206,7 +206,9 @@ class BonsaiArchiveTrieNodeStrategyTest {
     tx.commit();
 
     // History captured under the storage natural key.
-    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.storage(accountHash.getBytes(), location), 0L))
+    assertThat(
+            historyStore.getLatestBefore(
+                ArchiveNodeKey.storage(accountHash.getBytes(), location), 0L))
         .isPresent();
     // Live node written to flat DB.
     assertThat(
