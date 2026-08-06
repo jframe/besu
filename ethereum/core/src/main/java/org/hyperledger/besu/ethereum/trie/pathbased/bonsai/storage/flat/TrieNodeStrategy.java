@@ -63,4 +63,19 @@ public interface TrieNodeStrategy {
       SegmentedKeyValueStorage storage,
       SegmentedKeyValueStorageTransaction transaction,
       Bytes location);
+
+  /**
+   * Applies any capture work buffered by put/remove calls to the given transaction. Called by the
+   * Updater on every path that commits the composed world-state transaction, immediately before
+   * that commit. Default: no-op (non-archive strategies buffer nothing).
+   */
+  default void flushCaptures(
+      final SegmentedKeyValueStorage storage,
+      final SegmentedKeyValueStorageTransaction transaction) {}
+
+  /**
+   * Drops any buffered capture work. Called by the Updater on rollback and on commit paths that do
+   * not commit the composed world-state transaction. Default: no-op.
+   */
+  default void discardCaptures() {}
 }
