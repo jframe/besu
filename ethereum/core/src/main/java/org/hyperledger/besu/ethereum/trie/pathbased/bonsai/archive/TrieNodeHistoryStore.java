@@ -43,9 +43,21 @@ public final class TrieNodeHistoryStore {
       final long block,
       final int counter,
       final Bytes codecEntry) {
-    final Bytes key = ArchiveNodeKey.historyKey(naturalKey, block);
-    final Bytes value = Bytes.concatenate(Bytes.of((byte) counter), codecEntry);
-    tx.put(TRIE_NODE_HISTORY_ARCHIVE, key.toArrayUnsafe(), value.toArrayUnsafe());
+    putEncoded(
+        tx, ArchiveNodeKey.historyKey(naturalKey, block), encodeStoredValue(counter, codecEntry));
+  }
+
+  /** Builds the stored wire value: {@code [counter: 1 byte] ‖ codecEntry}. */
+  public static Bytes encodeStoredValue(final int counter, final Bytes codecEntry) {
+    return Bytes.concatenate(Bytes.of((byte) counter), codecEntry);
+  }
+
+  /** Writes a pre-built history entry. Key must come from {@link ArchiveNodeKey#historyKey}. */
+  public void putEncoded(
+      final SegmentedKeyValueStorageTransaction tx,
+      final Bytes historyKey,
+      final Bytes storedValue) {
+    tx.put(TRIE_NODE_HISTORY_ARCHIVE, historyKey.toArrayUnsafe(), storedValue.toArrayUnsafe());
   }
 
   public void delete(

@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_NODE_HISTORY_ARCHIVE;
 
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -133,5 +134,45 @@ class TrieNodeHistoryStoreTest {
     historyStore.delete(tx, naturalKey, 10L);
     tx.commit();
     assertThat(historyStore.get(naturalKey, 10L)).isEmpty();
+  }
+
+  @Test
+  void putEncodedWritesByteIdenticalEntryToPut() {
+    final Bytes naturalKey = ArchiveNodeKey.account(Bytes.fromHexString("0x0102"));
+    final Bytes codecEntry = ArchiveTrieNodeCodec.encodeFull(Bytes.fromHexString("0xdeadbeef"));
+    final long block = 42L;
+    final int counter = 7;
+
+    // Reference: the existing put().
+    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
+    historyStore.put(tx1, naturalKey, block, counter, codecEntry);
+    tx1.commit();
+    final byte[] viaPut =
+        storage
+            .get(
+                TRIE_NODE_HISTORY_ARCHIVE,
+                ArchiveNodeKey.historyKey(naturalKey, block).toArrayUnsafe())
+            .orElseThrow();
+
+    // Same entry via encodeStoredValue + putEncoded at a different block.
+    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
+    historyStore.putEncoded(
+        tx2,
+        ArchiveNodeKey.historyKey(naturalKey, block + 1),
+        TrieNodeHistoryStore.encodeStoredValue(counter, codecEntry));
+    tx2.commit();
+    final byte[] viaPutEncoded =
+        storage
+            .get(
+                TRIE_NODE_HISTORY_ARCHIVE,
+                ArchiveNodeKey.historyKey(naturalKey, block + 1).toArrayUnsafe())
+            .orElseThrow();
+
+    assertThat(viaPutEncoded).isEqualTo(viaPut);
+    // And the typed read path decodes it identically.
+    final TrieNodeHistoryStore.HistoryEntry decoded =
+        historyStore.get(naturalKey, block + 1).orElseThrow();
+    assertThat(decoded.counter()).isEqualTo(counter);
+    assertThat(decoded.rawEntryBytes()).isEqualTo(codecEntry);
   }
 }
