@@ -64,12 +64,10 @@ class ArchiveProofNodeLoaderTest {
     liveTx.put(TRIE_BRANCH_STORAGE, location.toArrayUnsafe(), liveNode.toArrayUnsafe());
     liveTx.commit();
     final SegmentedKeyValueStorageTransaction histTx = storage.startTransaction();
-    historyStore.put(
+    historyStore.putEncoded(
         histTx,
-        ArchiveNodeKey.account(location),
-        50L,
-        0,
-        ArchiveTrieNodeCodec.encodeFull(historicalNode));
+        ArchiveNodeKey.historyKey(ArchiveNodeKey.account(location), 50L),
+        TrieNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(historicalNode)));
     histTx.commit();
 
     final ArchiveProofNodeLoader loader = new ArchiveProofNodeLoader(reader, storage, 50L);
@@ -82,12 +80,10 @@ class ArchiveProofNodeLoaderTest {
     final Bytes location = Bytes.fromHexString("0x03");
     final Bytes historicalNode = Bytes.fromHexString("0xaa");
     final SegmentedKeyValueStorageTransaction histTx = storage.startTransaction();
-    historyStore.put(
+    historyStore.putEncoded(
         histTx,
-        ArchiveNodeKey.account(location),
-        50L,
-        0,
-        ArchiveTrieNodeCodec.encodeFull(historicalNode));
+        ArchiveNodeKey.historyKey(ArchiveNodeKey.account(location), 50L),
+        TrieNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(historicalNode)));
     histTx.commit();
 
     final ArchiveProofNodeLoader loader = new ArchiveProofNodeLoader(reader, storage, 50L);
@@ -109,12 +105,10 @@ class ArchiveProofNodeLoaderTest {
     final Bytes location = Bytes.fromHexString("0x05");
     final Bytes historicalNode = Bytes.fromHexString("0xcc");
     final SegmentedKeyValueStorageTransaction histTx = storage.startTransaction();
-    historyStore.put(
+    historyStore.putEncoded(
         histTx,
-        ArchiveNodeKey.storage(accountHash, location),
-        50L,
-        0,
-        ArchiveTrieNodeCodec.encodeFull(historicalNode));
+        ArchiveNodeKey.historyKey(ArchiveNodeKey.storage(accountHash, location), 50L),
+        TrieNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(historicalNode)));
     histTx.commit();
 
     final ArchiveProofNodeLoader loader = new ArchiveProofNodeLoader(reader, storage, 50L);

@@ -327,8 +327,10 @@ class BonsaiArchiveWorldStateProviderTrieHistoryTest {
     // with garbage bytes whose keccak256 will NOT match the stateRoot below.
     final Bytes garbageNodeRlp = Bytes.of(1, 2, 3, 4, 5);
     final SegmentedKeyValueStorageTransaction historyTx = composed.startTransaction();
-    historyStore.put(
-        historyTx, Bytes.EMPTY, 50L, 0, ArchiveTrieNodeCodec.encodeFull(garbageNodeRlp));
+    historyStore.putEncoded(
+        historyTx,
+        ArchiveNodeKey.historyKey(Bytes.EMPTY, 50L),
+        TrieNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(garbageNodeRlp)));
     historyTx.commit();
 
     // A stateRoot that will never equal keccak256(garbageNodeRlp), triggering the mismatch.
