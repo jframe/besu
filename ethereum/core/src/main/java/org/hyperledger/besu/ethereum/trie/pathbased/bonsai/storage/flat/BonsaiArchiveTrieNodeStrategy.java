@@ -36,6 +36,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -80,6 +81,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   /** Chunk of requests handed to one worker task. */
   private static final int CAPTURE_CHUNK_SIZE = 64;
 
+  private static final AtomicInteger CAPTURE_THREAD_COUNTER = new AtomicInteger();
+
   /**
    * Shared capture pool, mirroring ParallelStoredMerklePatriciaTrie's static-pool precedent.
    * Deliberately NOT the trie ForkJoinPool: that pool is saturated with hashing exactly while
@@ -90,7 +93,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       Executors.newFixedThreadPool(
           Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 2)),
           runnable -> {
-            final Thread thread = new Thread(runnable, "trie-capture");
+            final Thread thread =
+                new Thread(runnable, "trie-capture-" + CAPTURE_THREAD_COUNTER.getAndIncrement());
             thread.setDaemon(true);
             return thread;
           });
