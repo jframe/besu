@@ -32,6 +32,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.LongSupplier;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -49,11 +53,12 @@ import org.apache.tuweni.bytes.Bytes32;
  * never records a reorg-window block. The gate never suppresses the delegated live write — block
  * import must always proceed.
  *
- * <p>Capture is buffered per block and applied at {@link #flushCaptures}, which the Updater invokes
- * before every composed-tx commit. The diff base is read from committed storage at flush time;
- * during sequential import the live flat DB still holds block {@code N-1}'s value at that moment
- * (the block's own writes sit in the uncommitted transaction), so the read is the correct
- * previous-block diff base — same value the prior inline implementation read.
+ * <p>Capture is buffered per block. Requests are submitted to {@link #CAPTURE_POOL} in chunks of
+ * {@link #CAPTURE_CHUNK_SIZE} as they accumulate; the remainder is submitted at {@link
+ * #flushCaptures}. Workers call {@code computeCapture}, which reads only committed storage (the
+ * block's own writes sit in the still-uncommitted transaction) — safe to call from any thread.
+ * Worker results are joined serially at flush time; the transaction is never touched from worker
+ * threads.
  */
 public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
@@ -72,6 +77,24 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   /** A computed history entry ready to apply to the transaction. */
   record CaptureResult(Bytes historyKey, Bytes storedValue) {}
 
+  /** Chunk of requests handed to one worker task. */
+  private static final int CAPTURE_CHUNK_SIZE = 64;
+
+  /**
+   * Shared capture pool, mirroring ParallelStoredMerklePatriciaTrie's static-pool precedent.
+   * Deliberately NOT the trie ForkJoinPool: that pool is saturated with hashing exactly while
+   * captures run, and capture tasks are read-latency-bound, not CPU-bound. Daemon threads —
+   * process-lifetime, no shutdown needed.
+   */
+  private static final ExecutorService CAPTURE_POOL =
+      Executors.newFixedThreadPool(
+          Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 2)),
+          runnable -> {
+            final Thread thread = new Thread(runnable, "trie-capture");
+            thread.setDaemon(true);
+            return thread;
+          });
+
   private final TrieNodeStrategy baseStrategy;
   private final TrieNodeHistoryStore historyStore;
   private final TrieNodeHistoryProgress historyProgress;
@@ -83,6 +106,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   private final List<CaptureRequest> pendingRequests = new ArrayList<>();
   private long bufferedBlock = Long.MIN_VALUE;
+  private final List<Future<List<CaptureResult>>> inFlight = new ArrayList<>();
 
   // WORLD_BLOCK_NUMBER_KEY is constant within a block (only this import thread's uncommitted tx
   // changes it); cache it between flush/discard boundaries instead of reading it on every put.
@@ -149,7 +173,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     if (shouldCaptureBlock(block)) {
       enqueue(
           new CaptureRequest(
-              ArchiveNodeKey.account(location), location, block, null, nodeHash, node));
+              ArchiveNodeKey.account(location), location, block, null, nodeHash, node),
+          storage);
     }
   }
 
@@ -172,7 +197,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
               block,
               accountHash,
               nodeHash,
-              node));
+              node),
+          storage);
     }
   }
 
@@ -185,7 +211,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     baseStrategy.removeFlatAccountStateTrieNode(storage, transaction, location);
     if (shouldCaptureBlock(block)) {
       enqueue(
-          new CaptureRequest(ArchiveNodeKey.account(location), location, block, null, null, null));
+          new CaptureRequest(ArchiveNodeKey.account(location), location, block, null, null, null),
+          storage);
     }
   }
 
@@ -201,8 +228,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     return cachedBlockNumber;
   }
 
-  private void enqueue(final CaptureRequest request) {
-    if (!pendingRequests.isEmpty() && bufferedBlock != request.block()) {
+  private void enqueue(final CaptureRequest request, final SegmentedKeyValueStorage storage) {
+    if ((!pendingRequests.isEmpty() || !inFlight.isEmpty()) && bufferedBlock != request.block()) {
       throw new IllegalStateException(
           "trie-node capture buffer holds block "
               + bufferedBlock
@@ -212,6 +239,23 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     }
     bufferedBlock = request.block();
     pendingRequests.add(request);
+    if (pendingRequests.size() >= CAPTURE_CHUNK_SIZE) {
+      submitChunk(storage);
+    }
+  }
+
+  private void submitChunk(final SegmentedKeyValueStorage storage) {
+    final List<CaptureRequest> chunk = List.copyOf(pendingRequests);
+    pendingRequests.clear();
+    inFlight.add(
+        CAPTURE_POOL.submit(
+            () -> {
+              final List<CaptureResult> results = new ArrayList<>(chunk.size());
+              for (final CaptureRequest request : chunk) {
+                computeCapture(request, storage).ifPresent(results::add);
+              }
+              return results;
+            }));
   }
 
   /**
@@ -273,19 +317,30 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {
     blockNumberCached = false; // the commit this precedes will change WORLD_BLOCK_NUMBER_KEY
-    if (pendingRequests.isEmpty()) {
+    if (pendingRequests.isEmpty() && inFlight.isEmpty()) {
       return;
     }
     final long block = bufferedBlock;
+    if (!pendingRequests.isEmpty()) {
+      submitChunk(storage);
+    }
     try {
-      // Belt-and-braces: keyed by historyKey, last write wins — matches sequential tx.put order.
+      // Belt-and-braces: keyed by historyKey, last write wins — matches sequential tx.put order
+      // (chunks are joined in submission order, which is put order).
       final Map<Bytes, Bytes> results = new LinkedHashMap<>();
-      for (final CaptureRequest request : pendingRequests) {
-        computeCapture(request, storage)
-            .ifPresent(r -> results.put(r.historyKey(), r.storedValue()));
+      for (final Future<List<CaptureResult>> future : inFlight) {
+        for (final CaptureResult result : future.get()) {
+          results.put(result.historyKey(), result.storedValue());
+        }
       }
       results.forEach((key, value) -> historyStore.putEncoded(transaction, key, value));
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new RuntimeException("interrupted while flushing trie-node captures", e);
+    } catch (final ExecutionException e) {
+      throw new RuntimeException("trie-node capture failed", e.getCause());
     } finally {
+      inFlight.clear();
       pendingRequests.clear();
       bufferedBlock = Long.MIN_VALUE;
     }
@@ -296,6 +351,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   @Override
   public void discardCaptures() {
+    inFlight.forEach(future -> future.cancel(true));
+    inFlight.clear();
     pendingRequests.clear();
     bufferedBlock = Long.MIN_VALUE;
     blockNumberCached = false;
