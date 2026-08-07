@@ -149,7 +149,7 @@ public class PathBasedExtraStorageOptions
         names = "--Xbonsai-archive-state-proofs-enabled",
         description =
             "Enables trie-node history capture for archive nodes, backing historical eth_getProof (default: ${DEFAULT-VALUE}).",
-        fallbackValue = "false")
+        fallbackValue = "true")
     private Boolean archiveStateProofsEnabled = DEFAULT_ARCHIVE_STATE_PROOFS_ENABLED;
 
     /** Default Constructor. */

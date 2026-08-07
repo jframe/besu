@@ -953,12 +953,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         && trieNodeHistoryWriteStrategy != null) {
       final long maxLayers =
           ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager().getMaxLayersToLoad();
-      final SyncState effectiveSyncState = syncState;
-      final AtomicLong highestSafeBlock = new AtomicLong(Long.MIN_VALUE);
       trieNodeHistoryWriteStrategy.setHighestSafeBlockSupplier(
-          () ->
-              highestSafeBlock.accumulateAndGet(
-                  effectiveSyncState.bestChainHeight() - maxLayers, Math::max));
+          new LiveCaptureGate(syncState, maxLayers));
       LOG.info("Live trie-node history capture enabled (trailing head by {} blocks)", maxLayers);
       if (trieNodeHistoryProgress != null
           && trieNodeHistoryProgress.lastIndexedBlock() < 0
