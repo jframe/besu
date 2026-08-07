@@ -350,6 +350,13 @@ public class SyncState implements NewPayloadListener {
     return isInitialSyncPhaseDone;
   }
 
+  /**
+   * Returns {@code true} once the initial sync phase is complete and we are near the chain head.
+   */
+  public boolean isNetworkHeadKnown() {
+    return isInitialSyncPhaseDone;
+  }
+
   public void markInitialSyncPhaseAsDone() {
     isInitialSyncPhaseDone = true;
     isResyncNeeded = false;
