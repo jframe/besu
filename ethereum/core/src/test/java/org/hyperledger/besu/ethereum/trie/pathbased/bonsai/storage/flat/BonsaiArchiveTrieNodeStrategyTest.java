@@ -218,7 +218,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
   }
 
   @Test
-  void captureIsBufferedUntilFlush() {
+  void captureIsBufferedUntilFlushAndOnlyOwningTransactionCanFlush() {
     final Bytes location = Bytes.fromHexString("0x0102");
     final Bytes node = shortNodeRlp(0);
     final BonsaiArchiveTrieNodeStrategy strategy = strategy(() -> Long.MAX_VALUE);
@@ -226,16 +226,16 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(
         storage, tx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
-    tx.commit(); // committed WITHOUT flush: live node visible, history entry absent
 
-    assertThat(new BonsaiTrieNodeStrategy().getFlatAccountTrieNode(location, null, storage))
-        .contains(node);
+    // A flush from a transaction that did not fill the buffer is ignored.
+    final SegmentedKeyValueStorageTransaction foreignTx = storage.startTransaction();
+    strategy.flushCaptures(storage, foreignTx);
+    foreignTx.commit();
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isEmpty();
 
-    // Flushing into a new transaction lands the buffered entry.
-    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
-    strategy.flushCaptures(storage, tx2);
-    tx2.commit();
+    // The owning transaction's flush lands the buffered entry.
+    strategy.flushCaptures(storage, tx);
+    tx.commit();
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isPresent();
   }
 
@@ -248,11 +248,38 @@ class BonsaiArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(
         storage, tx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
-    strategy.discardCaptures();
+    strategy.discardCaptures(tx);
     strategy.flushCaptures(storage, tx); // nothing buffered => writes nothing
     tx.commit();
 
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isEmpty();
+  }
+
+  /**
+   * Regression test for the production sequence in {@code PathBasedWorldState.persist()}: the trie
+   * commit buffers captures on the import updater's transaction, then {@code
+   * TrieLogManager.saveTrieLog} opens a second updater and calls {@code commitTrieLogOnly()} —
+   * which invokes {@code discardCaptures} with ITS transaction — before the import updater flushes.
+   * The foreign discard must not wipe the buffer.
+   */
+  @Test
+  void discardFromAnotherTransactionDoesNotDropBufferedCaptures() {
+    final Bytes location = Bytes.fromHexString("0x0102");
+    final Bytes node = shortNodeRlp(0);
+    final BonsaiArchiveTrieNodeStrategy strategy = strategy(() -> Long.MAX_VALUE);
+
+    final SegmentedKeyValueStorageTransaction importTx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(
+        storage, importTx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
+
+    // Trie-log updater's lifecycle call with its own transaction — must be a no-op.
+    final SegmentedKeyValueStorageTransaction trieLogTx = storage.startTransaction();
+    strategy.discardCaptures(trieLogTx);
+    trieLogTx.rollback();
+
+    strategy.flushCaptures(storage, importTx);
+    importTx.commit();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isPresent();
   }
 
   @Test
@@ -357,7 +384,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
       strategy.putFlatAccountTrieNode(
           storage, tx, location, org.hyperledger.besu.crypto.Hash.keccak256(node), node);
     }
-    strategy.discardCaptures();
+    strategy.discardCaptures(tx);
     strategy.flushCaptures(storage, tx);
     tx.commit();
     assertThat(

@@ -61,6 +61,14 @@ import org.apache.tuweni.bytes.Bytes32;
  * block's own writes sit in the still-uncommitted transaction) — safe to call from any thread.
  * Worker results are joined serially at flush time; the transaction is never touched from worker
  * threads.
+ *
+ * <p>The buffer is owned by the transaction whose puts filled it. This strategy instance is shared
+ * by every Updater created from the same storage, and other updaters' lifecycle calls arrive
+ * mid-block: {@code TrieLogManager.saveTrieLog} opens its own updater between the trie commit and
+ * the composed commit and calls {@code commitTrieLogOnly()} (→ {@code discardCaptures}). {@link
+ * #flushCaptures} and {@link #discardCaptures} therefore ignore calls carrying a transaction other
+ * than the owning one — without this guard the trie-log updater silently wiped every buffered
+ * capture of every block.
  */
 public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
@@ -112,6 +120,9 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   private final List<CaptureRequest> pendingRequests = new ArrayList<>();
   private long bufferedBlock = Long.MIN_VALUE;
   private final List<Future<List<CaptureResult>>> inFlight = new ArrayList<>();
+  // The transaction whose puts filled the buffer; flush/discard from any other transaction is
+  // ignored (see class javadoc). Identity comparison: each Updater holds one transaction object.
+  private SegmentedKeyValueStorageTransaction owningTransaction;
 
   // WORLD_BLOCK_NUMBER_KEY is constant within a block (only this import thread's uncommitted tx
   // changes it); cache it between flush/discard boundaries instead of reading it on every put.
@@ -179,7 +190,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       enqueue(
           new CaptureRequest(
               ArchiveNodeKey.account(location), location, block, null, nodeHash, node),
-          storage);
+          storage,
+          transaction);
     }
   }
 
@@ -203,7 +215,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
               accountHash,
               nodeHash,
               node),
-          storage);
+          storage,
+          transaction);
     }
   }
 
@@ -217,7 +230,8 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     if (shouldCaptureBlock(block)) {
       enqueue(
           new CaptureRequest(ArchiveNodeKey.account(location), location, block, null, null, null),
-          storage);
+          storage,
+          transaction);
     }
   }
 
@@ -233,7 +247,10 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     return cachedBlockNumber;
   }
 
-  private void enqueue(final CaptureRequest request, final SegmentedKeyValueStorage storage) {
+  private void enqueue(
+      final CaptureRequest request,
+      final SegmentedKeyValueStorage storage,
+      final SegmentedKeyValueStorageTransaction transaction) {
     if ((!pendingRequests.isEmpty() || !inFlight.isEmpty()) && bufferedBlock != request.block()) {
       throw new IllegalStateException(
           "trie-node capture buffer holds block "
@@ -243,6 +260,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
               + " — previous block was neither flushed nor discarded");
     }
     bufferedBlock = request.block();
+    owningTransaction = transaction;
     pendingRequests.add(request);
     if (pendingRequests.size() >= CAPTURE_CHUNK_SIZE) {
       submitChunk(storage);
@@ -321,6 +339,10 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   public void flushCaptures(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {
+    if (owningTransaction != null && owningTransaction != transaction) {
+      // Another updater committing its own transaction — the buffer is not its to flush.
+      return;
+    }
     blockNumberCached = false; // the commit this precedes will change WORLD_BLOCK_NUMBER_KEY
     if (pendingRequests.isEmpty() && inFlight.isEmpty()) {
       return;
@@ -348,6 +370,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       inFlight.clear();
       pendingRequests.clear();
       bufferedBlock = Long.MIN_VALUE;
+      owningTransaction = null;
     }
     historyProgress.setLastIndexedBlock(block);
     historyProgress.setIndexStartBlock(block);
@@ -355,7 +378,11 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   }
 
   @Override
-  public void discardCaptures() {
+  public void discardCaptures(final SegmentedKeyValueStorageTransaction transaction) {
+    if (owningTransaction != null && owningTransaction != transaction) {
+      // Another updater's rollback or trie-log-only commit — the buffer is not its to discard.
+      return;
+    }
     // Join rather than cancel: cancel(true) only sets the interrupt flag and
     // does not prevent a worker mid-read from accessing storage that gets closed
     // during a pipeline-abort rollback. Joining ensures every worker has finished
@@ -374,6 +401,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     pendingRequests.clear();
     bufferedBlock = Long.MIN_VALUE;
     blockNumberCached = false;
+    owningTransaction = null;
     if (interrupted) {
       Thread.currentThread().interrupt();
     }

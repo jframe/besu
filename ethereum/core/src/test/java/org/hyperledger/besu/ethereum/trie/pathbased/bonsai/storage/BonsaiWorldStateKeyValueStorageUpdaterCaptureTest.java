@@ -44,7 +44,7 @@ class BonsaiWorldStateKeyValueStorageUpdaterCaptureTest {
     }
 
     @Override
-    public void discardCaptures() {
+    public void discardCaptures(final SegmentedKeyValueStorageTransaction tx) {
       events.add("discard");
     }
   }

@@ -476,7 +476,7 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
 
     @Override
     public void commitTrieLogOnly() {
-      trieNodeStrategy.discardCaptures();
+      trieNodeStrategy.discardCaptures(composedWorldStateTransaction);
       trieLogStorageTransaction.commit();
       composedWorldStateTransaction.close();
     }
@@ -490,7 +490,7 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
 
     @Override
     public void rollback() {
-      trieNodeStrategy.discardCaptures();
+      trieNodeStrategy.discardCaptures(composedWorldStateTransaction);
       composedWorldStateTransaction.rollback();
       trieLogStorageTransaction.rollback();
     }

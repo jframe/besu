@@ -67,15 +67,21 @@ public interface TrieNodeStrategy {
   /**
    * Applies any capture work buffered by put/remove calls to the given transaction. Called by the
    * Updater on every path that commits the composed world-state transaction, immediately before
-   * that commit. Default: no-op (non-archive strategies buffer nothing).
+   * that commit. Implementations that buffer per-transaction state must ignore calls whose {@code
+   * transaction} is not the one that filled the buffer — a single strategy instance is shared by
+   * every Updater on the same storage, and unrelated updaters (e.g. the trie-log-only updater
+   * inside {@code TrieLogManager.saveTrieLog}) commit mid-block. Default: no-op (non-archive
+   * strategies buffer nothing).
    */
   default void flushCaptures(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {}
 
   /**
-   * Drops any buffered capture work. Called by the Updater on rollback and on commit paths that do
-   * not commit the composed world-state transaction. Default: no-op.
+   * Drops any buffered capture work owned by the given transaction. Called by the Updater on
+   * rollback and on commit paths that do not commit the composed world-state transaction. The same
+   * ownership rule as {@link #flushCaptures} applies: calls from a transaction that did not fill
+   * the buffer must be ignored. Default: no-op.
    */
-  default void discardCaptures() {}
+  default void discardCaptures(final SegmentedKeyValueStorageTransaction transaction) {}
 }
