@@ -22,13 +22,15 @@ import java.util.function.LongSupplier;
 /**
  * Computes the highest block number that is safe to commit to the trie-node history archive.
  *
- * <p>During initial sync (PoS backward sync, snap sync) {@link SyncState#isInitialSyncPhaseDone()}
- * is {@code false} and the network head is not reliably available via peer estimates. In that case
- * every block is safe to capture (we are importing already-finalised history), so {@link
- * Long#MAX_VALUE} is returned.
+ * <p>When the network head is not reliably known — e.g. during PoS backward sync where the CL
+ * only sends {@code forkchoiceUpdated} (not {@code newPayload}) and PoS peers do not advertise
+ * height estimates — {@link Long#MAX_VALUE} is returned so that every block being imported is
+ * captured. This covers the common case where a PoS archive node is catching up from genesis
+ * with {@code sync-mode=FULL}.
  *
- * <p>Once initial sync is complete the gate trails the live network head by {@code maxLayers} so
- * that blocks within the reorg window are not archived prematurely.
+ * <p>Once the network head is known ({@link SyncState#isNetworkHeadKnown()} returns {@code true}),
+ * the gate trails the live network head by {@code maxLayers} so that blocks within the reorg
+ * window are not archived prematurely.
  */
 class LiveCaptureGate implements LongSupplier {
 
@@ -43,7 +45,7 @@ class LiveCaptureGate implements LongSupplier {
 
   @Override
   public long getAsLong() {
-    if (!syncState.isInitialSyncPhaseDone()) {
+    if (!syncState.isNetworkHeadKnown()) {
       return Long.MAX_VALUE;
     }
     return highestSafeBlock.accumulateAndGet(
