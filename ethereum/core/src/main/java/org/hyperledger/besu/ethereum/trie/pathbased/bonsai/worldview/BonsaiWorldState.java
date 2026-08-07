@@ -413,8 +413,9 @@ public class BonsaiWorldState extends PathBasedWorldState {
             new BonsaiWorldStateKeyValueStorage.Updater(
                 noOpSegmentedTx,
                 noOpTx,
-                worldStateKeyValueStorage.getFlatDbStrategy(),
-                worldStateKeyValueStorage.getComposedWorldStateStorage())),
+                getWorldStateStorage().getFlatDbStrategy(),
+                getWorldStateStorage().getComposedWorldStateStorage(),
+                getWorldStateStorage().getTrieNodeStrategy())),
         accumulator.copy());
   }
 
