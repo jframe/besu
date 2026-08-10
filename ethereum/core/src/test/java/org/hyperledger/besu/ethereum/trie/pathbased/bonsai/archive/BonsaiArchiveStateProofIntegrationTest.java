@@ -24,7 +24,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.Arch
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveProofNodeLoader;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -50,7 +50,7 @@ class BonsaiArchiveStateProofIntegrationTest {
   private ArchiveNodeHistoryStore historyStore;
   private ArchiveHistoryReader historyReader;
   private BonsaiTrieNodeStrategy baseStrategy;
-  private BonsaiArchiveTrieNodeStrategy archiveStrategy;
+  private ArchiveTrieNodeStrategy archiveStrategy;
 
   @BeforeEach
   void setUp() {
@@ -63,7 +63,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     baseStrategy = new BonsaiTrieNodeStrategy();
     // Gate always open: acts as initial-sync mode
     archiveStrategy =
-        new BonsaiArchiveTrieNodeStrategy(
+        new ArchiveTrieNodeStrategy(
             baseStrategy, historyStore, historyProgress, () -> Long.MAX_VALUE);
   }
 

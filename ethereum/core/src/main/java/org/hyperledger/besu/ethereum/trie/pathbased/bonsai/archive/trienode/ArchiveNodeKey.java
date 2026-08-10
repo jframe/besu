@@ -16,14 +16,14 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import org.apache.tuweni.bytes.Bytes;
 
-/** Key encoding for {@code TRIE_BRANCH_STORAGE_ARCHIVE} entries. */
+/** Utility class for constructing natural keys and history keys for archive trie nodes. */
 public final class ArchiveNodeKey {
   private ArchiveNodeKey() {}
 
   /**
    * Natural key for an account trie node: {@code [len:1B]‖location}.
    *
-   * <p>The 1-byte length prefix disambiguates keys that would otherwise be byte-prefixes of each
+   * <p>The 1-byte length prefix disambiguate keys that would otherwise be byte-prefixes of each
    * other (e.g. location {@code [0x0e]} vs {@code [0x0e, 0x00]}), ensuring {@code getNearestBefore}
    * never confuses entries from one node with those of a deeper node.
    */

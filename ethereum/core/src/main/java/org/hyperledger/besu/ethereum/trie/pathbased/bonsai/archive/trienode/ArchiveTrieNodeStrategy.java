@@ -12,15 +12,13 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
+package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.TrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
@@ -32,33 +30,32 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
 /**
- * FULL-only inline archive capture. On each trie-node put, delegates the live write to the base
- * strategy, then (if the capture gate is open for the current block) writes the full node RLP into
- * the SAME transaction. No prior-node read, no diff, no pool, no tombstones (roadmap §2.2). The
- * gate is initial-sync-only in PR1: supplier returns MAX_VALUE while initial-syncing, MIN_VALUE
- * otherwise; block 0 (genesis) is always captured.
+ * A {@link TrieNodeStrategy} that captures every trie-node write into the bonsai archive column
+ * family ({@code TRIE_BRANCH_STORAGE_ARCHIVE}) so that historical {@code eth_getProof} requests can
+ * be served without replaying trie-log diffs.
  *
- * <p><strong>Tx-ownership guard (fix 657cf447d9):</strong> the strategy instance is shared by every
- * {@code Updater} on the same storage. {@code TrieLogManager.saveTrieLog} opens a second updater
- * mid-block and calls {@code commitTrieLogOnly()} which triggers {@code onDiscard}. Without the
- * guard that foreign call would wipe the import block's capture state, leaving the archive silently
- * un-advanced on every block.
+ * <p>Each put is delegated to the wrapped {@code base} strategy first (live flat DB), then, if the
+ * capture gate is open, the full bare-RLP node is written into the archive in the same transaction
+ * under an {@link ArchiveNodeKey} that encodes the block number.
+ *
+ * <p>The gate is a {@code LongSupplier} returning the highest block safe to archive. In practice,
+ * it returns {@code Long.MAX_VALUE} while the node is behind the network head ({@code
+ * !syncState.isInSync()}) and {@code Long.MIN_VALUE} once at the head, preventing live blocks
+ * within the reorg window from entering the archive. Block 0 (genesis) is always captured.
  */
-public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
+public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   private final TrieNodeStrategy base;
   private final ArchiveNodeHistoryStore historyStore;
   private final ArchiveNodeHistoryProgress historyProgress;
-  private volatile LongSupplier highestSafeBlockSupplier;
+  private final LongSupplier highestSafeBlockSupplier;
 
   private long cachedBlockNumber = Long.MIN_VALUE;
   private boolean blockNumberCached = false;
   private long capturedBlock = Long.MIN_VALUE;
-  // Identity of the transaction whose puts filled the capture state. Flush/discard from any
-  // non-owning transaction are ignored (fix 657cf447d9).
   private SegmentedKeyValueStorageTransaction owningTransaction;
 
-  public BonsaiArchiveTrieNodeStrategy(
+  public ArchiveTrieNodeStrategy(
       final TrieNodeStrategy base,
       final ArchiveNodeHistoryStore historyStore,
       final ArchiveNodeHistoryProgress historyProgress,
@@ -67,10 +64,6 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
     this.historyStore = Objects.requireNonNull(historyStore);
     this.historyProgress = Objects.requireNonNull(historyProgress);
     this.highestSafeBlockSupplier = Objects.requireNonNull(highestSafeBlockSupplier);
-  }
-
-  public void setHighestSafeBlockSupplier(final LongSupplier supplier) {
-    this.highestSafeBlockSupplier = Objects.requireNonNull(supplier);
   }
 
   private boolean shouldCapture(final long block) {
@@ -143,7 +136,6 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Bytes location) {
-    // FULL-only: removals are not captured (roadmap §2.2). Live delete only.
     base.removeFlatAccountStateTrieNode(storage, transaction, location);
   }
 
@@ -152,9 +144,9 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {
     if (owningTransaction != null && owningTransaction != transaction) {
-      return; // another updater committing its own transaction — not ours to flush (657cf447d9)
+      return;
     }
-    blockNumberCached = false; // this commit advances WORLD_BLOCK_NUMBER_KEY
+    blockNumberCached = false;
     if (capturedBlock == Long.MIN_VALUE) {
       return;
     }
@@ -168,8 +160,7 @@ public class BonsaiArchiveTrieNodeStrategy implements TrieNodeStrategy {
   @Override
   public void onDiscard(final SegmentedKeyValueStorageTransaction transaction) {
     if (owningTransaction != null && owningTransaction != transaction) {
-      return; // another updater's rollback / trie-log-only commit — not ours to discard
-      // (657cf447d9)
+      return;
     }
     blockNumberCached = false;
     capturedBlock = Long.MIN_VALUE;

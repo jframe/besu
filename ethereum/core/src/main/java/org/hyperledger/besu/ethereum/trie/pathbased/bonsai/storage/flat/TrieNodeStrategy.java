@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
@@ -26,7 +27,7 @@ import org.apache.tuweni.bytes.Bytes32;
 /**
  * Pluggable strategy for trie-node reads and writes against {@code TRIE_BRANCH_STORAGE}. The
  * default implementation ({@link BonsaiTrieNodeStrategy}) is format-identical to the legacy inline
- * code; the archive implementation ({@link BonsaiArchiveTrieNodeStrategy}) additionally captures
+ * code; the archive implementation ({@link ArchiveTrieNodeStrategy}) additionally captures
  * full node RLP into {@code TRIE_BRANCH_STORAGE_ARCHIVE} for historical proof serving.
  *
  * <p>The two lifecycle hooks {@link #onBeforeCommit} and {@link #onDiscard} are default no-ops so

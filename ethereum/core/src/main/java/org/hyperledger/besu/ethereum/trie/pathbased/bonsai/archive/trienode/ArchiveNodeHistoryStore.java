@@ -25,8 +25,9 @@ import java.util.Optional;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
- * Point store for {@code TRIE_BRANCH_STORAGE_ARCHIVE}. FULL-only: the value is the bare node RLP.
- * (PR2 replaces the value with a codec entry; PR6 adds an index over these keys.)
+ * Stores historical trie node values in the archive store, keyed by a combination of the natural
+ * key and the block number at which the value was valid. For a given natural key and target block,
+ * returns the latest value at or before that block.
  */
 public final class ArchiveNodeHistoryStore {
 
@@ -54,12 +55,9 @@ public final class ArchiveNodeHistoryStore {
   }
 
   /**
-   * {@code getNearestBefore} scans the whole CF, so the returned key may belong to a different
-   * natural key; reject those. Known limitation: variable-length natural keys mean one can be a
-   * strict byte-prefix of another; a rare interleaving can make this return empty for a key that
-   * does have an earlier entry — a missed reconstruction, never a wrong one (the caller's
-   * fail-closed hash check rejects any bad node). Fixing it needs a fixed-width key length field
-   * (out of scope for PR1).
+   * Returns true if the foundKey is a history key for the same natural key as the given naturalKey.
+   * This is used to filter out history keys that are for different natural keys when searching for
+   * the latest value before a given block.
    */
   private static boolean naturalKeyMatches(final Bytes naturalKey, final Bytes foundKey) {
     return foundKey.size() >= naturalKey.size()

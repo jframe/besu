@@ -20,9 +20,9 @@ import java.util.Optional;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
- * Resolves a trie node's RLP as of a target block. FULL-only: a single {@code getLatestBefore}
- * lookup — the greatest version at or before the target is the node's content at that block
- * (reachability argument, roadmap §2.2). PR2 turns this into a diff-reconstruction walk.
+ * Reads historical trie node values from the archive store.
+ *
+ * <p>For a given natural key and target block, returns the latest value at or before that block.
  */
 public final class ArchiveHistoryReader {
 

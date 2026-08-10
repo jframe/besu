@@ -23,6 +23,7 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeKey;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
@@ -34,7 +35,7 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-class BonsaiArchiveTrieNodeStrategyTest {
+class ArchiveTrieNodeStrategyTest {
 
   private SegmentedKeyValueStorage storage;
   private ArchiveNodeHistoryStore historyStore;
@@ -49,8 +50,8 @@ class BonsaiArchiveTrieNodeStrategyTest {
     historyProgress = new ArchiveNodeHistoryProgress();
   }
 
-  private BonsaiArchiveTrieNodeStrategy strategyWithGate(final long highestSafeBlock) {
-    return new BonsaiArchiveTrieNodeStrategy(
+  private ArchiveTrieNodeStrategy strategyWithGate(final long highestSafeBlock) {
+    return new ArchiveTrieNodeStrategy(
         new BonsaiTrieNodeStrategy(), historyStore, historyProgress, () -> highestSafeBlock);
   }
 
@@ -68,7 +69,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
   @Test
   void capturesFullNodeWhenGateOpen() {
     // Gate wide open (initial sync): block 0 (no prior stored block) must be captured.
-    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MAX_VALUE);
+    final ArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MAX_VALUE);
     final Bytes location = Bytes.of(0x0e);
     final Bytes node = Bytes.fromHexString("0xdeadbeef");
 
@@ -87,7 +88,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     // Store block 5 as the last committed block, making the current block 6.
     setStoredBlockNumber(5L);
 
-    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MIN_VALUE);
+    final ArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MIN_VALUE);
     final Bytes location = Bytes.of(0x0e);
     final Bytes node = Bytes.fromHexString("0xcafe");
 
@@ -110,7 +111,7 @@ class BonsaiArchiveTrieNodeStrategyTest {
     // TrieLogManager.saveTrieLog() opens a second updater mid-block and calls commitTrieLogOnly(),
     // which triggers onDiscard(tx2). Without the ownership guard that call would wipe the capture
     // state built up by tx1, losing the block from the archive entirely.
-    final BonsaiArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MAX_VALUE);
+    final ArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MAX_VALUE);
     final Bytes location = Bytes.EMPTY;
     final Bytes node = Bytes.fromHexString("0x1234");
 

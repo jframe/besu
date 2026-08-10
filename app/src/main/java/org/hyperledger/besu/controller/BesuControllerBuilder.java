@@ -92,7 +92,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.Arch
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiArchiveTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
@@ -989,8 +989,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       final BonsaiWorldStateKeyValueStorage keyValueStorage =
           worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
       final SegmentedKeyValueStorage liveStorage = keyValueStorage.getComposedWorldStateStorage();
-      final BonsaiArchiveTrieNodeStrategy archiveTrieNodeStrategy =
-          new BonsaiArchiveTrieNodeStrategy(
+      final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
+          new ArchiveTrieNodeStrategy(
               new BonsaiTrieNodeStrategy(),
               new ArchiveNodeHistoryStore(liveStorage),
               ArchiveNodeHistoryProgress.load(liveStorage),

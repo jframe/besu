@@ -54,7 +54,7 @@ class ArchiveNodeHistoryProgressTest {
     p.save(tx);
     tx.commit();
     final ArchiveNodeHistoryProgress loaded = ArchiveNodeHistoryProgress.load(storage);
-    assertThat(loaded.indexStartBlock()).isEqualTo(3);
-    assertThat(loaded.lastIndexedBlock()).isEqualTo(9);
+    assertThat(loaded.indexStartBlock).isEqualTo(3);
+    assertThat(loaded.lastIndexedBlock).isEqualTo(9);
   }
 }

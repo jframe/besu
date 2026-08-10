@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
-import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -24,10 +24,7 @@ import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
 
-/**
- * Persisted contiguous covered window {@code [indexStartBlock, lastIndexedBlock]} for archive
- * proofs.
- */
+/** Tracks the progress of indexing historical trie nodes in the archive store. */
 public final class ArchiveNodeHistoryProgress {
 
   public static final long UNSET_LAST_INDEXED = -1L;
@@ -35,8 +32,8 @@ public final class ArchiveNodeHistoryProgress {
   private static final byte[] PROGRESS_KEY =
       "ARCHIVE_TRIE_HISTORY_PROGRESS_KEY".getBytes(StandardCharsets.UTF_8);
 
-  private volatile long indexStartBlock = UNSET_INDEX_START;
-  private volatile long lastIndexedBlock = UNSET_LAST_INDEXED;
+  volatile long indexStartBlock = UNSET_INDEX_START;
+  volatile long lastIndexedBlock = UNSET_LAST_INDEXED;
 
   public ArchiveNodeHistoryProgress() {}
 
@@ -46,34 +43,26 @@ public final class ArchiveNodeHistoryProgress {
         && block <= lastIndexedBlock;
   }
 
-  public long lastIndexedBlock() {
-    return lastIndexedBlock;
-  }
-
   public void setLastIndexedBlock(final long block) {
     this.lastIndexedBlock = block;
-  }
-
-  public long indexStartBlock() {
-    return indexStartBlock;
   }
 
   public void setIndexStartBlock(final long block) {
     this.indexStartBlock = Math.min(this.indexStartBlock, block);
   }
 
-  public Bytes toBytes() {
+  private Bytes toBytes() {
     return Bytes.concatenate(
         Bytes.ofUnsignedLong(indexStartBlock), Bytes.ofUnsignedLong(lastIndexedBlock));
   }
 
   public void save(final SegmentedKeyValueStorageTransaction tx) {
-    tx.put(TRIE_BRANCH_STORAGE, PROGRESS_KEY, toBytes().toArrayUnsafe());
+    tx.put(TRIE_BRANCH_STORAGE_ARCHIVE, PROGRESS_KEY, toBytes().toArrayUnsafe());
   }
 
   public static ArchiveNodeHistoryProgress load(final SegmentedKeyValueStorage storage) {
     final ArchiveNodeHistoryProgress progress = new ArchiveNodeHistoryProgress();
-    final Optional<byte[]> raw = storage.get(TRIE_BRANCH_STORAGE, PROGRESS_KEY);
+    final Optional<byte[]> raw = storage.get(TRIE_BRANCH_STORAGE_ARCHIVE, PROGRESS_KEY);
     raw.ifPresent(
         bytes -> {
           final Bytes b = Bytes.wrap(bytes);
