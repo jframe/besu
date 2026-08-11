@@ -90,9 +90,9 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchive
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
@@ -978,25 +978,23 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         // Close the migrator before storageProvider so callback finishes before RocksDB is closed
         closeables.addFirst(archiveMigrator);
       }
-    }
 
-    // Wire archive trie-node capture if the opt-in flag is set
-    if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(dataStorageConfiguration.getDataStorageFormat())
-        && dataStorageConfiguration
-            .getPathBasedExtraStorageConfiguration()
-            .getUnstable()
-            .getBonsaiArchiveStateProofsEnabled()) {
-      final BonsaiWorldStateKeyValueStorage keyValueStorage =
-          worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
-      final SegmentedKeyValueStorage liveStorage = keyValueStorage.getComposedWorldStateStorage();
-      final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
-          new ArchiveTrieNodeStrategy(
-              new BonsaiTrieNodeStrategy(),
-              new ArchiveNodeHistoryStore(liveStorage),
-              ArchiveNodeHistoryProgress.load(liveStorage),
-              () -> syncState.isInSync() ? Long.MIN_VALUE : Long.MAX_VALUE);
-      keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
-      LOG.info("Bonsai archive trie-node capture enabled (--Xbonsai-archive-state-proofs-enabled)");
+      if (dataStorageConfiguration
+          .getPathBasedExtraStorageConfiguration()
+          .getUnstable()
+          .getBonsaiArchiveStateProofsEnabled()) {
+        final BonsaiWorldStateKeyValueStorage keyValueStorage =
+            worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
+        final SegmentedKeyValueStorage liveStorage = keyValueStorage.getComposedWorldStateStorage();
+        final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
+            new ArchiveTrieNodeStrategy(
+                new BonsaiTrieNodeStrategy(),
+                new ArchiveNodeHistoryStore(liveStorage),
+                ArchiveNodeHistoryProgress.load(liveStorage),
+                () -> syncState.isInSync() ? Long.MIN_VALUE : Long.MAX_VALUE);
+        keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
+        LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
+      }
     }
 
     return new BesuController(

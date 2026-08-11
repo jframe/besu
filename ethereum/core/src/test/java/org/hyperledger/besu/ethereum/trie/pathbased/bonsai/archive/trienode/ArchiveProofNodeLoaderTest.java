@@ -21,7 +21,6 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
@@ -38,7 +37,6 @@ class ArchiveProofNodeLoaderTest {
   private SegmentedKeyValueStorage storage;
   private ArchiveNodeHistoryStore historyStore;
   private ArchiveHistoryReader historyReader;
-  private BonsaiTrieNodeStrategy trieStrategy;
 
   @BeforeEach
   void setUp() {
@@ -47,17 +45,10 @@ class ArchiveProofNodeLoaderTest {
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
     historyStore = new ArchiveNodeHistoryStore(storage);
     historyReader = new ArchiveHistoryReader(historyStore);
-    trieStrategy = new BonsaiTrieNodeStrategy();
   }
 
   private static Bytes32 keccak(final Bytes value) {
     return Bytes32.wrap(Hash.hash(value).getBytes());
-  }
-
-  private void putLive(final Bytes location, final Bytes node) {
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    trieStrategy.putFlatAccountTrieNode(storage, tx, location, keccak(node), node);
-    tx.commit();
   }
 
   private void putArchive(final Bytes location, final long block, final Bytes node) {
@@ -68,62 +59,36 @@ class ArchiveProofNodeLoaderTest {
 
   @Test
   void returnsEmptyTrieNodeForEmptyHash() {
-    final NodeLoader loader =
-        ArchiveProofNodeLoader.forAccount(trieStrategy, storage, historyReader, 5L);
+    final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 5L);
     assertThat(loader.getNode(Bytes.EMPTY, MerkleTrie.EMPTY_TRIE_NODE_HASH))
         .contains(MerkleTrie.EMPTY_TRIE_NODE);
   }
 
   @Test
-  void returnsLiveNodeWhenHashMatches() {
+  void returnsArchiveNodeWhenHashMatches() {
     final Bytes location = Bytes.of(0x0e);
     final Bytes node = Bytes.fromHexString("0xdeadbeef");
-    putLive(location, node);
+    putArchive(location, 5L, node);
 
-    final NodeLoader loader =
-        ArchiveProofNodeLoader.forAccount(trieStrategy, storage, historyReader, 5L);
+    final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 5L);
     assertThat(loader.getNode(location, keccak(node))).contains(node);
   }
 
   @Test
-  void fallsBackToArchiveWhenLiveHashDoesNotMatch() {
-    final Bytes location = Bytes.of(0x0e);
-    final Bytes oldNode = Bytes.fromHexString("0xaabb");
-    final Bytes newNode = Bytes.fromHexString("0xccdd");
-
-    // Live has the NEW node (state advanced past targetBlock).
-    putLive(location, newNode);
-    // Archive has the old node at block 3.
-    putArchive(location, 3L, oldNode);
-
-    // Proof for block 3 must return oldNode.
-    final NodeLoader loader =
-        ArchiveProofNodeLoader.forAccount(trieStrategy, storage, historyReader, 3L);
-    assertThat(loader.getNode(location, keccak(oldNode))).contains(oldNode);
-  }
-
-  @Test
-  void returnsEmptyWhenNeitherLiveNorArchiveMatchesHash() {
+  void returnsEmptyWhenArchiveHashDoesNotMatch() {
     final Bytes location = Bytes.of(0x0e);
     final Bytes archiveNode = Bytes.fromHexString("0x1122");
     final Bytes32 unknownHash = keccak(Bytes.fromHexString("0xfeed"));
     putArchive(location, 5L, archiveNode);
 
-    final NodeLoader loader =
-        ArchiveProofNodeLoader.forAccount(trieStrategy, storage, historyReader, 5L);
-    // Fail-closed: unknown hash → empty
+    final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 5L);
     assertThat(loader.getNode(location, unknownHash)).isEmpty();
   }
 
   @Test
-  void returnsEmptyWhenNotInArchiveAndLiveMismatches() {
+  void returnsEmptyWhenNothingInArchive() {
     final Bytes location = Bytes.of(0x0e);
-    final Bytes liveNode = Bytes.fromHexString("0xabcd");
-    final Bytes32 differentHash = keccak(Bytes.fromHexString("0x9999"));
-    putLive(location, liveNode);
-
-    final NodeLoader loader =
-        ArchiveProofNodeLoader.forAccount(trieStrategy, storage, historyReader, 2L);
-    assertThat(loader.getNode(location, differentHash)).isEmpty();
+    final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 5L);
+    assertThat(loader.getNode(location, keccak(Bytes.fromHexString("0x9999")))).isEmpty();
   }
 }

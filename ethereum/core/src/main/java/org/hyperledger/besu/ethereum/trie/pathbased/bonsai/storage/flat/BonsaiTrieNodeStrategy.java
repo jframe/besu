@@ -27,9 +27,9 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
 /**
- * Default trie-node strategy. On-disk format is identical to the pre-strategy inline code: account
- * nodes use bare {@code location} keys; storage nodes use {@code accountHash‖location} keys; values
- * are bare node RLP. Inherits the no-op lifecycle hooks from {@link TrieNodeStrategy}.
+ * The Bonsai strategy for storing and retrieving trie nodes in a flat key-value storage. This
+ * implementation uses a single segment for all trie nodes, with account trie nodes keyed by their
+ * location and storage trie nodes keyed by a combination of the account hash and their location.
  */
 public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
 

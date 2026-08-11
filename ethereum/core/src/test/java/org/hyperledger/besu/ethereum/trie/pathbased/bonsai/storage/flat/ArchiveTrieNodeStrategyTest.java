@@ -106,11 +106,7 @@ class ArchiveTrieNodeStrategyTest {
   }
 
   @Test
-  void foreignTransactionDoesNotWipeCaptureState() {
-    // Regression guard for fix 657cf447d9.
-    // TrieLogManager.saveTrieLog() opens a second updater mid-block and calls commitTrieLogOnly(),
-    // which triggers onDiscard(tx2). Without the ownership guard that call would wipe the capture
-    // state built up by tx1, losing the block from the archive entirely.
+  void onDiscardFromNonOwningTransactionIsNoOp() {
     final ArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MAX_VALUE);
     final Bytes location = Bytes.EMPTY;
     final Bytes node = Bytes.fromHexString("0x1234");

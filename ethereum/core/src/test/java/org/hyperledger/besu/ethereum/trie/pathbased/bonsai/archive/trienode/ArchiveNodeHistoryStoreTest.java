@@ -57,7 +57,7 @@ class ArchiveNodeHistoryStoreTest {
   }
 
   @Test
-  void doesNotBleedAcrossNaturalKeys() {
+  void prefixNaturalKeyDoesNotMatchLongerKey() {
     final Bytes shallow = ArchiveNodeKey.account(Bytes.of(0x0e));
     final Bytes deep = ArchiveNodeKey.account(Bytes.of(0x0e, 0x00));
     put(shallow, 5, Bytes.of(0xAA));

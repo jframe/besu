@@ -15,7 +15,6 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat;
 
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
@@ -25,20 +24,9 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
 /**
- * Pluggable strategy for trie-node reads and writes against {@code TRIE_BRANCH_STORAGE}. The
- * default implementation ({@link BonsaiTrieNodeStrategy}) is format-identical to the legacy inline
- * code; the archive implementation ({@link ArchiveTrieNodeStrategy}) additionally captures
- * full node RLP into {@code TRIE_BRANCH_STORAGE_ARCHIVE} for historical proof serving.
- *
- * <p>The two lifecycle hooks {@link #onBeforeCommit} and {@link #onDiscard} are default no-ops so
- * non-archive strategies impose no overhead. The {@code Updater} calls them unconditionally (no
- * {@code instanceof} check) — the default no-ops make this safe.
- *
- * <p><strong>Tx-ownership contract (fix 657cf447d9):</strong> the strategy instance is shared by
- * every {@code Updater} on the same storage object. {@code TrieLogManager.saveTrieLog} opens a
- * <em>second</em> updater mid-block and calls {@code commitTrieLogOnly()} which triggers {@code
- * onDiscard}. Implementations that hold per-transaction state MUST guard both hooks against calls
- * from non-owning transactions (compare by identity, not equality).
+ * Defines the strategy for storing and retrieving trie nodes in a flat key-value storage.
+ * Implementations of this interface can define different strategies for how trie nodes are stored
+ * and retrieved, such as using different key formats or storage segments.
  */
 public interface TrieNodeStrategy {
 
@@ -68,17 +56,11 @@ public interface TrieNodeStrategy {
       SegmentedKeyValueStorageTransaction transaction,
       Bytes location);
 
-  /**
-   * Called immediately before the composed world-state transaction commits. An archive strategy
-   * uses this to persist the covered-window progress marker. Default: no-op.
-   */
+  /** Called when the composed transaction is committed. */
   default void onBeforeCommit(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {}
 
-  /**
-   * Called when the composed transaction is discarded (rollback or {@code commitTrieLogOnly}). An
-   * archive strategy uses this to reset per-transaction capture state. Default: no-op.
-   */
+  /** Called when the composed transaction is discarded or rolled back. */
   default void onDiscard(final SegmentedKeyValueStorageTransaction transaction) {}
 }

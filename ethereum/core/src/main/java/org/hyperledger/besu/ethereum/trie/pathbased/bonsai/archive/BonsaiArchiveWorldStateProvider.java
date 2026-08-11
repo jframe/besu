@@ -26,7 +26,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.Arch
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveProofNodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams;
@@ -203,16 +202,13 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
   /**
    * A {@link WorldStateStorageCoordinator} that routes account-trie and storage-trie node reads
-   * through {@link ArchiveProofNodeLoader}: live-first from the flat DB, fallback to the archive CF
-   * when the flat DB has a newer node. The coverage check is done before instantiation so {@code
-   * isWorldStateAvailable} always returns {@code true} here.
+   * through {@link ArchiveProofNodeLoader}. The coverage check is done before instantiation so
+   * {@code isWorldStateAvailable} always returns {@code true} here.
    */
   private static final class HistoryBackedWorldStateStorageCoordinator
       extends WorldStateStorageCoordinator {
 
     private final ArchiveHistoryReader historyReader;
-    private final SegmentedKeyValueStorage liveStorage;
-    private final BonsaiTrieNodeStrategy trieStrategy;
     private final long targetBlock;
 
     HistoryBackedWorldStateStorageCoordinator(
@@ -221,8 +217,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         final long targetBlock) {
       super(keyValueStorage);
       this.historyReader = historyReader;
-      this.liveStorage = keyValueStorage.getComposedWorldStateStorage();
-      this.trieStrategy = new BonsaiTrieNodeStrategy();
       this.targetBlock = targetBlock;
     }
 
@@ -233,16 +227,14 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
     @Override
     public Optional<Bytes> getAccountStateTrieNode(final Bytes location, final Bytes32 nodeHash) {
-      return ArchiveProofNodeLoader.forAccount(
-              trieStrategy, liveStorage, historyReader, targetBlock)
+      return ArchiveProofNodeLoader.forAccount(historyReader, targetBlock)
           .getNode(location, nodeHash);
     }
 
     @Override
     public Optional<Bytes> getAccountStorageTrieNode(
         final Hash accountHash, final Bytes location, final Bytes32 nodeHash) {
-      return ArchiveProofNodeLoader.forStorage(
-              trieStrategy, liveStorage, accountHash, historyReader, targetBlock)
+      return ArchiveProofNodeLoader.forStorage(accountHash, historyReader, targetBlock)
           .getNode(location, nodeHash);
     }
   }

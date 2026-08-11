@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
@@ -47,9 +48,7 @@ import org.junit.jupiter.api.Test;
 class BonsaiArchiveStateProofIntegrationTest {
 
   private SegmentedKeyValueStorage storage;
-  private ArchiveNodeHistoryStore historyStore;
   private ArchiveHistoryReader historyReader;
-  private BonsaiTrieNodeStrategy baseStrategy;
   private ArchiveTrieNodeStrategy archiveStrategy;
 
   @BeforeEach
@@ -58,9 +57,9 @@ class BonsaiArchiveStateProofIntegrationTest {
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
     final ArchiveNodeHistoryProgress historyProgress = new ArchiveNodeHistoryProgress();
-    historyStore = new ArchiveNodeHistoryStore(storage);
+    final ArchiveNodeHistoryStore historyStore = new ArchiveNodeHistoryStore(storage);
+    final BonsaiTrieNodeStrategy baseStrategy = new BonsaiTrieNodeStrategy();
     historyReader = new ArchiveHistoryReader(historyStore);
-    baseStrategy = new BonsaiTrieNodeStrategy();
     // Gate always open: acts as initial-sync mode
     archiveStrategy =
         new ArchiveTrieNodeStrategy(
@@ -86,9 +85,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
-    // Live path: live DB has the node (unchanged since block 0)
-    final org.hyperledger.besu.ethereum.trie.NodeLoader loader =
-        ArchiveProofNodeLoader.forAccount(baseStrategy, storage, historyReader, 0L);
+    final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
     assertThat(loader.getNode(location, hash(node))).contains(node);
   }
 
@@ -122,14 +119,10 @@ class BonsaiArchiveStateProofIntegrationTest {
     archiveStrategy.onBeforeCommit(storage, tx1);
     tx1.commit();
 
-    // Live has block1's node; proof for block 0 must go through archive.
-    final org.hyperledger.besu.ethereum.trie.NodeLoader loader0 =
-        ArchiveProofNodeLoader.forAccount(baseStrategy, storage, historyReader, 0L);
+    final NodeLoader loader0 = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
     assertThat(loader0.getNode(location, hash(nodeAtBlock0))).contains(nodeAtBlock0);
 
-    // Proof for block 1 should also work (live has it).
-    final org.hyperledger.besu.ethereum.trie.NodeLoader loader1 =
-        ArchiveProofNodeLoader.forAccount(baseStrategy, storage, historyReader, 1L);
+    final NodeLoader loader1 = ArchiveProofNodeLoader.forAccount(historyReader, 1L);
     assertThat(loader1.getNode(location, hash(nodeAtBlock1))).contains(nodeAtBlock1);
   }
 
@@ -155,8 +148,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     // Nothing written to storage
     final Bytes location = Bytes.of(0x0f);
     final Bytes phantomNode = Bytes.fromHexString("0x9999");
-    final org.hyperledger.besu.ethereum.trie.NodeLoader loader =
-        ArchiveProofNodeLoader.forAccount(baseStrategy, storage, historyReader, 5L);
+    final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 5L);
     assertThat(loader.getNode(location, hash(phantomNode))).isEmpty();
   }
 
@@ -175,8 +167,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
-    final org.hyperledger.besu.ethereum.trie.NodeLoader loader =
-        ArchiveProofNodeLoader.forStorage(baseStrategy, storage, accountHash, historyReader, 0L);
+    final NodeLoader loader = ArchiveProofNodeLoader.forStorage(accountHash, historyReader, 0L);
     assertThat(loader.getNode(location, hash(node))).contains(node);
   }
 
@@ -198,8 +189,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     tx.commit();
 
     // Account-trie loader must not return anything for the same location
-    final org.hyperledger.besu.ethereum.trie.NodeLoader accountLoader =
-        ArchiveProofNodeLoader.forAccount(baseStrategy, storage, historyReader, 0L);
+    final NodeLoader accountLoader = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
     assertThat(accountLoader.getNode(storageLocation, hash(storageNode))).isEmpty();
   }
 }
