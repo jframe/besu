@@ -67,8 +67,8 @@ class ArchiveTrieNodeStrategyTest {
   }
 
   @Test
-  void capturesFullNodeWhenGateOpen() {
-    // Gate wide open (initial sync): block 0 (no prior stored block) must be captured.
+  void archivesFullNodeWhenGateOpen() {
+    // Gate wide open (initial sync): block 0 (no prior stored block) must be archived.
     final ArchiveTrieNodeStrategy strategy = strategyWithGate(true);
     final Bytes location = Bytes.of(0x0e);
     final Bytes node = Bytes.fromHexString("0xdeadbeef");
@@ -82,7 +82,7 @@ class ArchiveTrieNodeStrategyTest {
   }
 
   @Test
-  void doesNotCaptureWhenGateClosedAndNotGenesis() {
+  void doesNotArchiveWhenGateClosedAndNotGenesis() {
     // Gate closed (at-head sync): node writes go live but must NOT be archived.
     // Store block 5 as the last committed block, making the current block 6.
     setStoredBlockNumber(5L);

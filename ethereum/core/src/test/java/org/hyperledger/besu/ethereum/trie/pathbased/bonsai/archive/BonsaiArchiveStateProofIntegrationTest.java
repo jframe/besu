@@ -39,11 +39,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * End-to-end integration test for the bonsai archive trie-node capture and proof-read pipeline.
+ * End-to-end integration test for the bonsai archive trie-node write and proof-read pipeline.
  *
- * <p>Covers the full chain: BonsaiArchiveTrieNodeStrategy → ArchiveNodeHistoryStore →
+ * <p>Covers the full chain: ArchiveTrieNodeStrategy → ArchiveNodeHistoryStore →
  * ArchiveNodeHistoryProgress → ArchiveProofNodeLoader (as would be used by
- * HistoryBackedWorldStateStorageCoordinator). Does NOT require a real block-processing stack.
+ * BonsaiArchiveWorldStateStorageCoordinator). Does NOT require a real block-processing stack.
  */
 class BonsaiArchiveStateProofIntegrationTest {
 
@@ -69,12 +69,8 @@ class BonsaiArchiveStateProofIntegrationTest {
     return Bytes32.wrap(Hash.hash(value).getBytes());
   }
 
-  /**
-   * Simulates a full trie-node write cycle: the archive strategy captures a node during a block
-   * commit and the ArchiveProofNodeLoader can retrieve it.
-   */
   @Test
-  void capturedNodeIsRetrievableViaProofLoader() {
+  void archivedNodeIsRetrievableViaProofLoader() {
     final Bytes location = Bytes.of(0x0e);
     final Bytes node = Bytes.fromHexString("0xdeadbeef01");
 
@@ -87,10 +83,6 @@ class BonsaiArchiveStateProofIntegrationTest {
     assertThat(loader.getNode(location, hash(node))).contains(node);
   }
 
-  /**
-   * Simulates state change between two blocks: at block 1, live has new node; proof for block 0
-   * must serve the old node from the archive.
-   */
   @Test
   void archivePathServesHistoricalNodeWhenLiveStateAdvanced() {
     final Bytes location = Bytes.of(0x0a);
@@ -122,9 +114,8 @@ class BonsaiArchiveStateProofIntegrationTest {
     assertThat(loader1.getNode(location, hash(nodeAtBlock1))).contains(nodeAtBlock1);
   }
 
-  /** Progress is updated and covered after a successful block capture. */
   @Test
-  void progressCoversBlockAfterCapture() {
+  void progressCoversBlockAfterArchive() {
     final Bytes location = Bytes.of(0x00);
     final Bytes node = Bytes.fromHexString("0x01");
 
@@ -134,12 +125,11 @@ class BonsaiArchiveStateProofIntegrationTest {
 
     final ArchiveNodeHistoryProgress loaded = new ArchiveNodeHistoryProgress(storage);
     assertThat(loaded.covers(0L)).isTrue();
-    assertThat(loaded.covers(1L)).isFalse(); // only block 0 was captured
+    assertThat(loaded.covers(1L)).isFalse(); // only block 0 was archived
   }
 
-  /** Nodes NOT in the archive (e.g. block not captured) return empty from the proof loader. */
   @Test
-  void proofLoaderReturnsEmptyForUncapturedBlock() {
+  void proofLoaderReturnsEmptyForUnarchivedBlock() {
     // Nothing written to storage
     final Bytes location = Bytes.of(0x0f);
     final Bytes phantomNode = Bytes.fromHexString("0x9999");
@@ -147,9 +137,8 @@ class BonsaiArchiveStateProofIntegrationTest {
     assertThat(loader.getNode(location, hash(phantomNode))).isEmpty();
   }
 
-  /** Storage-trie capture and retrieval via forStorage loader. */
   @Test
-  void capturesAndRetrievesStorageTrieNode() {
+  void archivesAndRetrievesStorageTrieNode() {
     final Hash accountHash =
         Hash.wrap(
             Bytes32.fromHexString(
@@ -165,9 +154,8 @@ class BonsaiArchiveStateProofIntegrationTest {
     assertThat(loader.getNode(location, hash(node))).contains(node);
   }
 
-  /** Natural-key prefix isolation: account-trie loader must not bleed into storage-trie keys. */
   @Test
-  void accountLoaderDoesNotBleedIntoStorageTrieKeys() {
+  void accountTrieLoaderIgnoresStorageTrieEntries() {
     final Hash accountHash =
         Hash.wrap(
             Bytes32.fromHexString(
