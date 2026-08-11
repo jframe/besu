@@ -101,7 +101,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final SegmentedKeyValueStorage liveStorage =
         worldStateKeyValueStorage.getComposedWorldStateStorage();
     this.archiveHistoryStore = new ArchiveNodeHistoryStore(liveStorage);
-    this.archiveHistoryProgress = ArchiveNodeHistoryProgress.load(liveStorage);
+    this.archiveHistoryProgress = new ArchiveNodeHistoryProgress(liveStorage);
     this.archiveHistoryReader = new ArchiveHistoryReader(archiveHistoryStore);
   }
 

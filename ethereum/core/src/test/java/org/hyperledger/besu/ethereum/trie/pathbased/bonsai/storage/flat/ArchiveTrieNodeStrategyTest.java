@@ -47,12 +47,12 @@ class ArchiveTrieNodeStrategyTest {
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
     historyStore = new ArchiveNodeHistoryStore(storage);
-    historyProgress = new ArchiveNodeHistoryProgress();
+    historyProgress = new ArchiveNodeHistoryProgress(storage);
   }
 
-  private ArchiveTrieNodeStrategy strategyWithGate(final long highestSafeBlock) {
+  private ArchiveTrieNodeStrategy strategyWithGate(final boolean gateOpen) {
     return new ArchiveTrieNodeStrategy(
-        new BonsaiTrieNodeStrategy(), historyStore, historyProgress, () -> highestSafeBlock);
+        new BonsaiTrieNodeStrategy(), historyStore, historyProgress, () -> gateOpen);
   }
 
   private static Bytes32 hash(final Bytes value) {
@@ -69,13 +69,12 @@ class ArchiveTrieNodeStrategyTest {
   @Test
   void capturesFullNodeWhenGateOpen() {
     // Gate wide open (initial sync): block 0 (no prior stored block) must be captured.
-    final ArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MAX_VALUE);
+    final ArchiveTrieNodeStrategy strategy = strategyWithGate(true);
     final Bytes location = Bytes.of(0x0e);
     final Bytes node = Bytes.fromHexString("0xdeadbeef");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, location, hash(node), node);
-    strategy.onBeforeCommit(storage, tx);
     tx.commit();
 
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).contains(node);
@@ -88,13 +87,12 @@ class ArchiveTrieNodeStrategyTest {
     // Store block 5 as the last committed block, making the current block 6.
     setStoredBlockNumber(5L);
 
-    final ArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MIN_VALUE);
+    final ArchiveTrieNodeStrategy strategy = strategyWithGate(false);
     final Bytes location = Bytes.of(0x0e);
     final Bytes node = Bytes.fromHexString("0xcafe");
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, location, hash(node), node);
-    strategy.onBeforeCommit(storage, tx);
     tx.commit();
 
     // Live trie write happened
@@ -103,25 +101,5 @@ class ArchiveTrieNodeStrategyTest {
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 6L)).isEmpty();
     // Progress must be unset
     assertThat(historyProgress.covers(6L)).isFalse();
-  }
-
-  @Test
-  void onDiscardFromNonOwningTransactionIsNoOp() {
-    final ArchiveTrieNodeStrategy strategy = strategyWithGate(Long.MAX_VALUE);
-    final Bytes location = Bytes.EMPTY;
-    final Bytes node = Bytes.fromHexString("0x1234");
-
-    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction(); // import tx
-    strategy.putFlatAccountTrieNode(storage, tx1, location, hash(node), node);
-
-    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction(); // trie-log tx
-    strategy.onDiscard(tx2); // must be a no-op (657cf447d9)
-
-    strategy.onBeforeCommit(storage, tx1);
-    tx1.commit();
-
-    // If onDiscard(tx2) had wiped state, progress would be unset and the archive empty.
-    assertThat(historyProgress.covers(0L)).isTrue();
-    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isPresent();
   }
 }

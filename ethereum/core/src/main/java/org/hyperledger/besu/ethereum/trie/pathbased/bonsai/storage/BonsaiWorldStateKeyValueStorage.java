@@ -450,28 +450,24 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
 
     @Override
     public void commit() {
-      trieNodeStrategy.onBeforeCommit(worldStorage, composedWorldStateTransaction);
       trieLogStorageTransaction.commit();
       composedWorldStateTransaction.commit();
     }
 
     @Override
     public void commitTrieLogOnly() {
-      trieNodeStrategy.onDiscard(composedWorldStateTransaction);
       trieLogStorageTransaction.commit();
       composedWorldStateTransaction.close();
     }
 
     @Override
     public void commitComposedOnly() {
-      trieNodeStrategy.onBeforeCommit(worldStorage, composedWorldStateTransaction);
       composedWorldStateTransaction.commit();
       trieLogStorageTransaction.close();
     }
 
     @Override
     public void rollback() {
-      trieNodeStrategy.onDiscard(composedWorldStateTransaction);
       composedWorldStateTransaction.rollback();
       trieLogStorageTransaction.rollback();
     }

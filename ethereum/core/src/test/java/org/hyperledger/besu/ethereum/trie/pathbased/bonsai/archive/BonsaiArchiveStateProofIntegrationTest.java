@@ -56,14 +56,13 @@ class BonsaiArchiveStateProofIntegrationTest {
     storage =
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
-    final ArchiveNodeHistoryProgress historyProgress = new ArchiveNodeHistoryProgress();
+    final ArchiveNodeHistoryProgress historyProgress = new ArchiveNodeHistoryProgress(storage);
     final ArchiveNodeHistoryStore historyStore = new ArchiveNodeHistoryStore(storage);
     final BonsaiTrieNodeStrategy baseStrategy = new BonsaiTrieNodeStrategy();
     historyReader = new ArchiveHistoryReader(historyStore);
     // Gate always open: acts as initial-sync mode
     archiveStrategy =
-        new ArchiveTrieNodeStrategy(
-            baseStrategy, historyStore, historyProgress, () -> Long.MAX_VALUE);
+        new ArchiveTrieNodeStrategy(baseStrategy, historyStore, historyProgress, () -> true);
   }
 
   private static Bytes32 hash(final Bytes value) {
@@ -82,7 +81,6 @@ class BonsaiArchiveStateProofIntegrationTest {
     // Block 0 (no WORLD_BLOCK_NUMBER_KEY in storage → block is 0)
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     archiveStrategy.putFlatAccountTrieNode(storage, tx, location, hash(node), node);
-    archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
     final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
@@ -103,7 +101,6 @@ class BonsaiArchiveStateProofIntegrationTest {
     final SegmentedKeyValueStorageTransaction tx0 = storage.startTransaction();
     archiveStrategy.putFlatAccountTrieNode(
         storage, tx0, location, hash(nodeAtBlock0), nodeAtBlock0);
-    archiveStrategy.onBeforeCommit(storage, tx0);
     tx0.commit();
 
     // Advance the stored block number to 0 (simulates what the block commit also writes)
@@ -116,7 +113,6 @@ class BonsaiArchiveStateProofIntegrationTest {
     final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
     archiveStrategy.putFlatAccountTrieNode(
         storage, tx1, location, hash(nodeAtBlock1), nodeAtBlock1);
-    archiveStrategy.onBeforeCommit(storage, tx1);
     tx1.commit();
 
     final NodeLoader loader0 = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
@@ -134,10 +130,9 @@ class BonsaiArchiveStateProofIntegrationTest {
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     archiveStrategy.putFlatAccountTrieNode(storage, tx, location, hash(node), node);
-    archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
-    final ArchiveNodeHistoryProgress loaded = ArchiveNodeHistoryProgress.load(storage);
+    final ArchiveNodeHistoryProgress loaded = new ArchiveNodeHistoryProgress(storage);
     assertThat(loaded.covers(0L)).isTrue();
     assertThat(loaded.covers(1L)).isFalse(); // only block 0 was captured
   }
@@ -164,7 +159,6 @@ class BonsaiArchiveStateProofIntegrationTest {
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     archiveStrategy.putFlatStorageTrieNode(storage, tx, accountHash, location, hash(node), node);
-    archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
     final NodeLoader loader = ArchiveProofNodeLoader.forStorage(accountHash, historyReader, 0L);
@@ -185,7 +179,6 @@ class BonsaiArchiveStateProofIntegrationTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     archiveStrategy.putFlatStorageTrieNode(
         storage, tx, accountHash, storageLocation, hash(storageNode), storageNode);
-    archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
     // Account-trie loader must not return anything for the same location

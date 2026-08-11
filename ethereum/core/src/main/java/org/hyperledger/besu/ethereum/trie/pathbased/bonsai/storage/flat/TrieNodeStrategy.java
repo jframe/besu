@@ -55,12 +55,4 @@ public interface TrieNodeStrategy {
       SegmentedKeyValueStorage storage,
       SegmentedKeyValueStorageTransaction transaction,
       Bytes location);
-
-  /** Called when the composed transaction is committed. */
-  default void onBeforeCommit(
-      final SegmentedKeyValueStorage storage,
-      final SegmentedKeyValueStorageTransaction transaction) {}
-
-  /** Called when the composed transaction is discarded or rolled back. */
-  default void onDiscard(final SegmentedKeyValueStorageTransaction transaction) {}
 }

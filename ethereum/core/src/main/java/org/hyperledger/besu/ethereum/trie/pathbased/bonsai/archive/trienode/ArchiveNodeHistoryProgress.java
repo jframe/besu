@@ -20,55 +20,61 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Optional;
+import java.util.Objects;
 
 import org.apache.tuweni.bytes.Bytes;
 
-/** Tracks the progress of indexing historical trie nodes in the archive store. */
+/**
+ * Tracks the progress of indexing historical trie nodes in the archive store.
+ *
+ * <p>Progress is stored directly in {@code TRIE_BRANCH_STORAGE_ARCHIVE} as two consecutive
+ * big-endian longs: {@code indexStartBlock} followed by {@code lastIndexedBlock}. There is no
+ * in-memory state; every {@link #covers} read and every {@link #record} write goes straight to
+ * storage.
+ */
 public final class ArchiveNodeHistoryProgress {
 
-  public static final long UNSET_LAST_INDEXED = -1L;
-  public static final long UNSET_INDEX_START = Long.MAX_VALUE;
-  private static final byte[] PROGRESS_KEY =
+  static final byte[] PROGRESS_KEY =
       "ARCHIVE_TRIE_HISTORY_PROGRESS_KEY".getBytes(StandardCharsets.UTF_8);
 
-  volatile long indexStartBlock = UNSET_INDEX_START;
-  volatile long lastIndexedBlock = UNSET_LAST_INDEXED;
+  private final SegmentedKeyValueStorage storage;
 
-  public ArchiveNodeHistoryProgress() {}
+  public ArchiveNodeHistoryProgress(final SegmentedKeyValueStorage storage) {
+    this.storage = Objects.requireNonNull(storage);
+  }
 
+  /**
+   * Returns {@code true} if {@code block} falls within the contiguous range of blocks that have
+   * been indexed into the archive.
+   */
   public boolean covers(final long block) {
-    return lastIndexedBlock != UNSET_LAST_INDEXED
-        && block >= indexStartBlock
-        && block <= lastIndexedBlock;
+    return storage
+        .get(TRIE_BRANCH_STORAGE_ARCHIVE, PROGRESS_KEY)
+        .map(
+            raw -> {
+              final Bytes b = Bytes.wrap(raw);
+              return block >= b.getLong(0) && block <= b.getLong(8);
+            })
+        .orElse(false);
   }
 
-  public void setLastIndexedBlock(final long block) {
-    this.lastIndexedBlock = block;
-  }
-
-  public void setIndexStartBlock(final long block) {
-    this.indexStartBlock = Math.min(this.indexStartBlock, block);
-  }
-
-  private Bytes toBytes() {
-    return Bytes.concatenate(
-        Bytes.ofUnsignedLong(indexStartBlock), Bytes.ofUnsignedLong(lastIndexedBlock));
-  }
-
-  public void save(final SegmentedKeyValueStorageTransaction tx) {
-    tx.put(TRIE_BRANCH_STORAGE_ARCHIVE, PROGRESS_KEY, toBytes().toArrayUnsafe());
-  }
-
-  public static ArchiveNodeHistoryProgress load(final SegmentedKeyValueStorage storage) {
-    final ArchiveNodeHistoryProgress progress = new ArchiveNodeHistoryProgress();
-    final Optional<byte[]> raw = storage.get(TRIE_BRANCH_STORAGE_ARCHIVE, PROGRESS_KEY);
-    raw.ifPresent(
-        bytes -> {
-          final Bytes b = Bytes.wrap(bytes);
-          progress.indexStartBlock = b.getLong(0);
-          progress.lastIndexedBlock = b.getLong(8);
-        });
-    return progress;
+  /**
+   * Writes updated progress for {@code block} into {@code tx}. The write is atomic with the
+   * archive-node writes that precede it in the same transaction.
+   *
+   * <p>{@code indexStartBlock} is set to {@code min(existing, block)} so the recorded window only
+   * ever grows backwards; {@code lastIndexedBlock} is always set to {@code block}.
+   */
+  public void record(final SegmentedKeyValueStorageTransaction tx, final long block) {
+    final long startBlock =
+        storage
+            .get(TRIE_BRANCH_STORAGE_ARCHIVE, PROGRESS_KEY)
+            .map(raw -> Math.min(Bytes.wrap(raw).getLong(0), block))
+            .orElse(block);
+    tx.put(
+        TRIE_BRANCH_STORAGE_ARCHIVE,
+        PROGRESS_KEY,
+        Bytes.concatenate(Bytes.ofUnsignedLong(startBlock), Bytes.ofUnsignedLong(block))
+            .toArrayUnsafe());
   }
 }

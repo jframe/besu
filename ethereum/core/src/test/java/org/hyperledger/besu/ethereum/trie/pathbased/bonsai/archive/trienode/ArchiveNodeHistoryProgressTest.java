@@ -15,46 +15,80 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 
-import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class ArchiveNodeHistoryProgressTest {
-  @Test
-  void emptyProgressCoversNothing() {
-    final ArchiveNodeHistoryProgress p = new ArchiveNodeHistoryProgress();
-    assertThat(p.covers(0)).isFalse();
+
+  private SegmentedKeyValueStorage storage;
+  private ArchiveNodeHistoryProgress progress;
+
+  @BeforeEach
+  void setUp() {
+    storage = new SegmentedInMemoryKeyValueStorage(List.of(TRIE_BRANCH_STORAGE_ARCHIVE));
+    progress = new ArchiveNodeHistoryProgress(storage);
   }
 
   @Test
-  void coversWithinRecordedWindow() {
-    final ArchiveNodeHistoryProgress p = new ArchiveNodeHistoryProgress();
-    p.setIndexStartBlock(0);
-    p.setLastIndexedBlock(10);
-    assertThat(p.covers(0)).isTrue();
-    assertThat(p.covers(10)).isTrue();
-    assertThat(p.covers(11)).isFalse();
+  void coversNothingWhenNoProgressRecorded() {
+    assertThat(progress.covers(0)).isFalse();
+    assertThat(progress.covers(10)).isFalse();
   }
 
   @Test
-  void savesAndLoads() {
-    final SegmentedKeyValueStorage storage =
-        new SegmentedInMemoryKeyValueStorage(
-            List.of(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE));
-    final ArchiveNodeHistoryProgress p = new ArchiveNodeHistoryProgress();
-    p.setIndexStartBlock(3);
-    p.setLastIndexedBlock(9);
+  void coversRecordedBlockAfterRecord() {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    p.save(tx);
+    progress.record(tx, 5L);
     tx.commit();
-    final ArchiveNodeHistoryProgress loaded = ArchiveNodeHistoryProgress.load(storage);
-    assertThat(loaded.indexStartBlock).isEqualTo(3);
-    assertThat(loaded.lastIndexedBlock).isEqualTo(9);
+
+    assertThat(progress.covers(5L)).isTrue();
+    assertThat(progress.covers(6L)).isFalse();
+  }
+
+  @Test
+  void indexStartTracksFirstRecordedBlock() {
+    // Blocks are always archived in ascending order.
+    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
+    progress.record(tx1, 5L);
+    tx1.commit();
+
+    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
+    progress.record(tx2, 10L);
+    tx2.commit();
+
+    // Covered range is [5, 10]
+    assertThat(progress.covers(5L)).isTrue();
+    assertThat(progress.covers(10L)).isTrue();
+    assertThat(progress.covers(4L)).isFalse();
+    assertThat(progress.covers(11L)).isFalse();
+  }
+
+  @Test
+  void progressIsReadFromStorageNotInMemory() {
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    progress.record(tx, 3L);
+    tx.commit();
+
+    // A fresh instance reading the same storage sees the same progress
+    final ArchiveNodeHistoryProgress anotherView = new ArchiveNodeHistoryProgress(storage);
+    assertThat(anotherView.covers(3L)).isTrue();
+    assertThat(anotherView.covers(4L)).isFalse();
+  }
+
+  @Test
+  void uncommittedRecordNotVisible() {
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    progress.record(tx, 7L);
+    // NOT committed
+
+    assertThat(progress.covers(7L)).isFalse();
   }
 }
