@@ -23,7 +23,6 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveProofNodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
@@ -47,8 +46,6 @@ import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
-import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,7 +59,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   private final WorldStateConfig archiveWorldStateConfig;
   private volatile LongSupplier archiveMigrationProgressSupplier = () -> -1L;
 
-  private final ArchiveNodeHistoryStore archiveHistoryStore;
   private final ArchiveNodeHistoryProgress archiveHistoryProgress;
   private final ArchiveHistoryReader archiveHistoryReader;
 
@@ -100,7 +96,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             worldStateKeyValueStorage.getCurrentVersion());
     final SegmentedKeyValueStorage liveStorage =
         worldStateKeyValueStorage.getComposedWorldStateStorage();
-    this.archiveHistoryStore = new ArchiveNodeHistoryStore(liveStorage);
+    final ArchiveNodeHistoryStore archiveHistoryStore = new ArchiveNodeHistoryStore(liveStorage);
     this.archiveHistoryProgress = new ArchiveNodeHistoryProgress(liveStorage);
     this.archiveHistoryReader = new ArchiveHistoryReader(archiveHistoryStore);
   }
@@ -159,7 +155,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     }
     try {
       final WorldStateStorageCoordinator coordinator =
-          new HistoryBackedWorldStateStorageCoordinator(
+          new BonsaiArchiveWorldStateStorageCoordinator(
               archiveReadStorage, archiveHistoryReader, blockNumber);
       final WorldStateProofProvider proofProvider = new WorldStateProofProvider(coordinator);
       return mapper.apply(
@@ -197,45 +193,6 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
           .addArgument(e)
           .log();
       return Optional.empty();
-    }
-  }
-
-  /**
-   * A {@link WorldStateStorageCoordinator} that routes account-trie and storage-trie node reads
-   * through {@link ArchiveProofNodeLoader}. The coverage check is done before instantiation so
-   * {@code isWorldStateAvailable} always returns {@code true} here.
-   */
-  private static final class HistoryBackedWorldStateStorageCoordinator
-      extends WorldStateStorageCoordinator {
-
-    private final ArchiveHistoryReader historyReader;
-    private final long targetBlock;
-
-    HistoryBackedWorldStateStorageCoordinator(
-        final BonsaiWorldStateKeyValueStorage keyValueStorage,
-        final ArchiveHistoryReader historyReader,
-        final long targetBlock) {
-      super(keyValueStorage);
-      this.historyReader = historyReader;
-      this.targetBlock = targetBlock;
-    }
-
-    @Override
-    public boolean isWorldStateAvailable(final Bytes32 nodeHash, final Hash blockHash) {
-      return true; // coverage pre-checked in getAccountProof before instantiation
-    }
-
-    @Override
-    public Optional<Bytes> getAccountStateTrieNode(final Bytes location, final Bytes32 nodeHash) {
-      return ArchiveProofNodeLoader.forAccount(historyReader, targetBlock)
-          .getNode(location, nodeHash);
-    }
-
-    @Override
-    public Optional<Bytes> getAccountStorageTrieNode(
-        final Hash accountHash, final Bytes location, final Bytes32 nodeHash) {
-      return ArchiveProofNodeLoader.forStorage(accountHash, historyReader, targetBlock)
-          .getNode(location, nodeHash);
     }
   }
 }
