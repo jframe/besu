@@ -32,7 +32,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -115,28 +114,25 @@ public final class ArchiveTrieNodeCodec {
     return encodeShortDiff(oldNodeRlp, newNodeRlp);
   }
 
-  static int nodeArity(final Bytes nodeRlp) {
-    final RLPInput in = RLP.input(nodeRlp);
-    final int count = in.enterList();
-    if (count != SHORT_NODE_ARITY && count != BRANCH_NODE_ARITY) {
-      throw new IllegalArgumentException(
-          "Expected a "
-              + SHORT_NODE_ARITY
-              + "-item short node or "
-              + BRANCH_NODE_ARITY
-              + "-item branch node RLP list, got "
-              + count
-              + " items");
-    }
-    return count;
-  }
-
   public static ArchiveTrieNodeEntry decode(final Bytes entry) {
     Objects.requireNonNull(entry, "entry must not be null");
     if (entry.isEmpty()) {
       throw new IllegalArgumentException("Entry must be at least 1 byte (metadata byte)");
     }
     return new ArchiveTrieNodeEntry(entry.get(0), entry.slice(1));
+  }
+
+  public static Bytes reconstruct(final Bytes fullEntry, final List<Bytes> diffEntries) {
+    Objects.requireNonNull(fullEntry, "fullEntry must not be null");
+    Objects.requireNonNull(diffEntries, "diffEntries must not be null");
+    final ArchiveTrieNodeEntry base = decode(fullEntry);
+    if (!base.isFull()) {
+      throw new IllegalArgumentException("reconstruct: fullEntry must be a FULL entry");
+    }
+    final Bytes baseNode = base.fullNode();
+    return nodeArity(baseNode) == BRANCH_NODE_ARITY
+        ? reconstructBranch(baseNode, diffEntries)
+        : reconstructShort(baseNode, diffEntries);
   }
 
   private static Bytes encodeBranchDiff(final Bytes oldNodeRlp, final Bytes newNodeRlp) {
@@ -156,9 +152,7 @@ public final class ArchiveTrieNodeCodec {
     final boolean valueChanged = !oldFields.value().equals(newFields.value());
 
     byte metadata = NODE_IS_BRANCH;
-    if (valueChanged) {
-      metadata |= VALUE_CHANGED;
-    }
+    if (valueChanged) metadata |= VALUE_CHANGED;
 
     final List<Bytes> parts = new ArrayList<>();
     if (changedCount == 1) {
@@ -176,9 +170,7 @@ public final class ArchiveTrieNodeCodec {
         }
       }
     }
-    if (valueChanged) {
-      parts.add(frameBranchValue(newFields.value()));
-    }
+    if (valueChanged) parts.add(frameBranchValue(newFields.value()));
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
   }
 
@@ -193,29 +185,6 @@ public final class ArchiveTrieNodeCodec {
     }
     return Bytes.concatenate(Bytes.of((byte) len), value);
   }
-
-  private static BranchFields parseBranchFields(final Bytes nodeRlp) {
-    final RLPInput in = RLP.input(nodeRlp);
-    final int count = in.enterList();
-    if (count != BRANCH_NODE_ARITY) {
-      throw new IllegalArgumentException(
-          "Expected " + BRANCH_NODE_ARITY + "-item branch node RLP list, got " + count);
-    }
-    final Bytes[] children = new Bytes[BRANCH_CHILDREN];
-    for (int i = 0; i < BRANCH_CHILDREN; i++) {
-      children[i] = in.readAsRlp().raw();
-    }
-    final Bytes value = in.nextIsNull() ? readNullAsEmpty(in) : in.readBytes();
-    in.leaveList();
-    return new BranchFields(children, value);
-  }
-
-  private static Bytes readNullAsEmpty(final RLPInput in) {
-    in.skipNext();
-    return Bytes.EMPTY;
-  }
-
-  private record BranchFields(Bytes[] children, Bytes value) {}
 
   private static Bytes encodeShortDiff(final Bytes oldNodeRlp, final Bytes newNodeRlp) {
     final ShortFields oldFields = parseShortFields(oldNodeRlp);
@@ -246,33 +215,6 @@ public final class ArchiveTrieNodeCodec {
     return Bytes.concatenate(Bytes.of((byte) ((len >> 8) & 0xFF), (byte) (len & 0xFF)), field);
   }
 
-  private static ShortFields parseShortFields(final Bytes nodeRlp) {
-    final RLPInput in = RLP.input(nodeRlp);
-    final int count = in.enterList();
-    if (count != 2) {
-      throw new IllegalArgumentException("Expected 2-item short node RLP list, got " + count);
-    }
-    final Bytes path = in.readBytes();
-    final Bytes valueRlp = in.readAsRlp().raw();
-    in.leaveList();
-    return new ShortFields(path, valueRlp);
-  }
-
-  private record ShortFields(Bytes path, Bytes valueRlp) {}
-
-  public static Bytes reconstruct(final Bytes fullEntry, final List<Bytes> diffEntries) {
-    Objects.requireNonNull(fullEntry, "fullEntry must not be null");
-    Objects.requireNonNull(diffEntries, "diffEntries must not be null");
-    final ArchiveTrieNodeEntry base = decode(fullEntry);
-    if (!base.isFull()) {
-      throw new IllegalArgumentException("reconstruct: fullEntry must be a FULL entry");
-    }
-    final Bytes baseNode = base.fullNode();
-    return nodeArity(baseNode) == BRANCH_NODE_ARITY
-        ? reconstructBranch(baseNode, diffEntries)
-        : reconstructShort(baseNode, diffEntries);
-  }
-
   private static Bytes reconstructBranch(final Bytes baseNode, final List<Bytes> diffEntries) {
     final BranchFields base = parseBranchFields(baseNode);
     final Bytes[] children = Arrays.copyOf(base.children(), BRANCH_CHILDREN);
@@ -287,10 +229,7 @@ public final class ArchiveTrieNodeCodec {
       for (final Map.Entry<Integer, Bytes> e : entry.changedChildRefs().entrySet()) {
         children[e.getKey()] = e.getValue();
       }
-      final Optional<Bytes> newVal = entry.changedValue();
-      if (newVal.isPresent()) {
-        value = newVal.get();
-      }
+      value = entry.changedValue().orElse(value);
     }
 
     final BytesValueRLPOutput rlpOutput = new BytesValueRLPOutput();
@@ -314,14 +253,8 @@ public final class ArchiveTrieNodeCodec {
         throw new IllegalArgumentException(
             "reconstruct type mismatch: base is short, diff is branch");
       }
-      final Optional<Bytes> newPath = entry.changedKey();
-      if (newPath.isPresent()) {
-        path = newPath.get();
-      }
-      final Optional<Bytes> newVal = entry.changedShortNodeValue();
-      if (newVal.isPresent()) {
-        valueRlp = newVal.get();
-      }
+      path = entry.changedKey().orElse(path);
+      valueRlp = entry.changedShortNodeValue().orElse(valueRlp);
     }
 
     final BytesValueRLPOutput rlpOutput = new BytesValueRLPOutput();
@@ -337,4 +270,57 @@ public final class ArchiveTrieNodeCodec {
       throw new IllegalArgumentException("reconstruct expects DIFF entries only");
     }
   }
+
+  private static int nodeArity(final Bytes nodeRlp) {
+    final RLPInput in = RLP.input(nodeRlp);
+    final int count = in.enterList();
+    if (count != SHORT_NODE_ARITY && count != BRANCH_NODE_ARITY) {
+      throw new IllegalArgumentException(
+          "Expected a "
+              + SHORT_NODE_ARITY
+              + "-item short node or "
+              + BRANCH_NODE_ARITY
+              + "-item branch node RLP list, got "
+              + count
+              + " items");
+    }
+    return count;
+  }
+
+  private static BranchFields parseBranchFields(final Bytes nodeRlp) {
+    final RLPInput in = RLP.input(nodeRlp);
+    final int count = in.enterList();
+    if (count != BRANCH_NODE_ARITY) {
+      throw new IllegalArgumentException(
+          "Expected " + BRANCH_NODE_ARITY + "-item branch node RLP list, got " + count);
+    }
+    final Bytes[] children = new Bytes[BRANCH_CHILDREN];
+    for (int i = 0; i < BRANCH_CHILDREN; i++) {
+      children[i] = in.readAsRlp().raw();
+    }
+    final Bytes value = in.nextIsNull() ? readNullAsEmpty(in) : in.readBytes();
+    in.leaveList();
+    return new BranchFields(children, value);
+  }
+
+  private static Bytes readNullAsEmpty(final RLPInput in) {
+    in.skipNext();
+    return Bytes.EMPTY;
+  }
+
+  private record BranchFields(Bytes[] children, Bytes value) {}
+
+  private static ShortFields parseShortFields(final Bytes nodeRlp) {
+    final RLPInput in = RLP.input(nodeRlp);
+    final int count = in.enterList();
+    if (count != 2) {
+      throw new IllegalArgumentException("Expected 2-item short node RLP list, got " + count);
+    }
+    final Bytes path = in.readBytes();
+    final Bytes valueRlp = in.readAsRlp().raw();
+    in.leaveList();
+    return new ShortFields(path, valueRlp);
+  }
+
+  private record ShortFields(Bytes path, Bytes valueRlp) {}
 }
