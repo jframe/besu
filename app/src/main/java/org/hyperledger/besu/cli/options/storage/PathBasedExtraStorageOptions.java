@@ -147,7 +147,7 @@ public class PathBasedExtraStorageOptions
     @Option(
         hidden = true,
         names = {"--Xbonsai-archive-state-proofs-enabled"},
-        arity = "1",
+        fallbackValue = "true",
         description =
             "Enables eth_getProof for historical blocks backed by the bonsai archive trie-node store. Requires --data-storage-format=X_BONSAI_ARCHIVE and trie-node capture during initial sync. (default: ${DEFAULT-VALUE})")
     private Boolean bonsaiArchiveStateProofsEnabled = DEFAULT_BONSAI_ARCHIVE_STATE_PROOFS_ENABLED;
