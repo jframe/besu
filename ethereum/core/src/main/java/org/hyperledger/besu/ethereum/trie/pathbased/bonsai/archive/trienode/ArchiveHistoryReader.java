@@ -37,6 +37,8 @@ public final class ArchiveHistoryReader {
     if (targetBlock < 0) {
       throw new IllegalArgumentException("targetBlock must be >= 0, got " + targetBlock);
     }
-    return historyStore.getLatestBefore(naturalKey, targetBlock);
+    return historyStore
+        .getLatestBefore(naturalKey, targetBlock)
+        .map(entry -> entry.codecEntry().fullNode());
   }
 }

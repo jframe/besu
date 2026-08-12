@@ -36,7 +36,11 @@ class ArchiveHistoryReaderTest {
     final ArchiveNodeHistoryStore store = new ArchiveNodeHistoryStore(storage);
     final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x0e));
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    store.put(tx, nk, 5, Bytes.of(0xAA));
+    store.putEncoded(
+        tx,
+        ArchiveNodeKey.historyKey(nk, 5),
+        ArchiveNodeHistoryStore.encodeStoredValue(
+            0, ArchiveTrieNodeCodec.encodeFull(Bytes.of(0xAA))));
     tx.commit();
     final ArchiveHistoryReader reader = new ArchiveHistoryReader(store);
     assertThat(reader.nodeAt(nk, 9)).contains(Bytes.of(0xAA));

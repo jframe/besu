@@ -109,7 +109,10 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
     base.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
     final long block = currentBlockNumber(storage);
     if (shouldArchive(block)) {
-      historyStore.put(transaction, ArchiveNodeKey.account(location), block, node);
+      historyStore.putEncoded(
+          transaction,
+          ArchiveNodeKey.historyKey(ArchiveNodeKey.account(location), block),
+          ArchiveNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(node)));
       maybeRecordProgress(transaction, block);
     }
   }
@@ -125,8 +128,11 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
     base.putFlatStorageTrieNode(storage, transaction, accountHash, location, nodeHash, node);
     final long block = currentBlockNumber(storage);
     if (shouldArchive(block)) {
-      historyStore.put(
-          transaction, ArchiveNodeKey.storage(accountHash.getBytes(), location), block, node);
+      historyStore.putEncoded(
+          transaction,
+          ArchiveNodeKey.historyKey(
+              ArchiveNodeKey.storage(accountHash.getBytes(), location), block),
+          ArchiveNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(node)));
       maybeRecordProgress(transaction, block);
     }
   }

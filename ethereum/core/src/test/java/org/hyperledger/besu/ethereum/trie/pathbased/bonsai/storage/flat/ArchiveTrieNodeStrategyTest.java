@@ -77,7 +77,11 @@ class ArchiveTrieNodeStrategyTest {
     strategy.putFlatAccountTrieNode(storage, tx, location, hash(node), node);
     tx.commit();
 
-    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).contains(node);
+    assertThat(
+            historyStore
+                .getLatestBefore(ArchiveNodeKey.account(location), 0L)
+                .map(entry -> entry.codecEntry().fullNode()))
+        .contains(node);
     assertThat(historyProgress.covers(0L)).isTrue();
   }
 

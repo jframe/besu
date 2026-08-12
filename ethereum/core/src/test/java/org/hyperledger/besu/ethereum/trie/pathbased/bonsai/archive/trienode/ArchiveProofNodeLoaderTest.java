@@ -53,7 +53,10 @@ class ArchiveProofNodeLoaderTest {
 
   private void putArchive(final Bytes location, final long block, final Bytes node) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    historyStore.put(tx, ArchiveNodeKey.account(location), block, node);
+    historyStore.putEncoded(
+        tx,
+        ArchiveNodeKey.historyKey(ArchiveNodeKey.account(location), block),
+        ArchiveNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(node)));
     tx.commit();
   }
 
