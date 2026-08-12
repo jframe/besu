@@ -16,8 +16,9 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 
-import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
+import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
@@ -25,35 +26,126 @@ import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class ArchiveHistoryReaderTest {
-  @Test
-  void returnsLatestFullNodeAtOrBeforeTarget() {
-    final SegmentedKeyValueStorage storage =
-        new SegmentedInMemoryKeyValueStorage(
-            List.of(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE));
-    final ArchiveNodeHistoryStore store = new ArchiveNodeHistoryStore(storage);
-    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x0e));
+
+  /** Minimal valid branch-node RLP: 16 empty children + empty terminal value. */
+  private static Bytes emptyBranchRlp() {
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    out.startList();
+    for (int i = 0; i < 16; i++) {
+      out.writeNull();
+    }
+    out.writeBytes(Bytes.EMPTY);
+    out.endList();
+    return out.encoded();
+  }
+
+  /** Branch node with one child slot replaced by a 33-byte raw RLP hash ref. */
+  private static Bytes branchRlpWithChild(final int slot, final Bytes childRlp) {
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    out.startList();
+    for (int i = 0; i < 16; i++) {
+      if (i == slot) {
+        out.writeRaw(childRlp);
+      } else {
+        out.writeNull();
+      }
+    }
+    out.writeBytes(Bytes.EMPTY);
+    out.endList();
+    return out.encoded();
+  }
+
+  private static Bytes dummyChildRlp() {
+    // 0xa0 = RLP string of length 32, followed by 32 sequential bytes
+    final byte[] raw = new byte[33];
+    raw[0] = (byte) 0xa0;
+    for (int i = 1; i < 33; i++) {
+      raw[i] = (byte) i;
+    }
+    return Bytes.wrap(raw);
+  }
+
+  private SegmentedKeyValueStorage storage;
+  private ArchiveNodeHistoryStore store;
+  private ArchiveHistoryReader reader;
+
+  @BeforeEach
+  void setUp() {
+    storage = new SegmentedInMemoryKeyValueStorage(List.of(TRIE_BRANCH_STORAGE_ARCHIVE));
+    store = new ArchiveNodeHistoryStore(storage);
+    reader = new ArchiveHistoryReader(store);
+  }
+
+  private void putFull(final Bytes nk, final long block, final Bytes node) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     store.putEncoded(
         tx,
-        ArchiveNodeKey.historyKey(nk, 5),
-        ArchiveNodeHistoryStore.encodeStoredValue(
-            0, ArchiveTrieNodeCodec.encodeFull(Bytes.of(0xAA))));
+        ArchiveNodeKey.historyKey(nk, block),
+        ArchiveNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(node)));
     tx.commit();
-    final ArchiveHistoryReader reader = new ArchiveHistoryReader(store);
-    assertThat(reader.nodeAt(nk, 9)).contains(Bytes.of(0xAA));
-    assertThat(reader.nodeAt(nk, 4)).isEmpty();
+  }
+
+  private void putDiff(
+      final Bytes nk,
+      final long block,
+      final int counter,
+      final Bytes oldNode,
+      final Bytes newNode) {
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    store.putEncoded(
+        tx,
+        ArchiveNodeKey.historyKey(nk, block),
+        ArchiveNodeHistoryStore.encodeStoredValue(
+            counter, ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode)));
+    tx.commit();
+  }
+
+  @Test
+  void returnsFullNodeDirectly() {
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x0e));
+    final Bytes node = emptyBranchRlp();
+    putFull(nk, 5L, node);
+    assertThat(reader.nodeAt(nk, 9L)).contains(node);
+    assertThat(reader.nodeAt(nk, 4L)).isEmpty();
+  }
+
+  @Test
+  void reconstructsNodeFromDiff() {
+    final Bytes nodeV1 = emptyBranchRlp();
+    final Bytes nodeV2 = branchRlpWithChild(0, dummyChildRlp());
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x01));
+
+    putFull(nk, 100L, nodeV1);
+    putDiff(nk, 101L, 1, nodeV1, nodeV2);
+
+    assertThat(reader.nodeAt(nk, 100L)).contains(nodeV1);
+    assertThat(reader.nodeAt(nk, 101L)).contains(nodeV2);
+    assertThat(reader.nodeAt(nk, 200L)).contains(nodeV2);
+  }
+
+  @Test
+  void returnsDeletionAsEmpty() {
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x02));
+    final Bytes node = emptyBranchRlp();
+    putFull(nk, 10L, node);
+
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    store.putEncoded(
+        tx,
+        ArchiveNodeKey.historyKey(nk, 11L),
+        ArchiveNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeDiff(node, null)));
+    tx.commit();
+
+    assertThat(reader.nodeAt(nk, 11L)).isEmpty();
+    assertThat(reader.nodeAt(nk, 15L)).isEmpty();
   }
 
   @Test
   void rejectsNegativeBlock() {
-    final ArchiveHistoryReader reader =
-        new ArchiveHistoryReader(
-            new ArchiveNodeHistoryStore(
-                new SegmentedInMemoryKeyValueStorage(
-                    List.of(KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE))));
     assertThatThrownBy(() -> reader.nodeAt(Bytes.of(0x01, 0x0e), -1))
         .isInstanceOf(IllegalArgumentException.class);
   }
