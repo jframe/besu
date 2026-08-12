@@ -20,10 +20,12 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveProofNodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
@@ -69,10 +71,78 @@ class BonsaiArchiveStateProofIntegrationTest {
     return Bytes32.wrap(Hash.hash(value).getBytes());
   }
 
+  /** Branch node whose slot 0 holds a 33-byte hash ref derived from {@code seed}. */
+  private static Bytes branchNode(final int seed) {
+    final byte[] childRef = new byte[33];
+    childRef[0] = (byte) 0xa0; // RLP string, 32 bytes
+    for (int i = 1; i < 33; i++) {
+      childRef[i] = (byte) (i + seed);
+    }
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    out.startList();
+    out.writeRaw(Bytes.wrap(childRef));
+    for (int i = 1; i < 16; i++) {
+      out.writeNull();
+    }
+    out.writeBytes(Bytes.EMPTY);
+    out.endList();
+    return out.encoded();
+  }
+
+  /**
+   * Branch node with all 16 child slots populated, where only slot 0 varies with {@code seed} — the
+   * shape a real trie branch takes, and the case diff encoding is designed for: one changed child
+   * ref out of sixteen.
+   */
+  private static Bytes fullBranchNode(final int seed) {
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    out.startList();
+    out.writeRaw(childRef(seed));
+    for (int i = 1; i < 16; i++) {
+      out.writeRaw(childRef(i));
+    }
+    out.writeBytes(Bytes.EMPTY);
+    out.endList();
+    return out.encoded();
+  }
+
+  /** A 33-byte raw-RLP hash ref derived from {@code seed}. */
+  private static Bytes childRef(final int seed) {
+    final byte[] ref = new byte[33];
+    ref[0] = (byte) 0xa0; // RLP string, 32 bytes
+    for (int i = 1; i < 33; i++) {
+      ref[i] = (byte) (i + seed);
+    }
+    return Bytes.wrap(ref);
+  }
+
+  /** Leaf node {@code [path, value]} — the short-node shape of the codec's diff path. */
+  private static Bytes leafNode(final Bytes path, final Bytes value) {
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    out.startList();
+    out.writeBytes(path);
+    out.writeBytes(value);
+    out.endList();
+    return out.encoded();
+  }
+
+  /**
+   * Archives {@code node} at {@code location} as block {@code block}, then advances the stored
+   * world block number exactly as a real block commit would, so the next call is treated as the
+   * following block.
+   */
+  private void writeAccountBlock(final long block, final Bytes location, final Bytes node) {
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    archiveStrategy.putFlatAccountTrieNode(storage, tx, location, hash(node), node);
+    tx.put(
+        TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(block).toArrayUnsafe());
+    tx.commit();
+  }
+
   @Test
   void archivedNodeIsRetrievableViaProofLoader() {
     final Bytes location = Bytes.of(0x0e);
-    final Bytes node = Bytes.fromHexString("0xdeadbeef01");
+    final Bytes node = branchNode(0);
 
     // Block 0 (no WORLD_BLOCK_NUMBER_KEY in storage → block is 0)
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
@@ -86,26 +156,11 @@ class BonsaiArchiveStateProofIntegrationTest {
   @Test
   void archivePathServesHistoricalNodeWhenLiveStateAdvanced() {
     final Bytes location = Bytes.of(0x0a);
-    final Bytes nodeAtBlock0 = Bytes.fromHexString("0xaabb");
-    final Bytes nodeAtBlock1 = Bytes.fromHexString("0xccdd");
+    final Bytes nodeAtBlock0 = branchNode(0);
+    final Bytes nodeAtBlock1 = branchNode(1);
 
-    // --- Block 0 ---
-    final SegmentedKeyValueStorageTransaction tx0 = storage.startTransaction();
-    archiveStrategy.putFlatAccountTrieNode(
-        storage, tx0, location, hash(nodeAtBlock0), nodeAtBlock0);
-    tx0.commit();
-
-    // Advance the stored block number to 0 (simulates what the block commit also writes)
-    final SegmentedKeyValueStorageTransaction advance = storage.startTransaction();
-    advance.put(
-        TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
-    advance.commit();
-
-    // --- Block 1 ---
-    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
-    archiveStrategy.putFlatAccountTrieNode(
-        storage, tx1, location, hash(nodeAtBlock1), nodeAtBlock1);
-    tx1.commit();
+    writeAccountBlock(0L, location, nodeAtBlock0);
+    writeAccountBlock(1L, location, nodeAtBlock1);
 
     final NodeLoader loader0 = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
     assertThat(loader0.getNode(location, hash(nodeAtBlock0))).contains(nodeAtBlock0);
@@ -117,7 +172,7 @@ class BonsaiArchiveStateProofIntegrationTest {
   @Test
   void progressCoversBlockAfterArchive() {
     final Bytes location = Bytes.of(0x00);
-    final Bytes node = Bytes.fromHexString("0x01");
+    final Bytes node = branchNode(0);
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     archiveStrategy.putFlatAccountTrieNode(storage, tx, location, hash(node), node);
@@ -144,7 +199,7 @@ class BonsaiArchiveStateProofIntegrationTest {
             Bytes32.fromHexString(
                 "0xaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"));
     final Bytes location = Bytes.of(0x01);
-    final Bytes node = Bytes.fromHexString("0xffee");
+    final Bytes node = branchNode(0);
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     archiveStrategy.putFlatStorageTrieNode(storage, tx, accountHash, location, hash(node), node);
@@ -161,7 +216,7 @@ class BonsaiArchiveStateProofIntegrationTest {
             Bytes32.fromHexString(
                 "0x1234567812345678123456781234567812345678123456781234567812345678"));
     final Bytes storageLocation = Bytes.of(0x02);
-    final Bytes storageNode = Bytes.fromHexString("0xabcd");
+    final Bytes storageNode = branchNode(0);
 
     // Write only to storage-trie archive
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
@@ -172,5 +227,119 @@ class BonsaiArchiveStateProofIntegrationTest {
     // Account-trie loader must not return anything for the same location
     final NodeLoader accountLoader = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
     assertThat(accountLoader.getNode(storageLocation, hash(storageNode))).isEmpty();
+  }
+
+  @Test
+  void everyVersionAcrossACheckpointWindowIsProvable() {
+    final Bytes location = Bytes.of(0x0b);
+    final int blocks = ArchiveHistoryReader.CHECKPOINT_INTERVAL * 2 + 3;
+    for (int block = 0; block < blocks; block++) {
+      writeAccountBlock(block, location, branchNode(block));
+    }
+
+    // Walking past two checkpoint rollovers, every historical version still proves out by hash.
+    for (int block = 0; block < blocks; block++) {
+      final Bytes expected = branchNode(block);
+      final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, block);
+      assertThat(loader.getNode(location, hash(expected))).as("block %d", block).contains(expected);
+    }
+  }
+
+  @Test
+  void diffEncodedHistoryIsSmallerThanFullNodePerBlock() {
+    final Bytes location = Bytes.of(0x0c);
+    final int blocks = ArchiveHistoryReader.CHECKPOINT_INTERVAL;
+    long archivedBytes = 0;
+    long fullNodeBytes = 0;
+    for (int block = 0; block < blocks; block++) {
+      final Bytes node = fullBranchNode(block);
+      writeAccountBlock(block, location, node);
+      fullNodeBytes += node.size();
+      archivedBytes +=
+          storage
+              .get(
+                  TRIE_BRANCH_STORAGE_ARCHIVE,
+                  ArchiveNodeKey.historyKey(ArchiveNodeKey.account(location), block)
+                      .toArrayUnsafe())
+              .orElseThrow()
+              .length;
+    }
+    // A single-child-slot change encodes in a handful of bytes instead of a whole branch node.
+    assertThat(archivedBytes).isLessThan(fullNodeBytes / 2);
+  }
+
+  @Test
+  void shortNodeDiffsReconstructThroughTheProofLoader() {
+    final Bytes location = Bytes.of(0x0d);
+    final Bytes path = Bytes.of(0x20, 0x0a, 0x0b);
+    final Bytes leafV0 = leafNode(path, Bytes.of(0x01));
+    final Bytes leafV1 = leafNode(path, Bytes.of(0x02)); // value-only change
+    final Bytes leafV2 = leafNode(Bytes.of(0x20, 0x0a, 0x0c), Bytes.of(0x02)); // path-only change
+
+    writeAccountBlock(0L, location, leafV0);
+    writeAccountBlock(1L, location, leafV1);
+    writeAccountBlock(2L, location, leafV2);
+
+    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 0L).getNode(location, hash(leafV0)))
+        .contains(leafV0);
+    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 1L).getNode(location, hash(leafV1)))
+        .contains(leafV1);
+    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 2L).getNode(location, hash(leafV2)))
+        .contains(leafV2);
+  }
+
+  @Test
+  void deletedNodeIsAbsentFromLaterProofsButPresentInEarlierOnes() {
+    final Bytes location = Bytes.of(0x0e);
+    final Bytes node = branchNode(0);
+    writeAccountBlock(0L, location, node);
+
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    archiveStrategy.removeFlatAccountStateTrieNode(storage, tx, location);
+    tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(1L).toArrayUnsafe());
+    tx.commit();
+
+    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 0L).getNode(location, hash(node)))
+        .contains(node);
+    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 1L).getNode(location, hash(node)))
+        .isEmpty();
+  }
+
+  @Test
+  void storageTrieDiffsAreIsolatedPerAccount() {
+    final Hash accountA =
+        Hash.wrap(
+            Bytes32.fromHexString(
+                "0x1111111111111111111111111111111111111111111111111111111111111111"));
+    final Hash accountB =
+        Hash.wrap(
+            Bytes32.fromHexString(
+                "0x2222222222222222222222222222222222222222222222222222222222222222"));
+    final Bytes location = Bytes.of(0x03);
+    final Bytes aV0 = branchNode(10);
+    final Bytes aV1 = branchNode(11);
+    final Bytes bV0 = branchNode(20);
+
+    for (long block = 0; block <= 1; block++) {
+      final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+      final Bytes aNode = block == 0 ? aV0 : aV1;
+      archiveStrategy.putFlatStorageTrieNode(storage, tx, accountA, location, hash(aNode), aNode);
+      if (block == 0) {
+        archiveStrategy.putFlatStorageTrieNode(storage, tx, accountB, location, hash(bV0), bV0);
+      }
+      tx.put(
+          TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(block).toArrayUnsafe());
+      tx.commit();
+    }
+
+    // A's diff at block 1 must not disturb B, whose last write was at block 0.
+    assertThat(
+            ArchiveProofNodeLoader.forStorage(accountA, historyReader, 1L)
+                .getNode(location, hash(aV1)))
+        .contains(aV1);
+    assertThat(
+            ArchiveProofNodeLoader.forStorage(accountB, historyReader, 1L)
+                .getNode(location, hash(bV0)))
+        .contains(bV0);
   }
 }
