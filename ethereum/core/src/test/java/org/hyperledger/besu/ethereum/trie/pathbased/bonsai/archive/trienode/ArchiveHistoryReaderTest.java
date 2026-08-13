@@ -128,6 +128,20 @@ class ArchiveHistoryReaderTest {
   }
 
   @Test
+  void reconstructsNodeAtMaxDiffChainLength() {
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x03));
+    Bytes prev = emptyBranchRlp();
+    putFull(nk, 0L, prev);
+    final int chainLength = ArchiveHistoryReader.CHECKPOINT_INTERVAL - 1;
+    for (int i = 1; i <= chainLength; i++) {
+      final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
+      putDiff(nk, i, i, prev, next);
+      prev = next;
+    }
+    assertThat(reader.nodeAt(nk, chainLength)).contains(prev);
+  }
+
+  @Test
   void returnsDeletionAsEmpty() {
     final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x02));
     final Bytes node = emptyBranchRlp();
@@ -148,5 +162,32 @@ class ArchiveHistoryReaderTest {
   void rejectsNegativeBlock() {
     assertThatThrownBy(() -> reader.nodeAt(Bytes.of(0x01, 0x0e), -1))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void reconstructsNodeAtMaxBackwardWalkBoundary() {
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x06));
+    Bytes prev = emptyBranchRlp();
+    putFull(nk, 0L, prev);
+    for (int i = 1; i <= ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS; i++) {
+      final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
+      putDiff(nk, i, i, prev, next);
+      prev = next;
+    }
+    assertThat(reader.nodeAt(nk, ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS)).contains(prev);
+  }
+
+  @Test
+  void givesUpWhenDiffChainExceedsMaxBackwardWalkSteps() {
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x07));
+    Bytes prev = emptyBranchRlp();
+    putFull(nk, 0L, prev);
+    final int chainLength = ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS + 1;
+    for (int i = 1; i <= chainLength; i++) {
+      final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
+      putDiff(nk, i, i, prev, next);
+      prev = next;
+    }
+    assertThat(reader.nodeAt(nk, chainLength)).isEmpty();
   }
 }
