@@ -31,25 +31,21 @@ import org.apache.tuweni.bytes.Bytes32;
 
 /**
  * A {@link TrieNodeStrategy} that archives every trie-node write into {@code
- * TRIE_BRANCH_STORAGE_ARCHIVE} so that historical {@code eth_getProof} requests can be served
- * without replaying trie-log diffs.
+ * TRIE_BRANCH_STORAGE_ARCHIVE} so historical {@code eth_getProof} requests don't need trie-log
+ * replay.
  *
- * <p>Each put is delegated to the wrapped {@code base} strategy first (live flat DB), then, if the
- * archive gate is open, an {@link ArchiveTrieNodeCodec} entry is written into the archive column
- * family in the same transaction under an {@link ArchiveNodeKey} that encodes the block number.
- * Most entries are DIFFs against the previous version of the same node; every {@link
- * ArchiveHistoryReader#CHECKPOINT_INTERVAL}-th entry is a FULL node so the reader's backward walk
- * stays bounded. Removals write a DELETION tombstone. Progress is recorded atomically in the same
- * transaction on the first archive write per transaction.
+ * <p>Each put delegates to {@code base} (live flat DB) first, then — if the archive gate is open —
+ * writes an {@link ArchiveTrieNodeCodec} entry keyed by {@link ArchiveNodeKey} in the same
+ * transaction: a DIFF against the prior version, a FULL entry every {@link
+ * ArchiveHistoryReader#CHECKPOINT_INTERVAL}th write to bound the reader's backward walk, or a
+ * DELETION tombstone on removal. Progress is recorded once per transaction.
  *
- * <p>The diff base is read from the committed {@code storage}, which still holds block N-1's values
- * while block N's {@code transaction} is in flight. If archiving was interrupted (the gate closed
- * and later reopened, or the process restarted), the newest archive entry no longer matches the
- * flat DB, so the first archived block after the gap is written entirely as FULL entries.
+ * <p>The diff base is read from committed {@code storage} (still block N-1 while block N's {@code
+ * transaction} is in flight). An archiving gap — gate closed then reopened, or a restart — forces
+ * the next block to write FULL, since the newest archive entry no longer matches the flat DB.
  *
- * <p>The gate returns {@code true} while the node is behind the network head ({@code
- * !syncState.isInSync()}) and {@code false} once at the head, preventing live blocks within the
- * reorg window from entering the archive. Block 0 (genesis) is always archived.
+ * <p>The gate is {@code true} while behind the network head ({@code !syncState.isInSync()}),
+ * keeping live reorg-window blocks out of the archive; block 0 is always archived regardless.
  */
 public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
@@ -58,17 +54,10 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
   private final ArchiveNodeHistoryProgress historyProgress;
   private final BooleanSupplier archiveGate;
 
-  // Tracks the last transaction that recorded progress so that record() is called at most once per
-  // transaction rather than once per trie-node write.
   private SegmentedKeyValueStorageTransaction lastRecordedTx;
-
-  // Highest block archived so far, used to detect gaps in the archive chain. -1 until the first
-  // archived write, so the first block after construction is always written as FULL entries.
   private long lastArchivedBlock = -1L;
-
-  // Whether the archive chain is contiguous with the flat DB for the block currently being
-  // archived. Computed once per transaction so every node in a block agrees.
   private boolean chainContiguous;
+  private final Object archiveStateLock = new Object();
 
   public ArchiveTrieNodeStrategy(
       final TrieNodeStrategy base,
@@ -92,10 +81,6 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
         .orElse(0L);
   }
 
-  /**
-   * Called before the first archive write of each transaction: records progress and latches whether
-   * the archive chain is contiguous with the flat DB at this block.
-   */
   private void beginArchiveBlock(
       final SegmentedKeyValueStorageTransaction transaction, final long block) {
     if (lastRecordedTx != transaction) {
@@ -106,10 +91,6 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
     }
   }
 
-  /**
-   * Builds the stored archive value for a node write, choosing FULL or DIFF. See the class javadoc
-   * for why {@code priorFlat} is the correct diff base and why a chain gap forces FULL.
-   */
   private Bytes encodeNodeWrite(
       final Bytes naturalKey,
       final Bytes location,
@@ -137,6 +118,22 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
         counter, ArchiveTrieNodeCodec.encodeDiff(priorFlat, node));
   }
 
+  private void archiveNodeWrite(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final Bytes naturalKey,
+      final Bytes location,
+      final Bytes priorFlat,
+      final Bytes node,
+      final long block) {
+    final Bytes archiveValue;
+    synchronized (archiveStateLock) {
+      beginArchiveBlock(transaction, block);
+      archiveValue = encodeNodeWrite(naturalKey, location, priorFlat, node, block);
+    }
+    historyStore.putEncoded(
+        transaction, ArchiveNodeKey.historyKey(naturalKey, block), archiveValue);
+  }
+
   @Override
   public Optional<Bytes> getFlatAccountTrieNode(
       final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
@@ -160,18 +157,13 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final Bytes node) {
     final long block = currentBlockNumber(storage);
+    final boolean archiving = shouldArchive(block);
     final Bytes priorFlat =
-        shouldArchive(block)
-            ? base.getFlatAccountTrieNode(location, nodeHash, storage).orElse(null)
-            : null;
+        archiving ? base.getFlatAccountTrieNode(location, nodeHash, storage).orElse(null) : null;
     base.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
-    if (shouldArchive(block)) {
-      beginArchiveBlock(transaction, block);
+    if (archiving) {
       final Bytes naturalKey = ArchiveNodeKey.account(location);
-      historyStore.putEncoded(
-          transaction,
-          ArchiveNodeKey.historyKey(naturalKey, block),
-          encodeNodeWrite(naturalKey, location, priorFlat, node, block));
+      archiveNodeWrite(transaction, naturalKey, location, priorFlat, node, block);
     }
   }
 
@@ -184,18 +176,15 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final Bytes node) {
     final long block = currentBlockNumber(storage);
+    final boolean archiving = shouldArchive(block);
     final Bytes priorFlat =
-        shouldArchive(block)
+        archiving
             ? base.getFlatStorageTrieNode(accountHash, location, nodeHash, storage).orElse(null)
             : null;
     base.putFlatStorageTrieNode(storage, transaction, accountHash, location, nodeHash, node);
-    if (shouldArchive(block)) {
-      beginArchiveBlock(transaction, block);
+    if (archiving) {
       final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
-      historyStore.putEncoded(
-          transaction,
-          ArchiveNodeKey.historyKey(naturalKey, block),
-          encodeNodeWrite(naturalKey, location, priorFlat, node, block));
+      archiveNodeWrite(transaction, naturalKey, location, priorFlat, node, block);
     }
   }
 
@@ -212,8 +201,10 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
             : Optional.empty();
     base.removeFlatAccountStateTrieNode(storage, transaction, location);
     if (priorFlat.isPresent()) {
-      beginArchiveBlock(transaction, block);
       final Bytes naturalKey = ArchiveNodeKey.account(location);
+      synchronized (archiveStateLock) {
+        beginArchiveBlock(transaction, block);
+      }
       historyStore.putEncoded(
           transaction,
           ArchiveNodeKey.historyKey(naturalKey, block),
