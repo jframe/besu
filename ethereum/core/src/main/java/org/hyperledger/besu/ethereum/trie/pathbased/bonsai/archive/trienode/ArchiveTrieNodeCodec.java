@@ -36,53 +36,22 @@ import java.util.Objects;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
- * Encodes/decodes a trie node's history entry as FULL (complete node RLP), DIFF (structural delta
- * vs. the prior version), or a deletion tombstone. Pure codec: no I/O, no storage dependency.
+ * Codec for {@link ArchiveTrieNodeEntry} instances. Provides methods to encode/decode entries and
+ * reconstruct a node's RLP from a FULL entry and a list of DIFF entries.
  *
- * <p>The decoded, typed view of an entry is {@link ArchiveTrieNodeEntry}, which also owns the
- * metadata-byte bit-layout constants (wire format), since it represents "what does an entry look
- * like" — this class owns "how do you produce/reconstruct one."
+ * <p>Field framing: the short-node path carries a 2-byte big-endian length prefix and the branch
+ * terminal value a 1-byte one; everything else is self-delimiting raw RLP or fixed width
+ * (single-child index, child mask). Being last in the entry is not on its own enough to drop a
+ * prefix — see {@code frameBranchValue}.
  *
- * <h2>Metadata byte (first byte of every entry)</h2>
- *
- * <pre>
- * bit0  ENTRY_FULL    (0x01)  1 = full node RLP follows; 0 = diff entry
- * bit1  NODE_IS_BRANCH(0x02)  1 = branch (17-item list); 0 = extension/leaf (2-item short node)
- * bit2  KEY_CHANGED   (0x04)  (short node) path segment changed
- * bit3  VALUE_CHANGED (0x08)  (short/branch) embedded value changed
- * bit4  CREATION      (0x10)  node created at this block (no prior version)
- * bit5  DELETION      (0x20)  node deleted at this block (tombstone; no body follows)
- * bit6  SINGLE_CHILD_CHANGED (0x40) (branch diff) exactly one child slot changed; its index
- *                            follows as 1 byte instead of the 2-byte childMask
- * bit7  reserved
- * </pre>
- *
- * <h2>Field framing</h2>
- *
- * <p>Branch child refs and short-node values are captured as raw RLP ({@code readAsRlp().raw()}) —
- * already self-delimiting, since an RLP item's own header encodes its length — so neither carries
- * an external length prefix; decode re-parses them with the RLP reader to recover both the content
- * and how many bytes it occupied. Branch terminal values and short-node paths are captured as
- * decoded byte payloads ({@code readBytes()}), which are not self-delimiting, so those still carry
- * an explicit length prefix (1 byte for branch values, 2 bytes for short-node paths, matching their
- * pre-existing size limits).
+ * <p>The branch terminal value never actually occurs here: Bonsai account and storage tries are
+ * keyed by 32-byte hashes, so all keys are 64 nibbles, no key is a proper prefix of another, and no
+ * key terminates at a branch. The path is kept for correctness. Variable-length-keyed tries
+ * (transaction/receipt) do use that slot, but never reach this codec.
  */
 public final class ArchiveTrieNodeCodec {
-
-  /** RLP list arity of a short node (extension or leaf): {@code [encodedPath, value]}. */
   private static final int SHORT_NODE_ARITY = 2;
-
-  /**
-   * RLP list arity of a branch node: {@link ArchiveTrieNodeEntry#BRANCH_CHILDREN} child slots (one
-   * per hex nibble, 0-F) plus one terminal value slot.
-   */
   private static final int BRANCH_NODE_ARITY = BRANCH_CHILDREN + 1;
-
-  /**
-   * Largest length a 2-byte big-endian length prefix can represent ({@code 2^16 - 1}) — the size
-   * ceiling for the short-node path field, the only field still framed this way (see the class
-   * javadoc's "Field framing" section).
-   */
   private static final int SHORT_NODE_PATH_MAX_LENGTH = 0xFFFF;
 
   private ArchiveTrieNodeCodec() {}
@@ -94,24 +63,24 @@ public final class ArchiveTrieNodeCodec {
   }
 
   public static Bytes encodeDiff(final Bytes oldNodeRlp, final Bytes newNodeRlp) {
-    if (oldNodeRlp == null && newNodeRlp == null) {
+    final boolean created = oldNodeRlp == null;
+    final boolean deleted = newNodeRlp == null;
+    if (created && deleted) {
       throw new IllegalArgumentException("encodeDiff: both old and new node RLPs are null");
-    }
-    if (oldNodeRlp == null) {
+    } else if (created) {
       return Bytes.concatenate(Bytes.of((byte) (ENTRY_FULL | CREATION)), newNodeRlp);
-    }
-    if (newNodeRlp == null) {
+    } else if (deleted) {
       return Bytes.of(DELETION);
     }
-    final int oldArity = nodeArity(oldNodeRlp);
-    final int newArity = nodeArity(newNodeRlp);
-    if (oldArity != newArity) {
+
+    final int arity = nodeArity(newNodeRlp);
+    if (arity != nodeArity(oldNodeRlp)) {
       return encodeFull(newNodeRlp);
-    }
-    if (oldArity == BRANCH_NODE_ARITY) {
+    } else if (arity == BRANCH_NODE_ARITY) {
       return encodeBranchDiff(oldNodeRlp, newNodeRlp);
+    } else {
+      return encodeShortDiff(oldNodeRlp, newNodeRlp);
     }
-    return encodeShortDiff(oldNodeRlp, newNodeRlp);
   }
 
   public static ArchiveTrieNodeEntry decode(final Bytes entry) {
@@ -153,12 +122,13 @@ public final class ArchiveTrieNodeCodec {
 
     byte metadata = NODE_IS_BRANCH;
     if (valueChanged) metadata |= VALUE_CHANGED;
+    if (changedCount == 1) metadata |= SINGLE_CHILD_CHANGED;
 
     final List<Bytes> parts = new ArrayList<>();
     if (changedCount == 1) {
       // Common case: a single key update touches exactly one child slot in each branch node
       // along its path — encode the index directly instead of spending 2 bytes on a bitmask.
-      parts.add(Bytes.of((byte) (metadata | SINGLE_CHILD_CHANGED)));
+      parts.add(Bytes.of(metadata));
       parts.add(Bytes.of((byte) soleChangedIndex));
       parts.add(newFields.children()[soleChangedIndex]); // raw RLP, self-delimiting
     } else {
@@ -175,8 +145,10 @@ public final class ArchiveTrieNodeCodec {
   }
 
   /**
-   * Frames the branch terminal value (decoded payload, not self-delimiting) with a 1-byte length
-   * prefix.
+   * Frames the branch terminal value with a 1-byte length prefix. The prefix is not redundant
+   * despite the value being last: {@link org.hyperledger.besu.ethereum.rlp.RLPInput#readAsRlp()}
+   * eagerly prepares the item *after* the one it reads, so a preceding child ref would choke on raw
+   * value bytes that do not happen to start with a valid RLP header.
    */
   private static Bytes frameBranchValue(final Bytes value) {
     final int len = value.size();

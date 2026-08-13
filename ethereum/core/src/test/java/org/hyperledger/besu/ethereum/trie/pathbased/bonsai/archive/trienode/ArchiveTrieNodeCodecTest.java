@@ -110,6 +110,17 @@ class ArchiveTrieNodeCodecTest {
   }
 
   @Test
+  void branchDiffWithNoChangesEncodesAndDecodesCleanly() {
+    final Bytes node = branchNode(emptyBranchChildren(), Bytes.EMPTY);
+    final ArchiveTrieNodeEntry diff =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(node, node));
+    assertThat(diff.isFull()).isFalse();
+    assertThat(diff.isBranchNode()).isTrue();
+    assertThat(diff.changedChildRefs()).isEmpty();
+    assertThat(diff.changedValue()).isEmpty();
+  }
+
+  @Test
   void branchDiffCapturesSingleChangedChildSlot() {
     final Bytes[] oldChildren = emptyBranchChildren();
     oldChildren[3] = Bytes.fromHexString("0xa0" + "11".repeat(32)); // 33-byte hash ref
@@ -154,6 +165,72 @@ class ArchiveTrieNodeCodecTest {
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.changedChildRefs()).isEmpty();
     assertThat(diff.changedValue()).contains(Bytes.fromHexString("0xbb"));
+  }
+
+  @Test
+  void branchTerminalValueClearedToEmptyRoundTrips() {
+    // A zero-length prefix is the boundary case for the value slice.
+    final Bytes[] children = emptyBranchChildren();
+    final Bytes oldNode = branchNode(children, Bytes.fromHexString("0xaa"));
+    final Bytes newNode = branchNode(children, Bytes.EMPTY);
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode);
+    assertThat(ArchiveTrieNodeCodec.decode(diffEntry).changedValue()).contains(Bytes.EMPTY);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(oldNode), List.of(diffEntry)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void branchTerminalValueAtLongFormRlpHeaderLengthRoundTripsAlongsideChangedChild() {
+    // Value length 187 (0xbb) falls in the RLP long-form-string header range (0xb8-0xbf), which
+    // would misread as a 4-byte length-of-length if readRlpItem looked past the child ref it's
+    // reading into this value's own length-prefix byte. Force those 4 bytes to a value that
+    // cannot be a real remaining length, so a regression throws instead of silently miscounting.
+    final byte[] value = new byte[187];
+    value[0] = (byte) 0xFF;
+    value[1] = (byte) 0xFF;
+    value[2] = (byte) 0xFF;
+    value[3] = (byte) 0xFF;
+
+    final Bytes[] oldChildren = emptyBranchChildren();
+    oldChildren[3] = Bytes.fromHexString("0xa0" + "11".repeat(32));
+    final Bytes[] newChildren = oldChildren.clone();
+    newChildren[3] = Bytes.fromHexString("0xa0" + "22".repeat(32));
+    final Bytes oldNode = branchNode(oldChildren, Bytes.fromHexString("0xaa"));
+    final Bytes newNode = branchNode(newChildren, Bytes.wrap(value));
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode);
+    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
+    assertThat(diff.changedChildRefs().keySet()).containsExactly(3);
+    assertThat(diff.changedValue()).contains(Bytes.wrap(value));
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(oldNode), List.of(diffEntry)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void branchTerminalValueChangeAlongsideSingleChangedChildRoundTrips() {
+    // A value byte sequence that is not a valid RLP header (0xbb claims 4 length bytes) directly
+    // after a child ref: readAsRlp() prepares the following item eagerly, so dropping the value's
+    // length prefix corrupts the child ref read.
+    final Bytes[] oldChildren = emptyBranchChildren();
+    oldChildren[3] = Bytes.fromHexString("0xa0" + "11".repeat(32));
+    final Bytes[] newChildren = oldChildren.clone();
+    newChildren[3] = Bytes.fromHexString("0xa0" + "22".repeat(32));
+    final Bytes oldNode = branchNode(oldChildren, Bytes.fromHexString("0xaa"));
+    final Bytes newNode = branchNode(newChildren, Bytes.fromHexString("0xbbcc"));
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode);
+    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
+    assertThat(diff.changedChildRefs().keySet()).containsExactly(3);
+    assertThat(diff.changedValue()).contains(Bytes.fromHexString("0xbbcc"));
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(oldNode), List.of(diffEntry)))
+        .isEqualTo(newNode);
   }
 
   @Test

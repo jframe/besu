@@ -25,41 +25,23 @@ import org.apache.tuweni.bytes.Bytes;
 
 /**
  * The decoded, typed view of one archived trie-node history entry, produced by {@link
- * ArchiveTrieNodeCodec#decode(Bytes)}. An instance is one of three shapes, distinguished by the
- * predicates below: FULL (the complete node RLP, via {@link #fullNode()}), a branch or short-node
- * DIFF (a structural delta against the prior version), or a deletion tombstone (no body at all).
- * Only the codec constructs instances and only it knows which accessors are valid for a given
- * metadata byte — callers must check the relevant predicate before calling a shape-specific
- * accessor; calling the wrong one throws {@link IllegalStateException}.
+ * ArchiveTrieNodeCodec#decode(Bytes)}. One of three shapes — FULL ({@link #fullNode()}), a branch
+ * or short-node DIFF, or a deletion tombstone — selected by the predicates below. Callers must
+ * check the relevant predicate before calling a shape-specific accessor; calling the wrong one
+ * throws {@link IllegalStateException}.
  */
 public final class ArchiveTrieNodeEntry {
 
-  /** bit0: full node RLP follows; if clear this is a diff entry. */
-  public static final byte ENTRY_FULL = 0x01;
+  /** Metadata flags for the entry's type */
+  public static final byte ENTRY_FULL = 0b0000_0001;
 
-  /** bit1: the node is a branch (17-item RLP list); clear = extension or leaf (2-item). */
-  public static final byte NODE_IS_BRANCH = 0x02;
+  public static final byte NODE_IS_BRANCH = 0b0000_0010;
+  public static final byte KEY_CHANGED = 0b0000_0100;
+  public static final byte VALUE_CHANGED = 0b0000_1000;
+  public static final byte CREATION = 0b0001_0000;
+  public static final byte DELETION = 0b0010_0000;
+  public static final byte SINGLE_CHILD_CHANGED = 0b0100_0000;
 
-  /** bit2: (short node diff) the path segment (key) changed relative to the previous version. */
-  public static final byte KEY_CHANGED = 0x04;
-
-  /** bit3: (short/branch node diff) the embedded value changed relative to the previous version. */
-  public static final byte VALUE_CHANGED = 0x08;
-
-  /** bit4: this node was created at this block — there is no prior version to diff against. */
-  public static final byte CREATION = 0x10;
-
-  /** bit5: this node was deleted at this block (tombstone entry). */
-  public static final byte DELETION = 0x20;
-
-  /**
-   * bit6: (branch node diff) exactly one child slot changed; its index follows as a single byte
-   * instead of the 2-byte {@code childMask} — the common case, since a single key update touches
-   * exactly one child slot in each branch node along its path to the root.
-   */
-  public static final byte SINGLE_CHILD_CHANGED = 0x40;
-
-  /** Number of child slots in a branch node. */
   static final int BRANCH_CHILDREN = 16;
 
   private final byte metadata;
@@ -95,6 +77,7 @@ public final class ArchiveTrieNodeEntry {
       final int index = Byte.toUnsignedInt(body.get(0));
       return Map.of(index, readRlpItem(1));
     }
+
     final int mask = readChildMask();
     int offset = 2;
     final Map<Integer, Bytes> result = new LinkedHashMap<>();
@@ -113,6 +96,7 @@ public final class ArchiveTrieNodeEntry {
     if ((metadata & VALUE_CHANGED) == 0) {
       return Optional.empty();
     }
+
     final int offset = offsetAfterChildRefs();
     final int len = Byte.toUnsignedInt(body.get(offset));
     return Optional.of(body.slice(offset + 1, len));
@@ -134,20 +118,17 @@ public final class ArchiveTrieNodeEntry {
     return (hi << 8) | lo;
   }
 
-  /**
-   * Child refs are stored as raw, self-delimiting RLP (their own header encodes their length), so
-   * no external length prefix is needed — {@link RLP#input} parses exactly one item starting at
-   * {@code offset} and ignores anything after it, which is how the caller learns each item's
-   * consumed byte count ({@code .size()}) to advance to the next one.
-   */
   private Bytes readRlpItem(final int offset) {
-    return RLP.input(body.slice(offset)).readAsRlp().raw();
+    // Not readAsRlp(): it peeks past the item and can misread a trailing length prefix as RLP.
+    final int itemSize = RLP.input(body.slice(offset)).currentSize();
+    return body.slice(offset, itemSize);
   }
 
   private int offsetAfterChildRefs() {
     if (isSingleChildChanged()) {
       return 1 + readRlpItem(1).size();
     }
+
     final int mask = readChildMask();
     int offset = 2;
     for (int i = 0; i < BRANCH_CHILDREN; i++) {
@@ -163,7 +144,8 @@ public final class ArchiveTrieNodeEntry {
     if ((metadata & KEY_CHANGED) == 0) {
       return Optional.empty();
     }
-    return Optional.of(readShortField(0));
+
+    return Optional.of(readShortField());
   }
 
   public Optional<Bytes> changedShortNodeValue() {
@@ -171,9 +153,9 @@ public final class ArchiveTrieNodeEntry {
     if ((metadata & VALUE_CHANGED) == 0) {
       return Optional.empty();
     }
-    // Value is stored as raw, self-delimiting RLP (no external length prefix, unlike the key
-    // field) — it is always the last field present, so no further offset bookkeeping is needed.
-    final int keyFieldSize = ((metadata & KEY_CHANGED) != 0) ? (2 + readShortFieldLength(0)) : 0;
+
+    // Self-delimiting RLP with nothing following, so no length prefix or offset needed
+    final int keyFieldSize = ((metadata & KEY_CHANGED) != 0) ? (2 + readShortFieldLength()) : 0;
     return Optional.of(readRlpItem(keyFieldSize));
   }
 
@@ -183,14 +165,14 @@ public final class ArchiveTrieNodeEntry {
     }
   }
 
-  private Bytes readShortField(final int offset) {
-    final int len = readShortFieldLength(offset);
-    return body.slice(offset + 2, len);
+  private Bytes readShortField() {
+    final int len = readShortFieldLength();
+    return body.slice(2, len);
   }
 
-  private int readShortFieldLength(final int offset) {
-    final int hi = Byte.toUnsignedInt(body.get(offset));
-    final int lo = Byte.toUnsignedInt(body.get(offset + 1));
+  private int readShortFieldLength() {
+    final int hi = Byte.toUnsignedInt(body.get(0));
+    final int lo = Byte.toUnsignedInt(body.get(1));
     return (hi << 8) | lo;
   }
 }
