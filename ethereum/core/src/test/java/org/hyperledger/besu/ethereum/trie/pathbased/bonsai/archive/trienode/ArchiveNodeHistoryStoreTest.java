@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -76,5 +77,24 @@ class ArchiveNodeHistoryStoreTest {
     final Bytes deep = ArchiveNodeKey.account(Bytes.of(0x0e, 0x00));
     putEncoded(shallow, 5L, 0, ArchiveTrieNodeCodec.encodeFull(Bytes.of(0xAA)));
     assertThat(store.getLatestBefore(deep, 9L)).isEmpty();
+  }
+
+  @Test
+  void foreignKeyShorterThanBlockSuffixDoesNotMatch() {
+    final Bytes nk = ArchiveNodeKey.account(Bytes.EMPTY); // 1 byte: [0x00]
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(TRIE_BRANCH_STORAGE_ARCHIVE, Bytes.of(0x00).toArrayUnsafe(), new byte[] {1});
+    tx.commit();
+
+    assertThat(store.getLatestBefore(nk, 100L)).isEmpty();
+  }
+
+  @Test
+  void encodeStoredValueRejectsCounterOutOfByteRange() {
+    final Bytes codecEntry = ArchiveTrieNodeCodec.encodeFull(Bytes.of(0xAA));
+    assertThatThrownBy(() -> ArchiveNodeHistoryStore.encodeStoredValue(256, codecEntry))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> ArchiveNodeHistoryStore.encodeStoredValue(-1, codecEntry))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 }
