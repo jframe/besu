@@ -90,6 +90,7 @@ class ArchiveTrieNodeStrategyTest {
     strategy.putFlatAccountTrieNode(storage, tx, location, hashOf(node), node);
     tx.put(
         TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(block).toArrayUnsafe());
+    strategy.onBeforeCommit(storage, tx);
     tx.commit();
   }
 
@@ -126,6 +127,7 @@ class ArchiveTrieNodeStrategyTest {
     final Bytes node = branchNode(0);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putFlatAccountTrieNode(storage, tx, LOCATION, hashOf(node), node);
+    strategy.onBeforeCommit(storage, tx);
     tx.commit();
 
     assertThat(storage.get(TRIE_BRANCH_STORAGE, LOCATION.toArrayUnsafe())).isPresent();
@@ -194,6 +196,7 @@ class ArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.removeFlatAccountStateTrieNode(storage, tx, LOCATION);
     tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(1L).toArrayUnsafe());
+    strategy.onBeforeCommit(storage, tx);
     tx.commit();
 
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
@@ -207,6 +210,7 @@ class ArchiveTrieNodeStrategyTest {
   void removeOfAbsentNodeWritesNothing() {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.removeFlatAccountStateTrieNode(storage, tx, LOCATION);
+    strategy.onBeforeCommit(storage, tx);
     tx.commit();
 
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(LOCATION), 0L)).isEmpty();
@@ -247,16 +251,68 @@ class ArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx0 = storage.startTransaction();
     strategy.putFlatStorageTrieNode(storage, tx0, accountHash, LOCATION, hashOf(nodeV1), nodeV1);
     tx0.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
+    strategy.onBeforeCommit(storage, tx0);
     tx0.commit();
 
     final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
     strategy.putFlatStorageTrieNode(storage, tx1, accountHash, LOCATION, hashOf(nodeV2), nodeV2);
     tx1.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(1L).toArrayUnsafe());
+    strategy.onBeforeCommit(storage, tx1);
     tx1.commit();
 
     final Bytes nk = ArchiveNodeKey.storage(accountHash.getBytes(), LOCATION);
     assertThat(historyStore.getLatestBefore(nk, 1L).orElseThrow().counter()).isEqualTo(1);
     assertThat(reader.nodeAt(nk, 0L)).contains(nodeV1);
     assertThat(reader.nodeAt(nk, 1L)).contains(nodeV2);
+  }
+
+  @Test
+  void onRollbackDropsCaptures() {
+    final Bytes node = branchNode(0);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(storage, tx, LOCATION, hashOf(node), node);
+    strategy.onRollback(tx);
+    tx.rollback();
+
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(LOCATION), 0L)).isEmpty();
+  }
+
+  @Test
+  void foreignTxGuardIgnoresOtherTransactions() {
+    // Simulates commitTrieLogOnly() mid-block: a different updater's onRollback arrives while
+    // the owning updater's buffer is still live. The buffer must not be discarded.
+    final Bytes node = branchNode(0);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putFlatAccountTrieNode(storage, tx, LOCATION, hashOf(node), node);
+
+    final SegmentedKeyValueStorageTransaction foreignTx = storage.startTransaction();
+    strategy.onRollback(foreignTx); // must be ignored
+    foreignTx.rollback();
+
+    // Buffer is still intact — flush with the real tx
+    tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
+    strategy.onBeforeCommit(storage, tx);
+    tx.commit();
+
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(LOCATION), 0L)).isPresent();
+  }
+
+  @Test
+  void chunkBoundaryFlushesAllNodes() {
+    // 65 nodes in one block: the first 64 are auto-submitted as a chunk during enqueue, the 65th
+    // is submitted in onBeforeCommit. All 65 must appear in the archive.
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    for (int i = 0; i < 65; i++) {
+      final Bytes loc = Bytes.of((byte) (i + 2)); // +2 avoids ROOT_LOCATION and LOCATION
+      strategy.putFlatAccountTrieNode(storage, tx, loc, hashOf(branchNode(i)), branchNode(i));
+    }
+    tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
+    strategy.onBeforeCommit(storage, tx);
+    tx.commit();
+
+    for (int i = 0; i < 65; i++) {
+      final Bytes loc = Bytes.of((byte) (i + 2));
+      assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(loc), 0L)).isPresent();
+    }
   }
 }
