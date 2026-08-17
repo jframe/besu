@@ -78,7 +78,7 @@ class ArchiveTrieNodeStrategyTest {
     reader = new ArchiveHistoryReader(historyStore);
     strategy =
         new ArchiveTrieNodeStrategy(
-            new BonsaiTrieNodeStrategy(), historyStore, historyProgress, gateOpen::get);
+            new BonsaiTrieNodeStrategy(), historyStore, historyProgress, gateOpen::get, storage);
   }
 
   /**

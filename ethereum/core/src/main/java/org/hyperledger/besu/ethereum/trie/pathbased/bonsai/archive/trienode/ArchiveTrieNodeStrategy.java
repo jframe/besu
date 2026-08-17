@@ -50,9 +50,12 @@ import org.apache.tuweni.bytes.Bytes32;
  * encode FULL/DIFF) off the import thread. Results are joined and applied to the transaction in
  * {@link #onBeforeCommit}, which runs immediately before commit.
  *
- * <p>The diff base is read from committed {@code storage} (still block N-1 while block N's {@code
- * transaction} is in flight). An archiving gap — gate closed then reopened, or a restart — forces
- * the next block to write FULL, since the newest archive entry no longer matches the flat DB.
+ * <p>The diff base for each captured node is resolved without touching the layered world-state
+ * chain: workers first try {@link ArchiveHistoryReader#nodeAt} on the history store (a bounded
+ * RocksDB backward walk), then fall back to a direct read from {@code liveStorage} (the base
+ * persistent storage beneath all layers). An archiving gap — gate closed then reopened, or a
+ * restart — forces the next block to write FULL, since the newest archive entry no longer matches
+ * the flat DB.
  *
  * <p>The buffer is owned by the transaction whose puts filled it. This strategy instance is shared
  * by every Updater created from the same storage. {@link
@@ -97,6 +100,8 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
   private final ArchiveNodeHistoryStore historyStore;
   private final ArchiveNodeHistoryProgress historyProgress;
   private final BooleanSupplier archiveGate;
+  private final SegmentedKeyValueStorage liveStorage;
+  private final ArchiveHistoryReader historyReader;
 
   // Block-number cache — cleared in onBeforeCommit/onRollback so the next block re-reads it.
   private long cachedBlockNumber = Long.MIN_VALUE;
@@ -121,11 +126,14 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
       final TrieNodeStrategy base,
       final ArchiveNodeHistoryStore historyStore,
       final ArchiveNodeHistoryProgress historyProgress,
-      final BooleanSupplier archiveGate) {
+      final BooleanSupplier archiveGate,
+      final SegmentedKeyValueStorage liveStorage) {
     this.base = Objects.requireNonNull(base);
     this.historyStore = Objects.requireNonNull(historyStore);
     this.historyProgress = Objects.requireNonNull(historyProgress);
     this.archiveGate = Objects.requireNonNull(archiveGate);
+    this.liveStorage = Objects.requireNonNull(liveStorage);
+    this.historyReader = new ArchiveHistoryReader(historyStore);
   }
 
   private long currentBlockNumber(final SegmentedKeyValueStorage storage) {
@@ -176,7 +184,6 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
       enqueue(
           new CaptureRequest(
               ArchiveNodeKey.account(location), location, block, null, nodeHash, node),
-          storage,
           transaction);
     }
   }
@@ -200,7 +207,6 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
               accountHash,
               nodeHash,
               node),
-          storage,
           transaction);
     }
   }
@@ -216,15 +222,12 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
       enqueue(
           new CaptureRequest(
               ArchiveNodeKey.account(location), location, block, null, Bytes32.ZERO, null),
-          storage,
           transaction);
     }
   }
 
   private void enqueue(
-      final CaptureRequest request,
-      final SegmentedKeyValueStorage storage,
-      final SegmentedKeyValueStorageTransaction transaction) {
+      final CaptureRequest request, final SegmentedKeyValueStorageTransaction transaction) {
     if (pendingRequests.isEmpty() && inFlight.isEmpty()) {
       bufferedBlock = request.block();
       bufferedChainContiguous = request.block() == lastArchivedBlock + 1L;
@@ -239,11 +242,11 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
     }
     pendingRequests.add(request);
     if (pendingRequests.size() >= CAPTURE_CHUNK_SIZE) {
-      submitChunk(storage);
+      submitChunk();
     }
   }
 
-  private void submitChunk(final SegmentedKeyValueStorage storage) {
+  private void submitChunk() {
     final List<CaptureRequest> chunk = List.copyOf(pendingRequests);
     final boolean chainContiguous = bufferedChainContiguous;
     pendingRequests.clear();
@@ -252,29 +255,39 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
             () -> {
               final List<CaptureResult> results = new ArrayList<>(chunk.size());
               for (final CaptureRequest request : chunk) {
-                computeCapture(request, chainContiguous, storage).ifPresent(results::add);
+                computeCapture(request, chainContiguous).ifPresent(results::add);
               }
               return results;
             }));
   }
 
   /**
-   * Computes the history entry for one buffered write. Reads only committed storage (the block's
-   * own writes sit in the uncommitted transaction), so during sequential import the flat DB still
-   * holds block N-1's value — the correct diff base. Safe to call from any thread; never touches
-   * the transaction. Returns empty for a removal of a node with no live prior (nothing to record).
+   * Returns the committed node value at block N-1, without touching the layered world-state chain.
+   * First tries the history store (bounded RocksDB backward walk); if no archive entry exists yet,
+   * falls back to liveStorage (the base persistent storage beneath all in-memory layers).
    */
+  private Bytes priorNode(final CaptureRequest request) {
+    if (request.block() == 0L) {
+      return null;
+    }
+    final Optional<Bytes> fromHistory =
+        historyReader.nodeAt(request.naturalKey(), request.block() - 1L);
+    if (fromHistory.isPresent()) {
+      return fromHistory.get();
+    }
+    return request.accountHash() == null
+        ? base.getFlatAccountTrieNode(request.location(), request.nodeHash(), liveStorage)
+            .orElse(null)
+        : base.getFlatStorageTrieNode(
+                request.accountHash(), request.location(), request.nodeHash(), liveStorage)
+            .orElse(null);
+  }
+
+  // Safe to call from any thread; never touches the transaction.
+  // Returns empty for a removal of a node with no live prior (nothing to record).
   private Optional<CaptureResult> computeCapture(
-      final CaptureRequest request,
-      final boolean chainContiguous,
-      final SegmentedKeyValueStorage storage) {
-    final Bytes priorNode =
-        request.accountHash() == null
-            ? base.getFlatAccountTrieNode(request.location(), request.nodeHash(), storage)
-                .orElse(null)
-            : base.getFlatStorageTrieNode(
-                    request.accountHash(), request.location(), request.nodeHash(), storage)
-                .orElse(null);
+      final CaptureRequest request, final boolean chainContiguous) {
+    final Bytes priorNode = priorNode(request);
 
     if (request.newNode() == null) { // removal
       if (priorNode == null) {
@@ -322,7 +335,7 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
     }
     final long block = bufferedBlock;
     if (!pendingRequests.isEmpty()) {
-      submitChunk(storage);
+      submitChunk();
     }
     try {
       // Belt-and-braces: keyed by historyKey, last write wins — matches sequential tx.put order

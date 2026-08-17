@@ -989,7 +989,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
                 new BonsaiTrieNodeStrategy(),
                 new ArchiveNodeHistoryStore(liveStorage),
                 new ArchiveNodeHistoryProgress(liveStorage),
-                () -> !syncState.isInSync());
+                () -> !syncState.isInSync(),
+                liveStorage);
         keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
         LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
       }
