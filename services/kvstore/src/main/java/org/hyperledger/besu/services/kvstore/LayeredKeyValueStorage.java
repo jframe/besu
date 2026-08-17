@@ -92,7 +92,8 @@ public class LayeredKeyValueStorage extends SegmentedInMemoryKeyValueStorage
       throws StorageException {
     throwIfClosed();
     final Bytes wrapKey = Bytes.wrap(key);
-    for (LayeredKeyValueStorage cur = this; ; ) {
+    LayeredKeyValueStorage cur = this;
+    while (true) {
       final Optional<byte[]> found = cur.getLocal(segmentId, wrapKey);
       if (found != null) return found;
       if (!(cur.parent instanceof LayeredKeyValueStorage next))
@@ -116,7 +117,8 @@ public class LayeredKeyValueStorage extends SegmentedInMemoryKeyValueStorage
       final Bytes key,
       final Function<SegmentedKeyValueStorage, Optional<Bytes>> cacheGetFunction) {
     throwIfClosed();
-    for (LayeredKeyValueStorage cur = this; ; ) {
+    LayeredKeyValueStorage cur = this;
+    while (true) {
       final Optional<byte[]> found = cur.getLocal(segmentId, key);
       if (found != null) return found.map(Bytes::wrap);
       if (!(cur.parent instanceof LayeredKeyValueStorage next))
