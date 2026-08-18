@@ -1,14 +1,17 @@
 /*
- * Copyright contributors to Besu.
+ * Copyright contributors to Hyperledger Besu.
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -17,8 +20,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import org.hyperledger.besu.ethereum.rlp.RLP;
-
 import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -26,390 +27,281 @@ import org.junit.jupiter.api.Test;
 
 class ArchiveTrieNodeCodecTest {
 
-  private static Bytes shortNode(final Bytes path, final Bytes value) {
-    return RLP.encode(
-        out -> {
-          out.startList();
-          out.writeBytes(path);
-          out.writeBytes(value);
-          out.endList();
-        });
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  private static Bytes node(final int... bytes) {
+    final byte[] b = new byte[bytes.length];
+    for (int i = 0; i < bytes.length; i++) {
+      b[i] = (byte) bytes[i];
+    }
+    return Bytes.wrap(b);
   }
 
-  private static Bytes branchNode(final Bytes[] children, final Bytes value) {
-    return RLP.encode(
-        out -> {
-          out.startList();
-          for (final Bytes child : children) {
-            if (child.isEmpty()) {
-              out.writeNull();
-            } else {
-              out.writeRaw(child);
-            }
-          }
-          out.writeBytes(value);
-          out.endList();
-        });
+  private static Bytes fill(final int len, final int value) {
+    final byte[] b = new byte[len];
+    java.util.Arrays.fill(b, (byte) value);
+    return Bytes.wrap(b);
   }
 
-  private static Bytes[] emptyBranchChildren() {
-    final Bytes[] children = new Bytes[16];
-    java.util.Arrays.fill(children, Bytes.EMPTY);
-    return children;
+  // ---------------------------------------------------------------------------
+  // encodeFull
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void encodeFullRoundTrips() {
+    final Bytes n = node(0xAA, 0xBB, 0xCC);
+    final ArchiveTrieNodeEntry e = ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeFull(n));
+    assertThat(e.isFull()).isTrue();
+    assertThat(e.isDeletion()).isFalse();
+    assertThat(e.fullNode()).isEqualTo(n);
+  }
+
+  // ---------------------------------------------------------------------------
+  // encodeDiff — lifecycle cases
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void encodeDiffNullOldIsCreationFull() {
+    final Bytes n = node(0x01, 0x02);
+    final ArchiveTrieNodeEntry e =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(null, n));
+    assertThat(e.isFull()).isTrue();
+    assertThat(e.fullNode()).isEqualTo(n);
   }
 
   @Test
-  void encodeFullProducesEntryFullBitWithNodeBytesAppended() {
-    final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0x03"));
-    final Bytes entry = ArchiveTrieNodeCodec.encodeFull(node);
-    final ArchiveTrieNodeEntry decoded = ArchiveTrieNodeCodec.decode(entry);
-    assertThat(decoded.isFull()).isTrue();
-    assertThat(decoded.fullNode()).isEqualTo(node);
+  void encodeDiffNullNewIsDeletionTombstoneWithNoBody() {
+    final Bytes n = node(0x01, 0x02);
+    final Bytes entry = ArchiveTrieNodeCodec.encodeDiff(n, null);
+    assertThat(entry.size()).isEqualTo(1);
+    assertThat(ArchiveTrieNodeCodec.decode(entry).isDeletion()).isTrue();
   }
 
   @Test
-  void encodeDiffWithNullOldNodeIsCreationFull() {
-    final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
-    final ArchiveTrieNodeEntry decoded =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(null, node));
-    assertThat(decoded.isFull()).isTrue();
-    assertThat(decoded.fullNode()).isEqualTo(node);
-  }
-
-  @Test
-  void encodeDiffWithNullNewNodeIsDeletionTombstoneWithNoBody() {
-    final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
-    final Bytes entry = ArchiveTrieNodeCodec.encodeDiff(node, null);
-    assertThat(entry.size()).isEqualTo(1); // metadata byte only
-    final ArchiveTrieNodeEntry decoded = ArchiveTrieNodeCodec.decode(entry);
-    assertThat(decoded.isDeletion()).isTrue();
-    assertThat(decoded.isFull()).isFalse();
-  }
-
-  @Test
-  void encodeDiffWithBothNullThrows() {
+  void encodeDiffBothNullThrows() {
     assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(null, null))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
+  // ---------------------------------------------------------------------------
+  // encodeDiff — binary patch properties
+  // ---------------------------------------------------------------------------
+
   @Test
-  void encodeDiffAcrossNodeTypeChangeIsPlainFullOfNewNode() {
-    final Bytes[] children = emptyBranchChildren();
-    final Bytes branch = branchNode(children, Bytes.EMPTY);
-    final Bytes shortN = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0x02"));
-
-    final ArchiveTrieNodeEntry branchToShort =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(branch, shortN));
-    assertThat(branchToShort.isFull()).isTrue();
-    assertThat(branchToShort.fullNode()).isEqualTo(shortN);
-
-    final ArchiveTrieNodeEntry shortToBranch =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(shortN, branch));
-    assertThat(shortToBranch.isFull()).isTrue();
-    assertThat(shortToBranch.fullNode()).isEqualTo(branch);
+  void encodeDiffIdenticalNodesProducesNonFullDiff() {
+    // A no-op diff: same bytes in and out, but NOT a FULL entry (it encodes as a zero-op patch).
+    final Bytes n = fill(40, 0xAB);
+    final ArchiveTrieNodeEntry e =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(n, n));
+    assertThat(e.isFull()).isFalse();
+    assertThat(e.isDeletion()).isFalse();
   }
 
   @Test
-  void branchDiffWithNoChangesEncodesAndDecodesCleanly() {
-    final Bytes node = branchNode(emptyBranchChildren(), Bytes.EMPTY);
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(node, node));
-    assertThat(diff.isFull()).isFalse();
-    assertThat(diff.isBranchNode()).isTrue();
-    assertThat(diff.changedChildRefs()).isEmpty();
-    assertThat(diff.changedValue()).isEmpty();
+  void encodeDiffProducesEntrySmallerthanNodeForSingleByteChange() {
+    // Dominant trie-node case: one byte changes in a 36-byte node.
+    final byte[] old = new byte[36];
+    final byte[] newBytes = old.clone();
+    newBytes[18] = (byte) 0xFF;
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(Bytes.wrap(old), Bytes.wrap(newBytes));
+    assertThat(diffEntry.size()).isLessThan(36 + 1); // must beat FULL
   }
 
   @Test
-  void branchDiffCapturesSingleChangedChildSlot() {
-    final Bytes[] oldChildren = emptyBranchChildren();
-    oldChildren[3] = Bytes.fromHexString("0xa0" + "11".repeat(32)); // 33-byte hash ref
-    final Bytes[] newChildren = oldChildren.clone();
-    newChildren[3] = Bytes.fromHexString("0xa0" + "22".repeat(32));
-    final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
-    final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.isFull()).isFalse();
-    assertThat(diff.isBranchNode()).isTrue();
-    assertThat(diff.changedChildRefs().keySet()).containsExactly(3);
-    assertThat(diff.changedChildRefs()).containsEntry(3, newChildren[3]);
-    assertThat(diff.changedValue()).isEmpty();
+  void encodeDiffFallsBackToFullWhenPatchExceedsNodeSize() {
+    // Every byte differs → patch body (INSERT + SKIP) exceeds new node size → FULL.
+    final Bytes old = fill(8, 0x11);
+    final Bytes newNode = fill(8, 0x22);
+    // INSERT(8 bytes) = 2+8=10 bytes, SKIP(8) = 2 bytes, total patch = 12 > 8 → FULL
+    final ArchiveTrieNodeEntry e =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(old, newNode));
+    assertThat(e.isFull()).isTrue();
+    assertThat(e.fullNode()).isEqualTo(newNode);
   }
 
-  @Test
-  void branchDiffCapturesEmptyToHashRefAndHashRefToEmptyTransitions() {
-    final Bytes[] oldChildren = emptyBranchChildren();
-    final Bytes[] newChildren = emptyBranchChildren();
-    newChildren[0] = Bytes.fromHexString("0xa0" + "33".repeat(32)); // empty -> hash ref
-    oldChildren[5] = Bytes.fromHexString("0xa0" + "44".repeat(32));
-    // newChildren[5] left empty -> hash ref -> empty
-    final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
-    final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.changedChildRefs().keySet()).containsExactly(0, 5);
-    assertThat(diff.changedChildRefs().get(0)).isEqualTo(newChildren[0]);
-    assertThat(diff.changedChildRefs().get(5)).isEqualTo(Bytes.fromHexString("0x80")); // RLP null
-  }
-
-  @Test
-  void branchDiffCapturesTerminalValueChange() {
-    final Bytes[] children = emptyBranchChildren();
-    final Bytes oldNode = branchNode(children, Bytes.fromHexString("0xaa"));
-    final Bytes newNode = branchNode(children, Bytes.fromHexString("0xbb"));
-
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.changedChildRefs()).isEmpty();
-    assertThat(diff.changedValue()).contains(Bytes.fromHexString("0xbb"));
-  }
-
-  @Test
-  void branchTerminalValueClearedToEmptyRoundTrips() {
-    // A zero-length prefix is the boundary case for the value slice.
-    final Bytes[] children = emptyBranchChildren();
-    final Bytes oldNode = branchNode(children, Bytes.fromHexString("0xaa"));
-    final Bytes newNode = branchNode(children, Bytes.EMPTY);
-
-    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode);
-    assertThat(ArchiveTrieNodeCodec.decode(diffEntry).changedValue()).contains(Bytes.EMPTY);
-    assertThat(
-            ArchiveTrieNodeCodec.reconstruct(
-                ArchiveTrieNodeCodec.encodeFull(oldNode), List.of(diffEntry)))
-        .isEqualTo(newNode);
-  }
-
-  @Test
-  void branchTerminalValueAtLongFormRlpHeaderLengthRoundTripsAlongsideChangedChild() {
-    // Value length 187 (0xbb) falls in the RLP long-form-string header range (0xb8-0xbf), which
-    // would misread as a 4-byte length-of-length if readRlpItem looked past the child ref it's
-    // reading into this value's own length-prefix byte. Force those 4 bytes to a value that
-    // cannot be a real remaining length, so a regression throws instead of silently miscounting.
-    final byte[] value = new byte[187];
-    value[0] = (byte) 0xFF;
-    value[1] = (byte) 0xFF;
-    value[2] = (byte) 0xFF;
-    value[3] = (byte) 0xFF;
-
-    final Bytes[] oldChildren = emptyBranchChildren();
-    oldChildren[3] = Bytes.fromHexString("0xa0" + "11".repeat(32));
-    final Bytes[] newChildren = oldChildren.clone();
-    newChildren[3] = Bytes.fromHexString("0xa0" + "22".repeat(32));
-    final Bytes oldNode = branchNode(oldChildren, Bytes.fromHexString("0xaa"));
-    final Bytes newNode = branchNode(newChildren, Bytes.wrap(value));
-
-    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode);
-    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
-    assertThat(diff.changedChildRefs().keySet()).containsExactly(3);
-    assertThat(diff.changedValue()).contains(Bytes.wrap(value));
-    assertThat(
-            ArchiveTrieNodeCodec.reconstruct(
-                ArchiveTrieNodeCodec.encodeFull(oldNode), List.of(diffEntry)))
-        .isEqualTo(newNode);
-  }
-
-  @Test
-  void branchTerminalValueChangeAlongsideSingleChangedChildRoundTrips() {
-    // A value byte sequence that is not a valid RLP header (0xbb claims 4 length bytes) directly
-    // after a child ref: readAsRlp() prepares the following item eagerly, so dropping the value's
-    // length prefix corrupts the child ref read.
-    final Bytes[] oldChildren = emptyBranchChildren();
-    oldChildren[3] = Bytes.fromHexString("0xa0" + "11".repeat(32));
-    final Bytes[] newChildren = oldChildren.clone();
-    newChildren[3] = Bytes.fromHexString("0xa0" + "22".repeat(32));
-    final Bytes oldNode = branchNode(oldChildren, Bytes.fromHexString("0xaa"));
-    final Bytes newNode = branchNode(newChildren, Bytes.fromHexString("0xbbcc"));
-
-    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode);
-    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
-    assertThat(diff.changedChildRefs().keySet()).containsExactly(3);
-    assertThat(diff.changedValue()).contains(Bytes.fromHexString("0xbbcc"));
-    assertThat(
-            ArchiveTrieNodeCodec.reconstruct(
-                ArchiveTrieNodeCodec.encodeFull(oldNode), List.of(diffEntry)))
-        .isEqualTo(newNode);
-  }
-
-  @Test
-  void branchChildRefLargerThan255BytesRoundTripsSinceItIsNoLongerLengthPrefixed() {
-    // Child refs are self-delimiting raw RLP now (Optimization #2): unlike the old external
-    // 1-byte length prefix, there is no longer a 255-byte cap on a changed child ref's size.
-    final Bytes[] oldChildren = emptyBranchChildren();
-    final Bytes[] newChildren = emptyBranchChildren();
-    newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[300])));
-    final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
-    final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.changedChildRefs().keySet()).containsExactly(0);
-    assertThat(diff.changedChildRefs().get(0)).isEqualTo(newChildren[0]);
-  }
-
-  @Test
-  void branchChildRefAt255BytesRoundTrips() {
-    // Retained as a regression check at what used to be the length-prefix boundary — no longer a
-    // meaningful limit, but still a real size worth covering.
-    final Bytes[] oldChildren = emptyBranchChildren();
-    final Bytes[] newChildren = emptyBranchChildren();
-    newChildren[0] = RLP.encode(out -> out.writeBytes(Bytes.wrap(new byte[253])));
-    final Bytes oldNode = branchNode(oldChildren, Bytes.EMPTY);
-    final Bytes newNode = branchNode(newChildren, Bytes.EMPTY);
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.isFull()).isFalse();
-    assertThat(diff.isBranchNode()).isTrue();
-    assertThat(diff.changedChildRefs().keySet()).containsExactly(0);
-    assertThat(diff.changedChildRefs().get(0).size()).isEqualTo(255);
-  }
-
-  @Test
-  void shortNodePathAt65535BytesIsAllowedAnd65536Throws() {
-    // The path field is a decoded byte payload (readBytes(), not self-delimiting RLP), so it
-    // still carries an explicit 2-byte length prefix and its 65535-byte limit is unchanged.
-    final Bytes oldNode = shortNode(Bytes.fromHexString("0x01"), Bytes.EMPTY);
-    final Bytes at65535 = shortNode(Bytes.wrap(new byte[65535]), Bytes.EMPTY);
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, at65535));
-    assertThat(diff.changedKey()).isPresent();
-
-    final Bytes at65536 = shortNode(Bytes.wrap(new byte[65536]), Bytes.EMPTY);
-    assertThatThrownBy(() -> ArchiveTrieNodeCodec.encodeDiff(oldNode, at65536))
-        .isInstanceOf(IllegalArgumentException.class);
-  }
-
-  @Test
-  void shortNodeValueLargerThan65535BytesRoundTripsSinceItIsNoLongerLengthPrefixed() {
-    // The value field is self-delimiting raw RLP now (Optimization #2): unlike the old external
-    // 2-byte length prefix, there is no longer a 65535-byte cap on a changed value's size.
-    final Bytes oldNode = shortNode(Bytes.fromHexString("0x01"), Bytes.EMPTY);
-    final Bytes largeValue = shortNode(Bytes.fromHexString("0x01"), Bytes.wrap(new byte[70000]));
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, largeValue));
-    assertThat(diff.isFull()).isFalse();
-    assertThat(diff.isBranchNode()).isFalse();
-    assertThat(diff.isDeletion()).isFalse();
-    assertThat(diff.changedShortNodeValue()).isPresent();
-  }
-
-  @Test
-  void shortNodeDiffCapturesKeyOnlyChange() {
-    final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
-    final Bytes newNode = shortNode(Bytes.fromHexString("0x0103"), Bytes.fromHexString("0xaa"));
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.isFull()).isFalse();
-    assertThat(diff.isBranchNode()).isFalse();
-    assertThat(diff.isDeletion()).isFalse();
-    assertThat(diff.changedKey()).contains(Bytes.fromHexString("0x0103"));
-    assertThat(diff.changedShortNodeValue()).isEmpty();
-  }
-
-  @Test
-  void shortNodeDiffCapturesValueOnlyChange() {
-    final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
-    final Bytes newNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xbb"));
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.changedKey()).isEmpty();
-    assertThat(
-            diff.changedShortNodeValue()
-                .map(RLP::input)
-                .map(org.hyperledger.besu.ethereum.rlp.RLPInput::readBytes))
-        .contains(Bytes.fromHexString("0xbb"));
-  }
-
-  @Test
-  void shortNodeDiffCapturesBothKeyAndValueChange() {
-    final Bytes oldNode = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
-    final Bytes newNode = shortNode(Bytes.fromHexString("0x0103"), Bytes.fromHexString("0xbb"));
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
-    assertThat(diff.changedKey()).contains(Bytes.fromHexString("0x0103"));
-    assertThat(diff.changedShortNodeValue()).isPresent();
-  }
-
-  @Test
-  void shortNodeDiffWithNeitherKeyNorValueChangedEncodesAndDecodesCleanly() {
-    // Callers should avoid producing a true no-op diff, but the codec must still handle it.
-    final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
-    final ArchiveTrieNodeEntry diff =
-        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(node, node));
-    assertThat(diff.isFull()).isFalse();
-    assertThat(diff.isBranchNode()).isFalse();
-    assertThat(diff.isDeletion()).isFalse();
-    assertThat(diff.changedKey()).isEmpty();
-    assertThat(diff.changedShortNodeValue()).isEmpty();
-  }
+  // ---------------------------------------------------------------------------
+  // reconstruct — round-trip correctness
+  // ---------------------------------------------------------------------------
 
   @Test
   void reconstructWithNoDiffsReturnsFullNodeByteExact() {
-    final Bytes node = shortNode(Bytes.fromHexString("0x0102"), Bytes.fromHexString("0xaa"));
-    final Bytes result =
-        ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(node), List.of());
-    assertThat(result).isEqualTo(node);
+    final Bytes n = node(0x01, 0x02, 0x03);
+    assertThat(ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(n), List.of()))
+        .isEqualTo(n);
   }
 
   @Test
-  void reconstructAppliesSingleBranchDiffOnTopOfFull() {
-    final Bytes[] children = emptyBranchChildren();
-    final Bytes base = branchNode(children, Bytes.EMPTY);
-    final Bytes[] mutated = children.clone();
-    mutated[7] = Bytes.fromHexString("0xa0" + "55".repeat(32));
-    final Bytes next = branchNode(mutated, Bytes.EMPTY);
-    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(base, next);
-    final Bytes reconstructed =
-        ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(base), List.of(diffEntry));
-    assertThat(reconstructed).isEqualTo(next);
+  void roundTripSingleByteChange() {
+    final Bytes old = node(0xAA, 0xBB, 0xCC);
+    final Bytes newNode = node(0xAA, 0xFF, 0xCC);
+    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(old), List.of(diff)))
+        .isEqualTo(newNode);
   }
 
   @Test
-  void reconstructAppliesMultipleShortNodeDiffsInAscendingOrder() {
-    final Bytes v1 = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xaa"));
-    final Bytes v2 = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xbb"));
-    final Bytes v3 = shortNode(Bytes.fromHexString("0x02"), Bytes.fromHexString("0xbb"));
+  void roundTripHashSizedBlockChange() {
+    // Simulates a 32-byte hash ref changing inside a larger node (dominant trie change pattern).
+    final Bytes prefix = fill(3, 0x01);
+    final Bytes suffix = fill(5, 0x02);
+    final Bytes oldHash = fill(32, 0x00);
+    final Bytes newHash = fill(32, 0xAA);
+    final Bytes old = Bytes.concatenate(prefix, oldHash, suffix);
+    final Bytes newNode = Bytes.concatenate(prefix, newHash, suffix);
+
+    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    assertThat(diff.size()).isLessThan(newNode.size() + 1); // patch beats FULL
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(old), List.of(diff)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void roundTripPrefixOnlyChange() {
+    // First byte changes; suffix is long and unchanged.
+    final Bytes old = Bytes.concatenate(node(0x01), fill(50, 0xBB));
+    final Bytes newNode = Bytes.concatenate(node(0x02), fill(50, 0xBB));
+    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(old), List.of(diff)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void roundTripSuffixOnlyChange() {
+    // Last byte changes; prefix is long and unchanged.
+    final Bytes old = Bytes.concatenate(fill(50, 0xBB), node(0x01));
+    final Bytes newNode = Bytes.concatenate(fill(50, 0xBB), node(0x02));
+    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(old), List.of(diff)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void roundTripSizeIncreaseChange() {
+    // new node is longer than old (e.g. an extension node's path grows).
+    final Bytes old = node(0xAA, 0xBB);
+    final Bytes newNode = node(0xAA, 0xCC, 0xDD, 0xEE);
+    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    final ArchiveTrieNodeEntry entry = ArchiveTrieNodeCodec.decode(diff);
+    if (entry.isFull()) {
+      assertThat(entry.fullNode()).isEqualTo(newNode);
+    } else {
+      assertThat(
+              ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(old), List.of(diff)))
+          .isEqualTo(newNode);
+    }
+  }
+
+  @Test
+  void roundTripSizeDecreaseChange() {
+    // new node is shorter than old.
+    final Bytes old = node(0xAA, 0xBB, 0xCC, 0xDD);
+    final Bytes newNode = node(0xAA, 0xEE);
+    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    final ArchiveTrieNodeEntry entry = ArchiveTrieNodeCodec.decode(diff);
+    if (entry.isFull()) {
+      assertThat(entry.fullNode()).isEqualTo(newNode);
+    } else {
+      assertThat(
+              ArchiveTrieNodeCodec.reconstruct(ArchiveTrieNodeCodec.encodeFull(old), List.of(diff)))
+          .isEqualTo(newNode);
+    }
+  }
+
+  @Test
+  void reconstructAppliesMultipleDiffsInAscendingOrder() {
+    final Bytes v1 = node(0xAA, 0xBB, 0xCC);
+    final Bytes v2 = node(0xAA, 0xFF, 0xCC);
+    final Bytes v3 = node(0xDD, 0xFF, 0xCC);
     final Bytes diff1 = ArchiveTrieNodeCodec.encodeDiff(v1, v2);
     final Bytes diff2 = ArchiveTrieNodeCodec.encodeDiff(v2, v3);
-
-    final Bytes reconstructed =
-        ArchiveTrieNodeCodec.reconstruct(
-            ArchiveTrieNodeCodec.encodeFull(v1), List.of(diff1, diff2));
-    assertThat(reconstructed).isEqualTo(v3);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(v1), List.of(diff1, diff2)))
+        .isEqualTo(v3);
   }
+
+  @Test
+  void reconstructChainOfHashBlockChanges() {
+    // Three successive mutations each changing the same 32-byte field.
+    final Bytes prefix = fill(4, 0x01);
+    final Bytes suffix = fill(4, 0x02);
+    final Bytes v1 = Bytes.concatenate(prefix, fill(32, 0x00), suffix);
+    final Bytes v2 = Bytes.concatenate(prefix, fill(32, 0x11), suffix);
+    final Bytes v3 = Bytes.concatenate(prefix, fill(32, 0x22), suffix);
+    final Bytes diff1 = ArchiveTrieNodeCodec.encodeDiff(v1, v2);
+    final Bytes diff2 = ArchiveTrieNodeCodec.encodeDiff(v2, v3);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(v1), List.of(diff1, diff2)))
+        .isEqualTo(v3);
+  }
+
+  // ---------------------------------------------------------------------------
+  // reconstruct — input validation
+  // ---------------------------------------------------------------------------
 
   @Test
   void reconstructRejectsNonFullBaseEntry() {
-    final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xaa"));
-    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(node, node);
-    assertThatThrownBy(() -> ArchiveTrieNodeCodec.reconstruct(diffEntry, List.of()))
+    final Bytes n = node(0x01, 0x02, 0x03);
+    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(n, node(0x04, 0x05, 0x06));
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.reconstruct(diff, List.of()))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
-  void reconstructRejectsFullOrTombstoneEntryInDiffList() {
-    final Bytes node = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xaa"));
-    final Bytes fullEntry = ArchiveTrieNodeCodec.encodeFull(node);
-    assertThatThrownBy(
-            () ->
-                ArchiveTrieNodeCodec.reconstruct(
-                    fullEntry, List.of(ArchiveTrieNodeCodec.encodeDiff(node, null))))
+  void reconstructRejectsFullEntryInDiffList() {
+    final Bytes n = node(0x01, 0x02, 0x03);
+    final Bytes full1 = ArchiveTrieNodeCodec.encodeFull(n);
+    final Bytes full2 = ArchiveTrieNodeCodec.encodeFull(node(0x04, 0x05, 0x06));
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.reconstruct(full1, List.of(full2)))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
-  void reconstructRejectsNodeTypeMismatchBetweenBaseAndDiff() {
-    final Bytes[] children = emptyBranchChildren();
-    final Bytes branch = branchNode(children, Bytes.EMPTY);
-    final Bytes shortN = shortNode(Bytes.fromHexString("0x01"), Bytes.fromHexString("0xaa"));
-    // A short-node diff (no type-change bits set) fed against a branch base.
-    final Bytes shortDiff = ArchiveTrieNodeCodec.encodeDiff(shortN, shortN);
-    assertThatThrownBy(
-            () ->
-                ArchiveTrieNodeCodec.reconstruct(
-                    ArchiveTrieNodeCodec.encodeFull(branch), List.of(shortDiff)))
+  void reconstructRejectsDeletionTombstoneInDiffList() {
+    final Bytes n = node(0x01, 0x02, 0x03);
+    final Bytes full = ArchiveTrieNodeCodec.encodeFull(n);
+    final Bytes tombstone = ArchiveTrieNodeCodec.encodeDiff(n, null);
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.reconstruct(full, List.of(tombstone)))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  // ---------------------------------------------------------------------------
+  // ArchiveTrieNodeEntry.patchBody()
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void patchBodyThrowsOnFullEntry() {
+    final ArchiveTrieNodeEntry e =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeFull(node(0x01)));
+    assertThatThrownBy(e::patchBody).isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void patchBodyThrowsOnDeletionEntry() {
+    final ArchiveTrieNodeEntry e =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(node(0x01), null));
+    assertThatThrownBy(e::patchBody).isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void patchBodyReturnsNonNullForDiffEntry() {
+    final Bytes old = fill(40, 0x01);
+    final Bytes newNode = fill(40, 0x01);
+    newNode.toArray()[20] = (byte) 0xFF; // mutate a copy — need to use array
+    final byte[] arr = old.toArray();
+    arr[20] = (byte) 0xFF;
+    final Bytes mutated = Bytes.wrap(arr);
+    final ArchiveTrieNodeEntry e =
+        ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(old, mutated));
+    if (!e.isFull()) {
+      assertThat(e.patchBody()).isNotNull();
+    }
   }
 }
