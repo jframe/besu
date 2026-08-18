@@ -21,12 +21,11 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBa
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
-import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveHistoryReader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveProofNodeLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveReadTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeCapture;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
@@ -35,6 +34,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -46,7 +46,7 @@ import org.junit.jupiter.api.Test;
  * End-to-end integration test for the bonsai archive trie-node write and proof-read pipeline.
  *
  * <p>Covers the full chain: ArchiveTrieNodeStrategy → ArchiveNodeHistoryStore →
- * ArchiveNodeHistoryProgress → ArchiveProofNodeLoader (as would be used by
+ * ArchiveNodeHistoryProgress → ArchiveReadTrieNodeStrategy (as would be used by
  * BonsaiArchiveWorldStateStorageCoordinator). Does NOT require a real block-processing stack.
  */
 class BonsaiArchiveStateProofIntegrationTest {
@@ -143,6 +143,18 @@ class BonsaiArchiveStateProofIntegrationTest {
     tx.commit();
   }
 
+  private Optional<Bytes> readAccountNode(
+      final long block, final Bytes location, final Bytes32 nodeHash) {
+    return new ArchiveReadTrieNodeStrategy(block, historyReader)
+        .getFlatAccountTrieNode(location, nodeHash, storage);
+  }
+
+  private Optional<Bytes> readStorageNode(
+      final Hash accountHash, final long block, final Bytes location, final Bytes32 nodeHash) {
+    return new ArchiveReadTrieNodeStrategy(block, historyReader)
+        .getFlatStorageTrieNode(accountHash, location, nodeHash, storage);
+  }
+
   @Test
   void archivedNodeIsRetrievableViaProofLoader() {
     final Bytes location = Bytes.of(0x0e);
@@ -154,8 +166,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
-    final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
-    assertThat(loader.getNode(location, hash(node))).contains(node);
+    assertThat(readAccountNode(0L, location, hash(node))).contains(node);
   }
 
   @Test
@@ -167,11 +178,8 @@ class BonsaiArchiveStateProofIntegrationTest {
     writeAccountBlock(0L, location, nodeAtBlock0);
     writeAccountBlock(1L, location, nodeAtBlock1);
 
-    final NodeLoader loader0 = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
-    assertThat(loader0.getNode(location, hash(nodeAtBlock0))).contains(nodeAtBlock0);
-
-    final NodeLoader loader1 = ArchiveProofNodeLoader.forAccount(historyReader, 1L);
-    assertThat(loader1.getNode(location, hash(nodeAtBlock1))).contains(nodeAtBlock1);
+    assertThat(readAccountNode(0L, location, hash(nodeAtBlock0))).contains(nodeAtBlock0);
+    assertThat(readAccountNode(1L, location, hash(nodeAtBlock1))).contains(nodeAtBlock1);
   }
 
   @Test
@@ -194,8 +202,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     // Nothing written to storage
     final Bytes location = Bytes.of(0x0f);
     final Bytes phantomNode = Bytes.fromHexString("0x9999");
-    final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, 5L);
-    assertThat(loader.getNode(location, hash(phantomNode))).isEmpty();
+    assertThat(readAccountNode(5L, location, hash(phantomNode))).isEmpty();
   }
 
   @Test
@@ -212,8 +219,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
-    final NodeLoader loader = ArchiveProofNodeLoader.forStorage(accountHash, historyReader, 0L);
-    assertThat(loader.getNode(location, hash(node))).contains(node);
+    assertThat(readStorageNode(accountHash, 0L, location, hash(node))).contains(node);
   }
 
   @Test
@@ -232,9 +238,8 @@ class BonsaiArchiveStateProofIntegrationTest {
     archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
-    // Account-trie loader must not return anything for the same location
-    final NodeLoader accountLoader = ArchiveProofNodeLoader.forAccount(historyReader, 0L);
-    assertThat(accountLoader.getNode(storageLocation, hash(storageNode))).isEmpty();
+    // Account-trie reader must not return anything for the same location
+    assertThat(readAccountNode(0L, storageLocation, hash(storageNode))).isEmpty();
   }
 
   @Test
@@ -248,8 +253,9 @@ class BonsaiArchiveStateProofIntegrationTest {
     // Walking past two checkpoint rollovers, every historical version still proves out by hash.
     for (int block = 0; block < blocks; block++) {
       final Bytes expected = branchNode(block);
-      final NodeLoader loader = ArchiveProofNodeLoader.forAccount(historyReader, block);
-      assertThat(loader.getNode(location, hash(expected))).as("block %d", block).contains(expected);
+      assertThat(readAccountNode(block, location, hash(expected)))
+          .as("block %d", block)
+          .contains(expected);
     }
   }
 
@@ -288,12 +294,9 @@ class BonsaiArchiveStateProofIntegrationTest {
     writeAccountBlock(1L, location, leafV1);
     writeAccountBlock(2L, location, leafV2);
 
-    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 0L).getNode(location, hash(leafV0)))
-        .contains(leafV0);
-    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 1L).getNode(location, hash(leafV1)))
-        .contains(leafV1);
-    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 2L).getNode(location, hash(leafV2)))
-        .contains(leafV2);
+    assertThat(readAccountNode(0L, location, hash(leafV0))).contains(leafV0);
+    assertThat(readAccountNode(1L, location, hash(leafV1))).contains(leafV1);
+    assertThat(readAccountNode(2L, location, hash(leafV2))).contains(leafV2);
   }
 
   @Test
@@ -308,10 +311,8 @@ class BonsaiArchiveStateProofIntegrationTest {
     archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
-    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 0L).getNode(location, hash(node)))
-        .contains(node);
-    assertThat(ArchiveProofNodeLoader.forAccount(historyReader, 1L).getNode(location, hash(node)))
-        .isEmpty();
+    assertThat(readAccountNode(0L, location, hash(node))).contains(node);
+    assertThat(readAccountNode(1L, location, hash(node))).isEmpty();
   }
 
   @Test
@@ -343,13 +344,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     }
 
     // A's diff at block 1 must not disturb B, whose last write was at block 0.
-    assertThat(
-            ArchiveProofNodeLoader.forStorage(accountA, historyReader, 1L)
-                .getNode(location, hash(aV1)))
-        .contains(aV1);
-    assertThat(
-            ArchiveProofNodeLoader.forStorage(accountB, historyReader, 1L)
-                .getNode(location, hash(bV0)))
-        .contains(bV0);
+    assertThat(readStorageNode(accountA, 1L, location, hash(aV1))).contains(aV1);
+    assertThat(readStorageNode(accountB, 1L, location, hash(bV0))).contains(bV0);
   }
 }
