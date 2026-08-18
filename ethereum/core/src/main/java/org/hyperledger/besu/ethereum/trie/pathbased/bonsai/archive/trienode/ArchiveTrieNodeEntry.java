@@ -14,35 +14,36 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
-import org.hyperledger.besu.ethereum.rlp.RLP;
-
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Optional;
-
 import org.apache.tuweni.bytes.Bytes;
 
 /**
  * The decoded, typed view of one archived trie-node history entry, produced by {@link
- * ArchiveTrieNodeCodec#decode(Bytes)}. One of three shapes — FULL ({@link #fullNode()}), a branch
- * or short-node DIFF, or a deletion tombstone — selected by the predicates below. Callers must
+ * ArchiveTrieNodeCodec#decode(Bytes)}. One of four shapes — FULL ({@link #fullNode()}), a binary
+ * patch DIFF ({@link #patchBody()}), a REPLACEMENT ({@link #fullNode()} when {@link
+ * #isReplacement()}), or a deletion tombstone — selected by the predicates below. Callers must
  * check the relevant predicate before calling a shape-specific accessor; calling the wrong one
  * throws {@link IllegalStateException}.
+ *
+ * <p>REPLACEMENT entries are produced by {@link ArchiveTrieNodeCodec#encodeDiff} as a fallback when
+ * the binary patch would be at least as large as the new node. They carry the full new-node bytes
+ * (accessible via {@link #fullNode()}), but unlike standalone FULL entries they are not treated as
+ * FULL checkpoints by readers — callers that inspect {@link #isFull()} will see {@code false}, so
+ * they flow through reconstruction pipelines as diff-list entries rather than base checkpoints.
  */
 public final class ArchiveTrieNodeEntry {
 
-  /** Metadata flags for the entry's type */
   public static final byte ENTRY_FULL = 0b0000_0001;
 
-  public static final byte NODE_IS_BRANCH = 0b0000_0010;
-  public static final byte KEY_CHANGED = 0b0000_0100;
-  public static final byte VALUE_CHANGED = 0b0000_1000;
+  /**
+   * Set on entries produced by {@link ArchiveTrieNodeCodec#encodeDiff} when the binary patch would
+   * be at least as large as the new node. The {@link #ENTRY_FULL} bit is NOT set, so {@link
+   * #isFull()} returns {@code false} and readers do not treat these as FULL checkpoints. The node
+   * bytes are still accessible via {@link #fullNode()}.
+   */
+  static final byte REPLACEMENT = 0b0000_0010;
+
   public static final byte CREATION = 0b0001_0000;
   public static final byte DELETION = 0b0010_0000;
-  public static final byte SINGLE_CHILD_CHANGED = 0b0100_0000;
-
-  static final int BRANCH_CHILDREN = 16;
 
   private final byte metadata;
   private final Bytes body;
@@ -60,119 +61,39 @@ public final class ArchiveTrieNodeEntry {
     return (metadata & DELETION) != 0;
   }
 
-  public boolean isBranchNode() {
-    return (metadata & NODE_IS_BRANCH) != 0;
+  /**
+   * True when this entry was produced by {@link ArchiveTrieNodeCodec#encodeDiff} falling back to a
+   * full-node encoding because the binary patch was at least as large as the new node. The full new
+   * node bytes are accessible via {@link #fullNode()}. Unlike standalone FULL entries, {@link
+   * #isFull()} returns {@code false} for REPLACEMENT entries so they do not act as FULL
+   * checkpoints.
+   */
+  public boolean isReplacement() {
+    return (metadata & REPLACEMENT) != 0;
   }
 
+  /**
+   * Returns the full node bytes. Valid when {@link #isFull()} or {@link #isReplacement()} is true.
+   *
+   * @throws IllegalStateException if called on a diff or deletion entry
+   */
   public Bytes fullNode() {
-    if (!isFull()) {
-      throw new IllegalStateException("fullNode() called on a diff entry");
+    if (!isFull() && !isReplacement()) {
+      throw new IllegalStateException("fullNode() called on a non-full, non-replacement entry");
     }
     return body;
   }
 
-  public Map<Integer, Bytes> changedChildRefs() {
-    requireBranchDiff("changedChildRefs()");
-    if (isSingleChildChanged()) {
-      final int index = Byte.toUnsignedInt(body.get(0));
-      return Map.of(index, readRlpItem(1));
+  /**
+   * Returns the raw binary patch body (COPY/SKIP/INSERT op sequence). Only valid when {@link
+   * #isFull()}, {@link #isReplacement()}, and {@link #isDeletion()} are all false.
+   *
+   * @throws IllegalStateException if called on a full, replacement, or deletion entry
+   */
+  public Bytes patchBody() {
+    if (isFull() || isReplacement() || isDeletion()) {
+      throw new IllegalStateException("patchBody() called on a non-diff entry");
     }
-
-    final int mask = readChildMask();
-    int offset = 2;
-    final Map<Integer, Bytes> result = new LinkedHashMap<>();
-    for (int i = 0; i < BRANCH_CHILDREN; i++) {
-      if ((mask & (1 << i)) != 0) {
-        final Bytes childRlp = readRlpItem(offset);
-        result.put(i, childRlp);
-        offset += childRlp.size();
-      }
-    }
-    return Collections.unmodifiableMap(result);
-  }
-
-  public Optional<Bytes> changedValue() {
-    requireBranchDiff("changedValue()");
-    if ((metadata & VALUE_CHANGED) == 0) {
-      return Optional.empty();
-    }
-
-    final int offset = offsetAfterChildRefs();
-    final int len = Byte.toUnsignedInt(body.get(offset));
-    return Optional.of(body.slice(offset + 1, len));
-  }
-
-  private void requireBranchDiff(final String methodName) {
-    if (isFull() || !isBranchNode()) {
-      throw new IllegalStateException(methodName + " called on a non-branch DIFF entry");
-    }
-  }
-
-  private boolean isSingleChildChanged() {
-    return (metadata & SINGLE_CHILD_CHANGED) != 0;
-  }
-
-  private int readChildMask() {
-    final int hi = Byte.toUnsignedInt(body.get(0));
-    final int lo = Byte.toUnsignedInt(body.get(1));
-    return (hi << 8) | lo;
-  }
-
-  private Bytes readRlpItem(final int offset) {
-    // Not readAsRlp(): it peeks past the item and can misread a trailing length prefix as RLP.
-    final int itemSize = RLP.input(body.slice(offset)).currentSize();
-    return body.slice(offset, itemSize);
-  }
-
-  private int offsetAfterChildRefs() {
-    if (isSingleChildChanged()) {
-      return 1 + readRlpItem(1).size();
-    }
-
-    final int mask = readChildMask();
-    int offset = 2;
-    for (int i = 0; i < BRANCH_CHILDREN; i++) {
-      if ((mask & (1 << i)) != 0) {
-        offset += readRlpItem(offset).size();
-      }
-    }
-    return offset;
-  }
-
-  public Optional<Bytes> changedKey() {
-    requireShortDiff("changedKey()");
-    if ((metadata & KEY_CHANGED) == 0) {
-      return Optional.empty();
-    }
-
-    return Optional.of(readShortField());
-  }
-
-  public Optional<Bytes> changedShortNodeValue() {
-    requireShortDiff("changedShortNodeValue()");
-    if ((metadata & VALUE_CHANGED) == 0) {
-      return Optional.empty();
-    }
-
-    // Self-delimiting RLP with nothing following, so no length prefix or offset needed
-    final int keyFieldSize = ((metadata & KEY_CHANGED) != 0) ? (2 + readShortFieldLength()) : 0;
-    return Optional.of(readRlpItem(keyFieldSize));
-  }
-
-  private void requireShortDiff(final String methodName) {
-    if (isFull() || isBranchNode() || isDeletion()) {
-      throw new IllegalStateException(methodName + " called on a non-short-node DIFF entry");
-    }
-  }
-
-  private Bytes readShortField() {
-    final int len = readShortFieldLength();
-    return body.slice(2, len);
-  }
-
-  private int readShortFieldLength() {
-    final int hi = Byte.toUnsignedInt(body.get(0));
-    final int lo = Byte.toUnsignedInt(body.get(1));
-    return (hi << 8) | lo;
+    return body;
   }
 }

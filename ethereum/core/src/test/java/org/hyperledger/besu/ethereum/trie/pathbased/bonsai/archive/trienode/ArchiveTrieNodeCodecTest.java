@@ -111,13 +111,14 @@ class ArchiveTrieNodeCodecTest {
 
   @Test
   void encodeDiffFallsBackToFullWhenPatchExceedsNodeSize() {
-    // Every byte differs → patch body (INSERT + SKIP) exceeds new node size → FULL.
+    // Every byte differs → patch body (INSERT + SKIP) exceeds new node size → REPLACEMENT fallback.
     final Bytes old = fill(8, 0x11);
     final Bytes newNode = fill(8, 0x22);
-    // INSERT(8 bytes) = 2+8=10 bytes, SKIP(8) = 2 bytes, total patch = 12 > 8 → FULL
+    // INSERT(8 bytes) = 2+8=10 bytes, SKIP(8) = 2 bytes, total patch = 12 > 8 → REPLACEMENT
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(old, newNode));
-    assertThat(e.isFull()).isTrue();
+    assertThat(e.isFull()).isFalse();
+    assertThat(e.isReplacement()).isTrue();
     assertThat(e.fullNode()).isEqualTo(newNode);
   }
 
@@ -248,8 +249,13 @@ class ArchiveTrieNodeCodecTest {
 
   @Test
   void reconstructRejectsNonFullBaseEntry() {
-    final Bytes n = node(0x01, 0x02, 0x03);
-    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(n, node(0x04, 0x05, 0x06));
+    // Use a large node so the single-byte diff produces a pure DIFF entry (not a REPLACEMENT
+    // fallback), ensuring the first arg is non-full and reconstruct correctly rejects it.
+    final Bytes old = fill(40, 0x01);
+    final byte[] arr = old.toArray();
+    arr[20] = (byte) 0x02;
+    final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, Bytes.wrap(arr));
+    assertThat(ArchiveTrieNodeCodec.decode(diff).isFull()).isFalse(); // sanity: must be pure DIFF
     assertThatThrownBy(() -> ArchiveTrieNodeCodec.reconstruct(diff, List.of()))
         .isInstanceOf(IllegalArgumentException.class);
   }
@@ -300,7 +306,7 @@ class ArchiveTrieNodeCodecTest {
     final Bytes mutated = Bytes.wrap(arr);
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(old, mutated));
-    if (!e.isFull()) {
+    if (!e.isFull() && !e.isReplacement()) {
       assertThat(e.patchBody()).isNotNull();
     }
   }
