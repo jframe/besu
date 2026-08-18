@@ -91,6 +91,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchive
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeCapture;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
@@ -126,6 +127,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -984,12 +986,19 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         final BonsaiWorldStateKeyValueStorage keyValueStorage =
             worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
         final SegmentedKeyValueStorage liveStorage = keyValueStorage.getComposedWorldStateStorage();
-        final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
-            new ArchiveTrieNodeStrategy(
-                new BonsaiTrieNodeStrategy(),
+        final ExecutorService capturePool =
+            MonitoredExecutors.newFixedThreadPool(
+                "trie-capture",
+                Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 2)),
+                metricsSystem);
+        final ArchiveTrieNodeCapture capture =
+            new ArchiveTrieNodeCapture(
                 new ArchiveNodeHistoryStore(liveStorage),
                 new ArchiveNodeHistoryProgress(liveStorage),
-                () -> !syncState.isInSync());
+                capturePool);
+        final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
+            new ArchiveTrieNodeStrategy(
+                new BonsaiTrieNodeStrategy(), capture, () -> !syncState.isInSync());
         keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
         LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
       }

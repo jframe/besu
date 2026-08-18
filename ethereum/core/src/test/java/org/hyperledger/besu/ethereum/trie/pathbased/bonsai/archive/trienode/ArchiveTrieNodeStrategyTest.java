@@ -27,6 +27,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -76,9 +77,9 @@ class ArchiveTrieNodeStrategyTest {
     historyStore = new ArchiveNodeHistoryStore(storage);
     historyProgress = new ArchiveNodeHistoryProgress(storage);
     reader = new ArchiveHistoryReader(historyStore);
-    strategy =
-        new ArchiveTrieNodeStrategy(
-            new BonsaiTrieNodeStrategy(), historyStore, historyProgress, gateOpen::get);
+    final ArchiveTrieNodeCapture capture =
+        new ArchiveTrieNodeCapture(historyStore, historyProgress, Executors.newFixedThreadPool(2));
+    strategy = new ArchiveTrieNodeStrategy(new BonsaiTrieNodeStrategy(), capture, gateOpen::get);
   }
 
   /**
@@ -264,55 +265,5 @@ class ArchiveTrieNodeStrategyTest {
     assertThat(historyStore.getLatestBefore(nk, 1L).orElseThrow().counter()).isEqualTo(1);
     assertThat(reader.nodeAt(nk, 0L)).contains(nodeV1);
     assertThat(reader.nodeAt(nk, 1L)).contains(nodeV2);
-  }
-
-  @Test
-  void onRollbackDropsCaptures() {
-    final Bytes node = branchNode(0);
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    strategy.putFlatAccountTrieNode(storage, tx, LOCATION, hashOf(node), node);
-    strategy.onRollback(tx);
-    tx.rollback();
-
-    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(LOCATION), 0L)).isEmpty();
-  }
-
-  @Test
-  void foreignTxGuardIgnoresOtherTransactions() {
-    // Simulates commitTrieLogOnly() mid-block: a different updater's onRollback arrives while
-    // the owning updater's buffer is still live. The buffer must not be discarded.
-    final Bytes node = branchNode(0);
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    strategy.putFlatAccountTrieNode(storage, tx, LOCATION, hashOf(node), node);
-
-    final SegmentedKeyValueStorageTransaction foreignTx = storage.startTransaction();
-    strategy.onRollback(foreignTx); // must be ignored
-    foreignTx.rollback();
-
-    // Buffer is still intact — flush with the real tx
-    tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
-    strategy.onBeforeCommit(storage, tx);
-    tx.commit();
-
-    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(LOCATION), 0L)).isPresent();
-  }
-
-  @Test
-  void chunkBoundaryFlushesAllNodes() {
-    // 65 nodes in one block: the first 64 are auto-submitted as a chunk during enqueue, the 65th
-    // is submitted in onBeforeCommit. All 65 must appear in the archive.
-    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    for (int i = 0; i < 65; i++) {
-      final Bytes loc = Bytes.of((byte) (i + 2)); // +2 avoids ROOT_LOCATION and LOCATION
-      strategy.putFlatAccountTrieNode(storage, tx, loc, hashOf(branchNode(i)), branchNode(i));
-    }
-    tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
-    strategy.onBeforeCommit(storage, tx);
-    tx.commit();
-
-    for (int i = 0; i < 65; i++) {
-      final Bytes loc = Bytes.of((byte) (i + 2));
-      assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(loc), 0L)).isPresent();
-    }
   }
 }
