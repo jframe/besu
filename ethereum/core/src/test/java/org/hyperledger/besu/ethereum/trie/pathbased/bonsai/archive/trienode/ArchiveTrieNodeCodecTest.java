@@ -320,4 +320,44 @@ class ArchiveTrieNodeCodecTest {
     assertThat(diff.patchBody().toArray())
         .isEqualTo(new byte[] {0x00, 0x14, (byte) 0x80, 0x01, (byte) 0xFF, 0x40, 0x01});
   }
+
+  @Test
+  void encodeDiffMultipleNonAdjacentChangesProducesMultipleRuns() {
+    // 20-byte arrays: bytes 2 and 14 differ; 11-byte gap between them satisfies MATCH_THRESHOLD
+    final byte[] oldBytes = new byte[20];
+    final byte[] newBytes = new byte[20];
+    oldBytes[2] = 0x01;
+    newBytes[2] = 0x02;
+    oldBytes[14] = 0x03;
+    newBytes[14] = 0x04;
+    final Bytes oldNode = Bytes.wrap(oldBytes);
+    final Bytes newNode = Bytes.wrap(newBytes);
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode);
+    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
+    assertThat(diff.isFull()).isFalse();
+
+    // Verify round-trip
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(oldNode), List.of(diffEntry)))
+        .isEqualTo(newNode);
+
+    // Verify two separate INSERT ops (one per changed region, not one spanning both)
+    final byte[] body = diff.patchBody().toArray();
+    int insertCount = 0;
+    int pos = 0;
+    while (pos + 1 < body.length) {
+      final int hi = body[pos] & 0xFF;
+      final int lo = body[pos + 1] & 0xFF;
+      final int type = (hi >> 6) & 0x03;
+      final int length = ((hi & 0x3F) << 8) | lo;
+      pos += 2;
+      if (type == 2) { // OP_INSERT
+        insertCount++;
+        pos += length;
+      }
+    }
+    assertThat(insertCount).isEqualTo(2);
+  }
 }

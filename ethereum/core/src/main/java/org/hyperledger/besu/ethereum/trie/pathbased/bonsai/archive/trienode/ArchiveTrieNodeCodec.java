@@ -55,6 +55,7 @@ public final class ArchiveTrieNodeCodec {
   private static final int OP_SKIP = 1;
   private static final int OP_INSERT = 2;
   private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits
+  private static final int MATCH_THRESHOLD = 4; // min matching run to end a DIFF region
 
   private ArchiveTrieNodeCodec() {}
 
@@ -132,12 +133,62 @@ public final class ArchiveTrieNodeCodec {
   // ---------------------------------------------------------------------------
 
   /**
-   * Produces a binary patch body encoding the single-region diff from {@code old} to {@code
-   * newNode}. Finds the longest common prefix and suffix, then encodes the changed middle region as
-   * COPY(prefix) + INSERT(newMid) + SKIP(oldMidLen). The implicit trailing COPY of the suffix costs
-   * zero bytes.
+   * Dispatches to {@link #encodePatchMultiRun} for same-length arrays (the common case for
+   * hash-to-hash trie node changes) or {@link #encodePatchSingleRegion} for different-length
+   * arrays.
    */
   private static Bytes encodePatch(final Bytes old, final Bytes newNode) {
+    if (old.size() != newNode.size()) {
+      return encodePatchSingleRegion(old, newNode);
+    }
+    return encodePatchMultiRun(old, newNode);
+  }
+
+  /**
+   * Greedy multi-run encoder for same-length arrays. Emits one COPY+INSERT+SKIP triple per
+   * contiguous run of changed bytes. The trailing common suffix is left to the implicit copy in
+   * {@link #applyPatch}.
+   */
+  private static Bytes encodePatchMultiRun(final Bytes old, final Bytes newNode) {
+    final int len = old.size();
+    final List<Bytes> parts = new ArrayList<>();
+    int i = 0;
+    while (i < len) {
+      // COPY phase: advance while bytes match
+      final int copyStart = i;
+      while (i < len && old.get(i) == newNode.get(i)) i++;
+      if (i >= len) break; // trailing suffix: implicit copy in applyPatch handles it
+      if (i > copyStart) {
+        final int copyLen = i - copyStart;
+        if (copyLen > OP_MAX_LENGTH) return null;
+        parts.add(encodeOp(OP_COPY, copyLen));
+      }
+
+      // DIFF phase: advance until a matching run of >= MATCH_THRESHOLD bytes
+      final int diffStart = i;
+      while (i < len) {
+        int matchLen = 0;
+        while (i + matchLen < len && old.get(i + matchLen) == newNode.get(i + matchLen)) matchLen++;
+        if (matchLen >= MATCH_THRESHOLD) break;
+        i += Math.max(1, matchLen);
+      }
+      if (i > diffStart) {
+        final int diffLen = i - diffStart;
+        if (diffLen > OP_MAX_LENGTH) return null;
+        parts.add(encodeOp(OP_INSERT, diffLen));
+        parts.add(newNode.slice(diffStart, diffLen));
+        parts.add(encodeOp(OP_SKIP, diffLen));
+      }
+    }
+    return Bytes.concatenate(parts.toArray(new Bytes[0]));
+  }
+
+  /**
+   * Single-region encoder for different-length arrays. Finds the longest common prefix and suffix,
+   * then encodes the changed middle as COPY(prefix) + INSERT(newMid) + SKIP(oldMidLen). The
+   * implicit trailing COPY of the suffix costs zero bytes.
+   */
+  private static Bytes encodePatchSingleRegion(final Bytes old, final Bytes newNode) {
     // Common prefix length
     int prefix = 0;
     while (prefix < old.size()
