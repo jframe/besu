@@ -305,12 +305,10 @@ class ArchiveTrieNodeCodecTest {
   @Test
   void encodeDiffProducesKnownWireBytes() {
     // old: 40 bytes of 0x01; new: same with byte 20 = 0xFF
-    // Myers diff matches old[0..19] with new[0..19], inserts 0xFF, matches old[20..38] with
-    // new[21..39], then deletes old[39] — so the trailing 19-byte run is explicit COPY(19).
+    // prefix=20, INSERT(1, 0xFF), SKIP(1), suffix=19 implicit
     // OP_COPY=0, OP_SKIP=1, OP_INSERT=2; word = (type << 14) | length, big-endian 2 bytes
     // COPY(20):   (0<<14)|20  = 0x0014 → [0x00, 0x14]
     // INSERT(1):  (2<<14)|1   = 0x8001 → [0x80, 0x01], then [0xFF]
-    // COPY(19):   (0<<14)|19  = 0x0013 → [0x00, 0x13]
     // SKIP(1):    (1<<14)|1   = 0x4001 → [0x40, 0x01]
     final Bytes oldNode = fill(40, 0x01);
     final byte[] newArr = oldNode.toArray();
@@ -320,7 +318,7 @@ class ArchiveTrieNodeCodecTest {
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.patchBody().toArray())
-        .isEqualTo(new byte[] {0x00, 0x14, (byte) 0x80, 0x01, (byte) 0xFF, 0x00, 0x13, 0x40, 0x01});
+        .isEqualTo(new byte[] {0x00, 0x14, (byte) 0x80, 0x01, (byte) 0xFF, 0x40, 0x01});
   }
 
   @Test

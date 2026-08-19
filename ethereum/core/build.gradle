@@ -68,7 +68,6 @@ dependencies {
   implementation 'io.consensys.protocols:jc-kzg-4844'
 
   implementation 'org.xerial.snappy:snappy-java'
-  implementation 'io.github.java-diff-utils:java-diff-utils'
 
   annotationProcessor 'org.immutables:value'
 
