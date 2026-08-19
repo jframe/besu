@@ -18,30 +18,14 @@ import org.apache.tuweni.bytes.Bytes;
 
 /**
  * The decoded, typed view of one archived trie-node history entry, produced by {@link
- * ArchiveTrieNodeCodec#decode(Bytes)}. One of four shapes — FULL ({@link #fullNode()}), a binary
- * patch DIFF ({@link #patchBody()}), a REPLACEMENT ({@link #fullNode()} when {@link
- * #isReplacement()}), or a deletion tombstone — selected by the predicates below. Callers must
- * check the relevant predicate before calling a shape-specific accessor; calling the wrong one
- * throws {@link IllegalStateException}.
- *
- * <p>REPLACEMENT entries are produced by {@link ArchiveTrieNodeCodec#encodeDiff} as a fallback when
- * the binary patch would be at least as large as the new node. They carry the full new-node bytes
- * (accessible via {@link #fullNode()}), but unlike standalone FULL entries they are not treated as
- * FULL checkpoints by readers — callers that inspect {@link #isFull()} will see {@code false}, so
- * they flow through reconstruction pipelines as diff-list entries rather than base checkpoints.
+ * ArchiveTrieNodeCodec#decode(Bytes)}. One of three shapes — FULL ({@link #fullNode()}), a binary
+ * patch DIFF ({@link #patchBody()}), or a deletion tombstone — selected by the predicates below.
+ * Callers must check the relevant predicate before calling a shape-specific accessor; calling the
+ * wrong one throws {@link IllegalStateException}.
  */
 public final class ArchiveTrieNodeEntry {
 
   public static final byte ENTRY_FULL = 0b0000_0001;
-
-  /**
-   * Set on entries produced by {@link ArchiveTrieNodeCodec#encodeDiff} when the binary patch would
-   * be at least as large as the new node. The {@link #ENTRY_FULL} bit is NOT set, so {@link
-   * #isFull()} returns {@code false} and readers do not treat these as FULL checkpoints. The node
-   * bytes are still accessible via {@link #fullNode()}.
-   */
-  static final byte REPLACEMENT = 0b0000_0010;
-
   public static final byte CREATION = 0b0001_0000;
   public static final byte DELETION = 0b0010_0000;
 
@@ -62,36 +46,25 @@ public final class ArchiveTrieNodeEntry {
   }
 
   /**
-   * True when this entry was produced by {@link ArchiveTrieNodeCodec#encodeDiff} falling back to a
-   * full-node encoding because the binary patch was at least as large as the new node. The full new
-   * node bytes are accessible via {@link #fullNode()}. Unlike standalone FULL entries, {@link
-   * #isFull()} returns {@code false} for REPLACEMENT entries so they do not act as FULL
-   * checkpoints.
-   */
-  public boolean isReplacement() {
-    return (metadata & REPLACEMENT) != 0;
-  }
-
-  /**
-   * Returns the full node bytes. Valid when {@link #isFull()} or {@link #isReplacement()} is true.
+   * Returns the full node bytes. Valid when {@link #isFull()} is true.
    *
    * @throws IllegalStateException if called on a diff or deletion entry
    */
   public Bytes fullNode() {
-    if (!isFull() && !isReplacement()) {
-      throw new IllegalStateException("fullNode() called on a non-full, non-replacement entry");
+    if (!isFull()) {
+      throw new IllegalStateException("fullNode() called on a non-full entry");
     }
     return body;
   }
 
   /**
    * Returns the raw binary patch body (COPY/SKIP/INSERT op sequence). Only valid when {@link
-   * #isFull()}, {@link #isReplacement()}, and {@link #isDeletion()} are all false.
+   * #isFull()} and {@link #isDeletion()} are both false.
    *
-   * @throws IllegalStateException if called on a full, replacement, or deletion entry
+   * @throws IllegalStateException if called on a full or deletion entry
    */
   public Bytes patchBody() {
-    if (isFull() || isReplacement() || isDeletion()) {
+    if (isFull() || isDeletion()) {
       throw new IllegalStateException("patchBody() called on a non-diff entry");
     }
     return body;

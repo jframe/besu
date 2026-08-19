@@ -17,7 +17,6 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.CREATION;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.DELETION;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.ENTRY_FULL;
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.REPLACEMENT;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,14 +43,13 @@ import org.apache.tuweni.bytes.Bytes;
  * (EIP-8297), or any future encoding without modification.
  *
  * <p>If the patch body would be at least as large as the new node, {@link #encodeDiff} falls back
- * to a REPLACEMENT entry (metadata {@code REPLACEMENT}, without {@code ENTRY_FULL}) bounding the
- * worst case. REPLACEMENT entries carry the full new-node bytes (accessible via {@link
- * ArchiveTrieNodeEntry#fullNode()}). Unlike standalone FULL entries, {@link
- * ArchiveTrieNodeEntry#isFull()} is {@code false} for REPLACEMENT entries, so readers that use
- * {@code isFull()} to detect FULL checkpoints will not stop at them. In the diff list passed to
- * {@link #reconstruct}, REPLACEMENT entries replace the current running node value.
+ * to a FULL entry (via {@link #encodeFull}), bounding the worst case. These mid-chain FULL entries
+ * act as checkpoints: readers that use {@code isFull()} will stop reconstruction there and return
+ * the full node directly rather than applying further diffs.
  */
 public final class ArchiveTrieNodeCodec {
+
+  private static final byte DIFF = 0b0000_0000;
 
   private static final int OP_COPY = 0;
   private static final int OP_SKIP = 1;
@@ -67,9 +65,10 @@ public final class ArchiveTrieNodeCodec {
   }
 
   /**
-   * Encodes the diff from {@code oldNode} to {@code newNode} as a binary patch entry, or as a
-   * REPLACEMENT entry when {@code oldNode} is null (creation), {@code newNode} is null (deletion),
-   * or the patch body would be at least as large as the new node.
+   * Encodes the diff from {@code oldNode} to {@code newNode} as a binary patch entry. Returns a
+   * {@code ENTRY_FULL | CREATION} entry when {@code oldNode} is null (creation), a {@code DELETION}
+   * tombstone when {@code newNode} is null (deletion), or a {@code ENTRY_FULL} entry when the patch
+   * body would be at least as large as the new node or any segment exceeds the 14-bit length limit.
    */
   public static Bytes encodeDiff(final Bytes oldNode, final Bytes newNode) {
     if (oldNode == null && newNode == null) {
@@ -81,12 +80,10 @@ public final class ArchiveTrieNodeCodec {
     }
 
     final Bytes patch = encodePatch(oldNode, newNode);
-    if (patch.size() >= newNode.size()) {
-      // Fallback: REPLACEMENT carries the full new node but does NOT set ENTRY_FULL, so readers
-      // that use isFull() as a checkpoint signal (like ArchiveHistoryReader) do not stop here.
-      return Bytes.concatenate(Bytes.of(REPLACEMENT), newNode);
+    if (patch == null || patch.size() >= newNode.size()) {
+      return encodeFull(newNode);
     }
-    return Bytes.concatenate(Bytes.of((byte) 0x00), patch);
+    return Bytes.concatenate(Bytes.of(DIFF), patch);
   }
 
   public static ArchiveTrieNodeEntry decode(final Bytes entry) {
@@ -98,15 +95,11 @@ public final class ArchiveTrieNodeCodec {
   }
 
   /**
-   * Reconstructs a node by applying each diff entry's patch (or replacement) to the base FULL node
-   * in order.
+   * Reconstructs a node by applying each diff entry's patch to the base FULL node in order.
    *
-   * <p>REPLACEMENT entries in the diff list are handled by substituting their full node bytes as
-   * the new running value, rather than applying a patch.
-   *
-   * @param fullEntry a FULL codec entry (from {@link #encodeFull}), not a DIFF or REPLACEMENT
-   * @param diffEntries zero or more DIFF or REPLACEMENT entries (not standalone FULL, not deletion)
-   *     in ascending block order
+   * @param fullEntry a FULL codec entry (from {@link #encodeFull}), not a DIFF or deletion
+   * @param diffEntries zero or more DIFF entries (not standalone FULL, not deletion) in ascending
+   *     block order
    * @return the reconstructed node bytes after all diffs are applied
    * @throws IllegalArgumentException if {@code fullEntry} is not FULL, or any diff entry is a
    *     standalone FULL or a deletion tombstone
@@ -124,8 +117,6 @@ public final class ArchiveTrieNodeCodec {
       if (entry.isDeletion()) {
         throw new IllegalArgumentException(
             "reconstruct: diff list must not contain deletion entries");
-      } else if (entry.isReplacement()) {
-        node = entry.fullNode();
       } else if (entry.isFull()) {
         throw new IllegalArgumentException(
             "reconstruct: diff list must not contain standalone FULL entries");
@@ -166,6 +157,10 @@ public final class ArchiveTrieNodeCodec {
     final int oldMidLen = oldEnd - prefix;
     final int newMidLen = newEnd - prefix;
 
+    if (prefix > OP_MAX_LENGTH || newMidLen > OP_MAX_LENGTH || oldMidLen > OP_MAX_LENGTH) {
+      return null; // fall through to encodeFull in encodeDiff
+    }
+
     final List<Bytes> parts = new ArrayList<>(3);
     if (prefix > 0) {
       parts.add(encodeOp(OP_COPY, prefix));
@@ -195,11 +190,22 @@ public final class ArchiveTrieNodeCodec {
 
       switch (opType) {
         case OP_COPY -> {
+          if (oldPos + length > base.size()) {
+            throw new IllegalArgumentException("COPY length overruns base node");
+          }
           out.add(base.slice(oldPos, length));
           oldPos += length;
         }
-        case OP_SKIP -> oldPos += length;
+        case OP_SKIP -> {
+          oldPos += length;
+          if (oldPos > base.size()) {
+            throw new IllegalArgumentException("SKIP length overruns base node");
+          }
+        }
         case OP_INSERT -> {
+          if (patchPos + length > patchBody.size()) {
+            throw new IllegalArgumentException("INSERT length overruns patch body");
+          }
           out.add(patchBody.slice(patchPos, length));
           patchPos += length;
         }

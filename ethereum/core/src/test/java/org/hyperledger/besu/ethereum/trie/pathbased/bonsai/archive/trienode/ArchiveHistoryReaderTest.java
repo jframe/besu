@@ -180,11 +180,17 @@ class ArchiveHistoryReaderTest {
   @Test
   void givesUpWhenDiffChainExceedsMaxBackwardWalkSteps() {
     final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x07));
-    Bytes prev = emptyBranchRlp();
+    // Use 100-byte fixed-size nodes with a single counter byte so every diff produces a 7-byte
+    // patch — always smaller than the 100-byte node — guaranteeing no FULL fallback mid-chain.
+    final int nodeSize = 100;
+    final byte[] baseBytes = new byte[nodeSize];
+    Bytes prev = Bytes.wrap(baseBytes.clone());
     putFull(nk, 0L, prev);
     final int chainLength = ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS + 1;
     for (int i = 1; i <= chainLength; i++) {
-      final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
+      final byte[] nextBytes = baseBytes.clone();
+      nextBytes[0] = (byte) i;
+      final Bytes next = Bytes.wrap(nextBytes);
       putDiff(nk, i, i, prev, next);
       prev = next;
     }
