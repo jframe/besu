@@ -28,19 +28,21 @@ import org.apache.tuweni.bytes.Bytes;
  * Codec for {@link ArchiveTrieNodeEntry} instances. Provides methods to encode/decode entries and
  * reconstruct a node's bytes from a FULL entry and a list of DIFF entries.
  *
- * <p>DIFF entries are encoded as a sequence of binary COPY/SKIP/INSERT ops applied to the previous
- * node's bytes:
+ * <p>DIFF entries are encoded as a sequence of binary COPY/SKIP/INSERT/REPLACE ops applied to the
+ * previous node's bytes:
  *
  * <ul>
  *   <li>COPY(n) — emit n bytes from the old node at current old_pos, advance old_pos
  *   <li>SKIP(n) — advance old_pos by n, no output
  *   <li>INSERT(n) — followed by n bytes of new data, emit them (old_pos unchanged)
+ *   <li>REPLACE(n) — followed by n bytes of new data, emit them AND advance old_pos by n
  * </ul>
  *
- * <p>After all ops, any remaining bytes in the old node are implicitly appended (zero-cost trailing
- * suffix). Op word is 2 bytes big-endian: bits[15:14] = type (00=COPY, 01=SKIP, 10=INSERT),
- * bits[13:0] = length (max 16383). This format is trie-structure agnostic: it works for MPT, PBT
- * (EIP-8297), or any future encoding without modification.
+ * <p>REPLACE collapses the INSERT+SKIP pair used for same-length changed regions, saving 2 bytes
+ * per changed run. After all ops, any remaining bytes in the old node are implicitly appended
+ * (zero-cost trailing suffix). Op word is 2 bytes big-endian: bits[15:14] = type (00=COPY, 01=SKIP,
+ * 10=INSERT, 11=REPLACE), bits[13:0] = length (max 16383). This format is trie-structure agnostic:
+ * it works for MPT, PBT (EIP-8297), or any future encoding without modification.
  *
  * <p>If the patch body would be at least as large as the new node, {@link #encodeDiff} falls back
  * to a FULL entry (via {@link #encodeFull}), bounding the worst case. These mid-chain FULL entries
@@ -54,6 +56,8 @@ public final class ArchiveTrieNodeCodec {
   private static final int OP_COPY = 0;
   private static final int OP_SKIP = 1;
   private static final int OP_INSERT = 2;
+  private static final int OP_REPLACE =
+      3; // 0b11 — write N patch bytes to output AND advance oldPos by N
   private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits
   private static final int MATCH_THRESHOLD = 4; // min matching run to end a DIFF region
 
@@ -145,9 +149,9 @@ public final class ArchiveTrieNodeCodec {
   }
 
   /**
-   * Greedy multi-run encoder for same-length arrays. Emits one COPY+INSERT+SKIP triple per
-   * contiguous run of changed bytes. The trailing common suffix is left to the implicit copy in
-   * {@link #applyPatch}.
+   * Greedy multi-run encoder for same-length arrays. Emits one COPY+REPLACE pair per contiguous run
+   * of changed bytes. The trailing common suffix is left to the implicit copy in {@link
+   * #applyPatch}.
    */
   private static Bytes encodePatchMultiRun(final Bytes old, final Bytes newNode) {
     final int len = old.size();
@@ -175,9 +179,8 @@ public final class ArchiveTrieNodeCodec {
       if (i > diffStart) {
         final int diffLen = i - diffStart;
         if (diffLen > OP_MAX_LENGTH) return null;
-        parts.add(encodeOp(OP_INSERT, diffLen));
+        parts.add(encodeOp(OP_REPLACE, diffLen));
         parts.add(newNode.slice(diffStart, diffLen));
-        parts.add(encodeOp(OP_SKIP, diffLen));
       }
     }
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
@@ -259,6 +262,17 @@ public final class ArchiveTrieNodeCodec {
           }
           out.add(patchBody.slice(patchPos, length));
           patchPos += length;
+        }
+        case OP_REPLACE -> {
+          if (patchPos + length > patchBody.size()) {
+            throw new IllegalArgumentException("REPLACE data overruns patch body");
+          }
+          if (oldPos + length > base.size()) {
+            throw new IllegalArgumentException("REPLACE length overruns base node");
+          }
+          out.add(patchBody.slice(patchPos, length));
+          patchPos += length;
+          oldPos += length;
         }
         default -> throw new IllegalArgumentException("unknown patch op type: " + opType);
       }

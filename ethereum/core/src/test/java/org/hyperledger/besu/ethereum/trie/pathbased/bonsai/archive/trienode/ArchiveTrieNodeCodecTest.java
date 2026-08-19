@@ -111,10 +111,10 @@ class ArchiveTrieNodeCodecTest {
 
   @Test
   void encodeDiffFallsBackToFullWhenPatchExceedsNodeSize() {
-    // Every byte differs → patch body (INSERT + SKIP) exceeds new node size → FULL fallback.
+    // Every byte differs → patch body (REPLACE) exceeds new node size → FULL fallback.
     final Bytes old = fill(8, 0x11);
     final Bytes newNode = fill(8, 0x22);
-    // INSERT(8 bytes) = 2+8=10 bytes, SKIP(8) = 2 bytes, total patch = 12 > 8 → FULL
+    // REPLACE(8 bytes) = 2+8=10 bytes > 8 → FULL
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(old, newNode));
     assertThat(e.isFull()).isTrue();
@@ -305,11 +305,10 @@ class ArchiveTrieNodeCodecTest {
   @Test
   void encodeDiffProducesKnownWireBytes() {
     // old: 40 bytes of 0x01; new: same with byte 20 = 0xFF
-    // prefix=20, INSERT(1, 0xFF), SKIP(1), suffix=19 implicit
-    // OP_COPY=0, OP_SKIP=1, OP_INSERT=2; word = (type << 14) | length, big-endian 2 bytes
-    // COPY(20):   (0<<14)|20  = 0x0014 → [0x00, 0x14]
-    // INSERT(1):  (2<<14)|1   = 0x8001 → [0x80, 0x01], then [0xFF]
-    // SKIP(1):    (1<<14)|1   = 0x4001 → [0x40, 0x01]
+    // prefix=20, REPLACE(1, 0xFF), suffix=19 implicit
+    // OP_COPY=0, OP_REPLACE=3; word = (type << 14) | length, big-endian 2 bytes
+    // COPY(20):    (0<<14)|20  = 0x0014 → [0x00, 0x14]
+    // REPLACE(1):  (3<<14)|1   = 0xC001 → [0xC0, 0x01], then [0xFF]
     final Bytes oldNode = fill(40, 0x01);
     final byte[] newArr = oldNode.toArray();
     newArr[20] = (byte) 0xFF;
@@ -318,7 +317,7 @@ class ArchiveTrieNodeCodecTest {
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
     assertThat(diff.patchBody().toArray())
-        .isEqualTo(new byte[] {0x00, 0x14, (byte) 0x80, 0x01, (byte) 0xFF, 0x40, 0x01});
+        .isEqualTo(new byte[] {0x00, 0x14, (byte) 0xC0, 0x01, (byte) 0xFF});
   }
 
   @Test
@@ -343,9 +342,9 @@ class ArchiveTrieNodeCodecTest {
                 ArchiveTrieNodeCodec.encodeFull(oldNode), List.of(diffEntry)))
         .isEqualTo(newNode);
 
-    // Verify two separate INSERT ops (one per changed region, not one spanning both)
+    // Verify two separate REPLACE ops (one per changed region, not one spanning both)
     final byte[] body = diff.patchBody().toArray();
-    int insertCount = 0;
+    int replaceCount = 0;
     int pos = 0;
     while (pos + 1 < body.length) {
       final int hi = body[pos] & 0xFF;
@@ -353,11 +352,11 @@ class ArchiveTrieNodeCodecTest {
       final int type = (hi >> 6) & 0x03;
       final int length = ((hi & 0x3F) << 8) | lo;
       pos += 2;
-      if (type == 2) { // OP_INSERT
-        insertCount++;
+      if (type == 3) { // OP_REPLACE
+        replaceCount++;
         pos += length;
       }
     }
-    assertThat(insertCount).isEqualTo(2);
+    assertThat(replaceCount).isEqualTo(2);
   }
 }
