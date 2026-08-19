@@ -70,7 +70,6 @@ import org.hyperledger.besu.ethereum.eth.sync.common.SingleBlockHeaderDownloader
 import org.hyperledger.besu.ethereum.eth.sync.common.checkpoint.Checkpoint;
 import org.hyperledger.besu.ethereum.eth.sync.common.checkpoint.ImmutableCheckpoint;
 import org.hyperledger.besu.ethereum.eth.sync.fullsync.SyncTerminationCondition;
-import org.hyperledger.besu.ethereum.eth.sync.state.ConfirmedInSyncTrigger;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.transactions.BlobCache;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
@@ -129,6 +128,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -950,24 +950,31 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         // Close the migrator before storageProvider so callback finishes before RocksDB is closed
         closeables.addFirst(archiveMigrator);
 
-        // Use ConfirmedInSyncTrigger rather than a plain in-sync subscription: a failed chain
-        // download that disconnects the only peer reports "in sync" while the local chain is
-        // still behind, which would start the migration before the import has finished
-        ConfirmedInSyncTrigger.subscribe(
-            syncState,
-            0,
-            () -> {
-              LOG.info("Node is in sync, starting Bonsai archive migration");
-              archiveMigrator
-                  .migrate()
-                  .exceptionally(
-                      error -> {
-                        LOG.error(
-                            "Archive migration failed, archiver will remain disabled until restart",
-                            error);
-                        return null;
-                      });
-            });
+        final AtomicBoolean migrationStarted = new AtomicBoolean(false);
+        final AtomicLong syncSubscriptionId = new AtomicLong();
+        syncSubscriptionId.set(
+            syncState.subscribeInSync(
+                (inSync) -> {
+                  // Require a peer chain-head estimate: a node with no peers is considered
+                  // "in sync" by definition, so a peer-less notification after a failed
+                  // download would start migration while the local chain is still behind
+                  if (inSync
+                      && syncState.getBestPeerChainHead().isPresent()
+                      && migrationStarted.compareAndSet(false, true)) {
+                    syncState.unsubscribeInSync(syncSubscriptionId.get());
+                    LOG.info("Node is in sync, starting Bonsai archive migration");
+                    archiveMigrator
+                        .migrate()
+                        .exceptionally(
+                            error -> {
+                              LOG.error(
+                                  "Archive migration failed, archiver will remain disabled until restart",
+                                  error);
+                              return null;
+                            });
+                  }
+                },
+                0));
       } else {
         // Already in ARCHIVE mode (restart after migration): register ongoing migration
         final BonsaiFlatDbToArchiveMigrator archiveMigrator =
