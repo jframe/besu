@@ -22,6 +22,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import com.github.difflib.DiffUtils;
+import com.github.difflib.patch.AbstractDelta;
+import com.github.difflib.patch.Patch;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
@@ -55,7 +58,6 @@ public final class ArchiveTrieNodeCodec {
   private static final int OP_SKIP = 1;
   private static final int OP_INSERT = 2;
   private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits
-  private static final int MATCH_THRESHOLD = 4; // min matching run to end a DIFF region
 
   private ArchiveTrieNodeCodec() {}
 
@@ -145,41 +147,59 @@ public final class ArchiveTrieNodeCodec {
   }
 
   /**
-   * Greedy multi-run encoder for same-length arrays. Emits one COPY+INSERT+SKIP triple per
-   * contiguous run of changed bytes. The trailing common suffix is left to the implicit copy in
-   * {@link #applyPatch}.
+   * Myers-optimal multi-run encoder for same-length arrays. Uses java-diff-utils to find the
+   * minimum edit script (optimal LCS), then maps INSERT/DELETE/CHANGE deltas to COPY/INSERT/SKIP
+   * ops. The trailing common suffix is left to the implicit copy in {@link #applyPatch}.
    */
   private static Bytes encodePatchMultiRun(final Bytes old, final Bytes newNode) {
-    final int len = old.size();
+    final List<Byte> oldList = new ArrayList<>(old.size());
+    for (int i = 0; i < old.size(); i++) oldList.add(old.get(i));
+    final List<Byte> newList = new ArrayList<>(newNode.size());
+    for (int i = 0; i < newNode.size(); i++) newList.add(newNode.get(i));
+
+    final Patch<Byte> myersPatch = DiffUtils.diff(oldList, newList);
     final List<Bytes> parts = new ArrayList<>();
-    int i = 0;
-    while (i < len) {
-      // COPY phase: advance while bytes match
-      final int copyStart = i;
-      while (i < len && old.get(i) == newNode.get(i)) i++;
-      if (i >= len) break; // trailing suffix: implicit copy in applyPatch handles it
-      if (i > copyStart) {
-        final int copyLen = i - copyStart;
+    int oldPos = 0;
+
+    for (final AbstractDelta<Byte> delta : myersPatch.getDeltas()) {
+      final int deltaOldStart = delta.getSource().getPosition();
+      final int copyLen = deltaOldStart - oldPos;
+      if (copyLen > 0) {
         if (copyLen > OP_MAX_LENGTH) return null;
         parts.add(encodeOp(OP_COPY, copyLen));
       }
 
-      // DIFF phase: advance until a matching run of >= MATCH_THRESHOLD bytes
-      final int diffStart = i;
-      while (i < len) {
-        int matchLen = 0;
-        while (i + matchLen < len && old.get(i + matchLen) == newNode.get(i + matchLen)) matchLen++;
-        if (matchLen >= MATCH_THRESHOLD) break;
-        i += Math.max(1, matchLen);
+      switch (delta.getType()) {
+        case INSERT -> {
+          final List<Byte> ins = delta.getTarget().getLines();
+          if (ins.size() > OP_MAX_LENGTH) return null;
+          parts.add(encodeOp(OP_INSERT, ins.size()));
+          final byte[] buf = new byte[ins.size()];
+          for (int i = 0; i < buf.length; i++) buf[i] = ins.get(i);
+          parts.add(Bytes.wrap(buf));
+        }
+        case DELETE -> {
+          final int skipLen = delta.getSource().getLines().size();
+          if (skipLen > OP_MAX_LENGTH) return null;
+          parts.add(encodeOp(OP_SKIP, skipLen));
+        }
+        case CHANGE -> {
+          final List<Byte> ins = delta.getTarget().getLines();
+          if (ins.size() > OP_MAX_LENGTH) return null;
+          parts.add(encodeOp(OP_INSERT, ins.size()));
+          final byte[] buf = new byte[ins.size()];
+          for (int i = 0; i < buf.length; i++) buf[i] = ins.get(i);
+          parts.add(Bytes.wrap(buf));
+          final int skipLen = delta.getSource().getLines().size();
+          if (skipLen > OP_MAX_LENGTH) return null;
+          parts.add(encodeOp(OP_SKIP, skipLen));
+        }
+        default -> throw new IllegalStateException("Unexpected delta type: " + delta.getType());
       }
-      if (i > diffStart) {
-        final int diffLen = i - diffStart;
-        if (diffLen > OP_MAX_LENGTH) return null;
-        parts.add(encodeOp(OP_INSERT, diffLen));
-        parts.add(newNode.slice(diffStart, diffLen));
-        parts.add(encodeOp(OP_SKIP, diffLen));
-      }
+
+      oldPos = deltaOldStart + delta.getSource().getLines().size();
     }
+
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
   }
 
