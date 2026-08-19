@@ -38,12 +38,10 @@ import org.apache.tuweni.bytes.Bytes;
  *   <li>REPLACE(n) — followed by n bytes of new data, emit them AND advance old_pos by n
  * </ul>
  *
- * <p>REPLACE collapses the INSERT+SKIP pair used for same-length changed regions, saving 2 bytes
- * per changed run. After all ops, any remaining bytes in the old node are implicitly appended
- * (zero-cost trailing suffix). Op encoding: 1-byte compact (bit 7=0) for COPY/REPLACE with length ≤
- * 63 — COPY if bit 6=0 (length in bits[5:0]), REPLACE if bit 6=1 (length in bits[5:0]); 2-byte full
- * (bit 7=1) for all others — bits[6:5]=type (00=COPY,01=SKIP,10=INSERT,11=REPLACE), bits[4:0]‖byte2
- * = 13-bit length (max 8191). This format is trie-structure agnostic: it works for MPT, PBT
+ * <p>REPLACE collapses the INSERT+SKIP pair used for same-length changed regions. After all ops,
+ * any remaining bytes in the old node are implicitly appended (zero-cost trailing suffix). Each op
+ * is 2 bytes: byte1 bits[7:6] = type (0=COPY, 1=SKIP, 2=INSERT, 3=REPLACE), byte1 bits[5:0] and
+ * byte2 = 14-bit length (max 16383). This format is trie-structure agnostic: it works for MPT, PBT
  * (EIP-8297), or any future encoding without modification.
  *
  * <p>If the patch body would be at least as large as the new node, {@link #encodeDiff} falls back
@@ -58,9 +56,8 @@ public final class ArchiveTrieNodeCodec {
   private static final int OP_COPY = 0;
   private static final int OP_SKIP = 1;
   private static final int OP_INSERT = 2;
-  private static final int OP_REPLACE =
-      3; // 0b11 — write N patch bytes to output AND advance oldPos by N
-  private static final int OP_MAX_LENGTH = 0x1FFF; // 13 bits (2-byte full form)
+  private static final int OP_REPLACE = 3;
+  private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits (2-byte op format)
   private static final int MATCH_THRESHOLD = 2; // min matching run to end a DIFF region
 
   /**
@@ -92,7 +89,7 @@ public final class ArchiveTrieNodeCodec {
    * Encodes the diff from {@code oldNode} to {@code newNode} as a binary patch entry. Returns a
    * {@code ENTRY_FULL | CREATION} entry when {@code oldNode} is null (creation), a {@code DELETION}
    * tombstone when {@code newNode} is null (deletion), or a {@code ENTRY_FULL} entry when the patch
-   * body would be at least as large as the new node or any segment exceeds the 13-bit length limit.
+   * body would be at least as large as the new node.
    */
   public static Bytes encodeDiff(final Bytes oldNode, final Bytes newNode) {
     if (oldNode == null && newNode == null) {
@@ -104,7 +101,7 @@ public final class ArchiveTrieNodeCodec {
     }
 
     final Bytes patch = encodePatch(oldNode, newNode);
-    if (patch == null || patch.size() >= newNode.size()) {
+    if (patch.size() >= newNode.size()) {
       return encodeFull(newNode);
     }
     return Bytes.concatenate(Bytes.of(DIFF), patch);
@@ -181,24 +178,19 @@ public final class ArchiveTrieNodeCodec {
       while (i < len && old.get(i) == newNode.get(i)) i++;
       if (i >= len) break; // trailing suffix: implicit copy in applyPatch handles it
       if (i > copyStart) {
-        final int copyLen = i - copyStart;
-        if (copyLen > OP_MAX_LENGTH) return null;
-        parts.add(encodeOp(OP_COPY, copyLen));
+        appendCopyOrSkip(parts, OP_COPY, i - copyStart);
       }
 
       // DIFF phase: advance until a matching run of >= MATCH_THRESHOLD bytes
       final int diffStart = i;
       while (i < len) {
-        int matchLen = 0;
-        while (i + matchLen < len && old.get(i + matchLen) == newNode.get(i + matchLen)) matchLen++;
-        if (matchLen >= MATCH_THRESHOLD) break;
-        i += Math.max(1, matchLen);
+        int m = 0;
+        while (i + m < len && old.get(i + m) == newNode.get(i + m)) m++;
+        if (m >= MATCH_THRESHOLD) break;
+        i++;
       }
       if (i > diffStart) {
-        final int diffLen = i - diffStart;
-        if (diffLen > OP_MAX_LENGTH) return null;
-        parts.add(encodeOp(OP_REPLACE, diffLen));
-        parts.add(newNode.slice(diffStart, diffLen));
+        appendData(parts, OP_REPLACE, newNode.slice(diffStart, i - diffStart));
       }
     }
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
@@ -358,22 +350,13 @@ public final class ArchiveTrieNodeCodec {
     int patchPos = 0;
 
     while (patchPos < patchBody.size()) {
-      final int first = Byte.toUnsignedInt(patchBody.get(patchPos++));
-      final int opType;
-      final int length;
-      if ((first & 0x80) == 0) {
-        // 1-byte compact: bit 7 = 0; bit 6 selects COPY vs REPLACE
-        opType = ((first & 0x40) == 0) ? OP_COPY : OP_REPLACE;
-        length = first & 0x3F;
-      } else {
-        // 2-byte full: bit 7 = 1; bits[6:5] = type, bits[4:0]‖byte2 = 13-bit length
-        if (patchPos >= patchBody.size()) {
-          throw new IllegalArgumentException("truncated 2-byte op at position " + (patchPos - 1));
-        }
-        final int second = Byte.toUnsignedInt(patchBody.get(patchPos++));
-        opType = (first >> 5) & 0x03;
-        length = ((first & 0x1F) << 8) | second;
+      if (patchPos + 2 > patchBody.size()) {
+        throw new IllegalArgumentException("truncated op at position " + patchPos);
       }
+      final int first = Byte.toUnsignedInt(patchBody.get(patchPos++));
+      final int second = Byte.toUnsignedInt(patchBody.get(patchPos++));
+      final int opType = first >> 6;
+      final int length = ((first & 0x3F) << 8) | second;
 
       switch (opType) {
         case OP_COPY -> {
@@ -420,16 +403,10 @@ public final class ArchiveTrieNodeCodec {
   }
 
   private static Bytes encodeOp(final int type, final int length) {
-    if (type == OP_COPY && length <= 63) {
-      return Bytes.of((byte) length);
-    }
-    if (type == OP_REPLACE && length <= 63) {
-      return Bytes.of((byte) (0x40 | length));
-    }
     if (length < 0 || length > OP_MAX_LENGTH) {
       throw new IllegalArgumentException(
-          "patch op length out of 13-bit range [0, " + OP_MAX_LENGTH + "]: " + length);
+          "patch op length out of range [0, " + OP_MAX_LENGTH + "]: " + length);
     }
-    return Bytes.of((byte) (0x80 | (type << 5) | (length >> 8)), (byte) (length & 0xFF));
+    return Bytes.of((byte) ((type << 6) | (length >> 8)), (byte) (length & 0xFF));
   }
 }
