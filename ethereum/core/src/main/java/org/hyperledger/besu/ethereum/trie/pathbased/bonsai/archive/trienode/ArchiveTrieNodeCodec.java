@@ -63,6 +63,23 @@ public final class ArchiveTrieNodeCodec {
   private static final int OP_MAX_LENGTH = 0x1FFF; // 13 bits (2-byte full form)
   private static final int MATCH_THRESHOLD = 2; // min matching run to end a DIFF region
 
+  /**
+   * Minimum matching run required to accept a re-synchronisation anchor in {@link
+   * #encodePatchAligned}. Higher than {@link #MATCH_THRESHOLD} because a resync realigns old and
+   * new across an insertion/deletion, so a short coincidental match must not be mistaken for a
+   * genuine boundary — trie realignment points (child slots, hash refs) are ≥ 32 bytes, so 4
+   * rejects spurious 1-in-4-billion matches while still anchoring every real boundary.
+   */
+  private static final int RESYNC_MATCH_MIN = 4;
+
+  /**
+   * Cap on the (skipOld + insNew) distance {@link #findResync} searches before giving up and
+   * consuming the remainder as one edit. Real trie realignments happen within a child slot (≤ 33
+   * bytes); beyond this window the data has genuinely diverged and a single spanning edit (bounded
+   * by the FULL fallback in {@link #encodeDiff}) is the right answer.
+   */
+  private static final int RESYNC_MAX_RADIUS = 256;
+
   private ArchiveTrieNodeCodec() {}
 
   /** Layout: {@code [ENTRY_FULL]} ‖ {@code nodeBytes}. */
@@ -75,7 +92,7 @@ public final class ArchiveTrieNodeCodec {
    * Encodes the diff from {@code oldNode} to {@code newNode} as a binary patch entry. Returns a
    * {@code ENTRY_FULL | CREATION} entry when {@code oldNode} is null (creation), a {@code DELETION}
    * tombstone when {@code newNode} is null (deletion), or a {@code ENTRY_FULL} entry when the patch
-   * body would be at least as large as the new node or any segment exceeds the 14-bit length limit.
+   * body would be at least as large as the new node or any segment exceeds the 13-bit length limit.
    */
   public static Bytes encodeDiff(final Bytes oldNode, final Bytes newNode) {
     if (oldNode == null && newNode == null) {
@@ -140,12 +157,11 @@ public final class ArchiveTrieNodeCodec {
 
   /**
    * Dispatches to {@link #encodePatchMultiRun} for same-length arrays (the common case for
-   * hash-to-hash trie node changes) or {@link #encodePatchSingleRegion} for different-length
-   * arrays.
+   * hash-to-hash trie node changes) or {@link #encodePatchAligned} for different-length arrays.
    */
   private static Bytes encodePatch(final Bytes old, final Bytes newNode) {
     if (old.size() != newNode.size()) {
-      return encodePatchSingleRegion(old, newNode);
+      return encodePatchAligned(old, newNode);
     }
     return encodePatchMultiRun(old, newNode);
   }
@@ -189,46 +205,150 @@ public final class ArchiveTrieNodeCodec {
   }
 
   /**
-   * Single-region encoder for different-length arrays. Finds the longest common prefix and suffix,
-   * then encodes the changed middle as COPY(prefix) + INSERT(newMid) + SKIP(oldMidLen). The
-   * implicit trailing COPY of the suffix costs zero bytes.
+   * Length-tolerant multi-region encoder for different-length arrays. Walks {@code old} and {@code
+   * newNode} with two cursors, emitting a COPY for each run of matching bytes and — at each
+   * divergence — the minimal REPLACE/INSERT/SKIP edit needed to reach the next re-synchronisation
+   * point ({@link #findResync}). Unlike a single prefix/suffix diff, this copies unchanged regions
+   * that sit <em>between</em> two changes (e.g. the untouched child slots between two changed
+   * children of a branch node) instead of re-storing them inside one spanning INSERT — matching the
+   * density of a structure-aware child-mask diff without any knowledge of the node's structure.
+   *
+   * <p>The trailing common suffix is left to the implicit copy in {@link #applyPatch}. Ops larger
+   * than {@link #OP_MAX_LENGTH} are split into chunks, so this never returns null.
    */
-  private static Bytes encodePatchSingleRegion(final Bytes old, final Bytes newNode) {
-    // Common prefix length
-    int prefix = 0;
-    while (prefix < old.size()
-        && prefix < newNode.size()
-        && old.get(prefix) == newNode.get(prefix)) {
-      prefix++;
-    }
+  private static Bytes encodePatchAligned(final Bytes old, final Bytes newNode) {
+    final int oldLen = old.size();
+    final int newLen = newNode.size();
+    final List<Bytes> parts = new ArrayList<>();
+    int oi = 0;
+    int ni = 0;
 
-    // Common suffix length (working inward from end, staying within the post-prefix region)
-    int oldEnd = old.size();
-    int newEnd = newNode.size();
-    while (oldEnd > prefix && newEnd > prefix && old.get(oldEnd - 1) == newNode.get(newEnd - 1)) {
-      oldEnd--;
-      newEnd--;
-    }
-    // old[prefix..oldEnd) is the old middle; newNode[prefix..newEnd) is the new middle
-    final int oldMidLen = oldEnd - prefix;
-    final int newMidLen = newEnd - prefix;
+    while (oi < oldLen || ni < newLen) {
+      // COPY phase: count the matching run at the current aligned position.
+      int m = 0;
+      while (oi + m < oldLen && ni + m < newLen && old.get(oi + m) == newNode.get(ni + m)) {
+        m++;
+      }
+      if (m > 0) {
+        if (oi + m == oldLen && ni + m == newLen) {
+          break; // trailing common suffix: implicit copy in applyPatch handles it
+        }
+        appendCopyOrSkip(parts, OP_COPY, m);
+        oi += m;
+        ni += m;
+        continue;
+      }
 
-    if (prefix > OP_MAX_LENGTH || newMidLen > OP_MAX_LENGTH || oldMidLen > OP_MAX_LENGTH) {
-      return null; // fall through to encodeFull in encodeDiff
-    }
-
-    final List<Bytes> parts = new ArrayList<>(3);
-    if (prefix > 0) {
-      parts.add(encodeOp(OP_COPY, prefix));
-    }
-    if (newMidLen > 0) {
-      parts.add(encodeOp(OP_INSERT, newMidLen));
-      parts.add(newNode.slice(prefix, newMidLen));
-    }
-    if (oldMidLen > 0) {
-      parts.add(encodeOp(OP_SKIP, oldMidLen));
+      // Divergence: find the nearest point where old and new realign.
+      final int[] sync = findResync(old, oi, oldLen, newNode, ni, newLen);
+      final int skipOld = sync[0];
+      final int insNew = sync[1];
+      final int overlap = Math.min(skipOld, insNew);
+      if (overlap > 0) {
+        appendData(parts, OP_REPLACE, newNode.slice(ni, overlap));
+      }
+      if (insNew > overlap) {
+        appendData(parts, OP_INSERT, newNode.slice(ni + overlap, insNew - overlap));
+      }
+      if (skipOld > overlap) {
+        appendCopyOrSkip(parts, OP_SKIP, skipOld - overlap);
+      }
+      oi += skipOld;
+      ni += insNew;
     }
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
+  }
+
+  /**
+   * Finds the nearest re-synchronisation point after a divergence at {@code (oldPos, newPos)}.
+   * Returns {@code {skipOld, insNew}}: the number of old bytes to drop and new bytes to add to
+   * reach a run of at least {@link #RESYNC_MATCH_MIN} matching bytes (or the shared end of both
+   * arrays).
+   *
+   * <p>Candidates are searched by ascending total distance {@code d = skipOld + insNew}, and within
+   * each distance from the most balanced split outward — so an equal-length substitution (encoded
+   * as a tight REPLACE) is preferred over an insertion/deletion interpretation of the same change.
+   * If no anchor is found within {@link #RESYNC_MAX_RADIUS}, the remainder of both arrays is
+   * consumed as a single edit.
+   */
+  private static int[] findResync(
+      final Bytes old,
+      final int oldPos,
+      final int oldLen,
+      final Bytes newNode,
+      final int newPos,
+      final int newLen) {
+    final int maxOld = oldLen - oldPos;
+    final int maxNew = newLen - newPos;
+    final int cap = Math.min(maxOld + maxNew, RESYNC_MAX_RADIUS);
+    for (int d = 1; d <= cap; d++) {
+      // Visit splits ordered by |skipOld - insNew| ascending (balanced first).
+      for (int spread = (d & 1); spread <= d; spread += 2) {
+        final int hi = (d + spread) / 2;
+        final int lo = (d - spread) / 2;
+        // The two splits at this spread: (skipOld=hi, insNew=lo) and (skipOld=lo, insNew=hi).
+        if (hi <= maxOld
+            && lo <= maxNew
+            && anchors(old, oldPos + hi, oldLen, newNode, newPos + lo, newLen)) {
+          return new int[] {hi, lo};
+        }
+        if (spread > 0
+            && lo <= maxOld
+            && hi <= maxNew
+            && anchors(old, oldPos + lo, oldLen, newNode, newPos + hi, newLen)) {
+          return new int[] {lo, hi};
+        }
+      }
+    }
+    return new int[] {maxOld, maxNew};
+  }
+
+  /**
+   * True if old and new re-synchronise at the given positions: at least {@link #RESYNC_MATCH_MIN}
+   * bytes match, or the matching run reaches the end of both arrays together (a genuine common
+   * suffix shorter than the threshold).
+   */
+  private static boolean anchors(
+      final Bytes old,
+      final int oldPos,
+      final int oldLen,
+      final Bytes newNode,
+      final int newPos,
+      final int newLen) {
+    int c = 0;
+    while (oldPos + c < oldLen
+        && newPos + c < newLen
+        && old.get(oldPos + c) == newNode.get(newPos + c)) {
+      c++;
+      if (c >= RESYNC_MATCH_MIN) {
+        return true;
+      }
+    }
+    return c > 0 && oldPos + c == oldLen && newPos + c == newLen;
+  }
+
+  /** Emits a COPY or SKIP op (no data), splitting lengths above {@link #OP_MAX_LENGTH}. */
+  private static void appendCopyOrSkip(
+      final List<Bytes> parts, final int opType, final int length) {
+    int remaining = length;
+    while (remaining > 0) {
+      final int chunk = Math.min(remaining, OP_MAX_LENGTH);
+      parts.add(encodeOp(opType, chunk));
+      remaining -= chunk;
+    }
+  }
+
+  /** Emits a REPLACE or INSERT op followed by its data, splitting above {@link #OP_MAX_LENGTH}. */
+  private static void appendData(final List<Bytes> parts, final int opType, final Bytes data) {
+    int off = 0;
+    int remaining = data.size();
+    while (remaining > 0) {
+      final int chunk = Math.min(remaining, OP_MAX_LENGTH);
+      parts.add(encodeOp(opType, chunk));
+      parts.add(data.slice(off, chunk));
+      off += chunk;
+      remaining -= chunk;
+    }
   }
 
   /** Applies a binary patch body to {@code base}, producing the reconstructed node. */

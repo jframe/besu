@@ -122,6 +122,199 @@ class ArchiveTrieNodeCodecTest {
   }
 
   // ---------------------------------------------------------------------------
+  // encodeDiff — length-tolerant multi-region alignment (different-length arrays)
+  // ---------------------------------------------------------------------------
+
+  /** Counts ops of a given type in a patch body by walking the varint op stream. */
+  private static int countOps(final byte[] body, final int wantedType) {
+    int count = 0;
+    int pos = 0;
+    while (pos < body.length) {
+      final int first = body[pos++] & 0xFF;
+      final int type;
+      final int length;
+      if ((first & 0x80) == 0) {
+        type = ((first & 0x40) == 0) ? 0 : 3; // compact: COPY(0) or REPLACE(3)
+        length = first & 0x3F;
+      } else {
+        final int second = body[pos++] & 0xFF;
+        type = (first >> 5) & 0x03; // 0=COPY 1=SKIP 2=INSERT 3=REPLACE
+        length = ((first & 0x1F) << 8) | second;
+      }
+      if (type == wantedType) {
+        count++;
+      }
+      if (type == 2 || type == 3) { // INSERT / REPLACE carry data
+        pos += length;
+      }
+    }
+    return count;
+  }
+
+  @Test
+  void alignedEncoderCopiesUnchangedRegionBetweenTwoChangesInsteadOfSpanningInsert() {
+    // Two changes with an unchanged region between them, where an overall length change forces the
+    // different-length (aligned) path. A single prefix/suffix diff would swallow the middle 0x33
+    // run inside one spanning INSERT; the aligned encoder must COPY it instead.
+    final Bytes a = fill(20, 0x11); // leading unchanged
+    final Bytes h1Old = fill(32, 0x00); // changed hash (substitution)
+    final Bytes h1New = fill(32, 0xAA);
+    final Bytes mid = fill(20, 0x33); // interior UNCHANGED region
+    final Bytes h2Old = node(0x80); // empty child slot (1 byte)
+    final Bytes h2New = Bytes.concatenate(node(0xA0), fill(32, 0x77)); // becomes present (33 bytes)
+    final Bytes c = fill(20, 0x55); // trailing unchanged
+
+    final Bytes old = Bytes.concatenate(a, h1Old, mid, h2Old, c);
+    final Bytes newNode = Bytes.concatenate(a, h1New, mid, h2New, c);
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
+    assertThat(diff.isFull()).isFalse(); // genuine multi-region DIFF, not a FULL fallback
+
+    // Round-trip byte-exact.
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(old), List.of(diffEntry)))
+        .isEqualTo(newNode);
+
+    // The structural win: at least two COPY ops (leading region + interior 0x33 region), proving
+    // the unchanged middle was copied rather than re-stored inside one spanning INSERT.
+    assertThat(countOps(diff.patchBody().toArray(), 0)).isGreaterThanOrEqualTo(2);
+  }
+
+  @Test
+  void alignedEncoderInteriorInsertionIsFarSmallerThanNodeSize() {
+    // A 32-byte block inserted into the middle, unchanged data on both sides.
+    final Bytes head = fill(60, 0x11);
+    final Bytes tail = fill(60, 0x22);
+    final Bytes old = Bytes.concatenate(head, tail);
+    final Bytes newNode = Bytes.concatenate(head, fill(32, 0x33), tail);
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
+    assertThat(diff.isFull()).isFalse();
+    // Patch stores only the 32 inserted bytes + a few op bytes, not the 152-byte node.
+    assertThat(diffEntry.size()).isLessThan(45);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(old), List.of(diffEntry)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void alignedEncoderInteriorDeletionRoundTrips() {
+    // A 32-byte block removed from the middle, unchanged data on both sides.
+    final Bytes head = fill(60, 0x11);
+    final Bytes tail = fill(60, 0x22);
+    final Bytes old = Bytes.concatenate(head, fill(32, 0x33), tail);
+    final Bytes newNode = Bytes.concatenate(head, tail);
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
+    assertThat(diff.isFull()).isFalse();
+    // Deletion stores no new data — just COPY + SKIP ops — so the patch is tiny.
+    assertThat(diffEntry.size()).isLessThan(12);
+    assertThat(countOps(diff.patchBody().toArray(), 1)).isGreaterThanOrEqualTo(1); // ≥1 SKIP
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(old), List.of(diffEntry)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void alignedEncoderMixedSubstitutionAndInsertionRoundTrips() {
+    // Substitution (same length) AND insertion (length change) in the same node — exercises both
+    // the balanced-resync (REPLACE) and asymmetric-resync (INSERT) paths in one patch.
+    final Bytes a = fill(15, 0x11);
+    final Bytes subOld = fill(32, 0x00);
+    final Bytes subNew = fill(32, 0xAA);
+    final Bytes b = fill(15, 0x33);
+    final Bytes insNew = fill(40, 0x77);
+    final Bytes c = fill(15, 0x55);
+
+    final Bytes old = Bytes.concatenate(a, subOld, b, c);
+    final Bytes newNode = Bytes.concatenate(a, subNew, b, insNew, c);
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    assertThat(ArchiveTrieNodeCodec.decode(diffEntry).isFull()).isFalse();
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(old), List.of(diffEntry)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void alignedEncoderPureTrailingInsertionRoundTrips() {
+    final Bytes old = fill(50, 0x11);
+    final Bytes newNode = Bytes.concatenate(old, fill(20, 0x22));
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(old), List.of(diffEntry)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void alignedEncoderPureTrailingDeletionRoundTrips() {
+    final Bytes newNode = fill(50, 0x11);
+    final Bytes old = Bytes.concatenate(newNode, fill(20, 0x22));
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(old), List.of(diffEntry)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void alignedEncoderLeadingInsertionRoundTrips() {
+    final Bytes shared = fill(50, 0x11);
+    final Bytes old = shared;
+    final Bytes newNode = Bytes.concatenate(fill(20, 0x22), shared);
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(old), List.of(diffEntry)))
+        .isEqualTo(newNode);
+  }
+
+  @Test
+  void alignedEncoderThreeChangedRegionsRoundTripsAndStaysCompact() {
+    // Simulates three changed children in a branch node with a presence change (length delta),
+    // separated by unchanged children. The worst case the aligned encoder was built to fix.
+    final Bytes header = fill(3, 0x0F);
+    final Bytes childPresent = Bytes.concatenate(node(0xA0), fill(32, 0xC1)); // 33 bytes
+    final Bytes childEmpty = node(0x80); // 1 byte
+
+    // old: [hdr][c0][c1-empty][c2][c3][c4]
+    final Bytes c0 = childPresent;
+    final Bytes c1old = childEmpty;
+    final Bytes c2 = Bytes.concatenate(node(0xA0), fill(32, 0xC2));
+    final Bytes c3old = Bytes.concatenate(node(0xA0), fill(32, 0xC3));
+    final Bytes c4 = Bytes.concatenate(node(0xA0), fill(32, 0xC4));
+
+    // new: c1 becomes present (length change), c3's hash changes (substitution)
+    final Bytes c1new = Bytes.concatenate(node(0xA0), fill(32, 0xB1));
+    final Bytes c3new = Bytes.concatenate(node(0xA0), fill(32, 0xB3));
+
+    final Bytes old = Bytes.concatenate(header, c0, c1old, c2, c3old, c4);
+    final Bytes newNode = Bytes.concatenate(header, c0, c1new, c2, c3new, c4);
+
+    final Bytes diffEntry = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
+    final ArchiveTrieNodeEntry diff = ArchiveTrieNodeCodec.decode(diffEntry);
+    assertThat(diff.isFull()).isFalse();
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(old), List.of(diffEntry)))
+        .isEqualTo(newNode);
+
+    // Only the two changed children (~65 bytes of data) plus op overhead — nowhere near a spanning
+    // INSERT of the whole c1..c3 span (~101 bytes) or the full node (~170 bytes).
+    assertThat(diffEntry.size()).isLessThan(90);
+    // Unchanged c2 (between the two changes) must be COPYed, not re-stored: ≥2 COPY ops.
+    assertThat(countOps(diff.patchBody().toArray(), 0)).isGreaterThanOrEqualTo(2);
+  }
+
+  // ---------------------------------------------------------------------------
   // reconstruct — round-trip correctness
   // ---------------------------------------------------------------------------
 
@@ -186,8 +379,7 @@ class ArchiveTrieNodeCodecTest {
   @Test
   void roundTripSizeIncreaseChange() {
     // new node is longer than old (e.g. an extension node's path grows).
-    // patch = COPY(1)+INSERT(3)+SKIP(1) = 1+2+3+2 = 8 bytes > newNode(4) → always falls back to
-    // FULL.
+    // On such a tiny node any patch exceeds the 4-byte node, so encodeDiff falls back to FULL.
     final Bytes old = node(0xAA, 0xBB);
     final Bytes newNode = node(0xAA, 0xCC, 0xDD, 0xEE);
     final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
@@ -199,8 +391,7 @@ class ArchiveTrieNodeCodecTest {
   @Test
   void roundTripSizeDecreaseChange() {
     // new node is shorter than old.
-    // patch = COPY(1)+INSERT(1)+SKIP(3) = 1+2+1+2 = 6 bytes > newNode(2) → always falls back to
-    // FULL.
+    // On such a tiny node any patch exceeds the 2-byte node, so encodeDiff falls back to FULL.
     final Bytes old = node(0xAA, 0xBB, 0xCC, 0xDD);
     final Bytes newNode = node(0xAA, 0xEE);
     final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
