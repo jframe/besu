@@ -114,7 +114,7 @@ class ArchiveTrieNodeCodecTest {
     // Every byte differs → patch body (REPLACE) exceeds new node size → FULL fallback.
     final Bytes old = fill(8, 0x11);
     final Bytes newNode = fill(8, 0x22);
-    // REPLACE(8 bytes) = 2+8=10 bytes > 8 → FULL
+    // REPLACE(8 bytes) = 1 (compact header) + 8 data = 9 bytes > 8 → FULL
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(old, newNode));
     assertThat(e.isFull()).isTrue();
@@ -186,7 +186,8 @@ class ArchiveTrieNodeCodecTest {
   @Test
   void roundTripSizeIncreaseChange() {
     // new node is longer than old (e.g. an extension node's path grows).
-    // patch = COPY(1)+INSERT(3)+SKIP(1) = 9 bytes > newNode(4) → always falls back to FULL.
+    // patch = COPY(1)+INSERT(3)+SKIP(1) = 1+2+3+2 = 8 bytes > newNode(4) → always falls back to
+    // FULL.
     final Bytes old = node(0xAA, 0xBB);
     final Bytes newNode = node(0xAA, 0xCC, 0xDD, 0xEE);
     final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
@@ -198,7 +199,8 @@ class ArchiveTrieNodeCodecTest {
   @Test
   void roundTripSizeDecreaseChange() {
     // new node is shorter than old.
-    // patch = COPY(1)+INSERT(1)+SKIP(3) = 7 bytes > newNode(2) → always falls back to FULL.
+    // patch = COPY(1)+INSERT(1)+SKIP(3) = 1+2+1+2 = 6 bytes > newNode(2) → always falls back to
+    // FULL.
     final Bytes old = node(0xAA, 0xBB, 0xCC, 0xDD);
     final Bytes newNode = node(0xAA, 0xEE);
     final Bytes diff = ArchiveTrieNodeCodec.encodeDiff(old, newNode);
@@ -306,9 +308,8 @@ class ArchiveTrieNodeCodecTest {
   void encodeDiffProducesKnownWireBytes() {
     // old: 40 bytes of 0x01; new: same with byte 20 = 0xFF
     // prefix=20, REPLACE(1, 0xFF), suffix=19 implicit
-    // OP_COPY=0, OP_REPLACE=3; word = (type << 14) | length, big-endian 2 bytes
-    // COPY(20):    (0<<14)|20  = 0x0014 → [0x00, 0x14]
-    // REPLACE(1):  (3<<14)|1   = 0xC001 → [0xC0, 0x01], then [0xFF]
+    // COPY(20): compact (20 ≤ 63, OP_COPY) → [0x14]
+    // REPLACE(1): compact (1 ≤ 63, OP_REPLACE) → [0x41], then [0xFF]
     final Bytes oldNode = fill(40, 0x01);
     final byte[] newArr = oldNode.toArray();
     newArr[20] = (byte) 0xFF;
@@ -316,8 +317,7 @@ class ArchiveTrieNodeCodecTest {
     final ArchiveTrieNodeEntry diff =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode));
     assertThat(diff.isFull()).isFalse();
-    assertThat(diff.patchBody().toArray())
-        .isEqualTo(new byte[] {0x00, 0x14, (byte) 0xC0, 0x01, (byte) 0xFF});
+    assertThat(diff.patchBody().toArray()).isEqualTo(new byte[] {0x14, 0x41, (byte) 0xFF});
   }
 
   @Test
@@ -346,15 +346,25 @@ class ArchiveTrieNodeCodecTest {
     final byte[] body = diff.patchBody().toArray();
     int replaceCount = 0;
     int pos = 0;
-    while (pos + 1 < body.length) {
-      final int hi = body[pos] & 0xFF;
-      final int lo = body[pos + 1] & 0xFF;
-      final int type = (hi >> 6) & 0x03;
-      final int length = ((hi & 0x3F) << 8) | lo;
-      pos += 2;
-      if (type == 3) { // OP_REPLACE
-        replaceCount++;
-        pos += length;
+    while (pos < body.length) {
+      final int first = body[pos++] & 0xFF;
+      if ((first & 0x80) == 0) {
+        // 1-byte compact: bit 6 = 1 → compact REPLACE
+        if ((first & 0x40) != 0) {
+          replaceCount++;
+          pos += first & 0x3F; // skip data bytes
+        }
+      } else {
+        // 2-byte full: bits[6:5] = type
+        final int second = body[pos++] & 0xFF;
+        final int type = (first >> 5) & 0x03;
+        final int length = ((first & 0x1F) << 8) | second;
+        if (type == 3) { // OP_REPLACE
+          replaceCount++;
+          pos += length;
+        } else if (type == 2) { // OP_INSERT
+          pos += length;
+        }
       }
     }
     assertThat(replaceCount).isEqualTo(2);
