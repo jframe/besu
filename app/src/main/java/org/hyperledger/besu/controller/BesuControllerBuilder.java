@@ -1022,7 +1022,6 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         // Close the migrator before storageProvider so callback finishes before RocksDB is closed
         closeables.addFirst(archiveMigrator);
       }
-
     }
 
     return new BesuController(
