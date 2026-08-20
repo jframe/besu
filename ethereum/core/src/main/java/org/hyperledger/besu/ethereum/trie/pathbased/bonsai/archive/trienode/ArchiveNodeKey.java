@@ -21,6 +21,7 @@ public final class ArchiveNodeKey {
 
   public static final int BLOCK_SUFFIX_BYTES = 8;
 
+
   private ArchiveNodeKey() {}
 
   /**

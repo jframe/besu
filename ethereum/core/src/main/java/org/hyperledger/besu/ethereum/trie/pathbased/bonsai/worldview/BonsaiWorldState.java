@@ -14,14 +14,12 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 
-import static org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldView.encodeTrieValue;
-
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListOverlay;
+import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockProcessingExecutors;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
-import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.NoOpMerkleTrie;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.account.BonsaiAccount;
@@ -33,13 +31,9 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.NoOpBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.bal.BonsaiBalWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.PathBasedValue;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.preload.StorageConsumingMap;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.cache.PathBasedWorldStateCacheManager;
 import org.hyperledger.besu.ethereum.trie.patricia.ParallelStoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
@@ -48,18 +42,14 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
-import com.google.common.annotations.VisibleForTesting;
 import jakarta.validation.constraints.NotNull;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
-import org.apache.tuweni.rlp.RLP;
 import org.apache.tuweni.units.bigints.UInt256;
 
 @SuppressWarnings("rawtypes")
@@ -431,18 +421,9 @@ public class BonsaiWorldState extends PathBasedWorldState {
     return getWorldStateStorage().getAccountStateTrieNode(location, nodeHash);
   }
 
-  protected Optional<Bytes> getStorageTrieNode(
+  public Optional<Bytes> getStorageTrieNode(
       final Hash accountHash, final Bytes location, final Bytes32 nodeHash) {
     return getWorldStateStorage().getAccountStorageTrieNode(accountHash, location, nodeHash);
-  }
-
-  private void writeStorageTrieNode(
-      final BonsaiWorldStateKeyValueStorage.Updater stateUpdater,
-      final Hash accountHash,
-      final Bytes location,
-      final Bytes32 nodeHash,
-      final Bytes value) {
-    stateUpdater.putAccountStorageTrieNode(accountHash, location, nodeHash, value);
   }
 
   @Override
@@ -493,19 +474,45 @@ public class BonsaiWorldState extends PathBasedWorldState {
     this.bonsaiCachedMerkleTrieLoader = new NoOpBonsaiCachedMerkleTrieLoader();
   }
 
+  /** Account state trie rooted at the current world state root. */
+  public MerkleTrie<Bytes, Bytes> createAccountStateTrie() {
+    return createTrie(
+        (location, hash) ->
+            bonsaiCachedMerkleTrieLoader.getAccountStateTrieNode(
+                getWorldStateStorage(), location, hash),
+        Bytes32.wrap(worldStateRootHash.getBytes()),
+        BlockProcessingExecutors.accountTrieForkJoinPool());
+  }
+
+  /** Storage trie for the given account rooted at the provided storage root. */
+  public MerkleTrie<Bytes, Bytes> createStorageTrie(
+      final Hash accountHash, final Hash storageRoot) {
+    return createTrie(
+        (location, key) ->
+            bonsaiCachedMerkleTrieLoader.getAccountStorageTrieNode(
+                getWorldStateStorage(), accountHash, location, key),
+        Bytes32.wrap(storageRoot.getBytes()),
+        BlockProcessingExecutors.storageTrieForkJoinPool());
+  }
+
   private MerkleTrie<Bytes, Bytes> createTrie(final NodeLoader nodeLoader, final Bytes32 rootHash) {
+    return createTrie(nodeLoader, rootHash, BlockProcessingExecutors.accountTrieForkJoinPool());
+  }
+
+  private MerkleTrie<Bytes, Bytes> createTrie(
+      final NodeLoader nodeLoader, final Bytes32 rootHash, final ForkJoinPool forkJoinPool) {
     if (worldStateConfig.isTrieDisabled()) {
       return new NoOpMerkleTrie<>();
     }
     if (worldStateConfig.isParallelStateRootComputationEnabled()) {
       return new ParallelStoredMerklePatriciaTrie<>(
-          nodeLoader, rootHash, Function.identity(), Function.identity());
+          nodeLoader, rootHash, Function.identity(), Function.identity(), forkJoinPool);
     }
     return new StoredMerklePatriciaTrie<>(
         nodeLoader, rootHash, Function.identity(), Function.identity());
   }
 
-  protected Hash hashAndSavePreImage(final Bytes value) {
+  public Hash hashAndSavePreImage(final Bytes value) {
     // by default do not save has preImages
     return Hash.hash(value);
   }

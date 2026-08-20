@@ -29,6 +29,7 @@ import org.apache.tuweni.bytes.Bytes32;
  */
 public final class BonsaiArchiveWorldStateStorageCoordinator extends WorldStateStorageCoordinator {
 
+
   public BonsaiArchiveWorldStateStorageCoordinator(
       final BonsaiWorldStateKeyValueStorage keyValueStorage,
       final ArchiveHistoryReader historyReader,
