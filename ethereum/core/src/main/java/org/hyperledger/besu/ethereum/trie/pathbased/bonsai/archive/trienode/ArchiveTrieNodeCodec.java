@@ -58,14 +58,11 @@ public final class ArchiveTrieNodeCodec {
   private static final int OP_INSERT = 2;
   private static final int OP_REPLACE = 3;
   private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits (2-byte op format)
-  private static final int MATCH_THRESHOLD = 2; // min matching run to end a DIFF region
 
   /**
    * Minimum matching run required to accept a re-synchronisation anchor in {@link
-   * #encodePatchAligned}. Higher than {@link #MATCH_THRESHOLD} because a resync realigns old and
-   * new across an insertion/deletion, so a short coincidental match must not be mistaken for a
-   * genuine boundary — trie realignment points (child slots, hash refs) are ≥ 32 bytes, so 4
-   * rejects spurious 1-in-4-billion matches while still anchoring every real boundary.
+   * #encodePatchAligned}. Trie realignment points (child slots, hash refs) are ≥ 32 bytes, so 4
+   * rejects spurious 1-in-4-billion coincidental matches while still anchoring every real boundary.
    */
   private static final int RESYNC_MATCH_MIN = 4;
 
@@ -181,12 +178,12 @@ public final class ArchiveTrieNodeCodec {
         appendCopyOrSkip(parts, OP_COPY, i - copyStart);
       }
 
-      // DIFF phase: advance until a matching run of >= MATCH_THRESHOLD bytes
+      // DIFF phase: advance until RESYNC_MATCH_MIN or more matching bytes
       final int diffStart = i;
       while (i < len) {
         int m = 0;
         while (i + m < len && old.get(i + m) == newNode.get(i + m)) m++;
-        if (m >= MATCH_THRESHOLD) break;
+        if (m >= RESYNC_MATCH_MIN) break;
         i++;
       }
       if (i > diffStart) {
@@ -206,7 +203,7 @@ public final class ArchiveTrieNodeCodec {
    * density of a structure-aware child-mask diff without any knowledge of the node's structure.
    *
    * <p>The trailing common suffix is left to the implicit copy in {@link #applyPatch}. Ops larger
-   * than {@link #OP_MAX_LENGTH} are split into chunks, so this never returns null.
+   * than {@link #OP_MAX_LENGTH} are split into chunks.
    */
   private static Bytes encodePatchAligned(final Bytes old, final Bytes newNode) {
     final int oldLen = old.size();
