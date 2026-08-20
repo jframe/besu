@@ -90,7 +90,7 @@ import org.hyperledger.besu.ethereum.trie.forest.ForestWorldStateArchive;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveCoverageTracker;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeCapture;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
@@ -131,6 +131,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -727,6 +728,46 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             bonsaiCachedMerkleTrieLoader,
             protocolSchedule);
 
+    // Install the archive strategy before the genesis write so block 0 is captured. syncState does
+    // not exist yet, so the gate reads it lazily via archiveSyncStateRef.
+    final AtomicReference<SyncState> archiveSyncStateRef = new AtomicReference<>();
+    if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(dataStorageConfiguration.getDataStorageFormat())
+        && dataStorageConfiguration
+            .getPathBasedExtraStorageConfiguration()
+            .getUnstable()
+            .getBonsaiArchiveStateProofsEnabled()) {
+      final BonsaiWorldStateKeyValueStorage keyValueStorage =
+          worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
+      final SegmentedKeyValueStorage liveStorage = keyValueStorage.getComposedWorldStateStorage();
+      final ExecutorService capturePool =
+          MonitoredExecutors.newFixedThreadPool(
+              "trie-capture",
+              Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 2)),
+              metricsSystem);
+      final ArchiveTrieNodeCapture capture =
+          new ArchiveTrieNodeCapture(
+              new ArchiveNodeHistoryStore(liveStorage),
+              new ArchiveCoverageTracker(liveStorage),
+              capturePool);
+      final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
+          new ArchiveTrieNodeStrategy(
+              new BonsaiTrieNodeStrategy(),
+              capture,
+              // Archive only while behind the head so reorg-window blocks are skipped; also keep
+              // archiving with no peers — a failed download can leave us peerless and still behind.
+              () -> {
+                final SyncState archiveSyncState = archiveSyncStateRef.get();
+                return archiveSyncState != null
+                    && (!archiveSyncState.isInSync(
+                            dataStorageConfiguration
+                                .getPathBasedExtraStorageConfiguration()
+                                .getMaxLayersToLoad())
+                        || archiveSyncState.getBestPeerChainHead().isEmpty());
+              });
+      keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
+      LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
+    }
+
     if (maybeStoredGenesisBlockHash.isEmpty()) {
       genesisState.writeStateTo(worldStateArchive.getWorldState());
     }
@@ -788,6 +829,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
     final boolean hasInitialSyncPhase = fullSyncDisabled && p2pEnabled;
     final SyncState syncState =
         new SyncState(blockchain, ethPeers, hasInitialSyncPhase, checkpoint);
+    archiveSyncStateRef.set(syncState);
 
     protocolContext
         .safeConsensusContext(MergeContext.class)
@@ -981,29 +1023,6 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         closeables.addFirst(archiveMigrator);
       }
 
-      if (dataStorageConfiguration
-          .getPathBasedExtraStorageConfiguration()
-          .getUnstable()
-          .getBonsaiArchiveStateProofsEnabled()) {
-        final BonsaiWorldStateKeyValueStorage keyValueStorage =
-            worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
-        final SegmentedKeyValueStorage liveStorage = keyValueStorage.getComposedWorldStateStorage();
-        final ExecutorService capturePool =
-            MonitoredExecutors.newFixedThreadPool(
-                "trie-capture",
-                Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 2)),
-                metricsSystem);
-        final ArchiveTrieNodeCapture capture =
-            new ArchiveTrieNodeCapture(
-                new ArchiveNodeHistoryStore(liveStorage),
-                new ArchiveNodeHistoryProgress(liveStorage),
-                capturePool);
-        final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
-            new ArchiveTrieNodeStrategy(
-                new BonsaiTrieNodeStrategy(), capture, () -> !syncState.isInSync());
-        keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
-        LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
-      }
     }
 
     return new BesuController(
