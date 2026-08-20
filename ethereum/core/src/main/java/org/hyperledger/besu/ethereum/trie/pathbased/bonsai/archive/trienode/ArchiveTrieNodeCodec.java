@@ -129,35 +129,32 @@ public final class ArchiveTrieNodeCodec {
     if (!base.isFull()) {
       throw new IllegalArgumentException("reconstruct: fullEntry must be a FULL entry");
     }
+
     Bytes node = base.fullNode();
     for (final Bytes diffEntry : diffEntries) {
       final ArchiveTrieNodeEntry entry = decode(diffEntry);
       if (entry.isDeletion()) {
         throw new IllegalArgumentException(
             "reconstruct: diff list must not contain deletion entries");
-      } else if (entry.isFull()) {
+      }
+      if (entry.isFull()) {
         throw new IllegalArgumentException(
             "reconstruct: diff list must not contain standalone FULL entries");
-      } else {
-        node = applyPatch(node, entry.patchBody());
       }
+      node = applyPatch(node, entry.patchBody());
     }
     return node;
   }
-
-  // ---------------------------------------------------------------------------
-  // Internal: patch encoding and application
-  // ---------------------------------------------------------------------------
 
   /**
    * Dispatches to {@link #encodePatchMultiRun} for same-length arrays (the common case for
    * hash-to-hash trie node changes) or {@link #encodePatchAligned} for different-length arrays.
    */
   private static Bytes encodePatch(final Bytes old, final Bytes newNode) {
-    if (old.size() != newNode.size()) {
-      return encodePatchAligned(old, newNode);
+    if (old.size() == newNode.size()) {
+      return encodePatchMultiRun(old, newNode);
     }
-    return encodePatchMultiRun(old, newNode);
+    return encodePatchAligned(old, newNode);
   }
 
   /**
@@ -206,38 +203,41 @@ public final class ArchiveTrieNodeCodec {
     final int oldLen = old.size();
     final int newLen = newNode.size();
     final List<Bytes> parts = new ArrayList<>();
-    int oi = 0;
-    int ni = 0;
+    int oldPos = 0;
+    int newPos = 0;
 
-    while (oi < oldLen || ni < newLen) {
-      // COPY phase: count the matching run at the current aligned position.
-      final int m = matchRun(old, oi, newNode, ni);
-      if (m > 0) {
-        if (oi + m == oldLen && ni + m == newLen) {
+    while (oldPos < oldLen || newPos < newLen) {
+      // COPY: emit a matching run at the current aligned position.
+      final int matchLen = matchRun(old, oldPos, newNode, newPos);
+      if (matchLen > 0) {
+        if (oldPos + matchLen == oldLen && newPos + matchLen == newLen) {
           break; // trailing common suffix: implicit copy in applyPatch handles it
         }
-        appendCopyOrSkip(parts, OP_COPY, m);
-        oi += m;
-        ni += m;
+        appendCopyOrSkip(parts, OP_COPY, matchLen);
+        oldPos += matchLen;
+        newPos += matchLen;
         continue;
       }
 
-      // Divergence: find the nearest point where old and new realign.
-      final int[] sync = findResync(old, oi, newNode, ni);
+      // Divergence: find the nearest re-sync point, then decompose the gap into:
+      //   REPLACE — bytes present in both extents (min of skip and insert lengths)
+      //   INSERT  — new bytes with no old counterpart (insert surplus)
+      //   SKIP    — old bytes with no new counterpart (skip surplus)
+      final int[] sync = findResync(old, oldPos, newNode, newPos);
       final int skipOld = sync[0];
       final int insNew = sync[1];
-      final int overlap = Math.min(skipOld, insNew);
-      if (overlap > 0) {
-        appendData(parts, OP_REPLACE, newNode.slice(ni, overlap));
+      final int replaceLen = Math.min(skipOld, insNew);
+      if (replaceLen > 0) {
+        appendData(parts, OP_REPLACE, newNode.slice(newPos, replaceLen));
       }
-      if (insNew > overlap) {
-        appendData(parts, OP_INSERT, newNode.slice(ni + overlap, insNew - overlap));
+      if (insNew > replaceLen) {
+        appendData(parts, OP_INSERT, newNode.slice(newPos + replaceLen, insNew - replaceLen));
       }
-      if (skipOld > overlap) {
-        appendCopyOrSkip(parts, OP_SKIP, skipOld - overlap);
+      if (skipOld > replaceLen) {
+        appendCopyOrSkip(parts, OP_SKIP, skipOld - replaceLen);
       }
-      oi += skipOld;
-      ni += insNew;
+      oldPos += skipOld;
+      newPos += insNew;
     }
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
   }
@@ -260,19 +260,20 @@ public final class ArchiveTrieNodeCodec {
     final int maxNew = newNode.size() - newPos;
     final int cap = Math.min(maxOld + maxNew, RESYNC_MAX_RADIUS);
     for (int d = 1; d <= cap; d++) {
-      // Visit splits ordered by |skipOld - insNew| ascending (balanced first).
-      for (int spread = (d & 1); spread <= d; spread += 2) {
-        final int hi = (d + spread) / 2;
-        final int lo = (d - spread) / 2;
-        // The two splits at this spread: (skipOld=hi, insNew=lo) and (skipOld=lo, insNew=hi).
-        if (hi <= maxOld && lo <= maxNew && anchors(old, oldPos + hi, newNode, newPos + lo)) {
-          return new int[] {hi, lo};
+      // Visit all (skipOld, insNew) pairs with skipOld+insNew==d, from most balanced outward.
+      // imbalance = |skipOld - insNew|; must share parity with d so the halves are integers.
+      for (int imbalance = (d & 1); imbalance <= d; imbalance += 2) {
+        final int skip = (d + imbalance) / 2; // skip-heavy candidate: skipOld=skip, insNew=ins
+        final int ins = (d - imbalance) / 2;
+        if (skip <= maxOld && ins <= maxNew && anchors(old, oldPos + skip, newNode, newPos + ins)) {
+          return new int[] {skip, ins};
         }
-        if (spread > 0
-            && lo <= maxOld
-            && hi <= maxNew
-            && anchors(old, oldPos + lo, newNode, newPos + hi)) {
-          return new int[] {lo, hi};
+        // Mirror: insert-heavy counterpart (skipOld=ins, insNew=skip).
+        if (imbalance > 0
+            && ins <= maxOld
+            && skip <= maxNew
+            && anchors(old, oldPos + ins, newNode, newPos + skip)) {
+          return new int[] {ins, skip};
         }
       }
     }
@@ -331,7 +332,7 @@ public final class ArchiveTrieNodeCodec {
 
   /** Applies a binary patch body to {@code base}, producing the reconstructed node. */
   private static Bytes applyPatch(final Bytes base, final Bytes patchBody) {
-    final List<Bytes> out = new ArrayList<>();
+    final List<Bytes> outputParts = new ArrayList<>();
     int oldPos = 0;
     int patchPos = 0;
 
@@ -339,6 +340,7 @@ public final class ArchiveTrieNodeCodec {
       if (patchPos + 2 > patchBody.size()) {
         throw new IllegalArgumentException("truncated op at position " + patchPos);
       }
+      // 2-byte op: [2b type][6b lenHi][8b lenLo]
       final int first = Byte.toUnsignedInt(patchBody.get(patchPos++));
       final int second = Byte.toUnsignedInt(patchBody.get(patchPos++));
       final int opType = first >> 6;
@@ -349,7 +351,7 @@ public final class ArchiveTrieNodeCodec {
           if (oldPos + length > base.size()) {
             throw new IllegalArgumentException("COPY length overruns base node");
           }
-          out.add(base.slice(oldPos, length));
+          outputParts.add(base.slice(oldPos, length));
           oldPos += length;
         }
         case OP_SKIP -> {
@@ -362,7 +364,7 @@ public final class ArchiveTrieNodeCodec {
           if (patchPos + length > patchBody.size()) {
             throw new IllegalArgumentException("INSERT length overruns patch body");
           }
-          out.add(patchBody.slice(patchPos, length));
+          outputParts.add(patchBody.slice(patchPos, length));
           patchPos += length;
         }
         case OP_REPLACE -> {
@@ -372,7 +374,7 @@ public final class ArchiveTrieNodeCodec {
           if (oldPos + length > base.size()) {
             throw new IllegalArgumentException("REPLACE length overruns base node");
           }
-          out.add(patchBody.slice(patchPos, length));
+          outputParts.add(patchBody.slice(patchPos, length));
           patchPos += length;
           oldPos += length;
         }
@@ -382,10 +384,10 @@ public final class ArchiveTrieNodeCodec {
 
     // Implicit: copy remaining old bytes (the common suffix)
     if (oldPos < base.size()) {
-      out.add(base.slice(oldPos));
+      outputParts.add(base.slice(oldPos));
     }
 
-    return Bytes.concatenate(out.toArray(new Bytes[0]));
+    return Bytes.concatenate(outputParts.toArray(new Bytes[0]));
   }
 
   private static Bytes encodeOp(final int type, final int length) {
