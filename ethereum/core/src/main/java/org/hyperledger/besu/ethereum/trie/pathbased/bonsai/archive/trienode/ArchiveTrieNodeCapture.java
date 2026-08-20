@@ -70,7 +70,7 @@ public class ArchiveTrieNodeCapture {
   private static final int CAPTURE_CHUNK_SIZE = 64;
 
   private final ArchiveNodeHistoryStore historyStore;
-  private final ArchiveNodeHistoryProgress historyProgress;
+  private final ArchiveCoverageTracker coverageTracker;
   private final ExecutorService capturePool;
 
   // Instance-level (not static) so multiple instances in tests don't share slots.
@@ -82,10 +82,10 @@ public class ArchiveTrieNodeCapture {
 
   public ArchiveTrieNodeCapture(
       final ArchiveNodeHistoryStore historyStore,
-      final ArchiveNodeHistoryProgress historyProgress,
+      final ArchiveCoverageTracker coverageTracker,
       final ExecutorService capturePool) {
     this.historyStore = historyStore;
-    this.historyProgress = historyProgress;
+    this.coverageTracker = coverageTracker;
     this.capturePool = capturePool;
   }
 
@@ -179,7 +179,7 @@ public class ArchiveTrieNodeCapture {
     } catch (final ExecutionException e) {
       throw new RuntimeException("trie-node capture failed", e.getCause());
     }
-    historyProgress.record(transaction, buf.block);
+    coverageTracker.record(transaction, buf.block);
     lastArchivedBlock = buf.block;
   }
 

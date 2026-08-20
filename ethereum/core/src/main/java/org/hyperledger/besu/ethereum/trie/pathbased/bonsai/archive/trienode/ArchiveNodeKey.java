@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Hyperledger Besu.
+ * Copyright contributors to Besu.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -20,7 +20,6 @@ import org.apache.tuweni.bytes.Bytes;
 public final class ArchiveNodeKey {
 
   public static final int BLOCK_SUFFIX_BYTES = 8;
-
 
   private ArchiveNodeKey() {}
 

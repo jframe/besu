@@ -64,7 +64,7 @@ class ArchiveTrieNodeStrategyTest {
 
   private SegmentedKeyValueStorage storage;
   private ArchiveNodeHistoryStore historyStore;
-  private ArchiveNodeHistoryProgress historyProgress;
+  private ArchiveCoverageTracker coverageTracker;
   private ArchiveHistoryReader reader;
   private ArchiveTrieNodeStrategy strategy;
   private final AtomicBoolean gateOpen = new AtomicBoolean(true);
@@ -75,10 +75,10 @@ class ArchiveTrieNodeStrategyTest {
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
     historyStore = new ArchiveNodeHistoryStore(storage);
-    historyProgress = new ArchiveNodeHistoryProgress(storage);
+    coverageTracker = new ArchiveCoverageTracker(storage);
     reader = new ArchiveHistoryReader(historyStore);
     final ArchiveTrieNodeCapture capture =
-        new ArchiveTrieNodeCapture(historyStore, historyProgress, Executors.newFixedThreadPool(2));
+        new ArchiveTrieNodeCapture(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
     strategy = new ArchiveTrieNodeStrategy(new BonsaiTrieNodeStrategy(), capture, gateOpen::get);
   }
 
@@ -115,7 +115,7 @@ class ArchiveTrieNodeStrategyTest {
     assertThat(entryAt(LOCATION, 0L).codecEntry().isFull()).isTrue();
     assertThat(entryAt(LOCATION, 0L).counter()).isZero();
     assertThat(reader.nodeAt(ArchiveNodeKey.account(LOCATION), 0L)).contains(node);
-    assertThat(historyProgress.covers(0L)).isTrue();
+    assertThat(coverageTracker.hasArchiveBlock(0L)).isTrue();
   }
 
   @Test
@@ -133,7 +133,7 @@ class ArchiveTrieNodeStrategyTest {
 
     assertThat(storage.get(TRIE_BRANCH_STORAGE, LOCATION.toArrayUnsafe())).isPresent();
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(LOCATION), 6L)).isEmpty();
-    assertThat(historyProgress.covers(6L)).isFalse();
+    assertThat(coverageTracker.hasArchiveBlock(6L)).isFalse();
   }
 
   @Test

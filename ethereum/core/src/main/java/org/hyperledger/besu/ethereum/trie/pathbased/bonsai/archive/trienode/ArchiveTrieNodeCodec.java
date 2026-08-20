@@ -253,9 +253,9 @@ public final class ArchiveTrieNodeCodec {
    *
    * <p>Candidates are searched by ascending total distance {@code d = skipOld + insertNew}, and
    * within each distance from the most balanced split outward — so an equal-length substitution
-   * (encoded as a tight REPLACE) is preferred over an insertion/deletion interpretation of the
-   * same change. If no anchor is found within {@link #RESYNC_MAX_RADIUS}, the remainder of both
-   * arrays is consumed as a single edit.
+   * (encoded as a tight REPLACE) is preferred over an insertion/deletion interpretation of the same
+   * change. If no anchor is found within {@link #RESYNC_MAX_RADIUS}, the remainder of both arrays
+   * is consumed as a single edit.
    */
   private static Resync findResync(
       final Bytes old, final int oldPos, final Bytes newNode, final int newPos) {
@@ -402,7 +402,6 @@ public final class ArchiveTrieNodeCodec {
           "patch op length out of range [0, " + OP_MAX_LENGTH + "]: " + length);
     }
     return Bytes.of(
-        (byte) ((type << OP_TYPE_SHIFT) | (length >> Byte.SIZE)),
-        (byte) (length & 0xFF));
+        (byte) ((type << OP_TYPE_SHIFT) | (length >> Byte.SIZE)), (byte) (length & 0xFF));
   }
 }

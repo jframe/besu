@@ -21,8 +21,8 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBa
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveCoverageTracker;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveHistoryReader;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryProgress;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveReadTrieNodeStrategy;
@@ -46,7 +46,7 @@ import org.junit.jupiter.api.Test;
  * End-to-end integration test for the bonsai archive trie-node write and proof-read pipeline.
  *
  * <p>Covers the full chain: ArchiveTrieNodeStrategy → ArchiveNodeHistoryStore →
- * ArchiveNodeHistoryProgress → ArchiveReadTrieNodeStrategy (as would be used by
+ * ArchiveCoverageTracker → ArchiveReadTrieNodeStrategy (as would be used by
  * BonsaiArchiveWorldStateStorageCoordinator). Does NOT require a real block-processing stack.
  */
 class BonsaiArchiveStateProofIntegrationTest {
@@ -60,12 +60,12 @@ class BonsaiArchiveStateProofIntegrationTest {
     storage =
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
-    final ArchiveNodeHistoryProgress historyProgress = new ArchiveNodeHistoryProgress(storage);
+    final ArchiveCoverageTracker coverageTracker = new ArchiveCoverageTracker(storage);
     final ArchiveNodeHistoryStore historyStore = new ArchiveNodeHistoryStore(storage);
     final BonsaiTrieNodeStrategy baseStrategy = new BonsaiTrieNodeStrategy();
     historyReader = new ArchiveHistoryReader(historyStore);
     final ArchiveTrieNodeCapture capture =
-        new ArchiveTrieNodeCapture(historyStore, historyProgress, Executors.newFixedThreadPool(2));
+        new ArchiveTrieNodeCapture(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
     // Gate always open: acts as initial-sync mode
     archiveStrategy = new ArchiveTrieNodeStrategy(baseStrategy, capture, () -> true);
   }
@@ -192,9 +192,9 @@ class BonsaiArchiveStateProofIntegrationTest {
     archiveStrategy.onBeforeCommit(storage, tx);
     tx.commit();
 
-    final ArchiveNodeHistoryProgress loaded = new ArchiveNodeHistoryProgress(storage);
-    assertThat(loaded.covers(0L)).isTrue();
-    assertThat(loaded.covers(1L)).isFalse(); // only block 0 was archived
+    final ArchiveCoverageTracker loaded = new ArchiveCoverageTracker(storage);
+    assertThat(loaded.hasArchiveBlock(0L)).isTrue();
+    assertThat(loaded.hasArchiveBlock(1L)).isFalse(); // only block 0 was archived
   }
 
   @Test

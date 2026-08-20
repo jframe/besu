@@ -60,7 +60,7 @@ class ArchiveTrieNodeCaptureTest {
 
   private SegmentedKeyValueStorage storage;
   private ArchiveNodeHistoryStore historyStore;
-  private ArchiveNodeHistoryProgress historyProgress;
+  private ArchiveCoverageTracker coverageTracker;
   private ArchiveTrieNodeCapture capture;
 
   @BeforeEach
@@ -69,9 +69,9 @@ class ArchiveTrieNodeCaptureTest {
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
     historyStore = new ArchiveNodeHistoryStore(storage);
-    historyProgress = new ArchiveNodeHistoryProgress(storage);
+    coverageTracker = new ArchiveCoverageTracker(storage);
     capture =
-        new ArchiveTrieNodeCapture(historyStore, historyProgress, Executors.newFixedThreadPool(2));
+        new ArchiveTrieNodeCapture(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
   }
 
   private void enqueueAndCommit(
@@ -95,7 +95,7 @@ class ArchiveTrieNodeCaptureTest {
     final var entry = historyStore.getLatestBefore(nk, 0L).orElseThrow();
     assertThat(entry.codecEntry().isFull()).isTrue();
     assertThat(entry.counter()).isZero();
-    assertThat(historyProgress.covers(0L)).isTrue();
+    assertThat(coverageTracker.hasArchiveBlock(0L)).isTrue();
   }
 
   @Test
