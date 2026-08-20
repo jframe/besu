@@ -170,20 +170,17 @@ public final class ArchiveTrieNodeCodec {
     final List<Bytes> parts = new ArrayList<>();
     int i = 0;
     while (i < len) {
-      // COPY phase: advance while bytes match
+      // COPY phase: advance over the matching run.
       final int copyStart = i;
-      while (i < len && old.get(i) == newNode.get(i)) i++;
+      i += matchRun(old, i, len, newNode, i, len);
       if (i >= len) break; // trailing suffix: implicit copy in applyPatch handles it
       if (i > copyStart) {
         appendCopyOrSkip(parts, OP_COPY, i - copyStart);
       }
 
-      // DIFF phase: advance until RESYNC_MATCH_MIN or more matching bytes
+      // DIFF phase: advance until RESYNC_MATCH_MIN or more matching bytes.
       final int diffStart = i;
-      while (i < len) {
-        int m = 0;
-        while (i + m < len && old.get(i + m) == newNode.get(i + m)) m++;
-        if (m >= RESYNC_MATCH_MIN) break;
+      while (i < len && matchRun(old, i, len, newNode, i, len) < RESYNC_MATCH_MIN) {
         i++;
       }
       if (i > diffStart) {
@@ -214,10 +211,7 @@ public final class ArchiveTrieNodeCodec {
 
     while (oi < oldLen || ni < newLen) {
       // COPY phase: count the matching run at the current aligned position.
-      int m = 0;
-      while (oi + m < oldLen && ni + m < newLen && old.get(oi + m) == newNode.get(ni + m)) {
-        m++;
-      }
+      final int m = matchRun(old, oi, oldLen, newNode, ni, newLen);
       if (m > 0) {
         if (oi + m == oldLen && ni + m == newLen) {
           break; // trailing common suffix: implicit copy in applyPatch handles it
@@ -304,16 +298,27 @@ public final class ArchiveTrieNodeCodec {
       final Bytes newNode,
       final int newPos,
       final int newLen) {
+    final int c = matchRun(old, oldPos, oldLen, newNode, newPos, newLen);
+    return c >= RESYNC_MATCH_MIN || (c > 0 && oldPos + c == oldLen && newPos + c == newLen);
+  }
+
+  /**
+   * Length of the matching run starting at {@code (oldPos, newPos)}, bounded by both array ends.
+   */
+  private static int matchRun(
+      final Bytes old,
+      final int oldPos,
+      final int oldLen,
+      final Bytes newNode,
+      final int newPos,
+      final int newLen) {
     int c = 0;
     while (oldPos + c < oldLen
         && newPos + c < newLen
         && old.get(oldPos + c) == newNode.get(newPos + c)) {
       c++;
-      if (c >= RESYNC_MATCH_MIN) {
-        return true;
-      }
     }
-    return c > 0 && oldPos + c == oldLen && newPos + c == newLen;
+    return c;
   }
 
   /** Emits a COPY or SKIP op (no data), splitting lengths above {@link #OP_MAX_LENGTH}. */
