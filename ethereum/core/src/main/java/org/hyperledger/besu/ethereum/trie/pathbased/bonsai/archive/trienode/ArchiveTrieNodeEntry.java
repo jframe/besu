@@ -25,6 +25,7 @@ import org.apache.tuweni.bytes.Bytes;
  */
 public final class ArchiveTrieNodeEntry {
 
+  public static final byte ENTRY_DIFF = 0b0000_0000;
   public static final byte ENTRY_FULL = 0b0000_0001;
   public static final byte CREATION = 0b0001_0000;
   public static final byte DELETION = 0b0010_0000;
@@ -39,6 +40,10 @@ public final class ArchiveTrieNodeEntry {
 
   public boolean isFull() {
     return (metadata & ENTRY_FULL) != 0;
+  }
+
+  public boolean isCreation() {
+    return (metadata & CREATION) != 0;
   }
 
   public boolean isDeletion() {

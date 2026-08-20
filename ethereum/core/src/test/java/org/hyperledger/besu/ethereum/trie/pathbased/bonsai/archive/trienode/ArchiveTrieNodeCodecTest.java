@@ -68,6 +68,7 @@ class ArchiveTrieNodeCodecTest {
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(null, n));
     assertThat(e.isFull()).isTrue();
+    assertThat(e.isCreation()).isTrue();
     assertThat(e.fullNode()).isEqualTo(n);
   }
 

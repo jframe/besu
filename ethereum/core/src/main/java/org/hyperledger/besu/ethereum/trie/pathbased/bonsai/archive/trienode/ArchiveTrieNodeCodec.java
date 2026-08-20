@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.CREATION;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.DELETION;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.ENTRY_DIFF;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.ENTRY_FULL;
 
 import java.util.ArrayList;
@@ -51,12 +52,13 @@ import org.apache.tuweni.bytes.Bytes;
  */
 public final class ArchiveTrieNodeCodec {
 
-  private static final byte DIFF = 0b0000_0000;
-
   private static final int OP_COPY = 0;
   private static final int OP_SKIP = 1;
   private static final int OP_INSERT = 2;
   private static final int OP_REPLACE = 3;
+  private static final int OP_HEADER_SIZE = 2;
+  private static final int OP_TYPE_SHIFT = 6;
+  private static final int OP_LENGTH_HIGH_MASK = 0x3F;
   private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits (2-byte op format)
 
   /**
@@ -101,7 +103,7 @@ public final class ArchiveTrieNodeCodec {
     if (patch.size() >= newNode.size()) {
       return encodeFull(newNode);
     }
-    return Bytes.concatenate(Bytes.of(DIFF), patch);
+    return Bytes.concatenate(Bytes.of(ENTRY_DIFF), patch);
   }
 
   public static ArchiveTrieNodeEntry decode(final Bytes entry) {
@@ -163,25 +165,26 @@ public final class ArchiveTrieNodeCodec {
    * #applyPatch}.
    */
   private static Bytes encodePatchMultiRun(final Bytes old, final Bytes newNode) {
-    final int len = old.size();
+    final int nodeLength = old.size();
     final List<Bytes> parts = new ArrayList<>();
-    int i = 0;
-    while (i < len) {
+    int position = 0;
+    while (position < nodeLength) {
       // COPY phase: advance over the matching run.
-      final int copyStart = i;
-      i += matchRun(old, i, newNode, i);
-      if (i >= len) break; // trailing suffix: implicit copy in applyPatch handles it
-      if (i > copyStart) {
-        appendCopyOrSkip(parts, OP_COPY, i - copyStart);
+      final int copyStart = position;
+      position += matchRun(old, position, newNode, position);
+      if (position >= nodeLength) break; // trailing suffix: implicit copy in applyPatch handles it
+      if (position > copyStart) {
+        appendNoDataOp(parts, OP_COPY, position - copyStart);
       }
 
       // DIFF phase: advance until RESYNC_MATCH_MIN or more matching bytes.
-      final int diffStart = i;
-      while (i < len && matchRun(old, i, newNode, i) < RESYNC_MATCH_MIN) {
-        i++;
+      final int diffStart = position;
+      while (position < nodeLength
+          && matchRun(old, position, newNode, position) < RESYNC_MATCH_MIN) {
+        position++;
       }
-      if (i > diffStart) {
-        appendData(parts, OP_REPLACE, newNode.slice(diffStart, i - diffStart));
+      if (position > diffStart) {
+        appendDataOp(parts, OP_REPLACE, newNode.slice(diffStart, position - diffStart));
       }
     }
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
@@ -213,83 +216,87 @@ public final class ArchiveTrieNodeCodec {
         if (oldPos + matchLen == oldLen && newPos + matchLen == newLen) {
           break; // trailing common suffix: implicit copy in applyPatch handles it
         }
-        appendCopyOrSkip(parts, OP_COPY, matchLen);
+        appendNoDataOp(parts, OP_COPY, matchLen);
         oldPos += matchLen;
         newPos += matchLen;
         continue;
       }
 
-      // Divergence: find the nearest re-sync point, then decompose the gap into:
-      //   REPLACE — bytes present in both extents (min of skip and insert lengths)
-      //   INSERT  — new bytes with no old counterpart (insert surplus)
-      //   SKIP    — old bytes with no new counterpart (skip surplus)
-      final int[] sync = findResync(old, oldPos, newNode, newPos);
-      final int skipOld = sync[0];
-      final int insNew = sync[1];
-      final int replaceLen = Math.min(skipOld, insNew);
-      if (replaceLen > 0) {
-        appendData(parts, OP_REPLACE, newNode.slice(newPos, replaceLen));
-      }
-      if (insNew > replaceLen) {
-        appendData(parts, OP_INSERT, newNode.slice(newPos + replaceLen, insNew - replaceLen));
-      }
-      if (skipOld > replaceLen) {
-        appendCopyOrSkip(parts, OP_SKIP, skipOld - replaceLen);
-      }
-      oldPos += skipOld;
-      newPos += insNew;
+      final Resync resync = findResync(old, oldPos, newNode, newPos);
+      appendResyncEdit(parts, newNode, newPos, resync);
+      oldPos += resync.skipOld();
+      newPos += resync.insertNew();
     }
     return Bytes.concatenate(parts.toArray(new Bytes[0]));
   }
 
+  /** Emits the REPLACE, INSERT, and SKIP operations that consume one divergent region. */
+  private static void appendResyncEdit(
+      final List<Bytes> parts, final Bytes newNode, final int newPos, final Resync resync) {
+    final int replaceLen = Math.min(resync.skipOld(), resync.insertNew());
+    if (replaceLen > 0) {
+      appendDataOp(parts, OP_REPLACE, newNode.slice(newPos, replaceLen));
+    }
+    if (resync.insertNew() > replaceLen) {
+      appendDataOp(
+          parts, OP_INSERT, newNode.slice(newPos + replaceLen, resync.insertNew() - replaceLen));
+    }
+    if (resync.skipOld() > replaceLen) {
+      appendNoDataOp(parts, OP_SKIP, resync.skipOld() - replaceLen);
+    }
+  }
+
   /**
    * Finds the nearest re-synchronisation point after a divergence at {@code (oldPos, newPos)}.
-   * Returns {@code {skipOld, insNew}}: the number of old bytes to drop and new bytes to add to
-   * reach a run of at least {@link #RESYNC_MATCH_MIN} matching bytes (or the shared end of both
-   * arrays).
+   * Returns the number of old bytes to drop and new bytes to add to reach a run of at least {@link
+   * #RESYNC_MATCH_MIN} matching bytes (or the shared end of both arrays).
    *
-   * <p>Candidates are searched by ascending total distance {@code d = skipOld + insNew}, and within
-   * each distance from the most balanced split outward — so an equal-length substitution (encoded
-   * as a tight REPLACE) is preferred over an insertion/deletion interpretation of the same change.
-   * If no anchor is found within {@link #RESYNC_MAX_RADIUS}, the remainder of both arrays is
-   * consumed as a single edit.
+   * <p>Candidates are searched by ascending total distance {@code d = skipOld + insertNew}, and
+   * within each distance from the most balanced split outward — so an equal-length substitution
+   * (encoded as a tight REPLACE) is preferred over an insertion/deletion interpretation of the
+   * same change. If no anchor is found within {@link #RESYNC_MAX_RADIUS}, the remainder of both
+   * arrays is consumed as a single edit.
    */
-  private static int[] findResync(
+  private static Resync findResync(
       final Bytes old, final int oldPos, final Bytes newNode, final int newPos) {
     final int maxOld = old.size() - oldPos;
     final int maxNew = newNode.size() - newPos;
-    final int cap = Math.min(maxOld + maxNew, RESYNC_MAX_RADIUS);
-    for (int d = 1; d <= cap; d++) {
-      // Visit all (skipOld, insNew) pairs with skipOld+insNew==d, from most balanced outward.
-      // imbalance = |skipOld - insNew|; must share parity with d so the halves are integers.
-      for (int imbalance = (d & 1); imbalance <= d; imbalance += 2) {
-        final int skip = (d + imbalance) / 2; // skip-heavy candidate: skipOld=skip, insNew=ins
-        final int ins = (d - imbalance) / 2;
-        if (skip <= maxOld && ins <= maxNew && anchors(old, oldPos + skip, newNode, newPos + ins)) {
-          return new int[] {skip, ins};
+    final int maxDistance = Math.min(maxOld + maxNew, RESYNC_MAX_RADIUS);
+    for (int totalDistance = 1; totalDistance <= maxDistance; totalDistance++) {
+      // Visit all (skipOld, insertNew) pairs with skipOld+insertNew==totalDistance, from most
+      // balanced outward. Imbalance must share parity with totalDistance so the halves are ints.
+      for (int imbalance = (totalDistance & 1); imbalance <= totalDistance; imbalance += 2) {
+        final int skipOld = (totalDistance + imbalance) / 2;
+        final int insertNew = (totalDistance - imbalance) / 2;
+        if (skipOld <= maxOld
+            && insertNew <= maxNew
+            && isResyncAnchor(old, oldPos + skipOld, newNode, newPos + insertNew)) {
+          return new Resync(skipOld, insertNew);
         }
-        // Mirror: insert-heavy counterpart (skipOld=ins, insNew=skip).
+        // Mirror: insert-heavy counterpart (skipOld=insertNew, insertNew=skipOld).
         if (imbalance > 0
-            && ins <= maxOld
-            && skip <= maxNew
-            && anchors(old, oldPos + ins, newNode, newPos + skip)) {
-          return new int[] {ins, skip};
+            && insertNew <= maxOld
+            && skipOld <= maxNew
+            && isResyncAnchor(old, oldPos + insertNew, newNode, newPos + skipOld)) {
+          return new Resync(insertNew, skipOld);
         }
       }
     }
-    return new int[] {maxOld, maxNew};
+    return new Resync(maxOld, maxNew);
   }
+
+  private record Resync(int skipOld, int insertNew) {}
 
   /**
    * True if old and new re-synchronise at the given positions: at least {@link #RESYNC_MATCH_MIN}
    * bytes match, or the matching run reaches the end of both arrays together (a genuine common
    * suffix shorter than the threshold).
    */
-  private static boolean anchors(
+  private static boolean isResyncAnchor(
       final Bytes old, final int oldPos, final Bytes newNode, final int newPos) {
-    final int c = matchRun(old, oldPos, newNode, newPos);
-    return c >= RESYNC_MATCH_MIN
-        || (c > 0 && oldPos + c == old.size() && newPos + c == newNode.size());
+    final int matchLen = matchRun(old, oldPos, newNode, newPos);
+    return matchLen >= RESYNC_MATCH_MIN
+        || (matchLen > 0 && oldPos + matchLen == old.size() && newPos + matchLen == newNode.size());
   }
 
   /**
@@ -297,18 +304,17 @@ public final class ArchiveTrieNodeCodec {
    */
   private static int matchRun(
       final Bytes old, final int oldPos, final Bytes newNode, final int newPos) {
-    int c = 0;
-    while (oldPos + c < old.size()
-        && newPos + c < newNode.size()
-        && old.get(oldPos + c) == newNode.get(newPos + c)) {
-      c++;
+    int matchLen = 0;
+    while (oldPos + matchLen < old.size()
+        && newPos + matchLen < newNode.size()
+        && old.get(oldPos + matchLen) == newNode.get(newPos + matchLen)) {
+      matchLen++;
     }
-    return c;
+    return matchLen;
   }
 
   /** Emits a COPY or SKIP op (no data), splitting lengths above {@link #OP_MAX_LENGTH}. */
-  private static void appendCopyOrSkip(
-      final List<Bytes> parts, final int opType, final int length) {
+  private static void appendNoDataOp(final List<Bytes> parts, final int opType, final int length) {
     int remaining = length;
     while (remaining > 0) {
       final int chunk = Math.min(remaining, OP_MAX_LENGTH);
@@ -318,7 +324,7 @@ public final class ArchiveTrieNodeCodec {
   }
 
   /** Emits a REPLACE or INSERT op followed by its data, splitting above {@link #OP_MAX_LENGTH}. */
-  private static void appendData(final List<Bytes> parts, final int opType, final Bytes data) {
+  private static void appendDataOp(final List<Bytes> parts, final int opType, final Bytes data) {
     int off = 0;
     int remaining = data.size();
     while (remaining > 0) {
@@ -337,14 +343,14 @@ public final class ArchiveTrieNodeCodec {
     int patchPos = 0;
 
     while (patchPos < patchBody.size()) {
-      if (patchPos + 2 > patchBody.size()) {
+      if (patchPos + OP_HEADER_SIZE > patchBody.size()) {
         throw new IllegalArgumentException("truncated op at position " + patchPos);
       }
       // 2-byte op: [2b type][6b lenHi][8b lenLo]
       final int first = Byte.toUnsignedInt(patchBody.get(patchPos++));
       final int second = Byte.toUnsignedInt(patchBody.get(patchPos++));
-      final int opType = first >> 6;
-      final int length = ((first & 0x3F) << 8) | second;
+      final int opType = first >> OP_TYPE_SHIFT;
+      final int length = ((first & OP_LENGTH_HIGH_MASK) << Byte.SIZE) | second;
 
       switch (opType) {
         case OP_COPY -> {
@@ -395,6 +401,8 @@ public final class ArchiveTrieNodeCodec {
       throw new IllegalArgumentException(
           "patch op length out of range [0, " + OP_MAX_LENGTH + "]: " + length);
     }
-    return Bytes.of((byte) ((type << 6) | (length >> 8)), (byte) (length & 0xFF));
+    return Bytes.of(
+        (byte) ((type << OP_TYPE_SHIFT) | (length >> Byte.SIZE)),
+        (byte) (length & 0xFF));
   }
 }
