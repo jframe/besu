@@ -58,7 +58,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   private final WorldStateConfig archiveWorldStateConfig;
   private volatile LongSupplier archiveMigrationProgressSupplier = () -> -1L;
 
-  private final ArchiveCoverageTracker coverageTracker;
+  private final ArchiveCoverageTracker archiveCoverageTracker;
   private final ArchiveHistoryReader archiveHistoryReader;
 
   public BonsaiArchiveWorldStateProvider(
@@ -117,7 +117,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final SegmentedKeyValueStorage liveStorage =
         worldStateKeyValueStorage.getComposedWorldStateStorage();
     final ArchiveNodeHistoryStore archiveHistoryStore = new ArchiveNodeHistoryStore(liveStorage);
-    this.coverageTracker = new ArchiveCoverageTracker(liveStorage);
+    this.archiveCoverageTracker = new ArchiveCoverageTracker(liveStorage);
     this.archiveHistoryReader = new ArchiveHistoryReader(archiveHistoryStore);
   }
 
@@ -170,7 +170,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       final List<UInt256> accountStorageKeys,
       final Function<Optional<WorldStateProof>, ? extends Optional<U>> mapper) {
     final long blockNumber = blockHeader.getNumber();
-    if (!coverageTracker.hasArchiveBlock(blockNumber)) {
+    if (!archiveCoverageTracker.hasArchiveBlock(blockNumber)) {
       return super.getAccountProof(blockHeader, accountAddress, accountStorageKeys, mapper);
     }
     try {
