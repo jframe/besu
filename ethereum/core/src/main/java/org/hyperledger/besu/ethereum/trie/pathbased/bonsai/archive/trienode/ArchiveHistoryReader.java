@@ -41,11 +41,11 @@ public final class ArchiveHistoryReader {
 
   /**
    * Maximum number of backward steps this reader will take looking for a FULL checkpoint before
-   * giving up. Must be at least as large as the longest DIFF run {@link ArchiveTrieNodeStrategy}
-   * can produce (currently {@code CHECKPOINT_INTERVAL - 1}), or legitimate history becomes
-   * unreachable.
+   * giving up. Must be at least as large as the longest DIFF run the write path can produce — i.e.
+   * the largest tier interval minus one. Currently shallow nodes use interval 32, so this must be
+   * at least 32. Raising any tier above this value requires a matching raise here.
    */
-  public static final int MAX_BACKWARD_WALK_STEPS = CHECKPOINT_INTERVAL;
+  public static final int MAX_BACKWARD_WALK_STEPS = 32;
 
   private final ArchiveNodeHistoryStore historyStore;
 

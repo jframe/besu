@@ -158,22 +158,24 @@ class ArchiveTrieNodeStrategyTest {
   }
 
   @Test
-  void writesFullCheckpointAtInterval() {
-    final Bytes nk = ArchiveNodeKey.account(LOCATION);
-    for (int block = 0; block <= ArchiveHistoryReader.CHECKPOINT_INTERVAL; block++) {
-      writeBlock(block, LOCATION, branchNode(block));
+  void deepNode_writesFullCheckpointAtDeepInterval() {
+    // Deep node (location size 3 → DEEP_CHECKPOINT_INTERVAL = 16).
+    final Bytes deepLocation = Bytes.of(0x01, 0x02, 0x03);
+    final Bytes nk = ArchiveNodeKey.account(deepLocation);
+    final int interval = ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL;
+    for (int block = 0; block <= interval; block++) {
+      writeBlock(block, deepLocation, branchNode(block));
     }
 
-    // Blocks 1..CHECKPOINT_INTERVAL-1 are diffs with a rising counter; the interval block resets.
-    assertThat(entryAt(LOCATION, ArchiveHistoryReader.CHECKPOINT_INTERVAL - 1L).counter())
-        .isEqualTo(ArchiveHistoryReader.CHECKPOINT_INTERVAL - 1);
+    // Blocks 1..interval-1 are diffs with a rising counter; the interval block resets.
+    assertThat(entryAt(deepLocation, interval - 1L).counter()).isEqualTo(interval - 1);
 
-    final var checkpoint = entryAt(LOCATION, ArchiveHistoryReader.CHECKPOINT_INTERVAL);
+    final var checkpoint = entryAt(deepLocation, interval);
     assertThat(checkpoint.codecEntry().isFull()).isTrue();
     assertThat(checkpoint.counter()).isZero();
 
     // Every version is still reconstructable.
-    for (int block = 0; block <= ArchiveHistoryReader.CHECKPOINT_INTERVAL; block++) {
+    for (int block = 0; block <= interval; block++) {
       assertThat(reader.nodeAt(nk, block)).contains(branchNode(block));
     }
   }

@@ -180,6 +180,47 @@ class ArchiveTrieNodeCaptureTest {
   }
 
   @Test
+  void checkpointIntervalForDepth_mapsDepthToInterval() {
+    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(1))
+        .isEqualTo(ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL);
+    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(2))
+        .isEqualTo(ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL);
+    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(3))
+        .isEqualTo(ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL);
+    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(5))
+        .isEqualTo(ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL);
+    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(32))
+        .isEqualTo(ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL);
+  }
+
+  @Test
+  void maxCheckpointInterval_fitsReconstructWindow() {
+    final int maxInterval =
+        Math.max(
+            ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL,
+            ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL);
+    assertThat(maxInterval).isLessThanOrEqualTo(ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS);
+  }
+
+  @Test
+  void shallowNode_checksAtInterval32_notInterval16() {
+    // Depth-1 node (LOCATION has size 1): SHALLOW_CHECKPOINT_INTERVAL = 32.
+    // With the old single-interval-16 rule, mutation 16 would produce a FULL; with 32 it must DIFF.
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
+    for (int block = 1; block <= ArchiveHistoryReader.CHECKPOINT_INTERVAL; block++) {
+      enqueueAndCommit((long) block, nk, LOCATION, branchNode(block), branchNode(block - 1));
+    }
+    // Block 16 (= old CHECKPOINT_INTERVAL) should be a DIFF under the new tiered policy.
+    final var entry16 =
+        historyStore.getLatestBefore(nk, (long) ArchiveHistoryReader.CHECKPOINT_INTERVAL);
+    assertThat(entry16).isPresent();
+    assertThat(entry16.get().codecEntry().isFull())
+        .as("block 16 should be DIFF, not FULL, for a shallow node (interval 32)")
+        .isFalse();
+  }
+
+  @Test
   void chunkBoundaryFlushesAllNodes() {
     // 65 creations in one block: the first 64 are auto-submitted as a chunk during enqueue, the
     // 65th is submitted in onBeforeCommit. All 65 must appear in the archive.

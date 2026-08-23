@@ -178,6 +178,23 @@ class ArchiveHistoryReaderTest {
   }
 
   @Test
+  void reconstructsNodeAtShallowIntervalBoundary() {
+    // Shallow nodes use SHALLOW_CHECKPOINT_INTERVAL (32): write a FULL then 31 DIFFs and confirm
+    // the reader can reconstruct any block in the chain — proving the window is wide enough.
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x05));
+    Bytes prev = emptyBranchRlp();
+    putFull(nk, 0L, prev);
+    final int shallowInterval = ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL;
+    for (int i = 1; i < shallowInterval; i++) {
+      final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
+      putDiff(nk, i, i, prev, next);
+      prev = next;
+    }
+    // The last DIFF in the shallow run (block shallowInterval - 1) must be reconstructible.
+    assertThat(reader.nodeAt(nk, shallowInterval - 1)).contains(prev);
+  }
+
+  @Test
   void givesUpWhenDiffChainExceedsMaxBackwardWalkSteps() {
     final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x07));
     // Use 100-byte fixed-size nodes with a single counter byte so every diff produces a 7-byte

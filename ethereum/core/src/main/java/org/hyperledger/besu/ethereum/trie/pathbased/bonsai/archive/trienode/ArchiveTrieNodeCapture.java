@@ -69,6 +69,38 @@ public class ArchiveTrieNodeCapture {
 
   private static final int CAPTURE_CHUNK_SIZE = 64;
 
+  /**
+   * Shallow non-root nodes (1–2 location bytes, trie levels 1–4) checkpoint every {@code
+   * SHALLOW_CHECKPOINT_INTERVAL} mutations. These churn nearly every block, so a wider interval
+   * packs more cheap DIFFs between each full branch. Capped at 32 so it stays within {@link
+   * ArchiveHistoryReader#MAX_BACKWARD_WALK_STEPS}.
+   */
+  static final int SHALLOW_CHECKPOINT_INTERVAL = 32;
+
+  /**
+   * Deep nodes (>= 3 location bytes) checkpoint every {@code DEEP_CHECKPOINT_INTERVAL} mutations.
+   * Every N-th mutation emits a FULL entry instead of a DIFF, bounding the backward reconstruction
+   * walk.
+   */
+  static final int DEEP_CHECKPOINT_INTERVAL = 16;
+
+  /**
+   * Returns the checkpoint interval for a node at the given nibble-path depth (in {@code location}
+   * bytes). Root (depth 0) is already handled by the {@code !location.isEmpty()} guard in the write
+   * path and never reaches this call.
+   *
+   * <ul>
+   *   <li>depth 1–2 → {@link #SHALLOW_CHECKPOINT_INTERVAL}
+   *   <li>depth ≥ 3 → {@link #DEEP_CHECKPOINT_INTERVAL}
+   * </ul>
+   *
+   * @param locationSizeBytes the trie node's {@code location.size()} in bytes
+   * @return the mutation interval at which a FULL entry is emitted
+   */
+  static int checkpointIntervalForDepth(final int locationSizeBytes) {
+    return locationSizeBytes <= 2 ? SHALLOW_CHECKPOINT_INTERVAL : DEEP_CHECKPOINT_INTERVAL;
+  }
+
   private final ArchiveNodeHistoryStore historyStore;
   private final ArchiveCoverageTracker coverageTracker;
   private final ExecutorService capturePool;
@@ -142,7 +174,7 @@ public class ArchiveTrieNodeCapture {
           historyStore.getLatestBefore(request.naturalKey(), request.block() - 1L);
       if (priorEntry.isPresent() && !priorEntry.get().codecEntry().isDeletion()) {
         final int counter = priorEntry.get().counter() + 1;
-        if (counter < ArchiveHistoryReader.CHECKPOINT_INTERVAL) {
+        if (counter < checkpointIntervalForDepth(request.location().size())) {
           return Optional.of(
               result(request, counter, ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode)));
         }
