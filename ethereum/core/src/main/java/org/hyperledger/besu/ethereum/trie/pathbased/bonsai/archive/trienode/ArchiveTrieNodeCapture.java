@@ -70,6 +70,17 @@ public class ArchiveTrieNodeCapture {
   private static final int CAPTURE_CHUNK_SIZE = 64;
 
   /**
+   * Trie roots (empty location, depth 0) checkpoint every {@code ROOT_CHECKPOINT_INTERVAL}
+   * mutations. Unlike the mainnet depth-tier design (root = always FULL), roots here participate in
+   * checkpoint+diff: {@link ArchiveTrieNodeCodec#encodeDiff}'s size-guard stores a FULL whenever a
+   * root diff is not smaller (the mainnet dense-churn case), so this is byte-identical to
+   * always-FULL on mainnet-shaped chains and only diverges — favourably — when a root changes few
+   * children per block (the shallow / enterprise regime). Capped at 32 so it stays within {@link
+   * ArchiveHistoryReader#MAX_BACKWARD_WALK_STEPS}.
+   */
+  static final int ROOT_CHECKPOINT_INTERVAL = 32;
+
+  /**
    * Shallow non-root nodes (1–2 location bytes, trie levels 1–4) checkpoint every {@code
    * SHALLOW_CHECKPOINT_INTERVAL} mutations. These churn nearly every block, so a wider interval
    * packs more cheap DIFFs between each full branch. Capped at 32 so it stays within {@link
@@ -86,10 +97,10 @@ public class ArchiveTrieNodeCapture {
 
   /**
    * Returns the checkpoint interval for a node at the given nibble-path depth (in {@code location}
-   * bytes). Root (depth 0) is already handled by the {@code !location.isEmpty()} guard in the write
-   * path and never reaches this call.
+   * bytes).
    *
    * <ul>
+   *   <li>depth 0 (root) → {@link #ROOT_CHECKPOINT_INTERVAL}
    *   <li>depth 1–2 → {@link #SHALLOW_CHECKPOINT_INTERVAL}
    *   <li>depth ≥ 3 → {@link #DEEP_CHECKPOINT_INTERVAL}
    * </ul>
@@ -98,6 +109,9 @@ public class ArchiveTrieNodeCapture {
    * @return the mutation interval at which a FULL entry is emitted
    */
   static int checkpointIntervalForDepth(final int locationSizeBytes) {
+    if (locationSizeBytes == 0) {
+      return ROOT_CHECKPOINT_INTERVAL;
+    }
     return locationSizeBytes <= 2 ? SHALLOW_CHECKPOINT_INTERVAL : DEEP_CHECKPOINT_INTERVAL;
   }
 
@@ -169,7 +183,7 @@ public class ArchiveTrieNodeCapture {
       return Optional.of(result(request, 0, ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode)));
     }
 
-    if (!request.location().isEmpty() && request.block() != 0L && chainContiguous) {
+    if (request.block() != 0L && chainContiguous) {
       final Optional<ArchiveNodeHistoryStore.HistoryEntry> priorEntry =
           historyStore.getLatestBefore(request.naturalKey(), request.block() - 1L);
       if (priorEntry.isPresent() && !priorEntry.get().codecEntry().isDeletion()) {

@@ -138,17 +138,49 @@ class ArchiveTrieNodeCaptureTest {
   }
 
   @Test
-  void rootLocationAlwaysStoredFull() {
+  void rootSparseChange_producesDiffBetweenCheckpoints() {
+    // Root now participates in checkpoint+diff. branchNode(0)->branchNode(1) changes one 32-byte
+    // child slot of a ~50-byte node, so the diff is smaller than the node -> DIFF (was FULL).
     final Bytes nk = ArchiveNodeKey.account(ROOT_LOCATION);
-    for (int block = 0; block < 3; block++) {
-      enqueueAndCommit(
-          block, nk, ROOT_LOCATION, branchNode(block), block == 0 ? null : branchNode(block - 1));
+    enqueueAndCommit(0L, nk, ROOT_LOCATION, branchNode(0), null);
+    enqueueAndCommit(1L, nk, ROOT_LOCATION, branchNode(1), branchNode(0));
+
+    final var creation = historyStore.getLatestBefore(nk, 0L).orElseThrow();
+    assertThat(creation.codecEntry().isFull()).isTrue();
+    assertThat(creation.counter()).isZero();
+
+    final var diff = historyStore.getLatestBefore(nk, 1L).orElseThrow();
+    assertThat(diff.codecEntry().isFull()).isFalse();
+    assertThat(diff.codecEntry().isDeletion()).isFalse();
+    assertThat(diff.counter()).isEqualTo(1);
+  }
+
+  @Test
+  void rootDrasticChange_staysFullEveryBlock() {
+    // When each block's root shares nothing with the prior, encodeDiff falls back to FULL every
+    // block -> byte-identical to the old always-FULL behaviour (the mainnet case).
+    final Bytes nk = ArchiveNodeKey.account(ROOT_LOCATION);
+    enqueueAndCommit(0L, nk, ROOT_LOCATION, disjointNode(0), null);
+    enqueueAndCommit(1L, nk, ROOT_LOCATION, disjointNode(1), disjointNode(0));
+    enqueueAndCommit(2L, nk, ROOT_LOCATION, disjointNode(2), disjointNode(1));
+
+    for (long block = 0; block <= 2; block++) {
+      assertThat(historyStore.getLatestBefore(nk, block).orElseThrow().codecEntry().isFull())
+          .as("drastic root change at block %s must fall back to FULL", block)
+          .isTrue();
     }
-    for (int block = 0; block < 3; block++) {
-      final var entry = historyStore.getLatestBefore(nk, block).orElseThrow();
-      assertThat(entry.codecEntry().isFull()).isTrue();
-      assertThat(entry.counter()).isZero();
-    }
+  }
+
+  @Test
+  void storageRootSparseChange_producesDiff() {
+    // Storage-trie root: natural key = accountHash(32) ‖ [len:0]. Same self-tuning behaviour.
+    final Bytes accountHash = Bytes32.leftPad(Bytes.of(0x04));
+    final Bytes nk = ArchiveNodeKey.storage(accountHash, ROOT_LOCATION);
+    enqueueAndCommit(0L, nk, ROOT_LOCATION, branchNode(0), null);
+    enqueueAndCommit(1L, nk, ROOT_LOCATION, branchNode(1), branchNode(0));
+
+    assertThat(historyStore.getLatestBefore(nk, 0L).orElseThrow().codecEntry().isFull()).isTrue();
+    assertThat(historyStore.getLatestBefore(nk, 1L).orElseThrow().codecEntry().isFull()).isFalse();
   }
 
   @Test
@@ -183,6 +215,9 @@ class ArchiveTrieNodeCaptureTest {
 
   @Test
   void checkpointIntervalForDepth_mapsDepthToInterval() {
+    // Root (depth 0) now maps to ROOT_CHECKPOINT_INTERVAL instead of being excluded.
+    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(0))
+        .isEqualTo(ArchiveTrieNodeCapture.ROOT_CHECKPOINT_INTERVAL);
     assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(1))
         .isEqualTo(ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL);
     assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(2))
@@ -199,8 +234,13 @@ class ArchiveTrieNodeCaptureTest {
   void maxCheckpointInterval_fitsReconstructWindow() {
     final int maxInterval =
         Math.max(
-            ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL,
-            ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL);
+            ArchiveTrieNodeCapture.ROOT_CHECKPOINT_INTERVAL,
+            Math.max(
+                ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL,
+                ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL));
+    // The reader scans only the trailing MAX_BACKWARD_WALK_STEPS change-blocks for a FULL. If the
+    // largest checkpoint interval (now including the root) exceeded that, a DIFF target could have
+    // no FULL in the window and reconstruction would return empty -> eth_getProof would fail.
     assertThat(maxInterval).isLessThanOrEqualTo(ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS);
   }
 
@@ -242,6 +282,16 @@ class ArchiveTrieNodeCaptureTest {
     final byte[] b = new byte[530];
     for (int i = 0; i < b.length; i++) {
       b[i] = (byte) (i * 31 + block * 131 + 1);
+    }
+    return Bytes.wrap(b);
+  }
+
+  // 64-byte node fully determined by seed; consecutive seeds share no bytes, so encodeDiff's
+  // patch is >= the node and it falls back to FULL. Models dense (mainnet-shaped) root churn.
+  private static Bytes disjointNode(final int seed) {
+    final byte[] b = new byte[64];
+    for (int i = 0; i < b.length; i++) {
+      b[i] = (byte) (i * 31 + seed * 131 + 1);
     }
     return Bytes.wrap(b);
   }

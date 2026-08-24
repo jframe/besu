@@ -181,14 +181,22 @@ class ArchiveTrieNodeStrategyTest {
   }
 
   @Test
-  void rootNodeIsAlwaysWrittenFull() {
-    for (int block = 0; block < 3; block++) {
-      writeBlock(block, ROOT_LOCATION, branchNode(block));
-    }
-    for (int block = 0; block < 3; block++) {
-      assertThat(entryAt(ROOT_LOCATION, block).codecEntry().isFull()).isTrue();
-      assertThat(entryAt(ROOT_LOCATION, block).counter()).isZero();
-    }
+  void rootSparseChange_producesDiff() {
+    // Root participates in checkpoint+diff: creation FULL, a small subsequent delta DIFF, and the
+    // whole chain still reconstructs.
+    writeBlock(0L, ROOT_LOCATION, branchNode(0));
+    writeBlock(1L, ROOT_LOCATION, branchNode(1));
+
+    assertThat(entryAt(ROOT_LOCATION, 0L).codecEntry().isFull()).isTrue();
+    assertThat(entryAt(ROOT_LOCATION, 0L).counter()).isZero();
+
+    final var diff = entryAt(ROOT_LOCATION, 1L);
+    assertThat(diff.codecEntry().isFull()).isFalse();
+    assertThat(diff.counter()).isEqualTo(1);
+
+    final Bytes nk = ArchiveNodeKey.account(ROOT_LOCATION);
+    assertThat(reader.nodeAt(nk, 0L)).contains(branchNode(0));
+    assertThat(reader.nodeAt(nk, 1L)).contains(branchNode(1));
   }
 
   @Test
