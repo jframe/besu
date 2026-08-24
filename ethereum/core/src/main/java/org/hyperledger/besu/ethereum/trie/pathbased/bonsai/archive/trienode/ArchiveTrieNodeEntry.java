@@ -30,6 +30,11 @@ public final class ArchiveTrieNodeEntry {
   public static final byte CREATION = 0b0001_0000;
   public static final byte DELETION = 0b0010_0000;
 
+  public static final int FORMAT_SHIFT = 6;
+  public static final int FORMAT_MASK = 0b1100_0000;
+  public static final int FORMAT_MPT = 0;
+  public static final int FORMAT_PBT = 1;
+
   private final byte metadata;
   private final Bytes body;
 
@@ -48,6 +53,10 @@ public final class ArchiveTrieNodeEntry {
 
   public boolean isDeletion() {
     return (metadata & DELETION) != 0;
+  }
+
+  public int formatTag() {
+    return (Byte.toUnsignedInt(metadata) & FORMAT_MASK) >> FORMAT_SHIFT;
   }
 
   /**
