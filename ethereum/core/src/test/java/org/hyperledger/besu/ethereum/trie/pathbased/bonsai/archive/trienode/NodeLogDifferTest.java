@@ -20,7 +20,6 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trieno
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.NodeLog.NodeType.LEAF;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.SortedMap;
 import java.util.TreeMap;
@@ -72,9 +71,14 @@ class NodeLogDifferTest {
   @Test
   void applyOfDiffReconstructsNext_valuePathAndTypeChanges() {
     final NodeLog prior =
-        new NodeLog(EXTENSION, Bytes.of(0x01, 0x02), new TreeMap<>(java.util.Map.of(0, ref(1))), Optional.empty());
+        new NodeLog(
+            EXTENSION,
+            Bytes.of(0x01, 0x02),
+            new TreeMap<>(java.util.Map.of(0, ref(1))),
+            Optional.empty());
     final NodeLog next =
-        new NodeLog(LEAF, Bytes.of(0x01, 0x02, 0x10), new TreeMap<>(), Optional.of(Bytes.of(0xde, 0xad)));
+        new NodeLog(
+            LEAF, Bytes.of(0x01, 0x02, 0x10), new TreeMap<>(), Optional.of(Bytes.of(0xde, 0xad)));
 
     final List<NodeMutation> diff = NodeLogDiffer.diff(prior, next);
     assertThat(NodeLogDiffer.apply(prior, diff)).isEqualTo(next);

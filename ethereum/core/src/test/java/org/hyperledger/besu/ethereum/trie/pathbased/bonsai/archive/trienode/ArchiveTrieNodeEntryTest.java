@@ -23,7 +23,8 @@ class ArchiveTrieNodeEntryTest {
   @Test
   void formatTagIsReadFromHighBits_andDoesNotDisturbFlags() {
     // MPT DIFF: metadata 0x00 -> tag 0, not full/creation/deletion.
-    final ArchiveTrieNodeEntry mptDiff = ArchiveTrieNodeCodec.decode(Bytes.of((byte) 0x00, 0x11, 0x22));
+    final ArchiveTrieNodeEntry mptDiff =
+        ArchiveTrieNodeCodec.decode(Bytes.of((byte) 0x00, 0x11, 0x22));
     assertThat(mptDiff.formatTag()).isZero();
     assertThat(mptDiff.isFull()).isFalse();
 
