@@ -125,7 +125,7 @@ public final class ArchiveNodeHistoryStore {
    * @param counter distance since the last FULL entry for this natural key (0 = this entry is FULL)
    * @param codecEntry the decoded codec entry
    * @param rawEntryBytes the codec entry bytes, unmodified — fed back into {@link
-   *     ArchiveTrieNodeCodec#reconstruct} without re-encoding
+   *     NodeLogCodec#reconstruct} without re-encoding
    * @param block the block number this entry was written at
    */
   public record HistoryEntry(

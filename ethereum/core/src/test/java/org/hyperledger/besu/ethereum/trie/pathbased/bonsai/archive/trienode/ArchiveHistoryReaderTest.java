@@ -182,7 +182,7 @@ class ArchiveHistoryReaderTest {
     store.putEncoded(
         tx,
         ArchiveNodeKey.historyKey(nk, 11L),
-        ArchiveNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeDiff(node, null)));
+        ArchiveNodeHistoryStore.encodeStoredValue(0, Bytes.of(ArchiveTrieNodeEntry.DELETION)));
     tx.commit();
 
     assertThat(reader.nodeAt(nk, 11L)).isEmpty();

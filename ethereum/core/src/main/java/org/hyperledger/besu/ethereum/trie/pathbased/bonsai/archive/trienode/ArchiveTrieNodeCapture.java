@@ -72,10 +72,10 @@ public class ArchiveTrieNodeCapture {
   /**
    * Trie roots (empty location, depth 0) checkpoint every {@code ROOT_CHECKPOINT_INTERVAL}
    * mutations. Unlike the mainnet depth-tier design (root = always FULL), roots here participate in
-   * checkpoint+diff: {@link ArchiveTrieNodeCodec#encodeDiff}'s size-guard stores a FULL whenever a
-   * root diff is not smaller (the mainnet dense-churn case), so this is byte-identical to
-   * always-FULL on mainnet-shaped chains and only diverges — favourably — when a root changes few
-   * children per block (the shallow / enterprise regime). Capped at 32 so it stays within {@link
+   * checkpoint+diff: {@link NodeLogCodec#encodeDiff}'s size-guard stores a FULL whenever a root
+   * diff is not smaller (the mainnet dense-churn case), so this is byte-identical to always-FULL on
+   * mainnet-shaped chains and only diverges — favourably — when a root changes few children per
+   * block (the shallow / enterprise regime). Capped at 32 so it stays within {@link
    * ArchiveHistoryReader#MAX_BACKWARD_WALK_STEPS}.
    */
   static final int ROOT_CHECKPOINT_INTERVAL = 32;
