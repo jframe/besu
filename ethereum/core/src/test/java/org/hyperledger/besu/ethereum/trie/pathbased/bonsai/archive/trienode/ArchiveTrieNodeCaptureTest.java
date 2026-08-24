@@ -25,7 +25,9 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.IntFunction;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -218,6 +220,100 @@ class ArchiveTrieNodeCaptureTest {
     assertThat(entry16.get().codecEntry().isFull())
         .as("block 16 should be DIFF, not FULL, for a shallow node (interval 32)")
         .isFalse();
+  }
+
+  // ~530-byte node in which exactly one byte changes per block — a small, diff-friendly per-block
+  // delta typical of a real (deep) trie node's churn, where the wider interval genuinely wins.
+  private static Bytes smallDeltaNode(final int block) {
+    final byte[] b = new byte[530];
+    for (int i = 0; i < b.length; i++) {
+      b[i] = (byte) (i * 31);
+    }
+    b[7] = (byte) block;
+    return Bytes.wrap(b);
+  }
+
+  // ~530-byte node in which every byte differs from the previous block — the patch is >= the full
+  // node, so encodeDiff falls back to a FULL every block regardless of interval. This is the tiny
+  // local-QBFT case: shallow nodes cover a large fraction of the small keyspace and change
+  // drastically each block, so raising the checkpoint interval stores nothing extra AND saves
+  // nothing.
+  private static Bytes drasticNode(final int block) {
+    final byte[] b = new byte[530];
+    for (int i = 0; i < b.length; i++) {
+      b[i] = (byte) (i * 31 + block * 131 + 1);
+    }
+    return Bytes.wrap(b);
+  }
+
+  /**
+   * Replays an identical mutation sequence for a node at {@code location} on a fresh capture
+   * instance, then sums the on-disk stored-value bytes across all blocks. Stored value = 1 counter
+   * byte + the codec entry.
+   */
+  private long replayAndSumStoredBytes(
+      final Bytes location, final int blocks, final IntFunction<Bytes> nodeAt) {
+    final Bytes nk = ArchiveNodeKey.account(location);
+    final ExecutorService pool = Executors.newFixedThreadPool(2);
+    final ArchiveTrieNodeCapture localCapture =
+        new ArchiveTrieNodeCapture(historyStore, coverageTracker, pool);
+    Bytes prior = null;
+    for (int block = 0; block < blocks; block++) {
+      final Bytes node = nodeAt.apply(block);
+      final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+      localCapture.enqueue(nk, location, block, null, Bytes32.ZERO, node, prior, tx);
+      localCapture.onBeforeCommit(tx);
+      tx.commit();
+      prior = node;
+    }
+    pool.shutdown();
+    long total = 0;
+    for (int block = 0; block < blocks; block++) {
+      total +=
+          1 + historyStore.getLatestBefore(nk, (long) block).orElseThrow().rawEntryBytes().size();
+    }
+    return total;
+  }
+
+  @Test
+  void widerShallowIntervalReducesStoredBytes_forSmallPerBlockDeltas() {
+    // Shallow location (size 1 -> interval 32) vs deep location (size 3 -> interval 16), same
+    // 128-block sequence with a 1-byte-per-block delta on a ~530-byte node.
+    final int blocks = 128;
+    final long shallowBytes =
+        replayAndSumStoredBytes(Bytes.of(0x0a), blocks, ArchiveTrieNodeCaptureTest::smallDeltaNode);
+    final long deepBytes =
+        replayAndSumStoredBytes(
+            Bytes.of(0x0b, 0x0c, 0x0d), blocks, ArchiveTrieNodeCaptureTest::smallDeltaNode);
+
+    // Monotonic invariant: a wider interval can never store MORE (encodeDiff never exceeds a FULL).
+    assertThat(shallowBytes)
+        .as("interval-32 (%s B) must never exceed interval-16 (%s B)", shallowBytes, deepBytes)
+        .isLessThanOrEqualTo(deepBytes);
+    // With small per-block deltas the wider interval genuinely wins: fewer forced FULL checkpoints.
+    assertThat(shallowBytes)
+        .as(
+            "interval-32 (%s B) should be strictly smaller than interval-16 (%s B) for small deltas",
+            shallowBytes, deepBytes)
+        .isLessThan(deepBytes);
+  }
+
+  @Test
+  void intervalHasNoEffectOnStoredBytes_whenEveryBlockChangesDrastically() {
+    // When each block's node shares nothing with the previous, encodeDiff falls back to FULL every
+    // block, so interval-32 and interval-16 store byte-for-byte identically. This is why the local
+    // QBFT network (tiny trie, drastically-churning shallow nodes) shows no logical benefit — and
+    // why a small on-disk *increase* there is RocksDB blob/compaction noise, not this change.
+    final int blocks = 128;
+    final long shallowBytes =
+        replayAndSumStoredBytes(Bytes.of(0x0a), blocks, ArchiveTrieNodeCaptureTest::drasticNode);
+    final long deepBytes =
+        replayAndSumStoredBytes(
+            Bytes.of(0x0b, 0x0c, 0x0d), blocks, ArchiveTrieNodeCaptureTest::drasticNode);
+
+    assertThat(shallowBytes)
+        .as("drastic churn: interval-32 (%s B) == interval-16 (%s B)", shallowBytes, deepBytes)
+        .isEqualTo(deepBytes);
   }
 
   @Test
