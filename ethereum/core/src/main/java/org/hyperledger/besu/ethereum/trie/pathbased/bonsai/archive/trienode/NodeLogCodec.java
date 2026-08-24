@@ -97,8 +97,9 @@ public final class NodeLogCodec {
       return prependTag(tag, ArchiveTrieNodeCodec.encodeFull(newNode));
     }
 
-    // Correctness guard: re-encode to verify byte-exact round-trip.
-    final Bytes reproduced = adapter.encode(NodeLogDiffer.apply(priorModel, mutations));
+    // Correctness guard: verify through the serialized body so encodeMutations/decodeMutations
+    // asymmetries are caught. Falls back to FULL if the serialized form cannot reproduce newNode.
+    final Bytes reproduced = adapter.encode(NodeLogDiffer.apply(priorModel, decodeMutations(body)));
     if (!reproduced.equals(newNode)) {
       return prependTag(tag, ArchiveTrieNodeCodec.encodeFull(newNode));
     }
@@ -142,7 +143,7 @@ public final class NodeLogCodec {
         throw new IllegalArgumentException("reconstruct: diff list has a standalone FULL");
       }
       adapter = NodeCodecAdapters.byTag(entry.formatTag());
-      model = NodeLogDiffer.apply(model, decodeMutations(entry.patchBody()));
+      model = NodeLogDiffer.apply(model, decodeMutations(entry.diffBody()));
     }
     return adapter.encode(model);
   }

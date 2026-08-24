@@ -24,8 +24,8 @@ import org.apache.tuweni.bytes.Bytes;
  * Low-level byte codec for {@link ArchiveTrieNodeEntry} instances.
  *
  * <p>This class provides {@link #encodeFull} and {@link #decode} — the two primitives used by
- * {@code NodeLogCodec}. The semantic DIFF format (COPY/SKIP/INSERT/REPLACE byte-patch) previously
- * implemented here now lives in {@code NodeLogCodec}.
+ * {@code NodeLogCodec}. The semantic DIFF format (mutation-list encoding) lives in {@code
+ * NodeLogCodec}.
  */
 public final class ArchiveTrieNodeCodec {
 

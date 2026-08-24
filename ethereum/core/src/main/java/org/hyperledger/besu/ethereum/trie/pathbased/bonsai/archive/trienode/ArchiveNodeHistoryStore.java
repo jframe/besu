@@ -30,10 +30,9 @@ import org.apache.tuweni.bytes.Bytes;
  * key and the block number at which the value was valid. For a given natural key and target block,
  * returns the latest entry at or before that block.
  *
- * <p>Wire format per stored value: {@code [counter: 1 unsigned byte] ‖ [ArchiveTrieNodeCodec
- * entry]}. This class owns only storage mechanics — the FULL-vs-DIFF decision and counter
- * management live in {@link ArchiveTrieNodeStrategy}, and entry encoding lives in {@link
- * ArchiveTrieNodeCodec}.
+ * <p>Wire format per stored value: {@code [counter: 1 unsigned byte] ‖ [NodeLogCodec entry]}. This
+ * class owns only storage mechanics — the FULL-vs-DIFF decision and counter management live in
+ * {@link ArchiveTrieNodeStrategy}, and entry encoding lives in {@link NodeLogCodec}.
  */
 public final class ArchiveNodeHistoryStore {
 
@@ -52,7 +51,7 @@ public final class ArchiveNodeHistoryStore {
    * Builds the stored wire value: {@code [counter: 1 byte] ‖ codecEntry}.
    *
    * @param counter distance since the last FULL entry for this natural key (0 = this entry is FULL)
-   * @param codecEntry the {@link ArchiveTrieNodeCodec} entry bytes to store
+   * @param codecEntry the {@link NodeLogCodec} entry bytes to store
    * @return the wire-format bytes to pass to {@link #putEncoded}
    * @throws IllegalArgumentException if {@code counter} does not fit in an unsigned byte (0-255)
    */

@@ -141,6 +141,19 @@ class NodeLogCodecTest {
   }
 
   @Test
+  void correctnessGuardCatchesSerializationAsymmetry() {
+    // The guard must verify via decodeMutations(body), not the in-memory mutation list.
+    // Use the real MPT adapter — if encodeMutations/decodeMutations are symmetric (they are),
+    // this reconstructs correctly and produces a DIFF (not FULL).
+    final Bytes v0 = branch(new int[] {0, 1}, new int[] {0, 1});
+    final Bytes v1 = branch(new int[] {0, 1}, new int[] {0, 99}); // slot 1 changed
+    final Bytes entry = NodeLogCodec.encodeDiff(mpt, v0, v1);
+    assertThat(ArchiveTrieNodeCodec.decode(entry).isFull()).isFalse();
+    assertThat(NodeLogCodec.reconstruct(NodeLogCodec.encodeFull(mpt, v0), List.of(entry)))
+        .isEqualTo(v1);
+  }
+
+  @Test
   void sizeGuardFallsBackToFull_whenDiffNotSmaller() {
     // Two disjoint nodes: the mutation body is not smaller than the node -> FULL.
     final Bytes v0 =

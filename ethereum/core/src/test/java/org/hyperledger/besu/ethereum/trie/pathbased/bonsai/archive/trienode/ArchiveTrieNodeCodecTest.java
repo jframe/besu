@@ -48,20 +48,20 @@ class ArchiveTrieNodeCodecTest {
   }
 
   // ---------------------------------------------------------------------------
-  // ArchiveTrieNodeEntry.patchBody()
+  // ArchiveTrieNodeEntry.diffBody()
   // ---------------------------------------------------------------------------
 
   @Test
-  void patchBodyThrowsOnFullEntry() {
+  void diffBodyThrowsOnFullEntry() {
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeFull(node(0x01)));
-    assertThatThrownBy(e::patchBody).isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(e::diffBody).isInstanceOf(IllegalStateException.class);
   }
 
   @Test
-  void patchBodyThrowsOnDeletionEntry() {
+  void diffBodyThrowsOnDeletionEntry() {
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(Bytes.of(ArchiveTrieNodeEntry.DELETION));
-    assertThatThrownBy(e::patchBody).isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(e::diffBody).isInstanceOf(IllegalStateException.class);
   }
 }

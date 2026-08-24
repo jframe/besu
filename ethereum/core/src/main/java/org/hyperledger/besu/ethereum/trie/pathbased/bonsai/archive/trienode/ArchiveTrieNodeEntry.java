@@ -18,10 +18,10 @@ import org.apache.tuweni.bytes.Bytes;
 
 /**
  * The decoded, typed view of one archived trie-node history entry, produced by {@link
- * ArchiveTrieNodeCodec#decode(Bytes)}. One of three shapes — FULL ({@link #fullNode()}), a binary
- * patch DIFF ({@link #patchBody()}), or a deletion tombstone — selected by the predicates below.
- * Callers must check the relevant predicate before calling a shape-specific accessor; calling the
- * wrong one throws {@link IllegalStateException}.
+ * ArchiveTrieNodeCodec#decode(Bytes)}. One of three shapes — FULL ({@link #fullNode()}), a semantic
+ * DIFF ({@link #diffBody()}), or a deletion tombstone — selected by the predicates below. Callers
+ * must check the relevant predicate before calling a shape-specific accessor; calling the wrong one
+ * throws {@link IllegalStateException}.
  */
 public final class ArchiveTrieNodeEntry {
 
@@ -72,14 +72,14 @@ public final class ArchiveTrieNodeEntry {
   }
 
   /**
-   * Returns the raw binary patch body (COPY/SKIP/INSERT op sequence). Only valid when {@link
-   * #isFull()} and {@link #isDeletion()} are both false.
+   * Returns the raw semantic DIFF body (NodeLog mutation-list body, decoded by NodeLogCodec). Only
+   * valid when {@link #isFull()} and {@link #isDeletion()} are both false.
    *
    * @throws IllegalStateException if called on a full or deletion entry
    */
-  public Bytes patchBody() {
+  public Bytes diffBody() {
     if (isFull() || isDeletion()) {
-      throw new IllegalStateException("patchBody() called on a non-diff entry");
+      throw new IllegalStateException("diffBody() called on a non-diff entry");
     }
     return body;
   }
