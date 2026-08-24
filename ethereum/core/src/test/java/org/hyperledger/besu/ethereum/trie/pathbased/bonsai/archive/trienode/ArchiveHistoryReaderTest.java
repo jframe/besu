@@ -26,6 +26,7 @@ import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -125,6 +126,36 @@ class ArchiveHistoryReaderTest {
     assertThat(reader.nodeAt(nk, 100L)).contains(nodeV1);
     assertThat(reader.nodeAt(nk, 101L)).contains(nodeV2);
     assertThat(reader.nodeAt(nk, 200L)).contains(nodeV2);
+  }
+
+  @Test
+  void reconstructsAccountRootDiffChain() {
+    // Account root natural key is [0x00] (length prefix 0). Prove a root FULL + DIFF reconstructs.
+    final Bytes nk = ArchiveNodeKey.account(Bytes.EMPTY);
+    final Bytes v1 = emptyBranchRlp();
+    final Bytes v2 = branchRlpWithChild(0, dummyChildRlp());
+
+    putFull(nk, 100L, v1);
+    putDiff(nk, 101L, 1, v1, v2);
+
+    assertThat(reader.nodeAt(nk, 100L)).contains(v1);
+    assertThat(reader.nodeAt(nk, 101L)).contains(v2);
+    assertThat(reader.nodeAt(nk, 200L)).contains(v2);
+  }
+
+  @Test
+  void reconstructsStorageRootDiffChain() {
+    // Storage root natural key is accountHash(32) ‖ [0x00]. Prove it reconstructs independently.
+    final Bytes accountHash = Bytes32.leftPad(Bytes.of(0x09));
+    final Bytes nk = ArchiveNodeKey.storage(accountHash, Bytes.EMPTY);
+    final Bytes v1 = emptyBranchRlp();
+    final Bytes v2 = branchRlpWithChild(1, dummyChildRlp());
+
+    putFull(nk, 50L, v1);
+    putDiff(nk, 51L, 1, v1, v2);
+
+    assertThat(reader.nodeAt(nk, 50L)).contains(v1);
+    assertThat(reader.nodeAt(nk, 51L)).contains(v2);
   }
 
   @Test
