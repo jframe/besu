@@ -131,6 +131,16 @@ class NodeLogCodecTest {
   }
 
   @Test
+  void encodeFullTagsEntryCorrectly() {
+    final Bytes node = branch(new int[] {0}, new int[] {0});
+    final Bytes entry = NodeLogCodec.encodeFull(MptNodeCodecAdapter.INSTANCE, node);
+    final ArchiveTrieNodeEntry decoded = ArchiveTrieNodeCodec.decode(entry);
+    assertThat(decoded.isFull()).isTrue();
+    assertThat(decoded.isCreation()).isFalse();
+    assertThat(decoded.formatTag()).isZero();
+  }
+
+  @Test
   void sizeGuardFallsBackToFull_whenDiffNotSmaller() {
     // Two disjoint nodes: the mutation body is not smaller than the node -> FULL.
     final Bytes v0 =

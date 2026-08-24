@@ -117,7 +117,7 @@ public final class ArchiveHistoryReader {
       }
       if (prev.codecEntry().isFull()) {
         Collections.reverse(diffs);
-        return Optional.of(ArchiveTrieNodeCodec.reconstruct(prev.rawEntryBytes(), diffs));
+        return Optional.of(NodeLogCodec.reconstruct(prev.rawEntryBytes(), diffs));
       }
       diffs.add(prev.rawEntryBytes());
       walkBlock = prev.block();

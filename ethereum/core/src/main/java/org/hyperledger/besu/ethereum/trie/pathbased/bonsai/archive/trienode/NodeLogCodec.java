@@ -109,6 +109,17 @@ public final class NodeLogCodec {
   }
 
   /**
+   * Encodes a full trie-node snapshot as a codec entry, tagged with the adapter's format tag.
+   *
+   * @param adapter the codec adapter for the node format
+   * @param node the full node bytes
+   * @return the encoded entry bytes
+   */
+  public static Bytes encodeFull(final NodeCodecAdapter adapter, final Bytes node) {
+    return prependTag(adapter.formatTag(), ArchiveTrieNodeCodec.encodeFull(node));
+  }
+
+  /**
    * Reconstructs the node bytes from a FULL base entry and a sequence of DIFF entries.
    *
    * @param fullEntry the FULL codec entry for the oldest version

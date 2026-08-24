@@ -262,38 +262,41 @@ class ArchiveTrieNodeCaptureTest {
         .isFalse();
   }
 
-  // ~530-byte node in which exactly one byte changes per block — a small, diff-friendly per-block
-  // delta typical of a real (deep) trie node's churn, where the wider interval genuinely wins.
+  // Valid branch node in which only one child slot (slot 0) changes per block — the semantic diff
+  // is always one CHILD_CHANGE op, much smaller than the full node, so NodeLogCodec emits a DIFF
+  // entry. Models a small, diff-friendly per-block delta typical of deep trie node churn.
   private static Bytes smallDeltaNode(final int block) {
-    final byte[] b = new byte[530];
-    for (int i = 0; i < b.length; i++) {
-      b[i] = (byte) (i * 31);
-    }
-    b[7] = (byte) block;
-    return Bytes.wrap(b);
+    return branchNode(block);
   }
 
-  // ~530-byte node in which every byte differs from the previous block — the patch is >= the full
-  // node, so encodeDiff falls back to a FULL every block regardless of interval. This is the tiny
-  // local-QBFT case: shallow nodes cover a large fraction of the small keyspace and change
-  // drastically each block, so raising the checkpoint interval stores nothing extra AND saves
-  // nothing.
+  // Valid branch node with all 16 children set to unique hash refs derived from block — every
+  // child changes each transition, so the semantic diff body (16 CHILD_CHANGE ops × 37 B = 592 B)
+  // exceeds the full node (~532 B) and NodeLogCodec falls back to FULL every block.
   private static Bytes drasticNode(final int block) {
-    final byte[] b = new byte[530];
-    for (int i = 0; i < b.length; i++) {
-      b[i] = (byte) (i * 31 + block * 131 + 1);
-    }
-    return Bytes.wrap(b);
+    return fullBranchNode(block);
   }
 
-  // 64-byte node fully determined by seed; consecutive seeds share no bytes, so encodeDiff's
-  // patch is >= the node and it falls back to FULL. Models dense (mainnet-shaped) root churn.
+  // 16-child branch node fully determined by seed; all children differ between consecutive seeds,
+  // so encodeDiff falls back to FULL. Models dense (mainnet-shaped) root churn.
   private static Bytes disjointNode(final int seed) {
-    final byte[] b = new byte[64];
-    for (int i = 0; i < b.length; i++) {
-      b[i] = (byte) (i * 31 + seed * 131 + 1);
+    return fullBranchNode(seed);
+  }
+
+  /** Branch node with all 16 children set to 33-byte hash refs derived from {@code seed}. */
+  private static Bytes fullBranchNode(final int seed) {
+    final BytesValueRLPOutput out = new BytesValueRLPOutput();
+    out.startList();
+    for (int slot = 0; slot < 16; slot++) {
+      final byte[] childRef = new byte[33];
+      childRef[0] = (byte) 0xa0;
+      for (int j = 1; j < 33; j++) {
+        childRef[j] = (byte) (slot * 17 + seed * 131 + j);
+      }
+      out.writeRaw(Bytes.wrap(childRef));
     }
-    return Bytes.wrap(b);
+    out.writeBytes(Bytes.EMPTY);
+    out.endList();
+    return out.encoded();
   }
 
   /**

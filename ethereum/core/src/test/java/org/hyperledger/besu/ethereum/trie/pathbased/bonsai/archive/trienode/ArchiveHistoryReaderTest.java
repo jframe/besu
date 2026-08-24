@@ -101,7 +101,7 @@ class ArchiveHistoryReaderTest {
         tx,
         ArchiveNodeKey.historyKey(nk, block),
         ArchiveNodeHistoryStore.encodeStoredValue(
-            counter, ArchiveTrieNodeCodec.encodeDiff(oldNode, newNode)));
+            counter, NodeLogCodec.encodeDiff(MptNodeCodecAdapter.INSTANCE, oldNode, newNode)));
     tx.commit();
   }
 
@@ -226,19 +226,40 @@ class ArchiveHistoryReaderTest {
   }
 
   @Test
+  void reconstructsEveryVersionOfASemanticDiffChain() {
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x0c));
+    final java.util.List<Bytes> versions = new java.util.ArrayList<>();
+    Bytes prev = branchRlpWithChild(0, dummyChildRlp());
+    putFull(nk, 0L, prev);
+    versions.add(prev);
+    for (int i = 1; i < ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL; i++) {
+      final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
+      final Bytes entry = NodeLogCodec.encodeDiff(MptNodeCodecAdapter.INSTANCE, prev, next);
+      final org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction tx =
+          storage.startTransaction();
+      store.putEncoded(
+          tx,
+          ArchiveNodeKey.historyKey(nk, i),
+          ArchiveNodeHistoryStore.encodeStoredValue(i, entry));
+      tx.commit();
+      versions.add(next);
+      prev = next;
+    }
+    for (int i = 0; i < versions.size(); i++) {
+      assertThat(reader.nodeAt(nk, i)).contains(versions.get(i));
+    }
+  }
+
+  @Test
   void givesUpWhenDiffChainExceedsMaxBackwardWalkSteps() {
     final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x07));
-    // Use 100-byte fixed-size nodes with a single counter byte so every diff produces a 7-byte
-    // patch — always smaller than the 100-byte node — guaranteeing no FULL fallback mid-chain.
-    final int nodeSize = 100;
-    final byte[] baseBytes = new byte[nodeSize];
-    Bytes prev = Bytes.wrap(baseBytes.clone());
+    // Use valid branch RLP nodes where each transition changes exactly one child slot — a DIFF
+    // that is always smaller than the node — guaranteeing no FULL fallback mid-chain.
+    Bytes prev = branchRlpWithChild(0, dummyChildRlp());
     putFull(nk, 0L, prev);
     final int chainLength = ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS + 1;
     for (int i = 1; i <= chainLength; i++) {
-      final byte[] nextBytes = baseBytes.clone();
-      nextBytes[0] = (byte) i;
-      final Bytes next = Bytes.wrap(nextBytes);
+      final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
       putDiff(nk, i, i, prev, next);
       prev = next;
     }

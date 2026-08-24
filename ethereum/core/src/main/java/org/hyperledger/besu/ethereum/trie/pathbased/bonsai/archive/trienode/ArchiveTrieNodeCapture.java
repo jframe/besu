@@ -180,7 +180,11 @@ public class ArchiveTrieNodeCapture {
     final Bytes newNode = request.newNode();
 
     if (priorNode == null || newNode == null) {
-      return Optional.of(result(request, 0, ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode)));
+      return Optional.of(
+          result(
+              request,
+              0,
+              NodeLogCodec.encodeDiff(MptNodeCodecAdapter.INSTANCE, priorNode, newNode)));
     }
 
     if (request.block() != 0L && chainContiguous) {
@@ -190,11 +194,15 @@ public class ArchiveTrieNodeCapture {
         final int counter = priorEntry.get().counter() + 1;
         if (counter < checkpointIntervalForDepth(request.location().size())) {
           return Optional.of(
-              result(request, counter, ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode)));
+              result(
+                  request,
+                  counter,
+                  NodeLogCodec.encodeDiff(MptNodeCodecAdapter.INSTANCE, priorNode, newNode)));
         }
       }
     }
-    return Optional.of(result(request, 0, ArchiveTrieNodeCodec.encodeFull(newNode)));
+    return Optional.of(
+        result(request, 0, NodeLogCodec.encodeFull(MptNodeCodecAdapter.INSTANCE, newNode)));
   }
 
   private static CaptureResult result(
