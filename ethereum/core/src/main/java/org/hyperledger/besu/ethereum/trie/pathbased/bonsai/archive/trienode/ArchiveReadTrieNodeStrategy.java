@@ -15,7 +15,6 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveReadWorldStateStorageCoordinator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.TrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -27,9 +26,10 @@ import org.apache.tuweni.bytes.Bytes32;
 
 /**
  * A read-only {@link TrieNodeStrategy} that resolves trie-node RLP from the archive history store
- * for a fixed target block. Used by {@link BonsaiArchiveReadWorldStateStorageCoordinator} to serve
- * historical proofs without bypassing the standard {@code getAccountStateTrieNode} / {@code
- * getAccountStorageTrieNode} path.
+ * for a fixed target block. Used by {@link
+ * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateStorageCoordinator}
+ * to serve historical proofs without bypassing the standard {@code getAccountStateTrieNode} /
+ * {@code getAccountStorageTrieNode} path.
  *
  * <p>All write methods throw {@link UnsupportedOperationException}: this strategy is instantiated
  * only for proof reads, never for block imports.
@@ -48,7 +48,9 @@ public final class ArchiveReadTrieNodeStrategy implements TrieNodeStrategy {
   @Override
   public Optional<Bytes> getFlatAccountTrieNode(
       final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
-    return historyReader.nodeAt(ArchiveNodeKey.account(location), blockNumber);
+    return historyReader
+        .nodeAt(ArchiveNodeKey.account(location), blockNumber)
+        .filter(node -> Hash.hash(node).getBytes().equals(nodeHash));
   }
 
   @Override
@@ -57,8 +59,9 @@ public final class ArchiveReadTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final SegmentedKeyValueStorage storage) {
-    return historyReader.nodeAt(
-        ArchiveNodeKey.storage(accountHash.getBytes(), location), blockNumber);
+    return historyReader
+        .nodeAt(ArchiveNodeKey.storage(accountHash.getBytes(), location), blockNumber)
+        .filter(node -> Hash.hash(node).getBytes().equals(nodeHash));
   }
 
   @Override

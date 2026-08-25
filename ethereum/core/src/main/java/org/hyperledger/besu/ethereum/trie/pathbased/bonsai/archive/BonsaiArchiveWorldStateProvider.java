@@ -175,7 +175,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     }
     try {
       final WorldStateStorageCoordinator coordinator =
-          new BonsaiArchiveReadWorldStateStorageCoordinator(
+          new BonsaiArchiveWorldStateStorageCoordinator(
               archiveReadStorage, archiveHistoryReader, blockNumber);
       final WorldStateProofProvider proofProvider = new WorldStateProofProvider(coordinator);
       return mapper.apply(
