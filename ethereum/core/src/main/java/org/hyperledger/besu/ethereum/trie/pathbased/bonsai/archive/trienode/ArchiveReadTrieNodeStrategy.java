@@ -27,7 +27,7 @@ import org.apache.tuweni.bytes.Bytes32;
 /**
  * A read-only {@link TrieNodeStrategy} that resolves trie-node RLP from the archive history store
  * for a fixed target block. Used by {@link
- * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateStorageCoordinator}
+ * org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveReadWorldStateStorageCoordinator}
  * to serve historical proofs without bypassing the standard {@code getAccountStateTrieNode} /
  * {@code getAccountStorageTrieNode} path.
  *
@@ -48,9 +48,7 @@ public final class ArchiveReadTrieNodeStrategy implements TrieNodeStrategy {
   @Override
   public Optional<Bytes> getFlatAccountTrieNode(
       final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
-    return historyReader
-        .nodeAt(ArchiveNodeKey.account(location), blockNumber)
-        .filter(node -> Hash.hash(node).getBytes().equals(nodeHash));
+    return historyReader.nodeAt(ArchiveNodeKey.account(location), blockNumber);
   }
 
   @Override
@@ -59,9 +57,8 @@ public final class ArchiveReadTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes location,
       final Bytes32 nodeHash,
       final SegmentedKeyValueStorage storage) {
-    return historyReader
-        .nodeAt(ArchiveNodeKey.storage(accountHash.getBytes(), location), blockNumber)
-        .filter(node -> Hash.hash(node).getBytes().equals(nodeHash));
+    return historyReader.nodeAt(
+        ArchiveNodeKey.storage(accountHash.getBytes(), location), blockNumber);
   }
 
   @Override

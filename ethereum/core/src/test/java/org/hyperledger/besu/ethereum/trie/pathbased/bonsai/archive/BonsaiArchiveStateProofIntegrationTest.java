@@ -47,7 +47,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Covers the full chain: ArchiveTrieNodeStrategy → ArchiveNodeHistoryStore →
  * ArchiveCoverageTracker → ArchiveReadTrieNodeStrategy (as would be used by
- * BonsaiArchiveWorldStateStorageCoordinator). Does NOT require a real block-processing stack.
+ * BonsaiArchiveReadWorldStateStorageCoordinator). Does NOT require a real block-processing stack.
  */
 class BonsaiArchiveStateProofIntegrationTest {
 
