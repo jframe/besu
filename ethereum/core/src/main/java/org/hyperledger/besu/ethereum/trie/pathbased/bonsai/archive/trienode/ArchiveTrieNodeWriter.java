@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -32,7 +33,7 @@ import org.apache.tuweni.bytes.Bytes;
  * Persists the computed history entries to {@code TRIE_BRANCH_STORAGE_ARCHIVE} before each block
  * commit.
  */
-public class ArchiveTrieNodeWriter {
+public class ArchiveTrieNodeWriter implements Closeable {
 
   private record CaptureRequest(
       Bytes naturalKey, Bytes location, long block, Bytes newNode, Bytes priorNode) {}
@@ -204,5 +205,10 @@ public class ArchiveTrieNodeWriter {
 
   public void onRollback(final SegmentedKeyValueStorageTransaction transaction) {
     buffers.remove(transaction);
+  }
+
+  @Override
+  public void close() {
+    capturePool.shutdown();
   }
 }

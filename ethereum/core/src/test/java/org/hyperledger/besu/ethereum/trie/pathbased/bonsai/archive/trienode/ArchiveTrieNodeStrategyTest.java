@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
@@ -27,8 +28,11 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -275,5 +279,98 @@ class ArchiveTrieNodeStrategyTest {
     assertThat(historyStore.getLatestBefore(nk, 1L).orElseThrow().counter()).isEqualTo(1);
     assertThat(reader.nodeAt(nk, 0L)).contains(nodeV1);
     assertThat(reader.nodeAt(nk, 1L)).contains(nodeV2);
+  }
+
+  @Test
+  void createArchiving_buildsAWorkingStrategy() {
+    // The factory wires base + writer + pool + gate; block 0 is captured without consulting it.
+    final ExecutorService pool = Executors.newFixedThreadPool(2);
+    final ArchiveTrieNodeStrategy factoryStrategy =
+        ArchiveTrieNodeStrategy.createArchiving(storage, pool, () -> true);
+    final Bytes node = branchNode(0);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    factoryStrategy.putFlatAccountTrieNode(storage, tx, LOCATION, hashOf(node), node);
+    tx.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
+    factoryStrategy.onBeforeCommit(storage, tx);
+    tx.commit();
+
+    assertThat(reader.nodeAt(ArchiveNodeKey.account(LOCATION), 0L)).contains(node);
+    factoryStrategy.close();
+    assertThat(pool.isShutdown()).isTrue();
+  }
+
+  @Test
+  void createArchiving_requiresNonNullGate() {
+    final ExecutorService pool = Executors.newFixedThreadPool(2);
+    try {
+      assertThatThrownBy(() -> ArchiveTrieNodeStrategy.createArchiving(storage, pool, null))
+          .isInstanceOf(NullPointerException.class);
+    } finally {
+      pool.shutdownNow();
+    }
+  }
+
+  @Test
+  void deferredGate_failsLoudlyIfConsultedBeforeThePointerIsPopulated() {
+    // Mirrors the controller builder's pattern: the gate closes over an AtomicReference that is
+    // still empty at the point the strategy is installed (syncState does not exist yet).
+    final ExecutorService pool = Executors.newFixedThreadPool(2);
+    final AtomicReference<SyncStateStub> deferred = new AtomicReference<>();
+    final ArchiveTrieNodeStrategy deferredGateStrategy =
+        ArchiveTrieNodeStrategy.createArchiving(
+            storage,
+            pool,
+            () ->
+                Objects.requireNonNull(
+                        deferred.get(), "archive gate consulted before syncState exists")
+                    .open());
+    setStoredBlockNumber(1L); // current block 2 -> gate consulted
+    final Bytes node = branchNode(0);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    assertThatThrownBy(
+            () ->
+                deferredGateStrategy.putFlatAccountTrieNode(
+                    storage, tx, LOCATION, hashOf(node), node))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessageContaining("archive gate");
+    deferredGateStrategy.close();
+  }
+
+  private record SyncStateStub(boolean open) {}
+
+  @Test
+  void gate_controlsCapture() {
+    final ExecutorService pool = Executors.newFixedThreadPool(2);
+    final AtomicBoolean gate = new AtomicBoolean(false);
+    final ArchiveTrieNodeStrategy gatedStrategy =
+        ArchiveTrieNodeStrategy.createArchiving(storage, pool, gate::get);
+    setStoredBlockNumber(4L); // current block 5
+
+    // Gate closed: write goes live, nothing archived.
+    final Bytes node = branchNode(0);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    gatedStrategy.putFlatAccountTrieNode(storage, tx, LOCATION, hashOf(node), node);
+    gatedStrategy.onBeforeCommit(storage, tx);
+    tx.commit();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(LOCATION), 5L)).isEmpty();
+
+    // Gate open: subsequent write is archived.
+    gate.set(true);
+    writeBlockWith(gatedStrategy, 5L, LOCATION, branchNode(1));
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(LOCATION), 5L)).isPresent();
+    gatedStrategy.close();
+  }
+
+  private void writeBlockWith(
+      final ArchiveTrieNodeStrategy target,
+      final long block,
+      final Bytes location,
+      final Bytes node) {
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    target.putFlatAccountTrieNode(storage, tx, location, hashOf(node), node);
+    tx.put(
+        TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(block).toArrayUnsafe());
+    target.onBeforeCommit(storage, tx);
+    tx.commit();
   }
 }

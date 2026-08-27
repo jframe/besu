@@ -90,13 +90,9 @@ import org.hyperledger.besu.ethereum.trie.forest.ForestWorldStateArchive;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveCoverageTracker;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.flat.CodeHashCodeStorageStrategy;
@@ -112,7 +108,6 @@ import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 import org.hyperledger.besu.plugin.ServiceManager;
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
-import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.WorldStatePreimageStorage;
 import org.hyperledger.besu.services.BesuPluginContextImpl;
@@ -673,6 +668,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
 
     prepForBuild();
 
+    final List<Closeable> closeables = new ArrayList<>();
     final ProtocolSchedule protocolSchedule = createProtocolSchedule();
 
     final VariablesStorage variablesStorage = storageProvider.createVariablesStorage();
@@ -738,17 +734,13 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             .getBonsaiArchiveStateProofsEnabled()) {
       final BonsaiWorldStateKeyValueStorage keyValueStorage =
           worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
-      final SegmentedKeyValueStorage liveStorage = keyValueStorage.getComposedWorldStateStorage();
       final ExecutorService trieCapturePool =
           MonitoredExecutors.newFixedThreadPool(
               "trie-capture", syncConfig.getComputationParallelism(), metricsSystem);
       final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
-          new ArchiveTrieNodeStrategy(
-              new BonsaiTrieNodeStrategy(),
-              new ArchiveTrieNodeWriter(
-                  new ArchiveNodeHistoryStore(liveStorage),
-                  new ArchiveCoverageTracker(liveStorage),
-                  trieCapturePool),
+          ArchiveTrieNodeStrategy.createArchiving(
+              keyValueStorage.getComposedWorldStateStorage(),
+              trieCapturePool,
               // Archive only while behind the head so reorg-window blocks are skipped; also keep
               // archiving with no peers — a failed download can leave us peerless and still behind.
               () -> {
@@ -760,6 +752,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
                     || archiveSyncState.getBestPeerChainHead().isEmpty();
               });
       keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
+      closeables.add(archiveTrieNodeStrategy);
       LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
     }
 
@@ -967,7 +960,6 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       }
     }
 
-    final List<Closeable> closeables = new ArrayList<>();
     closeables.add(protocolContext.getWorldStateArchive());
     closeables.add(storageProvider);
 

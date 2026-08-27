@@ -18,12 +18,15 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.TrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.io.Closeable;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
 import java.util.function.BooleanSupplier;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -47,11 +50,34 @@ import org.apache.tuweni.bytes.Bytes32;
  * reopened, or a restart — forces the next block to write FULL, since the newest archive entry no
  * longer matches the flat DB.
  */
-public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
+public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
 
   private final TrieNodeStrategy base;
   private final BooleanSupplier archiveGate;
   private final ArchiveTrieNodeWriter trieNodeWriter;
+
+  /**
+   * Builds an archiving strategy over {@code liveStorage}, owning a worker pool for async
+   * history-entry computation.
+   *
+   * @param liveStorage the live world-state storage to archive writes from
+   * @param trieCapturePool the worker pool, owned and shut down by the returned strategy
+   * @param archiveGate returns true when the node is far enough behind head to archive safely;
+   *     never consulted for block 0
+   * @return an archiving {@link TrieNodeStrategy} ready to install via {@code setTrieNodeStrategy}
+   */
+  public static ArchiveTrieNodeStrategy createArchiving(
+      final SegmentedKeyValueStorage liveStorage,
+      final ExecutorService trieCapturePool,
+      final BooleanSupplier archiveGate) {
+    return new ArchiveTrieNodeStrategy(
+        new BonsaiTrieNodeStrategy(),
+        new ArchiveTrieNodeWriter(
+            new ArchiveNodeHistoryStore(liveStorage),
+            new ArchiveCoverageTracker(liveStorage),
+            trieCapturePool),
+        archiveGate);
+  }
 
   public ArchiveTrieNodeStrategy(
       final TrieNodeStrategy base,
@@ -162,5 +188,10 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
   @Override
   public void onRollback(final SegmentedKeyValueStorageTransaction transaction) {
     trieNodeWriter.onRollback(transaction);
+  }
+
+  @Override
+  public void close() {
+    trieNodeWriter.close();
   }
 }
