@@ -18,8 +18,8 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 
 import java.io.Closeable;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -53,8 +53,7 @@ public class ArchiveTrieNodeWriter implements Closeable {
   }
 
   private static final int BATCH_SIZE = 64;
-  static final int ROOT_CHECKPOINT_INTERVAL = 32;
-  static final int SHALLOW_CHECKPOINT_INTERVAL = 32;
+  public static final int SHALLOW_CHECKPOINT_INTERVAL = 32;
   public static final int DEEP_CHECKPOINT_INTERVAL = 16;
 
   /**
@@ -62,15 +61,15 @@ public class ArchiveTrieNodeWriter implements Closeable {
    * derived from it.
    */
   public static final int MAX_CHECKPOINT_INTERVAL =
-      Collections.max(
-          List.of(ROOT_CHECKPOINT_INTERVAL, SHALLOW_CHECKPOINT_INTERVAL, DEEP_CHECKPOINT_INTERVAL));
+      Math.max(SHALLOW_CHECKPOINT_INTERVAL, DEEP_CHECKPOINT_INTERVAL);
 
   /**
    * Returns the checkpoint interval for a node at the given nibble-path depth (in {@code location}
    * bytes).
    *
    * <ul>
-   *   <li>depth 0 (root) → {@link #ROOT_CHECKPOINT_INTERVAL}
+   *   <li>depth 0 (root) → {@link #SHALLOW_CHECKPOINT_INTERVAL} (root and shallow share the same
+   *       interval)
    *   <li>depth 1–2 → {@link #SHALLOW_CHECKPOINT_INTERVAL}
    *   <li>depth ≥ 3 → {@link #DEEP_CHECKPOINT_INTERVAL}
    * </ul>
@@ -79,10 +78,7 @@ public class ArchiveTrieNodeWriter implements Closeable {
    * @return the mutation interval at which a FULL entry is emitted
    */
   @VisibleForTesting
-  int checkpointIntervalForDepth(final int locationSizeBytes) {
-    if (locationSizeBytes == 0) {
-      return ROOT_CHECKPOINT_INTERVAL;
-    }
+  static int checkpointIntervalForDepth(final int locationSizeBytes) {
     return locationSizeBytes <= 2 ? SHALLOW_CHECKPOINT_INTERVAL : DEEP_CHECKPOINT_INTERVAL;
   }
 
@@ -99,9 +95,10 @@ public class ArchiveTrieNodeWriter implements Closeable {
       final ArchiveNodeHistoryStore historyStore,
       final ArchiveCoverageTracker coverageTracker,
       final ExecutorService capturePool) {
-    this.historyStore = historyStore;
-    this.coverageTracker = coverageTracker;
-    this.capturePool = capturePool;
+    this.historyStore = Objects.requireNonNull(historyStore, "historyStore must not be null");
+    this.coverageTracker =
+        Objects.requireNonNull(coverageTracker, "coverageTracker must not be null");
+    this.capturePool = Objects.requireNonNull(capturePool, "capturePool must not be null");
   }
 
   /**
@@ -164,7 +161,7 @@ public class ArchiveTrieNodeWriter implements Closeable {
         if (counter < checkpointIntervalForDepth(request.location().size())) {
           final Bytes codecEntry = ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode);
           // encodeDiff may fall back to FULL when the patch is no smaller than the node
-          final int effectiveCounter = ArchiveTrieNodeEntry.isFull(codecEntry) ? 0 : counter;
+          final int effectiveCounter = ArchiveTrieNodeEntry.isFullEncoded(codecEntry) ? 0 : counter;
           return createEncodedEntry(request, effectiveCounter, codecEntry);
         }
       }

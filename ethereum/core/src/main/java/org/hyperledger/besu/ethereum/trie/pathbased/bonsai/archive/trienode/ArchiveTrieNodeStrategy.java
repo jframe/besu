@@ -60,7 +60,7 @@ public class ArchiveTrieNodeStrategy
 
   // Starts true (archive everything) until the first in-sync event. Safe default for initial sync
   // and no-peers startup
-  final AtomicBoolean archiving = new AtomicBoolean(true);
+  private final AtomicBoolean archiving = new AtomicBoolean(true);
 
   /**
    * Builds an archiving strategy over {@code liveStorage}, owning a worker pool for async

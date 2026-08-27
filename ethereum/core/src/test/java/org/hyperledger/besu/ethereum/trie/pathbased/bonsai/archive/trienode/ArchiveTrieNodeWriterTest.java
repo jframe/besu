@@ -18,8 +18,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.DEEP_CHECKPOINT_INTERVAL;
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.ROOT_CHECKPOINT_INTERVAL;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.SHALLOW_CHECKPOINT_INTERVAL;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.checkpointIntervalForDepth;
 
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -247,13 +247,12 @@ class ArchiveTrieNodeWriterTest {
 
   @Test
   void checkpointIntervalForDepth_mapsDepthToInterval() {
-    // Root (depth 0) now maps to ROOT_CHECKPOINT_INTERVAL instead of being excluded.
-    assertThat(trieNodeWriter.checkpointIntervalForDepth(0)).isEqualTo(ROOT_CHECKPOINT_INTERVAL);
-    assertThat(trieNodeWriter.checkpointIntervalForDepth(1)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
-    assertThat(trieNodeWriter.checkpointIntervalForDepth(2)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
-    assertThat(trieNodeWriter.checkpointIntervalForDepth(3)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
-    assertThat(trieNodeWriter.checkpointIntervalForDepth(5)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
-    assertThat(trieNodeWriter.checkpointIntervalForDepth(32)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
+    assertThat(checkpointIntervalForDepth(0)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
+    assertThat(checkpointIntervalForDepth(1)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
+    assertThat(checkpointIntervalForDepth(2)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
+    assertThat(checkpointIntervalForDepth(3)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
+    assertThat(checkpointIntervalForDepth(5)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
+    assertThat(checkpointIntervalForDepth(32)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
   }
 
   @Test

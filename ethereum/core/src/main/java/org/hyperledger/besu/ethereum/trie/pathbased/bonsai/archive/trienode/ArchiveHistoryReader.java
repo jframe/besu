@@ -139,7 +139,7 @@ public final class ArchiveHistoryReader {
     }
 
     LOG.warn(
-        "expected a FULL checkpoint within {} steps for key {} but none was found  (target block {})",
+        "expected a FULL checkpoint within {} steps for key {} but none was found (target block {})",
         stepsToFull,
         naturalKey,
         targetBlock);

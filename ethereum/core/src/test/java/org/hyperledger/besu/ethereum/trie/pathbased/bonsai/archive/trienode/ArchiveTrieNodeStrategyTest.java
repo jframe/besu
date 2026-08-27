@@ -244,6 +244,31 @@ class ArchiveTrieNodeStrategyTest {
   }
 
   @Test
+  void removingExistingNodeWritesDeletionTombstone() {
+    // Block 0: create the node so it exists in committed storage.
+    final ArchiveTrieNodeStrategy strategy = strategyWithGate(true);
+    final Bytes location = Bytes.of(0x05);
+    final Bytes node = Bytes.fromHexString("0xdeadbeef");
+
+    put(strategy, location, node);
+
+    // Block 1: remove the node — prior lookup finds it, tombstone must be captured.
+    setStoredBlockNumber(0L);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.removeFlatAccountStateTrieNode(storage, tx, location);
+    strategy.onBeforeCommit(storage, tx);
+    tx.commit();
+
+    final var tombstone = historyStore.getLatestBefore(ArchiveNodeKey.account(location), 1L);
+    assertThat(tombstone).as("deletion tombstone written at block 1").isPresent();
+    assertThat(tombstone.get().codecEntry().isDeletion())
+        .as("entry at block 1 must be a deletion tombstone")
+        .isTrue();
+    assertThat(tombstone.get().block()).isEqualTo(1L);
+    assertThat(coverageTracker.hasArchiveBlock(1L)).isTrue();
+  }
+
+  @Test
   void removeDoesNotWriteToArchive() {
     setStoredBlockNumber(5L);
     final ArchiveTrieNodeStrategy strategy = strategyWithGate(true);

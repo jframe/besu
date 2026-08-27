@@ -164,7 +164,7 @@ class ArchiveHistoryReaderTest {
   }
 
   @Test
-  void reconstructsNodeAtMaxDiffChainLength() {
+  void reconstructsNodeAtDeepIntervalBoundary() {
     final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x03));
     Bytes prev = emptyBranchRlp();
     putFull(nk, 0L, prev);
