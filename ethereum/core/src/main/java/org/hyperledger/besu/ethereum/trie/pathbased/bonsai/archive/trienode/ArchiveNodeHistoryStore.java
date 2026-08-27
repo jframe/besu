@@ -24,6 +24,8 @@ import java.util.Objects;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Stores historical trie node values in the archive store, keyed by a combination of the natural
@@ -31,11 +33,11 @@ import org.apache.tuweni.bytes.Bytes;
  * returns the latest value at or before that block.
  *
  * <p>Wire format per stored value: {@code [counter: 1 unsigned byte] ‖ [ArchiveTrieNodeCodec
- * entry]}. This class owns only storage mechanics — the FULL-vs-DIFF decision and counter
- * management live in {@link ArchiveTrieNodeStrategy}, and entry encoding lives in {@link
- * ArchiveTrieNodeCodec}.
+ * entry]}.
  */
 public final class ArchiveNodeHistoryStore {
+
+  private static final Logger LOG = LoggerFactory.getLogger(ArchiveNodeHistoryStore.class);
 
   private final SegmentedKeyValueStorage storage;
 
@@ -96,7 +98,7 @@ public final class ArchiveNodeHistoryStore {
 
   private Optional<HistoryEntry> decodeNearest(final NearestKeyValue nearest) {
     final long block = ArchiveNodeKey.blockFromHistoryKey(nearest.key());
-    return nearest.wrapBytes().map(storedValue -> decodeStoredValue(storedValue, block));
+    return nearest.wrapBytes().flatMap(storedValue -> decodeStoredValue(storedValue, block));
   }
 
   /**
@@ -109,14 +111,16 @@ public final class ArchiveNodeHistoryStore {
         && ArchiveNodeKey.naturalKeyFromHistoryKey(foundKey).equals(naturalKey);
   }
 
-  private HistoryEntry decodeStoredValue(final Bytes storedValue, final long block) {
+  private Optional<HistoryEntry> decodeStoredValue(final Bytes storedValue, final long block) {
     if (storedValue.isEmpty()) {
-      throw new IllegalArgumentException("stored value must be at least 1 byte (counter prefix)");
+      LOG.warn("corrupt archive entry at block {}: stored value is empty, skipping", block);
+      return Optional.empty();
     }
     final int counter = Byte.toUnsignedInt(storedValue.get(0));
     final Bytes rawEntryBytes = storedValue.slice(1);
-    return new HistoryEntry(
-        counter, ArchiveTrieNodeCodec.decode(rawEntryBytes), rawEntryBytes, block);
+    return Optional.of(
+        new HistoryEntry(
+            counter, ArchiveTrieNodeCodec.decode(rawEntryBytes), rawEntryBytes, block));
   }
 
   /**

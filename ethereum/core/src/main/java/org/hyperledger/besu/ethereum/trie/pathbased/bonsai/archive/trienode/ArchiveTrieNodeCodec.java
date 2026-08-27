@@ -68,6 +68,14 @@ public final class ArchiveTrieNodeCodec {
     return Bytes.concatenate(Bytes.of(DIFF), patch);
   }
 
+  /**
+   * Decodes a raw codec entry (as produced by {@link #encodeFull} or {@link #encodeDiff}) into a
+   * typed {@link ArchiveTrieNodeEntry}.
+   *
+   * @param entry the encoded bytes; must be at least 1 byte (the metadata byte)
+   * @return the decoded entry
+   * @throws IllegalArgumentException if {@code entry} is null or empty
+   */
   public static ArchiveTrieNodeEntry decode(final Bytes entry) {
     Objects.requireNonNull(entry, "entry must not be null");
     if (entry.isEmpty()) {

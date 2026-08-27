@@ -41,8 +41,16 @@ public final class ArchiveTrieNodeEntry {
     return metadata == FULL;
   }
 
-  /** Returns true if the first byte of an encoded entry indicates a FULL entry. */
+  /**
+   * Returns true if the first byte of an encoded entry indicates a FULL entry.
+   *
+   * @param encodedEntry a codec-produced entry; must be non-null and non-empty
+   * @throws IllegalArgumentException if {@code encodedEntry} is empty
+   */
   public static boolean isFull(final Bytes encodedEntry) {
+    if (encodedEntry.isEmpty()) {
+      throw new IllegalArgumentException("encodedEntry must be at least 1 byte");
+    }
     return encodedEntry.get(0) == FULL;
   }
 
