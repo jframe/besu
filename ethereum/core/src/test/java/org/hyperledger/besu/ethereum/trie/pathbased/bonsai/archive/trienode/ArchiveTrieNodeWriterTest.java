@@ -137,8 +137,6 @@ class ArchiveTrieNodeWriterTest {
 
   @Test
   void rootSparseChange_producesDiffBetweenCheckpoints() {
-    // Root now participates in checkpoint+diff. branchNode(0)->branchNode(1) changes one 32-byte
-    // child slot of a ~50-byte node, so the diff is smaller than the node -> DIFF (was FULL).
     final Bytes nk = ArchiveNodeKey.account(ROOT_LOCATION);
     enqueueAndCommit(0L, nk, ROOT_LOCATION, branchNode(0), null);
     enqueueAndCommit(1L, nk, ROOT_LOCATION, branchNode(1), branchNode(0));
@@ -155,8 +153,6 @@ class ArchiveTrieNodeWriterTest {
 
   @Test
   void rootDrasticChange_staysFullEveryBlock() {
-    // When each block's root shares nothing with the prior, encodeDiff falls back to FULL every
-    // block -> byte-identical to the old always-FULL behaviour (the mainnet case).
     final Bytes nk = ArchiveNodeKey.account(ROOT_LOCATION);
     enqueueAndCommit(0L, nk, ROOT_LOCATION, disjointNode(0), null);
     enqueueAndCommit(1L, nk, ROOT_LOCATION, disjointNode(1), disjointNode(0));
@@ -170,8 +166,22 @@ class ArchiveTrieNodeWriterTest {
   }
 
   @Test
+  void midChainFullFallback_resetsCounterToZero() {
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
+    enqueueAndCommit(1L, nk, LOCATION, disjointNode(1), branchNode(0));
+
+    final var entry1 = historyStore.getLatestBefore(nk, 1L).orElseThrow();
+    assertThat(entry1.codecEntry().isFull())
+        .as("drastic change must produce a FULL entry")
+        .isTrue();
+    assertThat(entry1.counter())
+        .as("FULL entry produced by encodeDiff fallback must have counter == 0")
+        .isZero();
+  }
+
+  @Test
   void storageRootSparseChange_producesDiff() {
-    // Storage-trie root: natural key = accountHash(32) ‖ [len:0]. Same self-tuning behaviour.
     final Bytes accountHash = Bytes32.leftPad(Bytes.of(0x04));
     final Bytes nk = ArchiveNodeKey.storage(accountHash, ROOT_LOCATION);
     enqueueAndCommit(0L, nk, ROOT_LOCATION, branchNode(0), null);

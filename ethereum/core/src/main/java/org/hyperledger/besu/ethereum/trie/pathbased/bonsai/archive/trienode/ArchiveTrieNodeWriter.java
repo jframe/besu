@@ -162,8 +162,10 @@ public class ArchiveTrieNodeWriter implements Closeable {
       if (priorEntry.isPresent() && !priorEntry.get().codecEntry().isDeletion()) {
         final int counter = priorEntry.get().counter() + 1;
         if (counter < checkpointIntervalForDepth(request.location().size())) {
-          return createEncodedEntry(
-              request, counter, ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode));
+          final Bytes codecEntry = ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode);
+          // encodeDiff may fall back to FULL when the patch is no smaller than the node
+          final int effectiveCounter = ArchiveTrieNodeEntry.isFull(codecEntry) ? 0 : counter;
+          return createEncodedEntry(request, effectiveCounter, codecEntry);
         }
       }
     }

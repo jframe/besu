@@ -41,6 +41,11 @@ public final class ArchiveTrieNodeEntry {
     return metadata == FULL;
   }
 
+  /** Returns true if the first byte of an encoded entry indicates a FULL entry. */
+  public static boolean isFull(final Bytes encodedEntry) {
+    return encodedEntry.get(0) == FULL;
+  }
+
   public boolean isDeletion() {
     return metadata == DELETION;
   }
