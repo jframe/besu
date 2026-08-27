@@ -66,8 +66,7 @@ class BonsaiArchiveStateProofIntegrationTest {
     historyReader = new ArchiveHistoryReader(historyStore);
     final ArchiveTrieNodeWriter capture =
         new ArchiveTrieNodeWriter(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
-    // Gate always open: acts as initial-sync mode
-    archiveStrategy = new ArchiveTrieNodeStrategy(baseStrategy, capture, () -> true);
+    archiveStrategy = new ArchiveTrieNodeStrategy(baseStrategy, capture);
   }
 
   private static Bytes32 hash(final Bytes value) {

@@ -18,6 +18,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.core.Synchronizer;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.TrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -27,8 +28,9 @@ import java.io.Closeable;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
-import java.util.function.BooleanSupplier;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
@@ -50,11 +52,15 @@ import org.apache.tuweni.bytes.Bytes32;
  * reopened, or a restart — forces the next block to write FULL, since the newest archive entry no
  * longer matches the flat DB.
  */
-public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
+public class ArchiveTrieNodeStrategy
+    implements TrieNodeStrategy, Synchronizer.InSyncListener, Closeable {
 
   private final TrieNodeStrategy base;
-  private final BooleanSupplier archiveGate;
   private final ArchiveTrieNodeWriter trieNodeWriter;
+
+  // Starts true (archive everything) until the first in-sync event. Safe default for initial sync
+  // and no-peers startup
+  final AtomicBoolean archiving = new AtomicBoolean(true);
 
   /**
    * Builds an archiving strategy over {@code liveStorage}, owning a worker pool for async
@@ -62,30 +68,32 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
    *
    * @param liveStorage the live world-state storage to archive writes from
    * @param trieCapturePool the worker pool, owned and shut down by the returned strategy
-   * @param archiveGate returns true when the node is far enough behind head to archive safely;
-   *     never consulted for block 0
    * @return an archiving {@link TrieNodeStrategy} ready to install via {@code setTrieNodeStrategy}
    */
   public static ArchiveTrieNodeStrategy createArchiving(
-      final SegmentedKeyValueStorage liveStorage,
-      final ExecutorService trieCapturePool,
-      final BooleanSupplier archiveGate) {
+      final SegmentedKeyValueStorage liveStorage, final ExecutorService trieCapturePool) {
     return new ArchiveTrieNodeStrategy(
         new BonsaiTrieNodeStrategy(),
         new ArchiveTrieNodeWriter(
             new ArchiveNodeHistoryStore(liveStorage),
             new ArchiveCoverageTracker(liveStorage),
-            trieCapturePool),
-        archiveGate);
+            trieCapturePool));
   }
 
   public ArchiveTrieNodeStrategy(
-      final TrieNodeStrategy base,
-      final ArchiveTrieNodeWriter trieNodeWriter,
-      final BooleanSupplier archiveGate) {
+      final TrieNodeStrategy base, final ArchiveTrieNodeWriter trieNodeWriter) {
     this.base = Objects.requireNonNull(base);
     this.trieNodeWriter = Objects.requireNonNull(trieNodeWriter);
-    this.archiveGate = Objects.requireNonNull(archiveGate);
+  }
+
+  @Override
+  public void onInSyncStatusChange(final boolean inSync) {
+    archiving.set(!inSync);
+  }
+
+  @VisibleForTesting
+  void setArchiving(final boolean archive) {
+    archiving.set(archive);
   }
 
   private static long readBlockNumber(final SegmentedKeyValueStorage storage) {
@@ -96,7 +104,7 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
   }
 
   private boolean shouldCaptureBlock(final long block) {
-    return block == 0L || archiveGate.getAsBoolean();
+    return block == 0L || archiving.get();
   }
 
   @Override

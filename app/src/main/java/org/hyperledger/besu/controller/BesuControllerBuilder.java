@@ -126,7 +126,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -724,9 +723,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             bonsaiCachedMerkleTrieLoader,
             protocolSchedule);
 
-    // Install the archive strategy before the genesis write so block 0 is captured. syncState does
-    // not exist yet, so the gate reads it lazily via archiveSyncStateRef.
-    final AtomicReference<SyncState> archiveSyncStateRef = new AtomicReference<>();
+    // Install the archive strategy before the genesis write so block 0 is captured.
+    ArchiveTrieNodeStrategy archiveTrieNodeStrategy = null;
     if (DataStorageFormat.X_BONSAI_ARCHIVE.equals(dataStorageConfiguration.getDataStorageFormat())
         && dataStorageConfiguration
             .getPathBasedExtraStorageConfiguration()
@@ -737,20 +735,9 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       final ExecutorService trieCapturePool =
           MonitoredExecutors.newFixedThreadPool(
               "trie-capture", syncConfig.getComputationParallelism(), metricsSystem);
-      final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
+      archiveTrieNodeStrategy =
           ArchiveTrieNodeStrategy.createArchiving(
-              keyValueStorage.getComposedWorldStateStorage(),
-              trieCapturePool,
-              // Archive only while behind the head so reorg-window blocks are skipped; also keep
-              // archiving with no peers — a failed download can leave us peerless and still behind.
-              () -> {
-                final SyncState archiveSyncState = archiveSyncStateRef.get();
-                return !archiveSyncState.isInSync(
-                        dataStorageConfiguration
-                            .getPathBasedExtraStorageConfiguration()
-                            .getMaxLayersToLoad())
-                    || archiveSyncState.getBestPeerChainHead().isEmpty();
-              });
+              keyValueStorage.getComposedWorldStateStorage(), trieCapturePool);
       keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
       closeables.add(archiveTrieNodeStrategy);
       LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
@@ -817,7 +804,6 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
     final boolean hasInitialSyncPhase = fullSyncDisabled && p2pEnabled;
     final SyncState syncState =
         new SyncState(blockchain, ethPeers, hasInitialSyncPhase, checkpoint);
-    archiveSyncStateRef.set(syncState);
 
     protocolContext
         .safeConsensusContext(MergeContext.class)
@@ -910,6 +896,12 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             pivotBlockSelector);
 
     ethPeers.setTrailingPeerRequirementsSupplier(synchronizer::calculateTrailingPeerRequirements);
+
+    if (archiveTrieNodeStrategy != null) {
+      synchronizer.subscribeInSync(
+          archiveTrieNodeStrategy,
+          dataStorageConfiguration.getPathBasedExtraStorageConfiguration().getMaxLayersToLoad());
+    }
 
     if (syncConfig.getSyncMode() == SyncMode.SNAP) {
       synchronizer.subscribeInSync((b) -> ethPeers.snapServerPeersNeeded(!b));
