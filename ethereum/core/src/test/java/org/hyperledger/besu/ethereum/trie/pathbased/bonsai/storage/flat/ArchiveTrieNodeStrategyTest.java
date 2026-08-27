@@ -23,8 +23,8 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveCoverageTracker;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeKey;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeCapture;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
@@ -43,7 +43,7 @@ class ArchiveTrieNodeStrategyTest {
   private SegmentedKeyValueStorage storage;
   private ArchiveNodeHistoryStore historyStore;
   private ArchiveCoverageTracker coverageTracker;
-  private ArchiveTrieNodeCapture capture;
+  private ArchiveTrieNodeWriter capture;
 
   @BeforeEach
   void setUp() {
@@ -53,7 +53,7 @@ class ArchiveTrieNodeStrategyTest {
     historyStore = new ArchiveNodeHistoryStore(storage);
     coverageTracker = new ArchiveCoverageTracker(storage);
     capture =
-        new ArchiveTrieNodeCapture(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
+        new ArchiveTrieNodeWriter(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
   }
 
   private ArchiveTrieNodeStrategy strategyWithGate(final boolean gateOpen) {

@@ -92,8 +92,8 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchive
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveCoverageTracker;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeCapture;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
@@ -739,30 +739,25 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
       final BonsaiWorldStateKeyValueStorage keyValueStorage =
           worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
       final SegmentedKeyValueStorage liveStorage = keyValueStorage.getComposedWorldStateStorage();
-      final ExecutorService capturePool =
+      final ExecutorService trieCapturePool =
           MonitoredExecutors.newFixedThreadPool(
-              "trie-capture",
-              Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 2)),
-              metricsSystem);
-      final ArchiveTrieNodeCapture capture =
-          new ArchiveTrieNodeCapture(
-              new ArchiveNodeHistoryStore(liveStorage),
-              new ArchiveCoverageTracker(liveStorage),
-              capturePool);
+              "trie-capture", syncConfig.getComputationParallelism(), metricsSystem);
       final ArchiveTrieNodeStrategy archiveTrieNodeStrategy =
           new ArchiveTrieNodeStrategy(
               new BonsaiTrieNodeStrategy(),
-              capture,
+              new ArchiveTrieNodeWriter(
+                  new ArchiveNodeHistoryStore(liveStorage),
+                  new ArchiveCoverageTracker(liveStorage),
+                  trieCapturePool),
               // Archive only while behind the head so reorg-window blocks are skipped; also keep
               // archiving with no peers — a failed download can leave us peerless and still behind.
               () -> {
                 final SyncState archiveSyncState = archiveSyncStateRef.get();
-                return archiveSyncState != null
-                    && (!archiveSyncState.isInSync(
-                            dataStorageConfiguration
-                                .getPathBasedExtraStorageConfiguration()
-                                .getMaxLayersToLoad())
-                        || archiveSyncState.getBestPeerChainHead().isEmpty());
+                return !archiveSyncState.isInSync(
+                        dataStorageConfiguration
+                            .getPathBasedExtraStorageConfiguration()
+                            .getMaxLayersToLoad())
+                    || archiveSyncState.getBestPeerChainHead().isEmpty();
               });
       keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
       LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
@@ -990,15 +985,10 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
         final AtomicBoolean migrationStarted = new AtomicBoolean(false);
         final AtomicLong syncSubscriptionId = new AtomicLong();
         syncSubscriptionId.set(
-            syncState.subscribeInSync(
+            synchronizer.subscribeInSync(
                 (inSync) -> {
-                  // Require a peer chain-head estimate: a node with no peers is considered
-                  // "in sync" by definition, so a peer-less notification after a failed
-                  // download would start migration while the local chain is still behind
-                  if (inSync
-                      && syncState.getBestPeerChainHead().isPresent()
-                      && migrationStarted.compareAndSet(false, true)) {
-                    syncState.unsubscribeInSync(syncSubscriptionId.get());
+                  if (inSync && migrationStarted.compareAndSet(false, true)) {
+                    synchronizer.unsubscribeInSync(syncSubscriptionId.get());
                     LOG.info("Node is in sync, starting Bonsai archive migration");
                     archiveMigrator
                         .migrate()

@@ -17,8 +17,10 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.DEEP_CHECKPOINT_INTERVAL;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.ROOT_CHECKPOINT_INTERVAL;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.SHALLOW_CHECKPOINT_INTERVAL;
 
-import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -34,7 +36,7 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-class ArchiveTrieNodeCaptureTest {
+class ArchiveTrieNodeWriterTest {
 
   private static final Bytes LOCATION = Bytes.of(0x01);
   private static final Bytes ROOT_LOCATION = Bytes.EMPTY;
@@ -56,14 +58,10 @@ class ArchiveTrieNodeCaptureTest {
     return out.encoded();
   }
 
-  private static Bytes32 hashOf(final Bytes node) {
-    return Bytes32.wrap(Hash.hash(node).getBytes());
-  }
-
   private SegmentedKeyValueStorage storage;
   private ArchiveNodeHistoryStore historyStore;
   private ArchiveCoverageTracker coverageTracker;
-  private ArchiveTrieNodeCapture capture;
+  private ArchiveTrieNodeWriter trieNodeWriter;
 
   @BeforeEach
   void setUp() {
@@ -72,8 +70,8 @@ class ArchiveTrieNodeCaptureTest {
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
     historyStore = new ArchiveNodeHistoryStore(storage);
     coverageTracker = new ArchiveCoverageTracker(storage);
-    capture =
-        new ArchiveTrieNodeCapture(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
+    trieNodeWriter =
+        new ArchiveTrieNodeWriter(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
   }
 
   private void enqueueAndCommit(
@@ -83,8 +81,8 @@ class ArchiveTrieNodeCaptureTest {
       final Bytes newNode,
       final Bytes priorNode) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    capture.enqueue(naturalKey, location, block, null, Bytes32.ZERO, newNode, priorNode, tx);
-    capture.onBeforeCommit(tx);
+    trieNodeWriter.capture(naturalKey, location, block, newNode, priorNode, tx);
+    trieNodeWriter.onBeforeCommit(tx);
     tx.commit();
   }
 
@@ -187,8 +185,8 @@ class ArchiveTrieNodeCaptureTest {
   void rollbackDiscardsCaptureBuffer() {
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    capture.enqueue(nk, LOCATION, 0L, null, Bytes32.ZERO, branchNode(0), null, tx);
-    capture.onRollback(tx);
+    trieNodeWriter.capture(nk, LOCATION, 0L, branchNode(0), null, tx);
+    trieNodeWriter.onRollback(tx);
     tx.rollback();
 
     assertThat(historyStore.getLatestBefore(nk, 0L)).isEmpty();
@@ -200,48 +198,52 @@ class ArchiveTrieNodeCaptureTest {
     // the owning updater's buffer is still live. The buffer must not be discarded.
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    capture.enqueue(nk, LOCATION, 0L, null, Bytes32.ZERO, branchNode(0), null, tx);
+    trieNodeWriter.capture(nk, LOCATION, 0L, branchNode(0), null, tx);
 
     final SegmentedKeyValueStorageTransaction foreignTx = storage.startTransaction();
-    capture.onRollback(foreignTx); // must be ignored
+    trieNodeWriter.onRollback(foreignTx); // must be ignored
     foreignTx.rollback();
 
     // Buffer is still intact — flush with the owning tx.
-    capture.onBeforeCommit(tx);
+    trieNodeWriter.onBeforeCommit(tx);
     tx.commit();
 
     assertThat(historyStore.getLatestBefore(nk, 0L)).isPresent();
   }
 
   @Test
-  void checkpointIntervalForDepth_mapsDepthToInterval() {
-    // Root (depth 0) now maps to ROOT_CHECKPOINT_INTERVAL instead of being excluded.
-    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(0))
-        .isEqualTo(ArchiveTrieNodeCapture.ROOT_CHECKPOINT_INTERVAL);
-    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(1))
-        .isEqualTo(ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL);
-    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(2))
-        .isEqualTo(ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL);
-    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(3))
-        .isEqualTo(ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL);
-    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(5))
-        .isEqualTo(ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL);
-    assertThat(ArchiveTrieNodeCapture.checkpointIntervalForDepth(32))
-        .isEqualTo(ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL);
+  void interleavedTransactionsOnOneThreadFlushIndependently() {
+    // Transaction identity — not thread identity — scopes a capture buffer: two transactions live
+    // at once on the same thread must each keep their own captures and flush only their own.
+    final Bytes locA = Bytes.of(0x0a);
+    final Bytes locB = Bytes.of(0x0b);
+    final Bytes nkA = ArchiveNodeKey.account(locA);
+    final Bytes nkB = ArchiveNodeKey.account(locB);
+
+    final SegmentedKeyValueStorageTransaction txA = storage.startTransaction();
+    final SegmentedKeyValueStorageTransaction txB = storage.startTransaction();
+    trieNodeWriter.capture(nkA, locA, 0L, branchNode(0), null, txA);
+    trieNodeWriter.capture(nkB, locB, 1L, branchNode(1), null, txB);
+
+    trieNodeWriter.onBeforeCommit(txA);
+    txA.commit();
+    assertThat(historyStore.getLatestBefore(nkA, 0L)).isPresent();
+    assertThat(historyStore.getLatestBefore(nkB, 1L)).isEmpty();
+
+    trieNodeWriter.onBeforeCommit(txB);
+    txB.commit();
+    assertThat(historyStore.getLatestBefore(nkB, 1L)).isPresent();
   }
 
   @Test
-  void maxCheckpointInterval_fitsReconstructWindow() {
-    final int maxInterval =
-        Math.max(
-            ArchiveTrieNodeCapture.ROOT_CHECKPOINT_INTERVAL,
-            Math.max(
-                ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL,
-                ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL));
-    // The reader scans only the trailing MAX_BACKWARD_WALK_STEPS change-blocks for a FULL. If the
-    // largest checkpoint interval (now including the root) exceeded that, a DIFF target could have
-    // no FULL in the window and reconstruction would return empty -> eth_getProof would fail.
-    assertThat(maxInterval).isLessThanOrEqualTo(ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS);
+  void checkpointIntervalForDepth_mapsDepthToInterval() {
+    // Root (depth 0) now maps to ROOT_CHECKPOINT_INTERVAL instead of being excluded.
+    assertThat(trieNodeWriter.checkpointIntervalForDepth(0)).isEqualTo(ROOT_CHECKPOINT_INTERVAL);
+    assertThat(trieNodeWriter.checkpointIntervalForDepth(1)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
+    assertThat(trieNodeWriter.checkpointIntervalForDepth(2)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
+    assertThat(trieNodeWriter.checkpointIntervalForDepth(3)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
+    assertThat(trieNodeWriter.checkpointIntervalForDepth(5)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
+    assertThat(trieNodeWriter.checkpointIntervalForDepth(32)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
   }
 
   @Test
@@ -250,12 +252,12 @@ class ArchiveTrieNodeCaptureTest {
     // With the old single-interval-16 rule, mutation 16 would produce a FULL; with 32 it must DIFF.
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
     enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
-    for (int block = 1; block <= ArchiveHistoryReader.CHECKPOINT_INTERVAL; block++) {
+    for (int block = 1; block <= DEEP_CHECKPOINT_INTERVAL; block++) {
       enqueueAndCommit((long) block, nk, LOCATION, branchNode(block), branchNode(block - 1));
     }
-    // Block 16 (= old CHECKPOINT_INTERVAL) should be a DIFF under the new tiered policy.
-    final var entry16 =
-        historyStore.getLatestBefore(nk, (long) ArchiveHistoryReader.CHECKPOINT_INTERVAL);
+    // Block 16 (= DEEP_CHECKPOINT_INTERVAL) should be a DIFF under the tiered policy (shallow uses
+    // 32).
+    final var entry16 = historyStore.getLatestBefore(nk, (long) DEEP_CHECKPOINT_INTERVAL);
     assertThat(entry16).isPresent();
     assertThat(entry16.get().codecEntry().isFull())
         .as("block 16 should be DIFF, not FULL, for a shallow node (interval 32)")
@@ -305,13 +307,13 @@ class ArchiveTrieNodeCaptureTest {
       final Bytes location, final int blocks, final IntFunction<Bytes> nodeAt) {
     final Bytes nk = ArchiveNodeKey.account(location);
     final ExecutorService pool = Executors.newFixedThreadPool(2);
-    final ArchiveTrieNodeCapture localCapture =
-        new ArchiveTrieNodeCapture(historyStore, coverageTracker, pool);
+    final ArchiveTrieNodeWriter localCapture =
+        new ArchiveTrieNodeWriter(historyStore, coverageTracker, pool);
     Bytes prior = null;
     for (int block = 0; block < blocks; block++) {
       final Bytes node = nodeAt.apply(block);
       final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-      localCapture.enqueue(nk, location, block, null, Bytes32.ZERO, node, prior, tx);
+      localCapture.capture(nk, location, block, node, prior, tx);
       localCapture.onBeforeCommit(tx);
       tx.commit();
       prior = node;
@@ -331,10 +333,10 @@ class ArchiveTrieNodeCaptureTest {
     // 128-block sequence with a 1-byte-per-block delta on a ~530-byte node.
     final int blocks = 128;
     final long shallowBytes =
-        replayAndSumStoredBytes(Bytes.of(0x0a), blocks, ArchiveTrieNodeCaptureTest::smallDeltaNode);
+        replayAndSumStoredBytes(Bytes.of(0x0a), blocks, ArchiveTrieNodeWriterTest::smallDeltaNode);
     final long deepBytes =
         replayAndSumStoredBytes(
-            Bytes.of(0x0b, 0x0c, 0x0d), blocks, ArchiveTrieNodeCaptureTest::smallDeltaNode);
+            Bytes.of(0x0b, 0x0c, 0x0d), blocks, ArchiveTrieNodeWriterTest::smallDeltaNode);
 
     // Monotonic invariant: a wider interval can never store MORE (encodeDiff never exceeds a FULL).
     assertThat(shallowBytes)
@@ -356,10 +358,10 @@ class ArchiveTrieNodeCaptureTest {
     // why a small on-disk *increase* there is RocksDB blob/compaction noise, not this change.
     final int blocks = 128;
     final long shallowBytes =
-        replayAndSumStoredBytes(Bytes.of(0x0a), blocks, ArchiveTrieNodeCaptureTest::drasticNode);
+        replayAndSumStoredBytes(Bytes.of(0x0a), blocks, ArchiveTrieNodeWriterTest::drasticNode);
     final long deepBytes =
         replayAndSumStoredBytes(
-            Bytes.of(0x0b, 0x0c, 0x0d), blocks, ArchiveTrieNodeCaptureTest::drasticNode);
+            Bytes.of(0x0b, 0x0c, 0x0d), blocks, ArchiveTrieNodeWriterTest::drasticNode);
 
     assertThat(shallowBytes)
         .as("drastic churn: interval-32 (%s B) == interval-16 (%s B)", shallowBytes, deepBytes)
@@ -373,17 +375,9 @@ class ArchiveTrieNodeCaptureTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     for (int i = 0; i < 65; i++) {
       final Bytes loc = Bytes.of((byte) (i + 2)); // +2 avoids ROOT_LOCATION and LOCATION
-      capture.enqueue(
-          ArchiveNodeKey.account(loc),
-          loc,
-          0L,
-          null,
-          hashOf(branchNode(i)),
-          branchNode(i),
-          null,
-          tx);
+      trieNodeWriter.capture(ArchiveNodeKey.account(loc), loc, 0L, branchNode(i), null, tx);
     }
-    capture.onBeforeCommit(tx);
+    trieNodeWriter.onBeforeCommit(tx);
     tx.commit();
 
     for (int i = 0; i < 65; i++) {

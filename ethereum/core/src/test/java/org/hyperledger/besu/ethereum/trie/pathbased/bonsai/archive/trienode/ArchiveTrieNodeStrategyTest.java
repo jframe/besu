@@ -77,8 +77,8 @@ class ArchiveTrieNodeStrategyTest {
     historyStore = new ArchiveNodeHistoryStore(storage);
     coverageTracker = new ArchiveCoverageTracker(storage);
     reader = new ArchiveHistoryReader(historyStore);
-    final ArchiveTrieNodeCapture capture =
-        new ArchiveTrieNodeCapture(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
+    final ArchiveTrieNodeWriter capture =
+        new ArchiveTrieNodeWriter(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
     strategy = new ArchiveTrieNodeStrategy(new BonsaiTrieNodeStrategy(), capture, gateOpen::get);
   }
 
@@ -162,7 +162,7 @@ class ArchiveTrieNodeStrategyTest {
     // Deep node (location size 3 → DEEP_CHECKPOINT_INTERVAL = 16).
     final Bytes deepLocation = Bytes.of(0x01, 0x02, 0x03);
     final Bytes nk = ArchiveNodeKey.account(deepLocation);
-    final int interval = ArchiveTrieNodeCapture.DEEP_CHECKPOINT_INTERVAL;
+    final int interval = ArchiveTrieNodeWriter.DEEP_CHECKPOINT_INTERVAL;
     for (int block = 0; block <= interval; block++) {
       writeBlock(block, deepLocation, branchNode(block));
     }

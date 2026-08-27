@@ -34,18 +34,14 @@ public final class ArchiveHistoryReader {
   private static final Logger LOG = LoggerFactory.getLogger(ArchiveHistoryReader.class);
 
   /**
-   * Interval, in blocks, at which the writer ({@link ArchiveTrieNodeStrategy}) forces a FULL entry
-   * instead of a DIFF, bounding how far this reader ever needs to walk backward to find one.
+   * Sanity ceiling on the distance-to-FULL-checkpoint reported by a DIFF entry's stored {@code
+   * counter} (see {@link ArchiveNodeHistoryStore.HistoryEntry#counter()}). If a counter exceeds
+   * this, the entry is treated as corrupt and the read fails fast without walking at all. Derived
+   * from {@link ArchiveTrieNodeWriter#MAX_CHECKPOINT_INTERVAL} so it auto-updates when any tier
+   * interval changes.
    */
-  public static final int CHECKPOINT_INTERVAL = 16;
-
-  /**
-   * Maximum number of backward steps this reader will take looking for a FULL checkpoint before
-   * giving up. Must be at least as large as the longest DIFF run the write path can produce — i.e.
-   * the largest tier interval minus one. Currently shallow nodes use interval 32, so this must be
-   * at least 32. Raising any tier above this value requires a matching raise here.
-   */
-  public static final int MAX_BACKWARD_WALK_STEPS = 32;
+  public static final int MAX_BACKWARD_WALK_STEPS =
+      ArchiveTrieNodeWriter.MAX_CHECKPOINT_INTERVAL - 1;
 
   private final ArchiveNodeHistoryStore historyStore;
 
@@ -75,12 +71,12 @@ public final class ArchiveHistoryReader {
       throw new IllegalArgumentException("targetBlock must be >= 0, got " + targetBlock);
     }
 
-    final Optional<ArchiveNodeHistoryStore.HistoryEntry> anchorEntryOpt =
+    final Optional<ArchiveNodeHistoryStore.HistoryEntry> maybeAnchorEntry =
         historyStore.getLatestBefore(naturalKey, targetBlock);
-    if (anchorEntryOpt.isEmpty() || anchorEntryOpt.get().codecEntry().isDeletion()) {
+    if (maybeAnchorEntry.isEmpty() || maybeAnchorEntry.get().codecEntry().isDeletion()) {
       return Optional.empty();
     }
-    final ArchiveNodeHistoryStore.HistoryEntry anchorEntry = anchorEntryOpt.get();
+    final ArchiveNodeHistoryStore.HistoryEntry anchorEntry = maybeAnchorEntry.get();
     if (anchorEntry.codecEntry().isFull()) {
       return Optional.of(anchorEntry.codecEntry().fullNode());
     }
@@ -88,23 +84,42 @@ public final class ArchiveHistoryReader {
   }
 
   /**
-   * Walks backward from {@code anchorEntry} (itself a DIFF) collecting diffs until a FULL
-   * checkpoint turns up, then applies them forward. Gives up after {@link #MAX_BACKWARD_WALK_STEPS}
-   * steps, on running out of history, or on hitting a deletion tombstone.
+   * Walks backward from {@code anchorEntry} (itself a DIFF) exactly {@code anchorEntry.counter()}
+   * steps — the distance to the FULL checkpoint recorded by the writer — then applies the collected
+   * diffs forward. Fails fast if the counter exceeds {@link #MAX_BACKWARD_WALK_STEPS}, and treats
+   * any mismatch between the counter and the actual chain (a missing entry, an unexpected deletion,
+   * or no FULL at the expected point) as corruption.
    */
   private Optional<Bytes> reconstructFromDiffChain(
       final Bytes naturalKey,
       final ArchiveNodeHistoryStore.HistoryEntry anchorEntry,
       final long targetBlock) {
-    final List<Bytes> diffs = new ArrayList<>();
+    final int stepsToFull = anchorEntry.counter();
+    if (stepsToFull > MAX_BACKWARD_WALK_STEPS) {
+      LOG.warn(
+          "counter {} for key {} exceeds max backward walk steps {} at block {}",
+          stepsToFull,
+          naturalKey,
+          MAX_BACKWARD_WALK_STEPS,
+          targetBlock);
+      return Optional.empty();
+    }
+
+    final List<Bytes> diffs = new ArrayList<>(stepsToFull + 1);
     diffs.add(anchorEntry.rawEntryBytes());
     long walkBlock = anchorEntry.block();
 
-    for (int steps = 0; walkBlock > 0 && steps < MAX_BACKWARD_WALK_STEPS; steps++) {
+    for (int step = 0; step < stepsToFull && walkBlock > 0; step++) {
       final Optional<ArchiveNodeHistoryStore.HistoryEntry> prevOpt =
           historyStore.getLatestBefore(naturalKey, walkBlock - 1);
       if (prevOpt.isEmpty()) {
-        break;
+        LOG.warn(
+            "expected a FULL checkpoint {} steps back for key {} but history ran out before block {} (target block {})",
+            stepsToFull,
+            naturalKey,
+            walkBlock,
+            targetBlock);
+        return Optional.empty();
       }
       final ArchiveNodeHistoryStore.HistoryEntry prev = prevOpt.get();
       if (prev.codecEntry().isDeletion()) {
@@ -124,8 +139,8 @@ public final class ArchiveHistoryReader {
     }
 
     LOG.warn(
-        "no FULL checkpoint found within {} backward steps for key {} at block {}",
-        MAX_BACKWARD_WALK_STEPS,
+        "expected a FULL checkpoint within {} steps for key {} but none was found  (target block {})",
+        stepsToFull,
         naturalKey,
         targetBlock);
     return Optional.empty();

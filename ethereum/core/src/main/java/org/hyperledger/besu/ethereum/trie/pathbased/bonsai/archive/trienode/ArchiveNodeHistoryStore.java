@@ -26,9 +26,9 @@ import java.util.Optional;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
- * Stores historical trie node entries in the archive store, keyed by a combination of the natural
+ * Stores historical trie node values in the archive store, keyed by a combination of the natural
  * key and the block number at which the value was valid. For a given natural key and target block,
- * returns the latest entry at or before that block.
+ * returns the latest value at or before that block.
  *
  * <p>Wire format per stored value: {@code [counter: 1 unsigned byte] ‖ [ArchiveTrieNodeCodec
  * entry]}. This class owns only storage mechanics — the FULL-vs-DIFF decision and counter

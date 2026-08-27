@@ -36,10 +36,10 @@ import org.apache.tuweni.bytes.Bytes32;
  *
  * <p>Each put delegates to {@code base} (live flat DB) first, then — if the archive gate is open —
  * reads the prior node value from storage (where it is typically hot in the top few in-memory
- * layers) and enqueues a capture request via {@link ArchiveTrieNodeCapture}. Workers compute the
- * history entry ({@link ArchiveNodeHistoryStore#getLatestBefore} + encode FULL/DIFF) off the import
- * thread. Results are joined and applied to the transaction in {@link #onBeforeCommit}, which runs
- * immediately before commit.
+ * layers) and calls {@link ArchiveTrieNodeWriter#capture} to queue an async history-entry write.
+ * Workers compute the history entry ({@link ArchiveNodeHistoryStore#getLatestBefore} + encode
+ * FULL/DIFF) off the import thread. Results are joined and applied to the transaction in {@link
+ * #onBeforeCommit}, which runs immediately before commit.
  *
  * <p>Reading the prior node on the calling thread — rather than inside a worker — avoids disk I/O
  * in the common case (the prior value is hot in the in-memory layered chain) and eliminates any
@@ -51,14 +51,14 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
 
   private final TrieNodeStrategy base;
   private final BooleanSupplier archiveGate;
-  private final ArchiveTrieNodeCapture capture;
+  private final ArchiveTrieNodeWriter trieNodeWriter;
 
   public ArchiveTrieNodeStrategy(
       final TrieNodeStrategy base,
-      final ArchiveTrieNodeCapture capture,
+      final ArchiveTrieNodeWriter trieNodeWriter,
       final BooleanSupplier archiveGate) {
     this.base = Objects.requireNonNull(base);
-    this.capture = Objects.requireNonNull(capture);
+    this.trieNodeWriter = Objects.requireNonNull(trieNodeWriter);
     this.archiveGate = Objects.requireNonNull(archiveGate);
   }
 
@@ -102,15 +102,8 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
           block == 0L
               ? null
               : base.getFlatAccountTrieNode(location, nodeHash, storage).orElse(null);
-      capture.enqueue(
-          ArchiveNodeKey.account(location),
-          location,
-          block,
-          null,
-          nodeHash,
-          node,
-          prior,
-          transaction);
+      trieNodeWriter.capture(
+          ArchiveNodeKey.account(location), location, block, node, prior, transaction);
     }
   }
 
@@ -129,12 +122,10 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
           block == 0L
               ? null
               : base.getFlatStorageTrieNode(accountHash, location, nodeHash, storage).orElse(null);
-      capture.enqueue(
+      trieNodeWriter.capture(
           ArchiveNodeKey.storage(accountHash.getBytes(), location),
           location,
           block,
-          accountHash,
-          nodeHash,
           node,
           prior,
           transaction);
@@ -155,15 +146,8 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
               : base.getFlatAccountTrieNode(location, Bytes32.ZERO, storage).orElse(null);
       if (prior != null) {
         // Removing a node that doesn't exist is a no-op for the archive.
-        capture.enqueue(
-            ArchiveNodeKey.account(location),
-            location,
-            block,
-            null,
-            Bytes32.ZERO,
-            null,
-            prior,
-            transaction);
+        trieNodeWriter.capture(
+            ArchiveNodeKey.account(location), location, block, null, prior, transaction);
       }
     }
   }
@@ -172,11 +156,11 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy {
   public void onBeforeCommit(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {
-    capture.onBeforeCommit(transaction);
+    trieNodeWriter.onBeforeCommit(transaction);
   }
 
   @Override
   public void onRollback(final SegmentedKeyValueStorageTransaction transaction) {
-    capture.onRollback(transaction);
+    trieNodeWriter.onRollback(transaction);
   }
 }

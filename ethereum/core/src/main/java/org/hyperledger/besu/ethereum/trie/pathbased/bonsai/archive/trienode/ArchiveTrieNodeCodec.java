@@ -14,10 +14,9 @@
  */
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.CREATION;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.DELETION;
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.ENTRY_DIFF;
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.ENTRY_FULL;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.DIFF;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeEntry.FULL;
 
 import java.util.List;
 import java.util.Objects;
@@ -28,9 +27,9 @@ import org.apache.tuweni.bytes.Bytes;
  * Codec for {@link ArchiveTrieNodeEntry} instances. Provides methods to encode/decode entries and
  * reconstruct a node's bytes from a FULL entry and a list of DIFF entries.
  *
- * <p>A DIFF entry's body is a binary patch produced by {@link BinaryPatchCodec}, which documents
- * the op wire format. This class owns the entry framing (metadata byte, creation/deletion
- * lifecycle) and the storage policy around the patch.
+ * <p>A DIFF entry's body is a binary patch produced by {@link BinaryDiffCodec}, which documents the
+ * op wire format. This class owns the entry framing (metadata byte, creation/deletion lifecycle)
+ * and the storage policy around the patch.
  *
  * <p>If the patch body would be at least as large as the new node, {@link #encodeDiff} falls back
  * to a FULL entry (via {@link #encodeFull}), bounding the worst case. These mid-chain FULL entries
@@ -41,32 +40,32 @@ public final class ArchiveTrieNodeCodec {
 
   private ArchiveTrieNodeCodec() {}
 
-  /** Layout: {@code [ENTRY_FULL]} ‖ {@code nodeBytes}. */
+  /** Layout: {@code [FULL]} ‖ {@code nodeBytes}. */
   public static Bytes encodeFull(final Bytes nodeBytes) {
     Objects.requireNonNull(nodeBytes, "nodeBytes must not be null");
-    return Bytes.concatenate(Bytes.of(ENTRY_FULL), nodeBytes);
+    return Bytes.concatenate(Bytes.of(FULL), nodeBytes);
   }
 
   /**
    * Encodes the diff from {@code oldNode} to {@code newNode} as a binary patch entry. Returns a
-   * {@code ENTRY_FULL | CREATION} entry when {@code oldNode} is null (creation), a {@code DELETION}
-   * tombstone when {@code newNode} is null (deletion), or a {@code ENTRY_FULL} entry when the patch
-   * body would be at least as large as the new node.
+   * {@code FULL} entry when {@code oldNode} is null (creation), a {@code DELETION} tombstone when
+   * {@code newNode} is null (deletion), or a {@code FULL} entry when the patch body would be at
+   * least as large as the new node.
    */
   public static Bytes encodeDiff(final Bytes oldNode, final Bytes newNode) {
     if (oldNode == null && newNode == null) {
       throw new IllegalArgumentException("encodeDiff: both old and new nodes are null");
     } else if (oldNode == null) {
-      return Bytes.concatenate(Bytes.of((byte) (ENTRY_FULL | CREATION)), newNode);
+      return encodeFull(newNode);
     } else if (newNode == null) {
       return Bytes.of(DELETION);
     }
 
-    final Bytes patch = BinaryPatchCodec.encode(oldNode, newNode);
+    final Bytes patch = BinaryDiffCodec.encode(oldNode, newNode);
     if (patch.size() >= newNode.size()) {
       return encodeFull(newNode);
     }
-    return Bytes.concatenate(Bytes.of(ENTRY_DIFF), patch);
+    return Bytes.concatenate(Bytes.of(DIFF), patch);
   }
 
   public static ArchiveTrieNodeEntry decode(final Bytes entry) {
@@ -106,7 +105,7 @@ public final class ArchiveTrieNodeCodec {
         throw new IllegalArgumentException(
             "reconstruct: diff list must not contain standalone FULL entries");
       }
-      node = BinaryPatchCodec.apply(node, entry.patchBody());
+      node = BinaryDiffCodec.apply(node, entry.patchBody());
     }
     return node;
   }

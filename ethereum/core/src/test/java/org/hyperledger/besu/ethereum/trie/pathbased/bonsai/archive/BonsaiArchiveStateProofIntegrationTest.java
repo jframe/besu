@@ -26,8 +26,8 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.Arch
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeHistoryStore;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveNodeKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveReadTrieNodeStrategy;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeCapture;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -64,8 +64,8 @@ class BonsaiArchiveStateProofIntegrationTest {
     final ArchiveNodeHistoryStore historyStore = new ArchiveNodeHistoryStore(storage);
     final BonsaiTrieNodeStrategy baseStrategy = new BonsaiTrieNodeStrategy();
     historyReader = new ArchiveHistoryReader(historyStore);
-    final ArchiveTrieNodeCapture capture =
-        new ArchiveTrieNodeCapture(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
+    final ArchiveTrieNodeWriter capture =
+        new ArchiveTrieNodeWriter(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
     // Gate always open: acts as initial-sync mode
     archiveStrategy = new ArchiveTrieNodeStrategy(baseStrategy, capture, () -> true);
   }
@@ -245,7 +245,7 @@ class BonsaiArchiveStateProofIntegrationTest {
   @Test
   void everyVersionAcrossACheckpointWindowIsProvable() {
     final Bytes location = Bytes.of(0x0b);
-    final int blocks = ArchiveHistoryReader.CHECKPOINT_INTERVAL * 2 + 3;
+    final int blocks = ArchiveTrieNodeWriter.DEEP_CHECKPOINT_INTERVAL * 2 + 3;
     for (int block = 0; block < blocks; block++) {
       writeAccountBlock(block, location, branchNode(block));
     }
@@ -262,7 +262,7 @@ class BonsaiArchiveStateProofIntegrationTest {
   @Test
   void diffEncodedHistoryIsSmallerThanFullNodePerBlock() {
     final Bytes location = Bytes.of(0x0c);
-    final int blocks = ArchiveHistoryReader.CHECKPOINT_INTERVAL;
+    final int blocks = ArchiveTrieNodeWriter.DEEP_CHECKPOINT_INTERVAL;
     long archivedBytes = 0;
     long fullNodeBytes = 0;
     for (int block = 0; block < blocks; block++) {

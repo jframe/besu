@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 
-class BinaryPatchCodecTest {
+class BinaryDiffCodecTest {
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -41,8 +41,8 @@ class BinaryPatchCodecTest {
 
   /** Encodes old→new and asserts apply reproduces new byte-exactly, returning the patch. */
   private static Bytes encodeAndRoundTrip(final Bytes old, final Bytes newBytes) {
-    final Bytes patch = BinaryPatchCodec.encode(old, newBytes);
-    assertThat(BinaryPatchCodec.apply(old, patch)).isEqualTo(newBytes);
+    final Bytes patch = BinaryDiffCodec.encode(old, newBytes);
+    assertThat(BinaryDiffCodec.apply(old, patch)).isEqualTo(newBytes);
     return patch;
   }
 
@@ -83,7 +83,7 @@ class BinaryPatchCodecTest {
   @Test
   void applyEmptyPatchReturnsBaseByteExact() {
     final Bytes n = node(0x01, 0x02, 0x03);
-    assertThat(BinaryPatchCodec.apply(n, Bytes.EMPTY)).isEqualTo(n);
+    assertThat(BinaryDiffCodec.apply(n, Bytes.EMPTY)).isEqualTo(n);
   }
 
   @Test

@@ -17,8 +17,13 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
+import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
@@ -163,7 +168,7 @@ class ArchiveHistoryReaderTest {
     final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x03));
     Bytes prev = emptyBranchRlp();
     putFull(nk, 0L, prev);
-    final int chainLength = ArchiveHistoryReader.CHECKPOINT_INTERVAL - 1;
+    final int chainLength = ArchiveTrieNodeWriter.DEEP_CHECKPOINT_INTERVAL - 1;
     for (int i = 1; i <= chainLength; i++) {
       final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
       putDiff(nk, i, i, prev, next);
@@ -215,7 +220,7 @@ class ArchiveHistoryReaderTest {
     final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x05));
     Bytes prev = emptyBranchRlp();
     putFull(nk, 0L, prev);
-    final int shallowInterval = ArchiveTrieNodeCapture.SHALLOW_CHECKPOINT_INTERVAL;
+    final int shallowInterval = ArchiveTrieNodeWriter.SHALLOW_CHECKPOINT_INTERVAL;
     for (int i = 1; i < shallowInterval; i++) {
       final Bytes next = branchRlpWithChild(i % 16, dummyChildRlp());
       putDiff(nk, i, i, prev, next);
@@ -243,5 +248,46 @@ class ArchiveHistoryReaderTest {
       prev = next;
     }
     assertThat(reader.nodeAt(nk, chainLength)).isEmpty();
+  }
+
+  @Test
+  void shortCircuitsWithoutExtraReadsWhenCounterExceedsMaxBackwardWalkSteps() {
+    final SegmentedKeyValueStorage spyStorage =
+        spy(new SegmentedInMemoryKeyValueStorage(List.of(TRIE_BRANCH_STORAGE_ARCHIVE)));
+    final ArchiveNodeHistoryStore spiedStore = new ArchiveNodeHistoryStore(spyStorage);
+    final ArchiveHistoryReader spiedReader = new ArchiveHistoryReader(spiedStore);
+
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x08));
+    final int nodeSize = 100;
+    final byte[] baseBytes = new byte[nodeSize];
+    Bytes prev = Bytes.wrap(baseBytes.clone());
+
+    final SegmentedKeyValueStorageTransaction fullTx = spyStorage.startTransaction();
+    spiedStore.putEncoded(
+        fullTx,
+        ArchiveNodeKey.historyKey(nk, 0L),
+        ArchiveNodeHistoryStore.encodeStoredValue(0, ArchiveTrieNodeCodec.encodeFull(prev)));
+    fullTx.commit();
+
+    final int chainLength = ArchiveHistoryReader.MAX_BACKWARD_WALK_STEPS + 1;
+    for (int i = 1; i <= chainLength; i++) {
+      final byte[] nextBytes = baseBytes.clone();
+      nextBytes[0] = (byte) i;
+      final Bytes next = Bytes.wrap(nextBytes);
+      final SegmentedKeyValueStorageTransaction tx = spyStorage.startTransaction();
+      spiedStore.putEncoded(
+          tx,
+          ArchiveNodeKey.historyKey(nk, i),
+          ArchiveNodeHistoryStore.encodeStoredValue(
+              i, ArchiveTrieNodeCodec.encodeDiff(prev, next)));
+      tx.commit();
+      prev = next;
+    }
+
+    assertThat(spiedReader.nodeAt(nk, chainLength)).isEmpty();
+
+    // Only the single anchor lookup should have happened — no backward probing once the
+    // anchor's counter alone proves no FULL checkpoint can be within reach.
+    verify(spyStorage, times(1)).getNearestBefore(any(SegmentIdentifier.class), any(Bytes.class));
   }
 }

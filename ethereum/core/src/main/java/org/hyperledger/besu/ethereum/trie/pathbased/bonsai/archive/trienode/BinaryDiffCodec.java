@@ -20,7 +20,7 @@ import java.util.List;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
- * Generic binary patch codec: encodes the byte-level difference between a base array and a target
+ * Generic binary diff codec: encodes the byte-level difference between a base array and a target
  * array as a sequence of COPY/SKIP/INSERT/REPLACE ops, and applies such a patch to reconstruct the
  * target from the base.
  *
@@ -41,44 +41,23 @@ import org.apache.tuweni.bytes.Bytes;
  * least as large as the target (e.g. when every byte differs). Callers decide the fallback — {@link
  * ArchiveTrieNodeCodec#encodeDiff} stores a FULL entry in that case.
  */
-public final class BinaryPatchCodec {
+public final class BinaryDiffCodec {
 
-  private static final byte OP_COPY = 0b00;
-  private static final byte OP_SKIP = 0b01;
-  private static final byte OP_INSERT = 0b10;
-  private static final byte OP_REPLACE = 0b11;
+  private static final byte OP_COPY = 0x00;
+  private static final byte OP_SKIP = 0x01;
+  private static final byte OP_INSERT = 0x02;
+  private static final byte OP_REPLACE = 0x03;
+
   private static final int OP_HEADER_SIZE = 2;
   private static final int OP_TYPE_SHIFT = 6;
   private static final int OP_LENGTH_HIGH_MASK = 0x3F;
   private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits (2-byte op format)
-
-  /**
-   * Minimum matching run required to accept a re-synchronisation anchor in {@link
-   * #encodeRealigning}. Trie realignment points (child slots, hash refs) are ≥ 32 bytes, so 4
-   * rejects spurious 1-in-4-billion coincidental matches while still anchoring every real boundary.
-   */
   private static final int RESYNC_MATCH_MIN = 4;
-
-  /**
-   * Cap on the (skipOld + insNew) distance {@link #findResync} searches before giving up and
-   * consuming the remainder as one edit. Real trie realignments happen within a child slot (≤ 33
-   * bytes); beyond this window the data has genuinely diverged and a single spanning edit (bounded
-   * by the caller's FULL fallback) is the right answer.
-   */
   private static final int RESYNC_MAX_RADIUS = 256;
 
-  private BinaryPatchCodec() {}
+  private BinaryDiffCodec() {}
 
-  /**
-   * Encodes the byte-level difference from {@code base} to {@code target} as a patch body.
-   *
-   * <p>Dispatches to {@link #encodeSameLength} for same-length arrays or {@link #encodeRealigning}
-   * for different-length arrays. The same-length specialisation is not just an optimisation: it
-   * stays byte-aligned by construction (never emits SKIP/INSERT), so a changed run always becomes
-   * exactly one COPY+REPLACE pair, whereas the realigning encoder fed repetitive data (e.g. zero
-   * runs) can anchor on a coincidental shifted match and produce a correct but larger misaligned
-   * patch. Same-length substitution (hash-for-hash) is the dominant trie-node change.
-   */
+  /** Encodes the difference between {@code base} and {@code target} as a binary patch. */
   public static Bytes encode(final Bytes base, final Bytes target) {
     if (base.size() == target.size()) {
       return encodeSameLength(base, target);
@@ -97,10 +76,10 @@ public final class BinaryPatchCodec {
         throw new IllegalArgumentException("truncated op at position " + patchPos);
       }
       // 2-byte op: [2b type][6b lenHi][8b lenLo]
-      final int first = Byte.toUnsignedInt(patchBody.get(patchPos++));
-      final int second = Byte.toUnsignedInt(patchBody.get(patchPos++));
-      final int opType = first >> OP_TYPE_SHIFT;
-      final int length = ((first & OP_LENGTH_HIGH_MASK) << Byte.SIZE) | second;
+      final int firstHeaderByte = Byte.toUnsignedInt(patchBody.get(patchPos++));
+      final int secondHeaderByte = Byte.toUnsignedInt(patchBody.get(patchPos++));
+      final byte opType = (byte) (firstHeaderByte >> OP_TYPE_SHIFT);
+      final int length = ((firstHeaderByte & OP_LENGTH_HIGH_MASK) << Byte.SIZE) | secondHeaderByte;
 
       switch (opType) {
         case OP_COPY -> {
@@ -315,13 +294,11 @@ public final class BinaryPatchCodec {
   /** Emits a REPLACE or INSERT op followed by its data, splitting above {@link #OP_MAX_LENGTH}. */
   private static void appendDataOp(final List<Bytes> parts, final byte opType, final Bytes data) {
     int off = 0;
-    int remaining = data.size();
-    while (remaining > 0) {
-      final int chunk = Math.min(remaining, OP_MAX_LENGTH);
+    while (off < data.size()) {
+      final int chunk = Math.min(data.size() - off, OP_MAX_LENGTH);
       parts.add(encodeOpHeader(opType, chunk));
       parts.add(data.slice(off, chunk));
       off += chunk;
-      remaining -= chunk;
     }
   }
 

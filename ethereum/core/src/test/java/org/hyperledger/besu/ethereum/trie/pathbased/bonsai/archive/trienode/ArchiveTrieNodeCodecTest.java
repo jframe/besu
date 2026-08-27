@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Tests for entry framing (metadata byte, creation/deletion lifecycle), the FULL-fallback storage
  * policy, and diff-chain reconstruction. The binary patch algorithm inside DIFF bodies is covered
- * by {@link BinaryPatchCodecTest}.
+ * by {@link BinaryDiffCodecTest}.
  */
 class ArchiveTrieNodeCodecTest {
 
@@ -70,7 +70,6 @@ class ArchiveTrieNodeCodecTest {
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeDiff(null, n));
     assertThat(e.isFull()).isTrue();
-    assertThat(e.isCreation()).isTrue();
     assertThat(e.fullNode()).isEqualTo(n);
   }
 
