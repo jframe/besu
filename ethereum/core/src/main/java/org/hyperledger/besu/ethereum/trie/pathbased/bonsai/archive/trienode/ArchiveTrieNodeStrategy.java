@@ -135,7 +135,7 @@ public class ArchiveTrieNodeStrategy
       final Bytes prior =
           block == 0L
               ? null
-              : base.getFlatAccountTrieNode(location, nodeHash, storage).orElse(null);
+              : base.getFlatAccountTrieNode(location, Bytes32.ZERO, storage).orElse(null);
       trieNodeWriter.capture(
           ArchiveNodeKey.account(location), location, block, node, prior, transaction);
     }
@@ -155,7 +155,8 @@ public class ArchiveTrieNodeStrategy
       final Bytes prior =
           block == 0L
               ? null
-              : base.getFlatStorageTrieNode(accountHash, location, nodeHash, storage).orElse(null);
+              : base.getFlatStorageTrieNode(accountHash, location, Bytes32.ZERO, storage)
+                  .orElse(null);
       trieNodeWriter.capture(
           ArchiveNodeKey.storage(accountHash.getBytes(), location),
           location,
