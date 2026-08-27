@@ -112,8 +112,11 @@ public final class ArchiveNodeHistoryStore {
   }
 
   private Optional<HistoryEntry> decodeStoredValue(final Bytes storedValue, final long block) {
-    if (storedValue.isEmpty()) {
-      LOG.warn("corrupt archive entry at block {}: stored value is empty, skipping", block);
+    if (storedValue.size() < 2) {
+      LOG.warn(
+          "corrupt archive entry at block {}: stored value too short ({} bytes), skipping",
+          block,
+          storedValue.size());
       return Optional.empty();
     }
     final int counter = Byte.toUnsignedInt(storedValue.get(0));

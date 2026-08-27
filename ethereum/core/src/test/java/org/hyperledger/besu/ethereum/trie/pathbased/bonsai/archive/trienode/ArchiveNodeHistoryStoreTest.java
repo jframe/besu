@@ -103,6 +103,21 @@ class ArchiveNodeHistoryStoreTest {
   }
 
   @Test
+  void oneByteStoredValueIsSkippedWithoutThrowing() {
+    // Stored value with only the counter byte and no codec entry is corrupt; must return empty
+    // rather than propagating the IllegalArgumentException from ArchiveTrieNodeCodec.decode.
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x10));
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(
+        TRIE_BRANCH_STORAGE_ARCHIVE,
+        ArchiveNodeKey.historyKey(nk, 5L).toArrayUnsafe(),
+        new byte[] {0x00}); // counter byte only, no codec entry byte
+    tx.commit();
+
+    assertThat(store.getLatestBefore(nk, 5L)).isEmpty();
+  }
+
+  @Test
   void encodeStoredValueRejectsCounterOutOfByteRange() {
     final Bytes codecEntry = ArchiveTrieNodeCodec.encodeFull(Bytes.of(0xAA));
     assertThatThrownBy(() -> ArchiveNodeHistoryStore.encodeStoredValue(256, codecEntry))

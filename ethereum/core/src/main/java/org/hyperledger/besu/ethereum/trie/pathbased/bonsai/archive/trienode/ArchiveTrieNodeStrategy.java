@@ -80,6 +80,7 @@ public class ArchiveTrieNodeStrategy
             trieCapturePool));
   }
 
+  @VisibleForTesting
   public ArchiveTrieNodeStrategy(
       final TrieNodeStrategy base, final ArchiveTrieNodeWriter trieNodeWriter) {
     this.base = Objects.requireNonNull(base);
