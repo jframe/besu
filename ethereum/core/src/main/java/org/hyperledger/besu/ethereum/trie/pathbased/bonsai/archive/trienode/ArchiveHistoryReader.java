@@ -105,7 +105,7 @@ public final class ArchiveHistoryReader {
       return Optional.empty();
     }
 
-    final List<Bytes> diffs = new ArrayList<>(stepsToFull + 1);
+    final List<Bytes> diffs = new ArrayList<>(stepsToFull);
     diffs.add(anchorEntry.rawEntryBytes());
     long walkBlock = anchorEntry.block();
 

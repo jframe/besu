@@ -736,7 +736,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
           MonitoredExecutors.newFixedThreadPool(
               "trie-capture", syncConfig.getComputationParallelism(), metricsSystem);
       archiveTrieNodeStrategy =
-          ArchiveTrieNodeStrategy.createArchiving(
+          ArchiveTrieNodeStrategy.createArchiveStrategy(
               keyValueStorage.getComposedWorldStateStorage(), trieCapturePool);
       keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
       closeables.add(archiveTrieNodeStrategy);

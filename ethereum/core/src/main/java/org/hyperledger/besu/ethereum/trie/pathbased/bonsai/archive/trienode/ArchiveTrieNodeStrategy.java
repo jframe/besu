@@ -30,6 +30,8 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -62,6 +64,10 @@ public class ArchiveTrieNodeStrategy
   // and no-peers startup
   private final AtomicBoolean archiving = new AtomicBoolean(true);
 
+  // Block number is constant within a transaction; cache it to avoid a storage read per node write.
+  private final Cache<SegmentedKeyValueStorageTransaction, Long> txBlockNumberCache =
+      Caffeine.newBuilder().weakKeys().build();
+
   /**
    * Builds an archiving strategy over {@code liveStorage}, owning a worker pool for async
    * history-entry computation.
@@ -70,7 +76,7 @@ public class ArchiveTrieNodeStrategy
    * @param trieCapturePool the worker pool, owned and shut down by the returned strategy
    * @return an archiving {@link TrieNodeStrategy} ready to install via {@code setTrieNodeStrategy}
    */
-  public static ArchiveTrieNodeStrategy createArchiving(
+  public static ArchiveTrieNodeStrategy createArchiveStrategy(
       final SegmentedKeyValueStorage liveStorage, final ExecutorService trieCapturePool) {
     return new ArchiveTrieNodeStrategy(
         new BonsaiTrieNodeStrategy(),
@@ -130,7 +136,7 @@ public class ArchiveTrieNodeStrategy
       final Bytes location,
       final Bytes32 nodeHash,
       final Bytes node) {
-    final long block = readBlockNumber(storage);
+    final long block = txBlockNumberCache.get(transaction, ignored -> readBlockNumber(storage));
     base.putFlatAccountTrieNode(storage, transaction, location, nodeHash, node);
     if (shouldCaptureBlock(block)) {
       final Bytes prior =
@@ -150,7 +156,7 @@ public class ArchiveTrieNodeStrategy
       final Bytes location,
       final Bytes32 nodeHash,
       final Bytes node) {
-    final long block = readBlockNumber(storage);
+    final long block = txBlockNumberCache.get(transaction, ignored -> readBlockNumber(storage));
     base.putFlatStorageTrieNode(storage, transaction, accountHash, location, nodeHash, node);
     if (shouldCaptureBlock(block)) {
       final Bytes prior =
@@ -173,7 +179,7 @@ public class ArchiveTrieNodeStrategy
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction,
       final Bytes location) {
-    final long block = readBlockNumber(storage);
+    final long block = txBlockNumberCache.get(transaction, ignored -> readBlockNumber(storage));
     base.removeFlatAccountStateTrieNode(storage, transaction, location);
     if (shouldCaptureBlock(block)) {
       final Bytes prior =
@@ -192,11 +198,13 @@ public class ArchiveTrieNodeStrategy
   public void onBeforeCommit(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {
+    txBlockNumberCache.invalidate(transaction);
     trieNodeWriter.onBeforeCommit(transaction);
   }
 
   @Override
   public void onRollback(final SegmentedKeyValueStorageTransaction transaction) {
+    txBlockNumberCache.invalidate(transaction);
     trieNodeWriter.onRollback(transaction);
   }
 

@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
@@ -209,5 +210,13 @@ public class ArchiveTrieNodeWriter implements Closeable {
   @Override
   public void close() {
     capturePool.shutdown();
+    try {
+      if (!capturePool.awaitTermination(5, TimeUnit.SECONDS)) {
+        capturePool.shutdownNow();
+      }
+    } catch (final InterruptedException e) {
+      capturePool.shutdownNow();
+      Thread.currentThread().interrupt();
+    }
   }
 }
