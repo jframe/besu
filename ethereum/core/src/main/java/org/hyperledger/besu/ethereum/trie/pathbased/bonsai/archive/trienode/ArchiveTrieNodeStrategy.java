@@ -116,11 +116,11 @@ public class ArchiveTrieNodeStrategy
 
   /**
    * A no-op re-write: the node is being written with the exact bytes already committed at this
-   * location (e.g. a storage slot set to its existing value, which Bonsai still re-commits along the
-   * touched path). Its history is already captured by the last real change — {@code getLatestBefore}
-   * resolves to that entry — so archiving an empty-diff entry here is redundant and would count
-   * toward the diff-chain length that forces FULL checkpoints. Creations ({@code prior == null}) are
-   * never no-ops.
+   * location (e.g. a storage slot set to its existing value, which Bonsai still re-commits along
+   * the touched path). Its history is already captured by the last real change — {@code
+   * getLatestBefore} resolves to that entry — so archiving an empty-diff entry here is redundant
+   * and would count toward the diff-chain length that forces FULL checkpoints. Creations ({@code
+   * prior == null}) are never no-ops.
    */
   private boolean isNoOpRewrite(final Bytes prior, final Bytes node) {
     return prior != null && prior.equals(node);

@@ -54,7 +54,8 @@ public final class BinaryDiffCodec {
   private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits (2-byte op format)
   private static final int RESYNC_MATCH_MIN = 4;
   // 64 covers all real MPT patterns (single/dual child-presence toggles peak at edit distance 68);
-  // rarer multi-toggle cases fall through to the (maxBase, maxTarget) fallback and encodeDiff → FULL.
+  // rarer multi-toggle cases fall through to the (maxBase, maxTarget) fallback and encodeDiff →
+  // FULL.
   private static final int RESYNC_MAX_RADIUS = 64;
 
   private BinaryDiffCodec() {}
