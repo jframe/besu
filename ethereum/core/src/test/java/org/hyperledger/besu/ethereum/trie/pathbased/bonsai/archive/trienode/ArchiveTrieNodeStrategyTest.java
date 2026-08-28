@@ -217,6 +217,30 @@ class ArchiveTrieNodeStrategyTest {
   }
 
   @Test
+  void skipsArchivingNoOpRewriteOfUnchangedNode() {
+    // A node re-written with its already-committed bytes (the no-op storage write Bonsai still
+    // re-commits along a touched path) must not add a redundant archive entry: getLatestBefore
+    // resolves to the last real change, whose value is identical.
+    final ArchiveTrieNodeStrategy strategy = strategyWithGate(true);
+    final Bytes location = Bytes.of(0x07);
+    final Bytes node = Bytes.fromHexString("0xfeed");
+
+    // Block 1: real write — archived.
+    setStoredBlockNumber(0L);
+    put(strategy, location, node);
+
+    // Block 5: identical bytes re-written — no-op, must be skipped (no new entry).
+    setStoredBlockNumber(4L);
+    put(strategy, location, node);
+
+    final var latest = historyStore.getLatestBefore(ArchiveNodeKey.account(location), 5L);
+    assertThat(latest).isPresent();
+    assertThat(latest.get().block())
+        .as("no entry written at the no-op block; resolves to the block-1 entry")
+        .isEqualTo(1L);
+  }
+
+  @Test
   void accountReadsDelegateToLiveStorage() {
     final ArchiveTrieNodeStrategy strategy = strategyWithGate(true);
     final Bytes location = Bytes.of(0x0d);

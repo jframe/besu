@@ -114,6 +114,18 @@ public class ArchiveTrieNodeStrategy
     return block == 0L || archiving.get();
   }
 
+  /**
+   * A no-op re-write: the node is being written with the exact bytes already committed at this
+   * location (e.g. a storage slot set to its existing value, which Bonsai still re-commits along the
+   * touched path). Its history is already captured by the last real change — {@code getLatestBefore}
+   * resolves to that entry — so archiving an empty-diff entry here is redundant and would count
+   * toward the diff-chain length that forces FULL checkpoints. Creations ({@code prior == null}) are
+   * never no-ops.
+   */
+  private boolean isNoOpRewrite(final Bytes prior, final Bytes node) {
+    return prior != null && prior.equals(node);
+  }
+
   @Override
   public Optional<Bytes> getFlatAccountTrieNode(
       final Bytes location, final Bytes32 nodeHash, final SegmentedKeyValueStorage storage) {
@@ -143,6 +155,9 @@ public class ArchiveTrieNodeStrategy
           block == 0L
               ? null
               : base.getFlatAccountTrieNode(location, Bytes32.ZERO, storage).orElse(null);
+      if (isNoOpRewrite(prior, node)) {
+        return;
+      }
       trieNodeWriter.capture(
           ArchiveNodeKey.account(location), location, block, node, prior, transaction);
     }
@@ -164,6 +179,9 @@ public class ArchiveTrieNodeStrategy
               ? null
               : base.getFlatStorageTrieNode(accountHash, location, Bytes32.ZERO, storage)
                   .orElse(null);
+      if (isNoOpRewrite(prior, node)) {
+        return;
+      }
       trieNodeWriter.capture(
           ArchiveNodeKey.storage(accountHash.getBytes(), location),
           location,
