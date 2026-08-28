@@ -33,9 +33,6 @@ public final class ArchiveTrieNodeEntry {
   private final Bytes body;
 
   ArchiveTrieNodeEntry(final byte metadata, final Bytes body) {
-    if (metadata == DIFF && body.isEmpty()) {
-      throw new IllegalArgumentException("DIFF entry must have a non-empty patch body");
-    }
     this.metadata = metadata;
     this.body = body;
   }

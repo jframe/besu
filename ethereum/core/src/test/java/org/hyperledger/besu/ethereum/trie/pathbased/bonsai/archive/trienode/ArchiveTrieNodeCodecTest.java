@@ -228,12 +228,22 @@ class ArchiveTrieNodeCodecTest {
   // ---------------------------------------------------------------------------
 
   @Test
-  void decodeRejectsEmptyDiffBody() {
-    // A stored value with metadata=DIFF (0x00) but no body is corrupt and must be rejected at
-    // decode time rather than silently returning the base node from BinaryDiffCodec.apply.
-    final Bytes corruptEntry = Bytes.of(ArchiveTrieNodeEntry.DIFF);
-    assertThatThrownBy(() -> ArchiveTrieNodeCodec.decode(corruptEntry))
-        .isInstanceOf(IllegalArgumentException.class);
+  void decodeAcceptsEmptyDiffBodyAndReconstructsBaseNode() {
+    // An empty patch body is the valid encoding of an unchanged node (identical prior and new): it
+    // decodes as a no-op DIFF and reconstructs the base node byte-exactly
+    final Bytes n = fill(40, 0xAB);
+    final Bytes emptyDiff = ArchiveTrieNodeCodec.encodeDiff(n, n);
+    assertThat(emptyDiff).isEqualTo(Bytes.of(ArchiveTrieNodeEntry.DIFF)); // [DIFF] byte, no body
+
+    final ArchiveTrieNodeEntry e = ArchiveTrieNodeCodec.decode(emptyDiff);
+    assertThat(e.isFull()).isFalse();
+    assertThat(e.isDeletion()).isFalse();
+    assertThat(e.patchBody().size()).isZero();
+
+    assertThat(
+            ArchiveTrieNodeCodec.reconstruct(
+                ArchiveTrieNodeCodec.encodeFull(n), List.of(emptyDiff)))
+        .isEqualTo(n);
   }
 
   @Test
