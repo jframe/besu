@@ -80,6 +80,7 @@ public class PathBasedExtraStorageOptions
   public static final String DEEP_CHECKPOINT_INTERVAL =
       "--Xbonsai-archive-state-proofs-deep-checkpoint-interval";
 
+  /** Upper bound for the checkpoint intervals: the diff-chain counter is a single unsigned byte. */
   public static final int MAX_BONSAI_ARCHIVE_CHECKPOINT_INTERVAL =
       ArchiveNodeHistoryStore.MAX_COUNTER + 1;
 
