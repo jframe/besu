@@ -124,9 +124,14 @@ public final class ArchiveNodeHistoryStore {
     }
     final int counter = Byte.toUnsignedInt(storedValue.get(0));
     final Bytes rawEntryBytes = storedValue.slice(1);
-    return Optional.of(
-        new HistoryEntry(
-            counter, ArchiveTrieNodeCodec.decode(rawEntryBytes), rawEntryBytes, block));
+    try {
+      return Optional.of(
+          new HistoryEntry(
+              counter, ArchiveTrieNodeCodec.decode(rawEntryBytes), rawEntryBytes, block));
+    } catch (final IllegalArgumentException e) {
+      LOG.warn("corrupt archive entry at block {}: {}, skipping", block, e.getMessage());
+      return Optional.empty();
+    }
   }
 
   /**

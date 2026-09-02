@@ -118,6 +118,21 @@ class ArchiveNodeHistoryStoreTest {
   }
 
   @Test
+  void unknownMetadataByteIsSkippedWithoutThrowing() {
+    // Codec entry with an unknown metadata byte (not DIFF/FULL/DELETION) is corrupt; must return
+    // empty rather than propagating the IllegalArgumentException from ArchiveTrieNodeCodec.decode.
+    final Bytes nk = ArchiveNodeKey.account(Bytes.of(0x11));
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    tx.put(
+        TRIE_BRANCH_STORAGE_ARCHIVE,
+        ArchiveNodeKey.historyKey(nk, 5L).toArrayUnsafe(),
+        new byte[] {0x00, 0x05, 0x11}); // counter byte + unknown metadata byte 0x05 + body
+    tx.commit();
+
+    assertThat(store.getLatestBefore(nk, 5L)).isEmpty();
+  }
+
+  @Test
   void encodeStoredValueRejectsCounterOutOfByteRange() {
     final Bytes codecEntry = ArchiveTrieNodeCodec.encodeFull(Bytes.of(0xAA));
     assertThatThrownBy(() -> ArchiveNodeHistoryStore.encodeStoredValue(256, codecEntry))

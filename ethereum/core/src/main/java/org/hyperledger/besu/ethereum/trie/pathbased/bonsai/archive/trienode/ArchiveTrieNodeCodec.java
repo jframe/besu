@@ -74,14 +74,24 @@ public final class ArchiveTrieNodeCodec {
    *
    * @param entry the encoded bytes; must be at least 1 byte (the metadata byte)
    * @return the decoded entry
-   * @throws IllegalArgumentException if {@code entry} is null or empty
+   * @throws IllegalArgumentException if {@code entry} is null, empty, or carries an unknown
+   *     metadata byte
    */
   public static ArchiveTrieNodeEntry decode(final Bytes entry) {
     Objects.requireNonNull(entry, "entry must not be null");
     if (entry.isEmpty()) {
       throw new IllegalArgumentException("Entry must be at least 1 byte (metadata byte)");
     }
-    return new ArchiveTrieNodeEntry(entry.get(0), entry.slice(1));
+    final byte metadata = entry.get(0);
+    if (!isKnownMetadata(metadata)) {
+      throw new IllegalArgumentException(
+          String.format("Unknown archive trie-node entry metadata byte: 0x%02X", metadata));
+    }
+    return new ArchiveTrieNodeEntry(metadata, entry.slice(1));
+  }
+
+  private static boolean isKnownMetadata(final byte metadata) {
+    return metadata == FULL || metadata == DIFF || metadata == DELETION;
   }
 
   /**

@@ -247,6 +247,16 @@ class ArchiveTrieNodeCodecTest {
   }
 
   @Test
+  void decodeRejectsUnknownMetadataByte() {
+    // Only DIFF (0x00), FULL (0x01) and DELETION (0x02) are valid; any other first byte is corrupt
+    // and must be rejected at decode time rather than being silently treated as a DIFF.
+    final Bytes corrupt = Bytes.of(0x05, 0x11, 0x22);
+    assertThatThrownBy(() -> ArchiveTrieNodeCodec.decode(corrupt))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("0x05");
+  }
+
+  @Test
   void patchBodyThrowsOnFullEntry() {
     final ArchiveTrieNodeEntry e =
         ArchiveTrieNodeCodec.decode(ArchiveTrieNodeCodec.encodeFull(node(0x01)));
