@@ -60,7 +60,7 @@ class ArchiveTrieNodeStrategyTest {
 
   private ArchiveTrieNodeStrategy strategyWithGate(final boolean gateOpen) {
     final ArchiveTrieNodeStrategy strategy =
-        new ArchiveTrieNodeStrategy(new BonsaiTrieNodeStrategy(), capture);
+        new ArchiveTrieNodeStrategy(new BonsaiTrieNodeStrategy(), capture, () -> true);
     strategy.setArchiving(gateOpen);
     return strategy;
   }
@@ -131,6 +131,40 @@ class ArchiveTrieNodeStrategyTest {
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(locationC), 3L))
         .as("block 3 archived (gate reopened)")
         .isPresent();
+  }
+
+  @Test
+  void keepsArchivingWhenInSyncButPeerless() {
+    // SyncState reports "in sync" when there is no remote chain estimate (no peers). Such a
+    // peer-less in-sync signal must NOT stop archiving: capture continues while
+    // hasRemoteChainEstimate is false, even for a non-genesis block.
+    final ArchiveTrieNodeStrategy strategy =
+        new ArchiveTrieNodeStrategy(new BonsaiTrieNodeStrategy(), capture, () -> false);
+    strategy.onInSyncStatusChange(true); // spurious in-sync caused by having no peers
+
+    setStoredBlockNumber(5L); // current block 6, not genesis
+    final Bytes location = Bytes.of(0x0e);
+    put(strategy, location, Bytes.fromHexString("0xcafe"));
+
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 6L))
+        .as("peer-less in-sync must keep archiving")
+        .isPresent();
+  }
+
+  @Test
+  void stopsArchivingWhenInSyncWithRemoteEstimate() {
+    // Genuine in-sync (a remote chain estimate exists) closes the gate for non-genesis blocks.
+    final ArchiveTrieNodeStrategy strategy =
+        new ArchiveTrieNodeStrategy(new BonsaiTrieNodeStrategy(), capture, () -> true);
+    strategy.onInSyncStatusChange(true);
+
+    setStoredBlockNumber(5L); // current block 6, not genesis
+    final Bytes location = Bytes.of(0x0e);
+    put(strategy, location, Bytes.fromHexString("0xcafe"));
+
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 6L))
+        .as("genuine in-sync (with a peer) stops archiving")
+        .isEmpty();
   }
 
   @Test

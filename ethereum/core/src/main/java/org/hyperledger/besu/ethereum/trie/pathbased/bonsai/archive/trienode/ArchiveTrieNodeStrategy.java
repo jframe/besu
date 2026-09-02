@@ -29,6 +29,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -64,6 +65,9 @@ public class ArchiveTrieNodeStrategy
   // and no-peers startup
   private final AtomicBoolean archiving = new AtomicBoolean(true);
 
+  // True when a remote chain estimate exists (we have a peer that knows the chain head)
+  private volatile BooleanSupplier hasRemoteChainEstimate;
+
   // Block number is constant within a transaction; cache it to avoid a storage read per node write.
   private final Cache<SegmentedKeyValueStorageTransaction, Long> txBlockNumberCache =
       Caffeine.newBuilder().weakKeys().build();
@@ -90,24 +94,46 @@ public class ArchiveTrieNodeStrategy
             new ArchiveCoverageTracker(liveStorage),
             trieCapturePool,
             shallowCheckpointInterval,
-            deepCheckpointInterval));
+            deepCheckpointInterval),
+        () -> false);
   }
 
+  /**
+   * Supplies whether a remote chain estimate exists. Must be set before the in-sync subscription is
+   * registered, since it is consulted from {@link #onInSyncStatusChange(boolean)}.
+   *
+   * @param hasRemoteChainEstimate true when a peer with a known chain head is available
+   */
+  public void setHasRemoteChainEstimate(final BooleanSupplier hasRemoteChainEstimate) {
+    this.hasRemoteChainEstimate =
+        Objects.requireNonNull(hasRemoteChainEstimate, "hasRemoteChainEstimate must not be null");
+  }
+
+  /**
+   * @param base the delegate strategy for the live flat DB
+   * @param trieNodeWriter the writer that persists archived history entries
+   * @param hasRemoteChainEstimate supplies whether a remote chain estimate exists (see field)
+   */
   @VisibleForTesting
   public ArchiveTrieNodeStrategy(
-      final TrieNodeStrategy base, final ArchiveTrieNodeWriter trieNodeWriter) {
+      final TrieNodeStrategy base,
+      final ArchiveTrieNodeWriter trieNodeWriter,
+      final BooleanSupplier hasRemoteChainEstimate) {
     this.base = Objects.requireNonNull(base);
     this.trieNodeWriter = Objects.requireNonNull(trieNodeWriter);
+    this.hasRemoteChainEstimate =
+        Objects.requireNonNull(hasRemoteChainEstimate, "hasRemoteChainEstimate must not be null");
   }
 
   @Override
   public void onInSyncStatusChange(final boolean inSync) {
-    archiving.set(!inSync);
+    // A peer-less node reports "in sync" forever, so only trust a corroborated in-sync signal.
+    archiving.set(!inSync || !hasRemoteChainEstimate.getAsBoolean());
   }
 
   @VisibleForTesting
   void setArchiving(final boolean archive) {
-    archiving.set(archive);
+    this.archiving.set(archive);
   }
 
   private static long readBlockNumber(final SegmentedKeyValueStorage storage) {
