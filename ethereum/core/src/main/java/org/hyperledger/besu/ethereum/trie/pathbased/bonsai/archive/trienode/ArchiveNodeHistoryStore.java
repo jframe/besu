@@ -39,6 +39,9 @@ public final class ArchiveNodeHistoryStore {
 
   private static final Logger LOG = LoggerFactory.getLogger(ArchiveNodeHistoryStore.class);
 
+  // The diff-chain counter is stored as a single unsigned byte, so its maximum value is 255
+  public static final int MAX_COUNTER = 0xFF;
+
   private final SegmentedKeyValueStorage storage;
 
   /**
@@ -59,7 +62,7 @@ public final class ArchiveNodeHistoryStore {
    * @throws IllegalArgumentException if {@code counter} does not fit in an unsigned byte (0-255)
    */
   public static Bytes encodeStoredValue(final int counter, final Bytes codecEntry) {
-    if (counter < 0 || counter > 255) {
+    if (counter < 0 || counter > MAX_COUNTER) {
       throw new IllegalArgumentException("counter must fit in 1 unsigned byte: " + counter);
     }
     return Bytes.concatenate(Bytes.of((byte) counter), codecEntry);

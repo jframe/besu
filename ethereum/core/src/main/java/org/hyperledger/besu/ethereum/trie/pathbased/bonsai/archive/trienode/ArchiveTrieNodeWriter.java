@@ -54,38 +54,31 @@ public class ArchiveTrieNodeWriter implements Closeable {
   }
 
   private static final int BATCH_SIZE = 64;
-  public static final int SHALLOW_CHECKPOINT_INTERVAL = 32;
-  public static final int DEEP_CHECKPOINT_INTERVAL = 16;
-
-  /**
-   * Largest interval across all tiers; {@link ArchiveHistoryReader#MAX_BACKWARD_WALK_STEPS} is
-   * derived from it.
-   */
-  public static final int MAX_CHECKPOINT_INTERVAL =
-      Math.max(SHALLOW_CHECKPOINT_INTERVAL, DEEP_CHECKPOINT_INTERVAL);
 
   /**
    * Returns the checkpoint interval for a node at the given nibble-path depth (in {@code location}
    * bytes).
    *
    * <ul>
-   *   <li>depth 0 (root) → {@link #SHALLOW_CHECKPOINT_INTERVAL} (root and shallow share the same
+   *   <li>depth 0 (root) → the configured shallow interval (root and shallow share the same
    *       interval)
-   *   <li>depth 1–2 → {@link #SHALLOW_CHECKPOINT_INTERVAL}
-   *   <li>depth ≥ 3 → {@link #DEEP_CHECKPOINT_INTERVAL}
+   *   <li>depth 1–2 → the configured shallow interval
+   *   <li>depth ≥ 3 → the configured deep interval
    * </ul>
    *
    * @param locationSizeBytes the trie node's {@code location.size()} in bytes
    * @return the mutation interval at which a FULL entry is emitted
    */
   @VisibleForTesting
-  static int checkpointIntervalForDepth(final int locationSizeBytes) {
-    return locationSizeBytes <= 2 ? SHALLOW_CHECKPOINT_INTERVAL : DEEP_CHECKPOINT_INTERVAL;
+  int checkpointIntervalForDepth(final int locationSizeBytes) {
+    return locationSizeBytes <= 2 ? shallowCheckpointInterval : deepCheckpointInterval;
   }
 
   private final ArchiveNodeHistoryStore historyStore;
   private final ArchiveCoverageTracker coverageTracker;
   private final ExecutorService capturePool;
+  private final int shallowCheckpointInterval;
+  private final int deepCheckpointInterval;
 
   // One buffer per open transaction, keyed by identity; removed on commit or rollback.
   private final ConcurrentHashMap<SegmentedKeyValueStorageTransaction, CaptureBuffer> buffers =
@@ -95,11 +88,15 @@ public class ArchiveTrieNodeWriter implements Closeable {
   public ArchiveTrieNodeWriter(
       final ArchiveNodeHistoryStore historyStore,
       final ArchiveCoverageTracker coverageTracker,
-      final ExecutorService capturePool) {
+      final ExecutorService capturePool,
+      final int shallowCheckpointInterval,
+      final int deepCheckpointInterval) {
     this.historyStore = Objects.requireNonNull(historyStore, "historyStore must not be null");
     this.coverageTracker =
         Objects.requireNonNull(coverageTracker, "coverageTracker must not be null");
     this.capturePool = Objects.requireNonNull(capturePool, "capturePool must not be null");
+    this.shallowCheckpointInterval = shallowCheckpointInterval;
+    this.deepCheckpointInterval = deepCheckpointInterval;
   }
 
   /**

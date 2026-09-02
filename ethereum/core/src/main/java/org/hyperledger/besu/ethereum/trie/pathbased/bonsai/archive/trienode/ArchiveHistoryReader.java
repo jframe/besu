@@ -33,16 +33,6 @@ public final class ArchiveHistoryReader {
 
   private static final Logger LOG = LoggerFactory.getLogger(ArchiveHistoryReader.class);
 
-  /**
-   * Sanity ceiling on the distance-to-FULL-checkpoint reported by a DIFF entry's stored {@code
-   * counter} (see {@link ArchiveNodeHistoryStore.HistoryEntry#counter()}). If a counter exceeds
-   * this, the entry is treated as corrupt and the read fails fast without walking at all. Derived
-   * from {@link ArchiveTrieNodeWriter#MAX_CHECKPOINT_INTERVAL} so it auto-updates when any tier
-   * interval changes.
-   */
-  public static final int MAX_BACKWARD_WALK_STEPS =
-      ArchiveTrieNodeWriter.MAX_CHECKPOINT_INTERVAL - 1;
-
   private final ArchiveNodeHistoryStore historyStore;
 
   /**
@@ -61,8 +51,8 @@ public final class ArchiveHistoryReader {
    *     ArchiveNodeKey#storage}
    * @param targetBlock the block to reconstruct the node as of; must be >= 0
    * @return the node's RLP at or before {@code targetBlock}, or empty if the node did not exist or
-   *     was deleted by then, or if no FULL checkpoint could be found within {@link
-   *     #MAX_BACKWARD_WALK_STEPS} backward steps
+   *     was deleted by then, or if the diff chain is inconsistent (no FULL checkpoint found where
+   *     the stored counter indicates)
    * @throws IllegalArgumentException if {@code targetBlock} is negative
    */
   public Optional<Bytes> nodeAt(final Bytes naturalKey, final long targetBlock) {
@@ -86,25 +76,16 @@ public final class ArchiveHistoryReader {
   /**
    * Walks backward from {@code anchorEntry} (itself a DIFF) exactly {@code anchorEntry.counter()}
    * steps — the distance to the FULL checkpoint recorded by the writer — then applies the collected
-   * diffs forward. Fails fast if the counter exceeds {@link #MAX_BACKWARD_WALK_STEPS}, and treats
-   * any mismatch between the counter and the actual chain (a missing entry, an unexpected deletion,
-   * or no FULL at the expected point) as corruption.
+   * diffs forward. The counter is a single unsigned byte, so the walk is inherently bounded to at
+   * most {@link ArchiveNodeHistoryStore#MAX_COUNTER} steps. Treats any mismatch between the counter
+   * and the actual chain (a missing entry, an unexpected deletion, or no FULL at the expected
+   * point) as corruption.
    */
   private Optional<Bytes> reconstructFromDiffChain(
       final Bytes naturalKey,
       final ArchiveNodeHistoryStore.HistoryEntry anchorEntry,
       final long targetBlock) {
     final int stepsToFull = anchorEntry.counter();
-    if (stepsToFull > MAX_BACKWARD_WALK_STEPS) {
-      LOG.warn(
-          "counter {} for key {} exceeds max backward walk steps {} at block {}",
-          stepsToFull,
-          naturalKey,
-          MAX_BACKWARD_WALK_STEPS,
-          targetBlock);
-      return Optional.empty();
-    }
-
     final List<Bytes> diffs = new ArrayList<>(stepsToFull);
     diffs.add(anchorEntry.rawEntryBytes());
     long walkBlock = anchorEntry.block();

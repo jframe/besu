@@ -17,9 +17,8 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.DEEP_CHECKPOINT_INTERVAL;
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.SHALLOW_CHECKPOINT_INTERVAL;
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeWriter.checkpointIntervalForDepth;
+import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL;
+import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL;
 
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -71,7 +70,12 @@ class ArchiveTrieNodeWriterTest {
     historyStore = new ArchiveNodeHistoryStore(storage);
     coverageTracker = new ArchiveCoverageTracker(storage);
     trieNodeWriter =
-        new ArchiveTrieNodeWriter(historyStore, coverageTracker, Executors.newFixedThreadPool(2));
+        new ArchiveTrieNodeWriter(
+            historyStore,
+            coverageTracker,
+            Executors.newFixedThreadPool(2),
+            DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
   }
 
   private void enqueueAndCommit(
@@ -246,31 +250,53 @@ class ArchiveTrieNodeWriterTest {
   }
 
   @Test
-  void checkpointIntervalForDepth_mapsDepthToInterval() {
-    assertThat(checkpointIntervalForDepth(0)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
-    assertThat(checkpointIntervalForDepth(1)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
-    assertThat(checkpointIntervalForDepth(2)).isEqualTo(SHALLOW_CHECKPOINT_INTERVAL);
-    assertThat(checkpointIntervalForDepth(3)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
-    assertThat(checkpointIntervalForDepth(5)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
-    assertThat(checkpointIntervalForDepth(32)).isEqualTo(DEEP_CHECKPOINT_INTERVAL);
+  void checkpointIntervalForDepth_mapsDepthToTier() {
+    // depths 0-2 (root + trie levels 1-2) use the shallow interval
+    // depth >= 3 uses the deep interval
+    final int shallow = 24;
+    final int deep = 8;
+    final ArchiveTrieNodeWriter writer =
+        new ArchiveTrieNodeWriter(
+            historyStore, coverageTracker, Executors.newFixedThreadPool(1), shallow, deep);
+    assertThat(writer.checkpointIntervalForDepth(0)).isEqualTo(shallow);
+    assertThat(writer.checkpointIntervalForDepth(1)).isEqualTo(shallow);
+    assertThat(writer.checkpointIntervalForDepth(2)).isEqualTo(shallow);
+    assertThat(writer.checkpointIntervalForDepth(3)).isEqualTo(deep);
+    assertThat(writer.checkpointIntervalForDepth(5)).isEqualTo(deep);
+    assertThat(writer.checkpointIntervalForDepth(32)).isEqualTo(deep);
   }
 
   @Test
-  void shallowNode_checksAtInterval32_notInterval16() {
-    // Depth-1 node (LOCATION has size 1): SHALLOW_CHECKPOINT_INTERVAL = 32.
-    // With the old single-interval-16 rule, mutation 16 would produce a FULL; with 32 it must DIFF.
+  void shallowNodeCheckpointsAtShallowIntervalNotDeepInterval() {
+    // A shallow node (LOCATION has size 1, i.e. depth 1) must checkpoint on the shallow interval
+    final int shallowInterval = 8;
+    final int deepInterval = 4;
+    final ArchiveTrieNodeWriter writer =
+        new ArchiveTrieNodeWriter(
+            historyStore,
+            coverageTracker,
+            Executors.newFixedThreadPool(1),
+            shallowInterval,
+            deepInterval);
+
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
-    enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
-    for (int block = 1; block <= DEEP_CHECKPOINT_INTERVAL; block++) {
-      enqueueAndCommit((long) block, nk, LOCATION, branchNode(block), branchNode(block - 1));
+    Bytes prior = null;
+    for (int block = 0; block <= shallowInterval; block++) {
+      final Bytes node = branchNode(block);
+      final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+      writer.capture(nk, LOCATION, block, node, prior, tx);
+      writer.onBeforeCommit(tx);
+      tx.commit();
+      prior = node;
     }
-    // Block 16 (= DEEP_CHECKPOINT_INTERVAL) should be a DIFF under the tiered policy (shallow uses
-    // 32).
-    final var entry16 = historyStore.getLatestBefore(nk, (long) DEEP_CHECKPOINT_INTERVAL);
-    assertThat(entry16).isPresent();
-    assertThat(entry16.get().codecEntry().isFull())
-        .as("block 16 should be DIFF, not FULL, for a shallow node (interval 32)")
+
+    assertThat(historyStore.getLatestBefore(nk, deepInterval).orElseThrow().codecEntry().isFull())
+        .as("shallow node must NOT checkpoint at the deep interval (%d)", deepInterval)
         .isFalse();
+    assertThat(
+            historyStore.getLatestBefore(nk, shallowInterval).orElseThrow().codecEntry().isFull())
+        .as("shallow node must checkpoint at the shallow interval (%d)", shallowInterval)
+        .isTrue();
   }
 
   // ~530-byte node in which exactly one byte changes per block — a small, diff-friendly per-block
@@ -317,7 +343,12 @@ class ArchiveTrieNodeWriterTest {
     final Bytes nk = ArchiveNodeKey.account(location);
     final ExecutorService pool = Executors.newFixedThreadPool(2);
     final ArchiveTrieNodeWriter localCapture =
-        new ArchiveTrieNodeWriter(historyStore, coverageTracker, pool);
+        new ArchiveTrieNodeWriter(
+            historyStore,
+            coverageTracker,
+            pool,
+            DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
     Bytes prior = null;
     for (int block = 0; block < blocks; block++) {
       final Bytes node = nodeAt.apply(block);

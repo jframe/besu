@@ -74,16 +74,23 @@ public class ArchiveTrieNodeStrategy
    *
    * @param liveStorage the live world-state storage to archive writes from
    * @param trieCapturePool the worker pool, owned and shut down by the returned strategy
+   * @param shallowCheckpointInterval FULL-checkpoint interval for shallow nodes
+   * @param deepCheckpointInterval FULL-checkpoint interval for deep nodes
    * @return an archiving {@link TrieNodeStrategy} ready to install via {@code setTrieNodeStrategy}
    */
   public static ArchiveTrieNodeStrategy createArchiveStrategy(
-      final SegmentedKeyValueStorage liveStorage, final ExecutorService trieCapturePool) {
+      final SegmentedKeyValueStorage liveStorage,
+      final ExecutorService trieCapturePool,
+      final int shallowCheckpointInterval,
+      final int deepCheckpointInterval) {
     return new ArchiveTrieNodeStrategy(
         new BonsaiTrieNodeStrategy(),
         new ArchiveTrieNodeWriter(
             new ArchiveNodeHistoryStore(liveStorage),
             new ArchiveCoverageTracker(liveStorage),
-            trieCapturePool));
+            trieCapturePool,
+            shallowCheckpointInterval,
+            deepCheckpointInterval));
   }
 
   @VisibleForTesting

@@ -730,6 +730,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             .getPathBasedExtraStorageConfiguration()
             .getUnstable()
             .getBonsaiArchiveStateProofsEnabled()) {
+      final PathBasedExtraStorageConfiguration.PathBasedUnstable archiveUnstable =
+          dataStorageConfiguration.getPathBasedExtraStorageConfiguration().getUnstable();
       final BonsaiWorldStateKeyValueStorage keyValueStorage =
           worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
       final ExecutorService trieCapturePool =
@@ -737,7 +739,10 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
               "trie-capture", syncConfig.getComputationParallelism(), metricsSystem);
       archiveTrieNodeStrategy =
           ArchiveTrieNodeStrategy.createArchiveStrategy(
-              keyValueStorage.getComposedWorldStateStorage(), trieCapturePool);
+              keyValueStorage.getComposedWorldStateStorage(),
+              trieCapturePool,
+              archiveUnstable.getBonsaiArchiveShallowCheckpointInterval(),
+              archiveUnstable.getBonsaiArchiveDeepCheckpointInterval());
       keyValueStorage.setTrieNodeStrategy(archiveTrieNodeStrategy);
       closeables.add(archiveTrieNodeStrategy);
       LOG.info("Bonsai archive proofs enabled (--Xbonsai-archive-state-proofs-enabled)");
