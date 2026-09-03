@@ -20,10 +20,10 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorld
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache.BonsaiWorldStateCacheManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.code.PathBasedCodeCache;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.PathBasedWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.PathBasedWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig;
 import org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.ServiceManager;
@@ -113,8 +113,7 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
    * writes are emitted for capture. Mirrors head construction but takes an explicit (snapshot)
    * storage and never freezes.
    */
-  public BonsaiWorldState newTrieEnabledWorldState(
-      final BonsaiWorldStateKeyValueStorage storage) {
+  public BonsaiWorldState newTrieEnabledWorldState(final BonsaiWorldStateKeyValueStorage storage) {
     return new BonsaiWorldState(
         this,
         storage,

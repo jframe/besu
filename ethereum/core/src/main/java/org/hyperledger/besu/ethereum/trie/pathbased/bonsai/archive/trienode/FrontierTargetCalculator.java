@@ -20,8 +20,8 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 /**
  * Computes the block number the trie-node archive roller trails: the finalized block if a finality
  * signal exists (QBFT instant finality, PoS ~2 epochs behind head), otherwise {@code head -
- * maxLayersToLoad} for chains without finality (Clique/PoW). Every block at or below this target
- * is beyond any possible reorg, so the roller never observes a competing fork.
+ * maxLayersToLoad} for chains without finality (Clique/PoW). Every block at or below this target is
+ * beyond any possible reorg, so the roller never observes a competing fork.
  */
 public final class FrontierTargetCalculator {
   private FrontierTargetCalculator() {}

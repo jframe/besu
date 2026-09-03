@@ -280,7 +280,8 @@ class BonsaiWorldStateProviderTest {
   @Test
   void newTrieEnabledWorldStateIsUnfrozenAndTrieEnabled() {
     final BonsaiWorldStateKeyValueStorage storage =
-        new BonsaiWorldStateKeyValueStorage(storageProvider, new NoOpMetricsSystem(), DEFAULT_CONFIG);
+        new BonsaiWorldStateKeyValueStorage(
+            storageProvider, new NoOpMetricsSystem(), DEFAULT_CONFIG);
     final BonsaiWorldStateProvider provider =
         new BonsaiWorldStateProvider(
             storage,
