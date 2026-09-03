@@ -85,6 +85,13 @@ public class ArchiveTrieNodeWriter implements Closeable {
       new ConcurrentHashMap<>();
   private volatile long lastArchivedBlock = -1L;
 
+  /**
+   * When non-null (roller mode), archive-history and coverage writes go here instead of the persist
+   * transaction, so a snapshot recompute's base writes can be discarded while archive writes reach
+   * canonical storage.
+   */
+  private volatile SegmentedKeyValueStorageTransaction archiveWriteTransactionOverride;
+
   public ArchiveTrieNodeWriter(
       final ArchiveNodeHistoryStore historyStore,
       final ArchiveCoverageTracker coverageTracker,
@@ -174,6 +181,14 @@ public class ArchiveTrieNodeWriter implements Closeable {
         ArchiveNodeHistoryStore.encodeStoredValue(counter, codecEntry));
   }
 
+  public void setArchiveWriteTransaction(final SegmentedKeyValueStorageTransaction tx) {
+    this.archiveWriteTransactionOverride = tx;
+  }
+
+  public long lastArchivedBlock() {
+    return lastArchivedBlock;
+  }
+
   public void onBeforeCommit(final SegmentedKeyValueStorageTransaction transaction) {
     final CaptureBuffer buf = buffers.remove(transaction);
     if (buf == null) {
@@ -183,10 +198,12 @@ public class ArchiveTrieNodeWriter implements Closeable {
       if (!buf.pendingRequests.isEmpty()) {
         dispatchBatch(buf);
       }
+      final SegmentedKeyValueStorageTransaction writeTx =
+          archiveWriteTransactionOverride != null ? archiveWriteTransactionOverride : transaction;
       try {
         for (final Future<List<EncodedEntry>> future : buf.inFlight) {
           for (final EncodedEntry entry : future.get()) {
-            historyStore.putEncoded(transaction, entry.historyKey(), entry.storedValue());
+            historyStore.putEncoded(writeTx, entry.historyKey(), entry.storedValue());
           }
         }
       } catch (final InterruptedException e) {
@@ -195,7 +212,7 @@ public class ArchiveTrieNodeWriter implements Closeable {
       } catch (final ExecutionException e) {
         throw new RuntimeException("trie-node capture failed", e.getCause());
       }
-      coverageTracker.record(transaction, buf.block);
+      coverageTracker.record(writeTx, buf.block);
       lastArchivedBlock = buf.block;
     }
   }
