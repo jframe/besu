@@ -277,6 +277,25 @@ class BonsaiWorldStateProviderTest {
     verify(trieLogManager).getTrieLogLayer(blockHeader1Reorg.getHash());
   }
 
+  @Test
+  void newTrieEnabledWorldStateIsUnfrozenAndTrieEnabled() {
+    final BonsaiWorldStateKeyValueStorage storage =
+        new BonsaiWorldStateKeyValueStorage(storageProvider, new NoOpMetricsSystem(), DEFAULT_CONFIG);
+    final BonsaiWorldStateProvider provider =
+        new BonsaiWorldStateProvider(
+            storage,
+            blockchain,
+            DEFAULT_CONFIG.getPathBasedExtraStorageConfiguration(),
+            new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem()),
+            null,
+            EvmConfiguration.DEFAULT,
+            new PathBasedCodeCache());
+
+    final BonsaiWorldState ws = provider.newTrieEnabledWorldState(storage);
+
+    assertThat(ws.isStorageFrozen()).isFalse();
+  }
+
   // Helper methods
 
   private BonsaiWorldStateProvider createBonsaiWorldStateProvider() {
