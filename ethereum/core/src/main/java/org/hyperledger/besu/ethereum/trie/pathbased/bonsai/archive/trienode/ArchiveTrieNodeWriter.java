@@ -29,12 +29,16 @@ import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Persists the computed history entries to {@code TRIE_BRANCH_STORAGE_ARCHIVE} before each block
  * commit.
  */
 public class ArchiveTrieNodeWriter implements Closeable {
+
+  private static final Logger LOG = LoggerFactory.getLogger(ArchiveTrieNodeWriter.class);
 
   private record CaptureRequest(
       Bytes naturalKey, Bytes location, long block, Bytes newNode, Bytes priorNode) {}
@@ -186,11 +190,14 @@ public class ArchiveTrieNodeWriter implements Closeable {
       }
       final SegmentedKeyValueStorageTransaction writeTx =
           archiveWriteTransactionOverride != null ? archiveWriteTransactionOverride : transaction;
+      int nodeCount = 0;
       try {
         for (final Future<List<EncodedEntry>> future : buf.inFlight) {
-          for (final EncodedEntry entry : future.get()) {
+          final List<EncodedEntry> entries = future.get();
+          for (final EncodedEntry entry : entries) {
             historyStore.putEncoded(writeTx, entry.historyKey(), entry.storedValue());
           }
+          nodeCount += entries.size();
         }
       } catch (final InterruptedException e) {
         Thread.currentThread().interrupt();
@@ -198,6 +205,8 @@ public class ArchiveTrieNodeWriter implements Closeable {
       } catch (final ExecutionException e) {
         throw new RuntimeException("trie-node capture failed", e.getCause());
       }
+      LOG.debug(
+          "Archive trie-node writer: block {} wrote {} node history entries", buf.block, nodeCount);
       coverageTracker.record(writeTx, buf.block);
       lastArchivedBlock = buf.block;
     }

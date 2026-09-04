@@ -74,6 +74,15 @@ public class ArchiveTrieNodeFrontierRoller implements Closeable {
   volatile OptionalLong blockObserverId = OptionalLong.empty();
   private volatile boolean closed = false;
 
+  // Stateful rolling context — kept alive between catch-up runs to avoid re-positioning from HEAD.
+  // Null means not yet initialised or invalidated after an error. Always accessed from the single
+  // catch-up executor thread.
+  private BonsaiWorldStateLayerStorage rollerLayer;
+  private BonsaiWorldState rollerState;
+  private ArchiveTrieNodeStrategy rollerStrategy;
+  // Package-private so unit tests can assert on positioning without going through the full stack.
+  long rollerStatePosition = -1L;
+
   public ArchiveTrieNodeFrontierRoller(
       final BonsaiWorldStateKeyValueStorage worldStateStorage,
       final BonsaiWorldStateProvider worldStateProvider,
@@ -106,6 +115,8 @@ public class ArchiveTrieNodeFrontierRoller implements Closeable {
     ongoingTarget.set(
         FrontierTargetCalculator.computeFrontierTarget(
             blockchain, trieLogManager.getMaxLayersToLoad()));
+    LOG.info(
+        "Archive frontier roller starting: cursor={} target={}", cursor.get(), ongoingTarget.get());
 
     blockObserverId =
         OptionalLong.of(
@@ -135,42 +146,61 @@ public class ArchiveTrieNodeFrontierRoller implements Closeable {
   }
 
   private void catchUp() {
+    final long from = cursor.get();
+    final long target = ongoingTarget.get();
     try {
-      captureRange(cursor.get(), ongoingTarget.get());
+      captureRange(from, target);
+    } catch (final Exception e) {
+      LOG.error(
+          "Archive frontier roller: error capturing range ({}, {}]; cursor stays at {}",
+          from,
+          target,
+          cursor.get(),
+          e);
     } finally {
       catchUpRunning.set(false);
-      if (!closed && cursor.get() < ongoingTarget.get()) {
+      final long reached = cursor.get();
+      if (reached >= target) {
+        LOG.info("Archive frontier roller: fully caught up at block {}", reached);
+      } else if (reached > from) {
+        LOG.debug("Archive frontier roller: advanced to {} (target {})", reached, target);
+      }
+      if (!closed && reached < ongoingTarget.get()) {
         scheduleCatchUpIfNeeded();
       }
     }
   }
 
   /**
-   * Captures archive-history entries for all blocks in {@code (fromExclusive, toInclusive]}. Uses a
-   * mutable layer over canonical head: rolls it back to {@code fromExclusive}, then rolls forward
-   * block-by-block, persisting each block so trie-node writes are captured into a canonical archive
-   * transaction. The layer itself is discarded after this call (never committed to canonical).
+   * Captures archive-history entries for all blocks in {@code (fromExclusive, toInclusive]}.
+   *
+   * <p>On the first call (or after an error), creates a fresh layer over canonical head, rolls it
+   * back to {@code fromExclusive} via {@link #positionAtCursor}, then rolls forward. On subsequent
+   * calls the layer and state are kept alive between runs — no re-positioning needed — so the cost
+   * is proportional to the number of blocks captured rather than the size of the trie-log window.
+   *
+   * <p>On exception the stateful context is torn down so the next call starts clean.
    */
   @VisibleForTesting
   void captureRange(final long fromExclusive, final long toInclusive) {
     if (toInclusive <= fromExclusive) {
       return;
     }
-    final ArchiveTrieNodeStrategy rollerStrategy =
-        ArchiveTrieNodeStrategy.createRollerStrategy(
-            worldStateStorage.getComposedWorldStateStorage(),
-            trieCapturePool,
-            shallowCheckpointInterval,
-            deepCheckpointInterval);
-    final BonsaiWorldStateLayerStorage layer = new BonsaiWorldStateLayerStorage(worldStateStorage);
+    boolean ok = false;
     try {
-      layer.setTrieNodeStrategy(rollerStrategy);
-      final BonsaiWorldState state = worldStateProvider.newTrieEnabledWorldState(layer);
-      positionAtCursor(state, fromExclusive);
+      ensureRollerState(fromExclusive);
+
+      // Re-read cursor: ensureRollerState may have advanced it past fromExclusive when the
+      // retention window was exceeded. The loop start reflects the actual position of rollerState.
+      final long effectiveFrom = cursor.get();
+      if (toInclusive <= effectiveFrom) {
+        ok = true;
+        return;
+      }
 
       final ArchiveTrieNodeWriter writer = rollerStrategy.getTrieNodeWriter();
 
-      for (long b = fromExclusive + 1; b <= toInclusive; b++) {
+      for (long b = effectiveFrom + 1; b <= toInclusive; b++) {
         final BlockHeader header = blockchain.getBlockHeader(b).orElseThrow();
         final TrieLog log = trieLogManager.getTrieLogLayer(header.getHash()).orElseThrow();
 
@@ -179,10 +209,10 @@ public class ArchiveTrieNodeFrontierRoller implements Closeable {
         writer.setArchiveWriteTransaction(canonicalTx);
 
         final PathBasedWorldStateUpdateAccumulator<?> acc =
-            (PathBasedWorldStateUpdateAccumulator<?>) state.getAccumulator();
+            (PathBasedWorldStateUpdateAccumulator<?>) rollerState.getAccumulator();
         acc.rollForward(log);
         acc.commit();
-        state.persist(header); // recompute → emits node writes → onBeforeCommit → canonicalTx
+        rollerState.persist(header); // recompute → emits node writes → onBeforeCommit → canonicalTx
 
         canonicalTx.put(
             TRIE_BRANCH_STORAGE_ARCHIVE,
@@ -191,23 +221,120 @@ public class ArchiveTrieNodeFrontierRoller implements Closeable {
         canonicalTx.commit(); // archive history + coverage + cursor, atomically
         writer.setArchiveWriteTransaction(null);
         cursor.set(b);
+        rollerStatePosition = b;
+        if (b % 1000 == 0) {
+          LOG.debug(
+              "Archive frontier roller: block {} / {} ({} remaining)",
+              b,
+              toInclusive,
+              toInclusive - b);
+        }
       }
+      ok = true;
     } finally {
-      try {
-        layer.close(); // discard layer writes; never committed to canonical
-      } catch (final Exception e) {
-        LOG.warn("Failed to close layer storage in frontier roller", e);
+      if (!ok) {
+        tearDownRollerState();
       }
+    }
+  }
+
+  /**
+   * Ensures {@link #rollerLayer}, {@link #rollerState}, and {@link #rollerStrategy} are initialised
+   * and positioned at {@code fromExclusive}. Reuses the existing context when the state is already
+   * there; otherwise tears down any stale context and re-positions from HEAD.
+   */
+  private void ensureRollerState(final long fromExclusive) {
+    if (rollerState != null && rollerStatePosition == fromExclusive) {
+      // State is already positioned at fromExclusive from the previous run — nothing to do.
+      return;
+    }
+    if (rollerState != null) {
+      LOG.warn(
+          "Archive frontier roller state is at {} but fromExclusive={}; re-positioning",
+          rollerStatePosition,
+          fromExclusive);
+      tearDownRollerState();
+    }
+
+    // Guard: if the cursor is older than the trie-log retention window, we cannot roll back
+    // far enough to reposition. Advance cursor to the oldest reachable block and position the
+    // state there. The current captureRange call will archive nothing (toInclusive == cursor),
+    // but the state is ready for the next call to roll forward from.
+    final long head = blockchain.getChainHeadBlockNumber();
+    final long maxLayers = trieLogManager.getMaxLayersToLoad();
+    final long oldestReachable = Math.max(0L, head - maxLayers);
+    final long positionTarget;
+    if (fromExclusive < oldestReachable) {
+      LOG.warn(
+          "Archive frontier roller cursor {} is beyond trie-log retention (head={}, maxLayers={})."
+              + " Advancing cursor to {} — blocks {}-{} will not be re-archived.",
+          fromExclusive,
+          head,
+          maxLayers,
+          oldestReachable,
+          fromExclusive + 1,
+          oldestReachable);
+      cursor.set(oldestReachable);
+      positionTarget = oldestReachable;
+      // Fall through: position rollerState at oldestReachable so the next catch-up can roll
+      // forward from there without re-positioning.
+    } else {
+      positionTarget = fromExclusive;
+    }
+
+    rollerStrategy =
+        ArchiveTrieNodeStrategy.createRollerStrategy(
+            worldStateStorage.getComposedWorldStateStorage(),
+            trieCapturePool,
+            shallowCheckpointInterval,
+            deepCheckpointInterval);
+    rollerLayer = new BonsaiWorldStateLayerStorage(worldStateStorage);
+    rollerLayer.setTrieNodeStrategy(rollerStrategy);
+    rollerState = worldStateProvider.newTrieEnabledWorldState(rollerLayer);
+    positionAtCursor(rollerState, positionTarget);
+    rollerStatePosition = positionTarget;
+  }
+
+  private void tearDownRollerState() {
+    rollerState = null;
+    rollerStrategy = null;
+    rollerStatePosition = -1L;
+    if (rollerLayer != null) {
+      try {
+        rollerLayer.close();
+      } catch (final Exception e) {
+        LOG.warn("Failed to close roller layer storage", e);
+      }
+      rollerLayer = null;
     }
   }
 
   private void positionAtCursor(final BonsaiWorldState state, final long targetBlock) {
     final long head = blockchain.getChainHeadBlockNumber();
+    final long rollbackDepth = head - targetBlock;
+    final long maxLayers = trieLogManager.getMaxLayersToLoad();
+    if (rollbackDepth > maxLayers) {
+      throw new IllegalStateException(
+          String.format(
+              "Cannot position roller at block %d: rollback depth %d exceeds trie-log retention %d (head=%d). "
+                  + "Cursor is too far behind head to reposition via trie-log rollback.",
+              targetBlock, rollbackDepth, maxLayers, head));
+    }
     final PathBasedWorldStateUpdateAccumulator<?> acc =
         (PathBasedWorldStateUpdateAccumulator<?>) state.getAccumulator();
     for (long b = head; b > targetBlock; b--) {
       final BlockHeader header = blockchain.getBlockHeader(b).orElseThrow();
-      final TrieLog log = trieLogManager.getTrieLogLayer(header.getHash()).orElseThrow();
+      final long blockNum = b;
+      final TrieLog log =
+          trieLogManager
+              .getTrieLogLayer(header.getHash())
+              .orElseThrow(
+                  () ->
+                      new IllegalStateException(
+                          "Trie-log missing for block "
+                              + blockNum
+                              + " while positioning roller at "
+                              + targetBlock));
       acc.rollBack(log);
     }
     acc.commit();
@@ -235,5 +362,6 @@ public class ArchiveTrieNodeFrontierRoller implements Closeable {
     blockObserverId.ifPresent(blockchain::removeObserver);
     blockObserverId = OptionalLong.empty();
     executorService.shutdownNow();
+    tearDownRollerState();
   }
 }

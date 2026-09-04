@@ -26,19 +26,24 @@ import org.hyperledger.besu.ethereum.chain.DefaultBlockchain;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
+import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -69,6 +74,15 @@ class ArchiveTrieNodeFrontierRollerTest {
   @Mock private BonsaiWorldStateKeyValueStorage worldStateStorage;
   @Mock private BonsaiWorldStateProvider worldStateProvider;
   @Mock private TrieLogManager trieLogManager;
+
+  // Used by real-captureRange tests only (retention-gap coverage).
+  @Mock private BonsaiWorldState rollerWorldState;
+
+  @SuppressWarnings("rawtypes")
+  @Mock
+  private PathBasedWorldStateUpdateAccumulator mockAccumulator;
+
+  @Mock private TrieLog mockTrieLog;
 
   private SegmentedInMemoryKeyValueStorage archiveStorage;
   private MutableBlockchain blockchain;
@@ -235,10 +249,73 @@ class ArchiveTrieNodeFrontierRollerTest {
         .untilAsserted(() -> assertThat(roller.cursor.get()).isEqualTo(4L));
   }
 
+  // --- retention-gap advance in the real captureRange ---
+  //
+  // These tests exercise the actual captureRange / ensureRollerState path (not ControllableRoller).
+  // They cover the off-by-one fix: when cursor < head - maxLayers the retention-gap branch must
+  // advance the cursor AND fall through to position rollerState (previously it returned early,
+  // leaving rollerState null and causing the roller to spin without archiving anything).
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void captureRangeAdvancesCursorAndPositionsStateWhenBeyondRetention() {
+    // maxLayers=1 (setUp), 3 blocks → head=3, oldestReachable=2, target=2
+    // captureRange(0, 2): cursor 0 < 2 → advance cursor to 2, position state at block 2.
+    // Loop is empty (effectiveFrom == toInclusive=2), but rollerState is ready for next call.
+    appendBlocks(3);
+    final BlockHeader block3 = blockchain.getBlockHeader(3L).get();
+    when(trieLogManager.getTrieLogLayer(block3.getHash())).thenReturn(Optional.of(mockTrieLog));
+    when(worldStateProvider.newTrieEnabledWorldState(any())).thenReturn(rollerWorldState);
+    when(rollerWorldState.getAccumulator()).thenReturn(mockAccumulator);
+
+    final ArchiveTrieNodeFrontierRoller roller = createRealRoller();
+    roller.cursor.set(0L);
+    roller.captureRange(0L, 2L);
+
+    assertThat(roller.cursor.get()).isEqualTo(2L);
+    assertThat(roller.rollerStatePosition).isEqualTo(2L);
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void captureRangeArchivesNextBlockAfterRetentionGapAdvance() {
+    // Same setup; second call reuses state and archives block 3 (cursor 2 → 3).
+    appendBlocks(3);
+    final BlockHeader block3 = blockchain.getBlockHeader(3L).get();
+    when(trieLogManager.getTrieLogLayer(block3.getHash())).thenReturn(Optional.of(mockTrieLog));
+    when(worldStateProvider.newTrieEnabledWorldState(any())).thenReturn(rollerWorldState);
+    when(rollerWorldState.getAccumulator()).thenReturn(mockAccumulator);
+
+    final ArchiveTrieNodeFrontierRoller roller = createRealRoller();
+    roller.cursor.set(0L);
+    roller.captureRange(0L, 2L); // retention-gap advance, state positioned at 2
+    roller.captureRange(2L, 3L); // reuses state, rolls forward to 3
+
+    assertThat(roller.cursor.get()).isEqualTo(3L);
+  }
+
   // --- helpers ---
 
   private ControllableRoller createControllableRoller() {
     return createControllableRoller(Executors.newScheduledThreadPool(1), null);
+  }
+
+  /**
+   * Creates a real (non-overriding) roller for tests that need to exercise {@code captureRange}.
+   */
+  private ArchiveTrieNodeFrontierRoller createRealRoller() {
+    final ArchiveTrieNodeFrontierRoller roller =
+        new ArchiveTrieNodeFrontierRoller(
+            worldStateStorage,
+            worldStateProvider,
+            trieLogManager,
+            blockchain,
+            Executors.newScheduledThreadPool(1),
+            Executors.newFixedThreadPool(2),
+            SHALLOW_INTERVAL,
+            DEEP_INTERVAL);
+    rollers.add(roller);
+    return roller;
   }
 
   private ControllableRoller createControllableRoller(
