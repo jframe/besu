@@ -37,6 +37,8 @@
     "depositContractAddress": "0x4242424242424242424242424242424242424242",
     "withdrawalRequestContractAddress": "0x00A3ca265EBcb825B45F985A16CEFB49958cE017",
     "consolidationRequestContractAddress": "0x00b42dbF2194e931E80326D950320f7d9Dbeac02",
+    "builderDepositRequestContractAddress": "0x0000884d2AA32eAa155F59A2f24eFa73D9008282",
+    "builderExitRequestContractAddress": "0x000014574A74c805590AFF9499fc7A690f008282",
     "ethash": {}
   },
   "nonce": "0x42",
