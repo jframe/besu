@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -72,5 +73,36 @@ class SnapV2BlockAccessListApplierForestTest {
     assertThat(h.readAccount(ALICE)).isPresent();
     assertThat(h.readAccount(ALICE).get().getNonce()).isEqualTo(7L);
     assertThat(h.readAccount(ALICE).get().getBalance()).isEqualTo(Wei.of(500));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("harnesses")
+  void appliesStorageSlotChangeAndRecomputesRoot(final StateHarness h) {
+    final UInt256 slotKey = UInt256.valueOf(3);
+    h.seedAccount(ALICE, 1L, Wei.of(10), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+
+    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+    final Block block2 =
+        b.appendCanonical(
+            block1.getHeader(),
+            b.balWithStorageChanges(ALICE, Map.of(slotKey, UInt256.valueOf(99))),
+            2L);
+
+    final DownloadedStorageRangeTracker storageTracker = new DownloadedStorageRangeTracker();
+    final Bytes32 newRoot =
+        new SnapV2BlockAccessListApplier(
+                h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule())
+            .applyBlockAccessLists(
+                block1.getHeader().getNumber() + 1,
+                block2.getHeader().getNumber(),
+                h.forestStartRoot(),
+                fullAccountRange(),
+                storageTracker)
+            .commit();
+    h.updateAccountRoot(newRoot);
+
+    assertThat(h.readStorageSlot(ALICE, slotKey)).hasValue(UInt256.valueOf(99));
+    assertThat(h.readAccount(ALICE).get().getStorageRoot()).isNotEqualTo(Hash.EMPTY_TRIE_HASH);
   }
 }
