@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -32,6 +33,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncMetricsManager;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncProcessState;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.context.SnapSyncStatePersistenceManager;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.v2.SnapV2AccountRangeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.v2.SnapV2BytecodeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.v2.SnapV2StorageRangeRequest;
 import org.hyperledger.besu.ethereum.rlp.RLP;
@@ -663,6 +665,124 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     // ALICE is not in the persisted range: skipped by planReorg and applyCanonicalBals.
     assertThat(accountExists(ALICE)).isFalse();
     assertThat(accountFetches).hasValue(0); // no re-download triggered
+  }
+
+  // ── Test 14: same-chain advance → BALs [old+1,new] applied, request retargeted, no fetch ──────
+
+  /**
+   * Straight canonical chain: gen ─ 1(ALICE=100) ─ 2(ALICE=50)[old pivot] ─ 3(ALICE=80)[new pivot].
+   * All blocks have HIGH difficulty so all are canonical. {@code areBothBlocksOnCanonicalChain}
+   * returns {@code true} → the same-chain branch runs: apply BALs [3,3], retarget queued account
+   * request to new pivot. No peer fetches because ALICE has no storage (pendingAffected is empty).
+   */
+  @Test
+  void sameChainPivotAdvance_appliesBalsAndRetargets_noReorg() {
+    final Block block1 =
+        b.appendCanonical(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
+    final Block block2 =
+        b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+
+    // Apply [1,2] to canonical coordinator.
+    applyTo(
+        canonicalCoordinator,
+        1,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+
+    // Build and append block3 (ALICE=80) before applying its BAL so the blockchain holds it.
+    final Block block3 =
+        b.appendCanonical(block2.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 3L);
+
+    // Apply [3,3] to canonical now that block3 is in the blockchain.
+    applyTo(
+        canonicalCoordinator,
+        3,
+        3,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+
+    // Create download state with block2 as the (old) current pivot.
+    final SnapV2WorldDownloadState state =
+        createDownloadState(
+            block2.getHeader(), ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator));
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    applyTo(localCoordinator, 1, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    // Queue an account request targeted at block2 — it must be retargeted to block3.
+    final SnapV2AccountRangeRequest accountReq =
+        new SnapV2AccountRangeRequest(
+            block2.getHeader(), RangeManager.MIN_RANGE, RangeManager.MAX_RANGE);
+    state.enqueueRequest(accountReq);
+
+    startCatchupAndAwait(state, block3.getHeader());
+
+    // BAL [3,3] applied: ALICE=80. No re-download (same canonical chain).
+    assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80));
+    assertThat(accountFetches).hasValue(0);
+    // Queued account request retargeted to the new pivot.
+    final SnapV2AccountRangeRequest retargetedReq =
+        (SnapV2AccountRangeRequest) state.pendingAccountRequests.asList().get(0);
+    assertThat(retargetedReq.getPivotBlockHeader()).isEqualTo(block3.getHeader());
+    // Local and canonical world states agree.
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator))
+        .isEqualTo(ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator));
+  }
+
+  // ── Test 9: unrecoverable reorg → failure propagated through downloadFuture ─────────────────
+
+  /**
+   * The orphaned block's BAL is NOT stored locally (simulates a pruned orphaned BAL). The healer
+   * cannot plan the reorg → {@link SnapV2ReorgHealer#planReorg} throws {@link
+   * ReorgUnrecoverableException} → {@code startPivotCatchup} completes {@code internalFuture}
+   * exceptionally → {@code downloadFuture} is also completed exceptionally.
+   *
+   * <pre>
+   * gen -- 1() -- 2s(ALICE=50)   orphaned, BAL not stored
+   *            \-- 2c(ALICE=80)  canonical
+   *                  \-- 3c (pins canonicalRoot, new pivot)
+   * </pre>
+   */
+  @Test
+  void unrecoverableReorg_propagatesFailure() {
+    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+    // Orphaned block whose BAL header-hash is committed but the BAL itself is NOT stored.
+    final Block block2s =
+        b.appendStaleWithoutStoringBal(
+            block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    final Block block2c =
+        b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
+
+    // Build canonical world state and compute its root.
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    // Create download state with the stale (orphaned) block2s as the current pivot.
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    // Apply only block1 locally; block2s was never applied (simulates partial download).
+    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    // Trigger pivot catchup without awaiting — the reorg healer cannot read the orphaned BAL
+    // and must throw ReorgUnrecoverableException synchronously (0 in-flight tasks, pre-completed
+    // listener future → finishPivotCatchup runs on the calling thread).
+    state.startPivotCatchup(newPivot.getHeader());
+
+    assertThat(state.getDownloadFuture()).isCompletedExceptionally();
+    assertThatThrownBy(() -> state.getDownloadFuture().join())
+        .hasRootCauseInstanceOf(ReorgUnrecoverableException.class);
   }
 
   // ── shared helpers ────────────────────────────────────────────────────────────────────────────
