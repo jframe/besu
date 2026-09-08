@@ -25,7 +25,10 @@ import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderBuilder;
 import org.hyperledger.besu.ethereum.core.Difficulty;
+import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.eth.manager.snap.SnapTestServing;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedAccountRangeTracker;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
@@ -33,12 +36,17 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -286,6 +294,60 @@ class ReorgBlockchainBuilder {
     final ProtocolSchedule schedule = Mockito.mock(ProtocolSchedule.class);
     Mockito.when(schedule.getByBlockHeader(Mockito.any())).thenReturn(spec);
     return schedule;
+  }
+
+  /** Creates a fresh in-memory Bonsai world state storage. */
+  static BonsaiWorldStateKeyValueStorage newBonsaiStorage() {
+    return new BonsaiWorldStateKeyValueStorage(
+        new InMemoryKeyValueStorageProvider(),
+        new NoOpMetricsSystem(),
+        DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
+  }
+
+  /**
+   * Returns the account trie root hash from {@code coordinator}'s flat storage, or {@link
+   * Hash#EMPTY_TRIE_HASH} if the storage is empty.
+   */
+  static Hash worldStateRoot(final WorldStateStorageCoordinator coordinator) {
+    return coordinator.getTrieNodeUnsafe(Bytes.EMPTY).map(Hash::hash).orElse(Hash.EMPTY_TRIE_HASH);
+  }
+
+  /**
+   * Returns a {@link DownloadedAccountRangeTracker} that covers the entire address space as a
+   * single already-completed range, simulating a fully-downloaded world state.
+   */
+  static DownloadedAccountRangeTracker fullAccountRange() {
+    final DownloadedAccountRangeTracker tracker = new DownloadedAccountRangeTracker();
+    tracker.registerPending(
+        Bytes32.ZERO,
+        Bytes32.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        0);
+    return tracker;
+  }
+
+  /** A real reorg fetcher serving from {@code canonicalStorage}, counting calls per seam. */
+  static SnapV2ReorgStateFetcher servingFetcher(
+      final BonsaiWorldStateKeyValueStorage canonicalStorage,
+      final Hash canonicalRoot,
+      final WorldStateStorageCoordinator localCoordinator,
+      final AtomicInteger accountFetches,
+      final AtomicInteger storageFetches,
+      final AtomicInteger codeFetches) {
+    final SnapTestServing serving = new SnapTestServing(canonicalStorage, canonicalRoot);
+    return new SnapV2ReorgStateFetcher(
+        (start, end, pivot) -> {
+          accountFetches.incrementAndGet();
+          return serving.accountRange(start, end, pivot);
+        },
+        (accounts, start, end, pivot) -> {
+          storageFetches.incrementAndGet();
+          return serving.storageRange(accounts, start, end, pivot);
+        },
+        (codeHashes, pivot) -> {
+          codeFetches.incrementAndGet();
+          return serving.byteCodes(codeHashes, pivot);
+        },
+        localCoordinator);
   }
 
   // ---- BAL construction helpers ----
