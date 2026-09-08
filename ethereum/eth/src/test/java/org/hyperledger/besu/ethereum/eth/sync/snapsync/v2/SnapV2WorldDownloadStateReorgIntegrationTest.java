@@ -79,6 +79,14 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
   private static final UInt256 S1 = UInt256.valueOf(1);
 
+  // Test 4 — NO+YES: account created only on canonical fork.
+  private static final Address GRACE =
+      Address.fromHexString("0x7777777777777777777777777777777777777777");
+
+  // Test 5 — NO+NO: account exists at block1, neither fork touches it.
+  private static final Address BOB =
+      Address.fromHexString("0x2222222222222222222222222222222222222222");
+
   private static final Bytes32 MAX_KEY =
       Bytes32.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
@@ -280,6 +288,91 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(state.pendingCodeRequests.asList()).isEmpty();
     // ALICE carries through from the canonical BAL.
     assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80));
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
+  // ── Test 4: matrix NO + YES → new account created from canonical BAL ─────────────────────────
+
+  @Test
+  void notModifiedInOrphanedButModifiedInNewBlock_appliesNewBal() {
+    final Block block1 =
+        b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
+    final Block block2s =
+        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    final Block block2c =
+        b.appendCanonical(
+            block1.getHeader(),
+            b.merge(
+                b.balWithBalances(Map.of(ALICE, Wei.of(80))),
+                b.balWithBalances(Map.of(GRACE, Wei.of(50)))),
+            2L);
+
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    assertThat(readAccount(GRACE).getBalance()).isEqualTo(Wei.of(50)); // created from canonical BAL
+    assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80));
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
+  // ── Test 5: matrix NO + NO → untouched account is left intact ────────────────────────────────
+
+  @Test
+  void notModifiedInOrphanedOrNewBlock_skipsEntirely() {
+    final Block block1 =
+        b.appendBlockWithBal(
+            b.header(0),
+            b.merge(
+                b.balWithBalances(Map.of(ALICE, Wei.of(100))),
+                b.balWithBalances(Map.of(BOB, Wei.of(100)))),
+            1L);
+    final Block block2s =
+        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    final Block block2c =
+        b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
+
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    assertThat(readAccount(BOB).getBalance()).isEqualTo(Wei.of(100)); // untouched by both forks
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
