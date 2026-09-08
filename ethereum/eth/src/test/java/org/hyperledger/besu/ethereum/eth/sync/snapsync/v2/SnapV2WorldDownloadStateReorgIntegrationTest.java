@@ -785,6 +785,76 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         .hasRootCauseInstanceOf(ReorgUnrecoverableException.class);
   }
 
+  // ── Test 10: multi-block reorg recovery ──────────────────────────────────────────────────────
+
+  /**
+   * Multi-block orphaned fork (block2s, block3s) and multi-block canonical fork (block2c, block3c).
+   * Exercises {@code collectOrphanedTouches} and {@code collectCanonicalTouches} walking multiple
+   * blocks and a 2-step ancestor walk. Common ancestor is block1.
+   *
+   * <pre>
+   * gen -- 1(ALICE=100, DAVE=75) -+- 2s(ALICE=50) -- 3s(DAVE=60)  [old pivot, orphaned]
+   *                               \- 2c(ALICE=80) -- 3c(GRACE=50) -- 4c(pins root) [new pivot]
+   * </pre>
+   *
+   * <ul>
+   *   <li>ALICE (YES+YES): apply canonical BAL → 80.
+   *   <li>DAVE (YES+NO): orphaned-only change → re-fetched from canonical → restored to 75.
+   *   <li>GRACE (NO+YES): canonical-only new account → applied from canonical BAL → 50.
+   * </ul>
+   */
+  @Test
+  void multiBlockReorg_recoversAcrossSeveralOrphanedAndCanonicalBlocks() {
+    final Block block1 =
+        b.appendBlockWithBal(
+            b.header(0),
+            b.merge(
+                b.balWithBalances(Map.of(ALICE, Wei.of(100))),
+                b.balWithBalances(Map.of(DAVE, Wei.of(75)))),
+            1L);
+
+    // Orphaned fork: two blocks.
+    final Block block2s =
+        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    final Block block3s =
+        b.appendStale(block2s.getHeader(), b.balWithBalances(Map.of(DAVE, Wei.of(60))), 3L);
+
+    // Canonical fork: two blocks + pivot pinner.
+    final Block block2c =
+        b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
+    final Block block3c =
+        b.appendCanonical(block2c.getHeader(), b.balWithBalances(Map.of(GRACE, Wei.of(50))), 3L);
+
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        3,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block3c.getHeader(), b.emptyBal(), 4L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block3s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    applyTo(localCoordinator, 2, 3, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80)); // YES+YES: canonical value
+    assertThat(readAccount(DAVE).getBalance())
+        .isEqualTo(Wei.of(75)); // YES+NO: restored from block1
+    assertThat(readAccount(GRACE).getBalance())
+        .isEqualTo(Wei.of(50)); // NO+YES: new canonical account
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
   // ── shared helpers ────────────────────────────────────────────────────────────────────────────
 
   /**
