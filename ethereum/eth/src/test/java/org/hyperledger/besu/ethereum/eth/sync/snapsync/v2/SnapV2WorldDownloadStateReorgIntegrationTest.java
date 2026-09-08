@@ -105,6 +105,10 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   private static final Bytes32 MAX_KEY =
       Bytes32.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
+  // Test 11 — unaffected account with storage (not touched by either fork)
+  private static final Address CAROL =
+      Address.fromHexString("0x3333333333333333333333333333333333333333");
+
   private final BonsaiWorldStateKeyValueStorage localStorage =
       ReorgBlockchainBuilder.newBonsaiStorage();
   private final WorldStateStorageCoordinator localCoordinator =
@@ -853,6 +857,148 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(readAccount(GRACE).getBalance())
         .isEqualTo(Wei.of(50)); // NO+YES: new canonical account
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
+  // ── Test 11: unaffected account storage root kept, request retargeted
+  // ───────────────────────────
+
+  /**
+   * A queued storage request for CAROL — an account NOT touched by either fork — is retargeted to
+   * the new pivot while keeping CAROL's existing (unchanged) storage root. The root is read from
+   * the local DB after seeding; it must NOT be replaced by the {@code correctedRoots} map (which
+   * only contains accounts whose canonical storage root differs from the orphaned one).
+   *
+   * <pre>
+   * gen -- 1(FRANK+CAROL have storage, S1 set) -+- 2s(FRANK adds S2=200)  orphaned
+   *                                              \- 2c(FRANK adds S3=555)  canonical
+   *                                                   \- 3c (pins canonicalRoot, new pivot)
+   * </pre>
+   */
+  @Test
+  void queuedStorageRequestForUnaffectedAccount_retargetedKeepingExistingRoot() {
+    final var baseBal =
+        b.merge(
+            b.balWithBalances(Map.of(FRANK, Wei.of(200), CAROL, Wei.of(10))),
+            b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(7))),
+            b.balWithStorageChanges(CAROL, Map.of(S1, UInt256.valueOf(9))));
+    final Block block1 = b.appendBlockWithBal(b.header(0), baseBal, 1L);
+    final Block block2s =
+        b.appendStale(
+            block1.getHeader(),
+            b.balWithStorageChanges(FRANK, Map.of(S2, UInt256.valueOf(200))),
+            2L);
+    final Block block2c =
+        b.appendCanonical(
+            block1.getHeader(),
+            b.balWithStorageChanges(FRANK, Map.of(S3, UInt256.valueOf(555))),
+            2L);
+
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    // Read CAROL's storage root from the local DB after seeding (she is untouched by both forks).
+    final Bytes32 carolRoot = Bytes32.wrap(readAccount(CAROL).getStorageRoot().getBytes());
+
+    final SnapV2StorageRangeRequest carolReq =
+        new SnapV2StorageRangeRequest(
+            block2s.getHeader(),
+            Bytes32.wrap(CAROL.addressHash().getBytes()),
+            carolRoot,
+            RangeManager.MIN_RANGE,
+            RangeManager.MAX_RANGE,
+            RangeManager.MIN_RANGE);
+    state.enqueueRequest(carolReq);
+
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    final var queued = state.pendingStorageRequests.asList();
+    assertThat(queued).hasSize(1);
+    final SnapV2StorageRangeRequest retargeted = (SnapV2StorageRangeRequest) queued.get(0);
+    assertThat(retargeted.getPivotBlockHeader()).isEqualTo(newPivot.getHeader());
+    // CAROL is absent from correctedRoots — storage root must be preserved as-is.
+    assertThat(retargeted.getStorageRoot()).isEqualTo(carolRoot);
+  }
+
+  // ── Test 12: queued code and account requests retargeted to new pivot ─────────────────────────
+
+  /**
+   * A queued bytecode request and a queued account-range request — both originally targeted at the
+   * stale (orphaned) pivot — are retargeted to the new pivot after the reorg completes.
+   *
+   * <pre>
+   * gen -- 1(ALICE=100) -+- 2s(ALICE=50)  orphaned
+   *                      \- 2c(ALICE=80)  canonical
+   *                           \- 3c (pins canonicalRoot, new pivot)
+   * </pre>
+   */
+  @Test
+  void queuedCodeAndAccountRequests_retargetedToNewPivot() {
+    final Block block1 =
+        b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
+    final Block block2s =
+        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    final Block block2c =
+        b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
+
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    final SnapV2BytecodeRequest codeReq =
+        new SnapV2BytecodeRequest(
+            block2s.getHeader(),
+            Bytes32.wrap(ALICE.addressHash().getBytes()),
+            Bytes32.wrap(Hash.hash(NC_CODE).getBytes()),
+            RangeManager.MIN_RANGE);
+    final SnapV2AccountRangeRequest accountReq =
+        new SnapV2AccountRangeRequest(
+            block2s.getHeader(), RangeManager.MIN_RANGE, RangeManager.MAX_RANGE);
+    state.enqueueRequest(codeReq);
+    state.enqueueRequest(accountReq);
+
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    assertThat(
+            ((SnapV2BytecodeRequest) state.pendingCodeRequests.asList().get(0))
+                .getPivotBlockHeader())
+        .isEqualTo(newPivot.getHeader());
+    assertThat(
+            ((SnapV2AccountRangeRequest) state.pendingAccountRequests.asList().get(0))
+                .getPivotBlockHeader())
+        .isEqualTo(newPivot.getHeader());
   }
 
   // ── shared helpers ────────────────────────────────────────────────────────────────────────────
