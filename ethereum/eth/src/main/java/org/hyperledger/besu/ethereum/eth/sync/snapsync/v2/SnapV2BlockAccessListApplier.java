@@ -262,15 +262,27 @@ public class SnapV2BlockAccessListApplier {
       final FetchedReorgState fetched,
       final DownloadedAccountRangeTracker accountRangeTracker,
       final DownloadedStorageRangeTracker storageRangeTracker) {
+    return applyReorgCorrections(
+        plan, fetched, Optional.empty(), accountRangeTracker, storageRangeTracker);
+  }
+
+  public ReorgRecoveryResult applyReorgCorrections(
+      final ReorgPlan plan,
+      final FetchedReorgState fetched,
+      final Optional<Bytes32> forestStartRoot,
+      final DownloadedAccountRangeTracker accountRangeTracker,
+      final DownloadedStorageRangeTracker storageRangeTracker) {
 
     final Set<Hash> refetchedAccounts = new HashSet<>(plan.accountsToRefetch());
     refetchedAccounts.addAll(plan.slotsToRefetch().keySet());
+
+    final MerkleTrie<Bytes, Bytes> accountTrie = openAccountTrie(forestStartRoot);
+
     if (refetchedAccounts.isEmpty()) {
-      return new ReorgRecoveryResult(Set.of(), Map.of());
+      return new ReorgRecoveryResult(Set.of(), Map.of(), Bytes32.wrap(accountTrie.getRootHash()));
     }
 
     final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
-    final MerkleTrie<Bytes, Bytes> accountTrie = openAccountTrie(Optional.empty());
 
     final Set<Hash> deletedAccounts = new HashSet<>();
     final Map<Hash, Bytes32> correctedRoots = new HashMap<>();
@@ -304,6 +316,7 @@ public class SnapV2BlockAccessListApplier {
           fetchedSlots,
           canonicalAccount,
           accountRangeTracker,
+          accountTrie,
           updater);
     }
 
@@ -331,7 +344,8 @@ public class SnapV2BlockAccessListApplier {
         "Applied snap/2 reorg corrections: {} accounts restored, {} accounts deleted",
         correctedRoots.size(),
         deletedAccounts.size());
-    return new ReorgRecoveryResult(deletedAccounts, correctedRoots);
+    return new ReorgRecoveryResult(
+        deletedAccounts, correctedRoots, Bytes32.wrap(accountTrie.getRootHash()));
   }
 
   private void deleteAccount(
@@ -361,9 +375,10 @@ public class SnapV2BlockAccessListApplier {
       final Map<Hash, Optional<UInt256>> fetchedSlots,
       final PmtStateTrieAccountValue canonicalAccount,
       final DownloadedAccountRangeTracker accountRangeTracker,
+      final MerkleTrie<Bytes, Bytes> accountTrie,
       final WorldStateKeyValueStorage.Updater updater) {
 
-    final PmtStateTrieAccountValue localAccount = readFlatAccount(accountHash);
+    final PmtStateTrieAccountValue localAccount = readCurrentAccount(accountHash, accountTrie);
     if (localAccount == null) {
       throw new WorldStateDownloaderException(
           "snap/2 reorg correction: account " + accountHash + " not found locally");
@@ -375,7 +390,7 @@ public class SnapV2BlockAccessListApplier {
             applyForStrategy(
                 updater,
                 onBonsai -> onBonsai.putAccountStorageTrieNode(accountHash, location, hash, value),
-                onForest -> {});
+                onForest -> onForest.putAccountStorageTrieNode(hash, value));
 
     for (final Hash slotHash : divergedSlots) {
       final Optional<UInt256> fetchedValue = fetchedSlots.get(slotHash);
@@ -438,7 +453,9 @@ public class SnapV2BlockAccessListApplier {
               + " was not fetched");
     }
     applyForStrategy(
-        updater, onBonsai -> onBonsai.putCode(accountHash, codeHash, code), onForest -> {});
+        updater,
+        onBonsai -> onBonsai.putCode(accountHash, codeHash, code),
+        onForest -> onForest.putCode(Bytes32.wrap(codeHash.getBytes()), code));
   }
 
   private boolean hasCodeLocally(final Hash codeHash, final Hash accountHash) {
@@ -577,12 +594,6 @@ public class SnapV2BlockAccessListApplier {
     return worldStateStorageCoordinator.applyForStrategy(
         bonsai -> readAccountData(bonsai.getAccount(accountHash)),
         forest -> readTrieAccount(accountTrie, accountHash));
-  }
-
-  private PmtStateTrieAccountValue readFlatAccount(final Hash accountHash) {
-    return readAccountData(
-        worldStateStorageCoordinator.applyForStrategy(
-            bonsai -> bonsai.getAccount(accountHash), forest -> Optional.<Bytes>empty()));
   }
 
   private static PmtStateTrieAccountValue readTrieAccount(
