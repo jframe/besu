@@ -37,6 +37,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.v2.SnapV2AccountR
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.v2.SnapV2BytecodeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.v2.SnapV2StorageRangeRequest;
 import org.hyperledger.besu.ethereum.rlp.RLP;
+import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
@@ -1001,6 +1002,86 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         .isEqualTo(newPivot.getHeader());
   }
 
+  // ── Test 13: account with missing code bytes → code fetched during reorg recovery ───────────
+
+  /**
+   * Forces the code-fetch path: CAROL's canonical code hash ({@code carolCodeCanonical}) is stored
+   * in her account record but the corresponding code bytes are absent locally. The healer detects
+   * CAROL as Category B (YES+NO): she appears in block2s (orphaned nonce change) but is absent from
+   * block2c (canonical fork has an empty BAL). On re-fetch, {@code collectMissingCodeHashes} sees
+   * that CAROL's code hash is not locally available and schedules a {@code fetchCodes} call. After
+   * recovery the code bytes must be present, {@code codeFetches >= 1}, and the local state root
+   * must match {@code canonicalRoot}.
+   *
+   * <pre>
+   * gen -- 1(CAROL balance=100, code=carolCodeCanonical) -+- 2s(CAROL nonce=5)  orphaned
+   *                                                       \- 2c(empty BAL)      canonical
+   *                                                            \- 3c (pins canonicalRoot, newPivot)
+   * </pre>
+   */
+  @Test
+  void accountWithNewCanonicalCode_fetchesAndStoresCode() {
+    final Bytes carolCodeCanonical = Bytes.fromHexString("0x6080604052348015600f");
+
+    // Block 1: CAROL gets balance + carolCodeCanonical.
+    final Block block1 =
+        b.appendBlockWithBal(
+            b.header(0),
+            b.merge(
+                b.balWithBalances(Map.of(CAROL, Wei.of(100))),
+                b.balWithCodeChange(CAROL, carolCodeCanonical)),
+            1L);
+
+    // Block 2s (orphaned, low difficulty): CAROL nonce changes → she's in orphaned touches.
+    final Block block2s = b.appendStale(block1.getHeader(), b.balWithNonceChange(CAROL, 5L), 2L);
+
+    // Block 2c (canonical, high difficulty): empty BAL → CAROL absent from canonical touches.
+    final Block block2c = b.appendCanonical(block1.getHeader(), b.emptyBal(), 2L);
+
+    // Build canonical world state (block2c is now canonical at height 2).
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    // Create download state with the orphaned block2s as pivot.
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+
+    // Apply block 1 to local: stores CAROL's account record + carolCodeCanonical bytes.
+    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    // Delete CAROL's code bytes from local storage so hasCodeLocally() returns false.
+    // BonsaiWorldStateKeyValueStorage uses CodeHashCodeStorageStrategy when "code stored using
+    // code hash" is enabled; its removeFlatCode() is a no-op, so we delete the code entry
+    // directly from the underlying CODE_STORAGE segment instead.
+    final Hash carolCodeHash = Hash.hash(carolCodeCanonical);
+    final var codeTx = localStorage.getComposedWorldStateStorage().startTransaction();
+    codeTx.remove(KeyValueSegmentIdentifier.CODE_STORAGE, carolCodeHash.getBytes().toArrayUnsafe());
+    codeTx.commit();
+
+    // Apply block 2 (canonical block2c has empty BAL — no-op for CAROL locally).
+    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    // Code bytes must have been fetched and stored during reorg recovery.
+    assertThat(readCode(CAROL)).hasValue(carolCodeCanonical);
+    assertThat(codeFetches.get()).isGreaterThanOrEqualTo(1);
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
   // ── shared helpers ────────────────────────────────────────────────────────────────────────────
 
   /**
@@ -1082,5 +1163,11 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
                     address.addressHash(), new StorageSlotKey(slot)),
             forest -> Optional.<Bytes>empty())
         .map(UInt256::fromBytes);
+  }
+
+  private Optional<Bytes> readCode(final Address address) {
+    return readAccountBytes(address)
+        .map(bytes -> PmtStateTrieAccountValue.readFrom(RLP.input(bytes)).getCodeHash())
+        .flatMap(codeHash -> localCoordinator.getCode(codeHash, address.addressHash()));
   }
 }
