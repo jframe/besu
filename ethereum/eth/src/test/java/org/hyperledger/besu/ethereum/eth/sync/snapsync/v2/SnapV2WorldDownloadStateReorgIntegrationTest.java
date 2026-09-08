@@ -93,6 +93,13 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   private static final Address FRANK =
       Address.fromHexString("0x6666666666666666666666666666666666666666");
 
+  // Tests 7, 8 — download-status rules (PENDING and not-yet-downloaded).
+  private static final Address PETE =
+      Address.fromHexString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+  private static final UInt256 SP1 = UInt256.valueOf(101);
+  private static final UInt256 SP2 = UInt256.valueOf(102);
+
   private static final Bytes32 MAX_KEY =
       Bytes32.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
@@ -466,6 +473,196 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(retargeted.getPivotBlockHeader()).isEqualTo(newPivot.getHeader());
     final Bytes32 canonicalFrankRoot = Bytes32.wrap(readAccount(FRANK).getStorageRoot().getBytes());
     assertThat(retargeted.getStorageRoot()).isEqualTo(canonicalFrankRoot);
+  }
+
+  // ── Test 7: PENDING range — fix downloaded slot, defer not-downloaded slot ───────────────────
+
+  /**
+   * Account range is PENDING (has one outstanding child). PETE's slot SP1 is downloaded but SP2 is
+   * not. The orphaned fork rewrites both slots. After recovery:
+   *
+   * <ul>
+   *   <li>SP1 is re-fetched from the canonical peer and restored to its canonical value (1).
+   *   <li>SP2 remains absent (never downloaded, never re-fetched).
+   *   <li>The queued storage request is retargeted to the new pivot with PETE's canonical storage
+   *       root (installed via root-patch, not recomputed from the incomplete trie).
+   * </ul>
+   *
+   * <pre>
+   * gen -- 1(PETE=100, SP1=1) -- 2(SP2=2) -- 3s(SP1=10, SP2=20)   orphaned
+   *                                        \-- 3c(PETE=300 bal)     canonical
+   *                                              \-- 4c (pins canonicalRoot, new pivot)
+   * </pre>
+   */
+  @Test
+  void pendingRange_appliesToDownloadedSlotsAndDefersRest() {
+    // Throwaway trackers for local seeding: PENDING range, only SP1 slot downloaded.
+    final DownloadedAccountRangeTracker seedAccountTracker = new DownloadedAccountRangeTracker();
+    seedAccountTracker.registerPending(Bytes32.ZERO, MAX_KEY, 1);
+    final DownloadedStorageRangeTracker seedStorageTracker = new DownloadedStorageRangeTracker();
+    seedStorageTracker.registerSlotRange(
+        Bytes32.wrap(PETE.addressHash().getBytes()),
+        Bytes32.wrap(new StorageSlotKey(SP1).getSlotHash().getBytes()),
+        Bytes32.wrap(new StorageSlotKey(SP1).getSlotHash().getBytes()));
+
+    // Block 1 (shared): creates PETE with balance 100 and SP1=1.
+    // PETE is new (existingAccount == null) so isAccountCompleted=true; SP1 applied in full.
+    final Block block1 =
+        b.appendBlockWithBal(
+            b.header(0),
+            b.merge(
+                b.balWithBalances(Map.of(PETE, Wei.of(100))),
+                b.balWithStorageChanges(PETE, Map.of(SP1, UInt256.valueOf(1)))),
+            1L);
+    applyTo(localCoordinator, 1, 1, seedAccountTracker, seedStorageTracker);
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+
+    // Block 2 (shared): SP2 appears on the canonical side; SP2 is NOT downloaded locally
+    // (not in seedStorageTracker), so the slot-guard blocks it.
+    final Block block2 =
+        b.appendBlockWithBal(
+            block1.getHeader(), b.balWithStorageChanges(PETE, Map.of(SP2, UInt256.valueOf(2))), 2L);
+    applyTo(localCoordinator, 2, 2, seedAccountTracker, seedStorageTracker);
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+
+    // Block 3s (orphaned, low difficulty): rewrites both slots; only SP1 lands locally.
+    // appendStale uses LOW difficulty, so it is initially canonical at height 3.
+    final Block block3s =
+        b.appendStale(
+            block2.getHeader(),
+            b.balWithStorageChanges(
+                PETE, Map.of(SP1, UInt256.valueOf(10), SP2, UInt256.valueOf(20))),
+            3L);
+    applyTo(localCoordinator, 3, 3, seedAccountTracker, seedStorageTracker);
+    assertThat(readStorageSlot(PETE, SP1)).hasValue(UInt256.valueOf(10)); // downloaded, rewritten
+    assertThat(readStorageSlot(PETE, SP2)).isEmpty(); // not downloaded, still absent
+
+    // Block 3c (canonical, high difficulty): balance only; reorg makes it canonical at height 3.
+    final Block block3c =
+        b.appendCanonical(block2.getHeader(), b.balWithBalances(Map.of(PETE, Wei.of(300))), 3L);
+    applyTo(
+        canonicalCoordinator,
+        3,
+        3,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block3c.getHeader(), b.emptyBal(), 4L, canonicalRoot);
+
+    // Create download state; register the same PENDING+SP1 configuration on state's trackers
+    // (the healer reads these during planReorg / applyReorgCorrections).
+    final SnapV2WorldDownloadState state = createDownloadState(block3s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 1);
+    state
+        .getStorageRangeTracker()
+        .registerSlotRange(
+            Bytes32.wrap(PETE.addressHash().getBytes()),
+            Bytes32.wrap(new StorageSlotKey(SP1).getSlotHash().getBytes()),
+            Bytes32.wrap(new StorageSlotKey(SP1).getSlotHash().getBytes()));
+
+    // Queue PETE's still-in-progress storage request with the stale (orphaned) storage root.
+    final Bytes32 oldRoot = Bytes32.wrap(readAccount(PETE).getStorageRoot().getBytes());
+    final SnapV2StorageRangeRequest peteReq =
+        new SnapV2StorageRangeRequest(
+            block3s.getHeader(),
+            Bytes32.wrap(PETE.addressHash().getBytes()),
+            oldRoot,
+            RangeManager.MIN_RANGE,
+            RangeManager.MAX_RANGE,
+            RangeManager.MIN_RANGE);
+    state.enqueueRequest(peteReq);
+
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    // Downloaded SP1 restored; not-downloaded SP2 stays absent; canonical balance applied.
+    assertThat(readStorageSlot(PETE, SP1)).hasValue(UInt256.valueOf(1));
+    assertThat(readStorageSlot(PETE, SP2)).isEmpty();
+    assertThat(readAccount(PETE).getBalance()).isEqualTo(Wei.of(300));
+
+    // Pending account: retargeted storage request carries PETE's canonical storage root
+    // (installed via root-patch, not recomputed from the still-incomplete local trie).
+    final PmtStateTrieAccountValue canonicalPete =
+        PmtStateTrieAccountValue.readFrom(
+            RLP.input(
+                canonicalCoordinator
+                    .applyForStrategy(
+                        bonsai -> bonsai.getAccount(PETE.addressHash()),
+                        forest -> Optional.<Bytes>empty())
+                    .orElseThrow()));
+    final SnapV2StorageRangeRequest retargeted =
+        (SnapV2StorageRangeRequest) state.pendingStorageRequests.asList().get(0);
+    assertThat(retargeted.getPivotBlockHeader()).isEqualTo(newPivot.getHeader());
+    assertThat(retargeted.getStorageRoot())
+        .isEqualTo(Bytes32.wrap(canonicalPete.getStorageRoot().getBytes()));
+  }
+
+  // ── Test 8: not-yet-downloaded range → account deferred entirely ─────────────────────────────
+
+  /**
+   * ALICE's account hash lies outside the registered downloaded range (only [ZERO, ZERO] is
+   * persisted). The orphaned fork modified ALICE, but since her range is not persisted, recovery
+   * must skip her entirely — no re-download, no local change.
+   *
+   * <pre>
+   * gen -- 1(ALICE=100) -- 2s(ALICE=50)   orphaned
+   *                     \-- 2c(ALICE=80)  canonical
+   *                           \-- 3c (newPivot, canonicalRoot)
+   * </pre>
+   */
+  @Test
+  void notYetDownloadedRange_defersToLaterCycle() {
+    // Verify that ALICE is NOT covered by the degenerate [ZERO, ZERO] range.
+    final Bytes32 aliceHash = Bytes32.wrap(ALICE.addressHash().getBytes());
+    assertThat(aliceHash).isNotEqualTo(Bytes32.ZERO);
+
+    // Build chain: block1 (shared), block2s (orphaned low), block2c (canonical high).
+    final Block block1 =
+        b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
+    final Block block2s =
+        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    final Block block2c =
+        b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
+
+    // Seed canonical coordinator only; ALICE is not applied to local (her range is not persisted).
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    // Create download state: only [ZERO, ZERO] is persisted; ALICE's hash is NOT covered.
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, Bytes32.ZERO, 0);
+    // ALICE's hash is outside [ZERO, ZERO] → isAccountHashPersisted returns false.
+    assertThat(state.getAccountRangeTracker().isAccountHashPersisted(aliceHash)).isFalse();
+
+    // Do NOT apply any local BALs for ALICE — she is not in the persisted range.
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    // ALICE is not in the persisted range: skipped by planReorg and applyCanonicalBals.
+    assertThat(accountExists(ALICE)).isFalse();
+    assertThat(accountFetches).hasValue(0); // no re-download triggered
   }
 
   // ── shared helpers ────────────────────────────────────────────────────────────────────────────
