@@ -659,7 +659,7 @@ public class SnapV2BlockAccessListApplier {
             applyForStrategy(
                 updater,
                 onBonsai -> onBonsai.putAccountStorageTrieNode(accountHash, location, hash, value),
-                onForest -> {});
+                onForest -> onForest.putAccountStorageTrieNode(hash, value));
 
     int downloadedSlots = 0;
     for (final PerAccountChanges.StorageSlotUpdate update : perAccount.storageChanges.values()) {
