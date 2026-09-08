@@ -78,6 +78,8 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   private static final Bytes NC_CODE = Bytes.fromHexString("0x60806040523480156010");
 
   private static final UInt256 S1 = UInt256.valueOf(1);
+  private static final UInt256 S2 = UInt256.valueOf(2);
+  private static final UInt256 S3 = UInt256.valueOf(3);
 
   // Test 4 — NO+YES: account created only on canonical fork.
   private static final Address GRACE =
@@ -86,6 +88,10 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   // Test 5 — NO+NO: account exists at block1, neither fork touches it.
   private static final Address BOB =
       Address.fromHexString("0x2222222222222222222222222222222222222222");
+
+  // Test 6 — slot-level YES+NO: orphaned fork changes S1+S2, canonical fork sets S3.
+  private static final Address FRANK =
+      Address.fromHexString("0x6666666666666666666666666666666666666666");
 
   private static final Bytes32 MAX_KEY =
       Bytes32.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
@@ -374,6 +380,92 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     assertThat(readAccount(BOB).getBalance()).isEqualTo(Wei.of(100)); // untouched by both forks
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
+  // ── Test 6: slot-level YES+NO → orphaned-only slots restored, canonical slot applied ──────────
+
+  @Test
+  void slotsModifiedInOrphanedButNotNewBlock_reDownloadsSlots() {
+    // Block 1: FRANK has balance + S1=7 (base state).
+    final var baseBal =
+        b.merge(
+            b.balWithBalances(Map.of(FRANK, Wei.of(200))),
+            b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(7))));
+    final Block block1 = b.appendBlockWithBal(b.header(0), baseBal, 1L);
+
+    // Block 2s (orphaned, lower difficulty): FRANK S1=100, S2=200 — canonical at height 2
+    // initially.
+    final Block block2s =
+        b.appendStale(
+            block1.getHeader(),
+            b.balWithStorageChanges(
+                FRANK, Map.of(S1, UInt256.valueOf(100), S2, UInt256.valueOf(200))),
+            2L);
+
+    // Pre-seed local with the orphaned state while block2s is still canonical at height 2.
+    applyTo(
+        localCoordinator,
+        1,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+
+    // Block 2c (canonical, higher difficulty): FRANK S3=555 — triggers reorg.
+    final Block block2c =
+        b.appendCanonical(
+            block1.getHeader(),
+            b.balWithStorageChanges(FRANK, Map.of(S3, UInt256.valueOf(555))),
+            2L);
+
+    // Build canonical world state (block2c is now canonical at height 2).
+    applyTo(
+        canonicalCoordinator,
+        1,
+        1,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    applyTo(
+        canonicalCoordinator,
+        2,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    // Create download state with the stale (orphaned) pivot.
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    // Completing the full account range (initialChildCount=0) makes
+    // isAccountHashDownloaded(FRANK)=true so that computeSlotsToRefetch detects the
+    // diverged orphaned slots S1 and S2.
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+
+    // Queue a storage request for FRANK with the (soon-stale) orphaned storage root.
+    final Bytes32 oldRoot = Bytes32.wrap(readAccount(FRANK).getStorageRoot().getBytes());
+    final SnapV2StorageRangeRequest frankReq =
+        new SnapV2StorageRangeRequest(
+            block2s.getHeader(),
+            Bytes32.wrap(FRANK.addressHash().getBytes()),
+            oldRoot,
+            RangeManager.MIN_RANGE,
+            RangeManager.MAX_RANGE,
+            RangeManager.MIN_RANGE);
+    state.enqueueRequest(frankReq);
+
+    startCatchupAndAwait(state, newPivot.getHeader());
+
+    assertThat(readStorageSlot(FRANK, S1)).hasValue(UInt256.valueOf(7)); // restored to base value
+    assertThat(readStorageSlot(FRANK, S2)).isEmpty(); // orphaned-only slot removed
+    assertThat(readStorageSlot(FRANK, S3)).hasValue(UInt256.valueOf(555)); // canonical slot applied
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+
+    // The queued storage request was retargeted to the new pivot with FRANK's canonical root.
+    final var queued = state.pendingStorageRequests.asList();
+    assertThat(queued).hasSize(1);
+    final SnapV2StorageRangeRequest retargeted = (SnapV2StorageRangeRequest) queued.get(0);
+    assertThat(retargeted.getPivotBlockHeader()).isEqualTo(newPivot.getHeader());
+    final Bytes32 canonicalFrankRoot = Bytes32.wrap(readAccount(FRANK).getStorageRoot().getBytes());
+    assertThat(retargeted.getStorageRoot()).isEqualTo(canonicalFrankRoot);
   }
 
   // ── shared helpers ────────────────────────────────────────────────────────────────────────────
