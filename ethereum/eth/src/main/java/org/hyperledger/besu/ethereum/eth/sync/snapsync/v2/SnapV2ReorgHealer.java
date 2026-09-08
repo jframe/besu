@@ -200,7 +200,11 @@ public class SnapV2ReorgHealer {
       final DownloadedStorageRangeTracker storageRangeTracker) {
     final var batch =
         applier.applyBlockAccessLists(
-            plan.fromBlock(), plan.toBlock(), accountRangeTracker, storageRangeTracker);
+            plan.fromBlock(),
+            plan.toBlock(),
+            Optional.of(Bytes32.wrap(plan.oldPivot().getStateRoot().getBytes())),
+            accountRangeTracker,
+            storageRangeTracker);
     batch.commit();
   }
 

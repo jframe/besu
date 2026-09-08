@@ -35,6 +35,13 @@ interface StateHarness {
   /** Current account-trie root, needed by the Forest applier; empty on Bonsai. */
   Optional<Bytes32> forestStartRoot();
 
+  /**
+   * Called after an applier batch commit to hand back the new account-trie root. Forest harnesses
+   * must update their cached root so subsequent {@link #readAccount} calls see the new state.
+   * Bonsai harnesses ignore this (flat DB is always up to date).
+   */
+  default void updateAccountRoot(final Bytes32 newRoot) {}
+
   void seedAccount(Address address, long nonce, Wei balance, Hash storageRoot, Hash codeHash);
 
   void seedStorageSlot(Address address, UInt256 slotKey, UInt256 value);

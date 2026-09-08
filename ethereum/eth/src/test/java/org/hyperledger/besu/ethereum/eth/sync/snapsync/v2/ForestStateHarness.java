@@ -56,6 +56,11 @@ final class ForestStateHarness implements StateHarness {
     return Optional.of(accountRoot);
   }
 
+  @Override
+  public void updateAccountRoot(final Bytes32 newRoot) {
+    accountRoot = newRoot;
+  }
+
   private MerkleTrie<Bytes, Bytes> accountTrie() {
     final NodeLoader loader =
         (location, hash) -> coordinator.getAccountStateTrieNode(location, hash);
