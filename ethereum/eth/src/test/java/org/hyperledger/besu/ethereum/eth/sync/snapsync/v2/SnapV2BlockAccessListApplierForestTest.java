@@ -20,10 +20,15 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Block;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedAccountRangeTracker;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedStorageRangeTracker;
+import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -131,5 +136,68 @@ class SnapV2BlockAccessListApplierForestTest {
 
     assertThat(h.readAccount(ALICE).get().getCodeHash()).isEqualTo(Hash.hash(newCode));
     assertThat(h.readCode(ALICE)).hasValue(newCode);
+  }
+
+  /**
+   * A diverged storage slot (set only on the orphaned fork) is cleared by reorg corrections on both
+   * Bonsai and Forest. Verifies that {@code fixDivergedSlots} reads the account via the MPT on
+   * Forest and that storage-trie-node writes are no longer gated.
+   */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("harnesses")
+  void reorgCorrectionClearsDivergedStorageSlot(final StateHarness h) {
+    final UInt256 slotKey = UInt256.valueOf(1);
+    final Hash slotHash = ReorgBlockchainBuilder.slotHash(slotKey);
+
+    // Seed ALICE with slot = 100 (the orphaned-fork value); account starts with empty storage root.
+    h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    h.seedStorageSlot(ALICE, slotKey, UInt256.valueOf(100));
+
+    // Canonical at new pivot: slot is absent (canonical fork never wrote this slot).
+    // The canonical account has empty storage root because the slot is gone.
+    final PmtStateTrieAccountValue canonicalAlice =
+        new PmtStateTrieAccountValue(0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+
+    // Build plan: ALICE has one slot to fix, no full-account refetch.
+    final ReorgPlan plan = planWithDivergedSlots(Map.of(ALICE.addressHash(), Set.of(slotHash)));
+
+    // Fetched state: ALICE exists, slot is absent at the canonical pivot.
+    final FetchedReorgState fetched =
+        new FetchedReorgState(
+            Map.of(ALICE.addressHash(), Optional.of(canonicalAlice)),
+            Map.of(ALICE.addressHash(), Map.of(slotHash, Optional.empty())),
+            Map.of());
+
+    final SnapV2BlockAccessListApplier applier =
+        new SnapV2BlockAccessListApplier(
+            h.coordinator(),
+            new ReorgBlockchainBuilder().blockchain(),
+            ReorgBlockchainBuilder.balEnabledSchedule());
+
+    // Use a fresh tracker (no downloads) so the storage-root consistency check is skipped.
+    final ReorgRecoveryResult recovery =
+        applier.applyReorgCorrections(
+            plan,
+            fetched,
+            h.forestStartRoot(),
+            new DownloadedAccountRangeTracker(),
+            new DownloadedStorageRangeTracker());
+
+    h.updateAccountRoot(recovery.finalAccountRoot());
+
+    // The diverged slot must be absent after correction.
+    assertThat(h.readStorageSlot(ALICE, slotKey)).isEmpty();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  private static ReorgPlan planWithDivergedSlots(
+      final Map<Hash, Set<Hash>> divergedSlotsByAccount) {
+    final BlockHeader ancestor = new BlockHeaderTestFixture().number(1).buildHeader();
+    final BlockHeader oldPivot = new BlockHeaderTestFixture().number(2).buildHeader();
+    final BlockHeader newPivot = new BlockHeaderTestFixture().number(3).buildHeader();
+    return new ReorgPlan(ancestor, oldPivot, newPivot, Set.of(), divergedSlotsByAccount);
   }
 }

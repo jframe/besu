@@ -194,7 +194,7 @@ public class SnapV2ReorgHealer {
    * persisted accounts touched by the canonical fork up to date. Entries listed for re-fetch in
    * {@link ReorgPlan} are left for a later step.
    */
-  public void applyCanonicalBals(
+  public Bytes32 applyCanonicalBals(
       final ReorgPlan plan,
       final DownloadedAccountRangeTracker accountRangeTracker,
       final DownloadedStorageRangeTracker storageRangeTracker) {
@@ -205,7 +205,7 @@ public class SnapV2ReorgHealer {
             Optional.of(Bytes32.wrap(plan.oldPivot().getStateRoot().getBytes())),
             accountRangeTracker,
             storageRangeTracker);
-    batch.commit();
+    return batch.commit();
   }
 
   /**
@@ -238,11 +238,13 @@ public class SnapV2ReorgHealer {
     // Apply canonical BALs while the re-fetch is in flight. The BAL commit must happen
     // before fixDivergedSlots below because it opens storage tries from on-disk roots and
     // the Bonsai Updater is write-only (no read-back of uncommitted writes).
-    applyCanonicalBals(plan, accountRangeTracker, storageRangeTracker);
+    final Bytes32 intermediateRoot =
+        applyCanonicalBals(plan, accountRangeTracker, storageRangeTracker);
 
     final FetchedReorgState fetched = joinUnwrapped(fetchFuture);
     final ReorgRecoveryResult recovery =
-        applier.applyReorgCorrections(plan, fetched, accountRangeTracker, storageRangeTracker);
+        applier.applyReorgCorrections(
+            plan, fetched, Optional.of(intermediateRoot), accountRangeTracker, storageRangeTracker);
 
     LOG.info(
         "snap/2 reorg recovery complete: {} accounts restored, {} accounts deleted",
