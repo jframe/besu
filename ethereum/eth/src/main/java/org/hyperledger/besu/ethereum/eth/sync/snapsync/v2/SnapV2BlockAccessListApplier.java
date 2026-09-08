@@ -625,7 +625,7 @@ public class SnapV2BlockAccessListApplier {
     applyForStrategy(
         updater,
         onBonsai -> onBonsai.putCode(accountHash, codeHash, perAccount.latestCode),
-        onForest -> {});
+        onForest -> onForest.putCode(Bytes32.wrap(codeHash.getBytes()), perAccount.latestCode));
     return codeHash;
   }
 
