@@ -358,6 +358,10 @@ class ReorgBlockchainBuilder {
                 List.of())));
   }
 
+  BlockAccessList balWithCode(final Address address, final Bytes newCode) {
+    return balWithCodeChange(address, newCode);
+  }
+
   BlockAccessList balWithCodeChange(final Address address, final Bytes newCode) {
     return finalizeBal(
         List.of(

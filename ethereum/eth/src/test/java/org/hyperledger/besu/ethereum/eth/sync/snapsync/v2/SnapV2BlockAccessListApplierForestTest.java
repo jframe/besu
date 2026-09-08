@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedStorageRangeTra
 import java.util.Map;
 import java.util.stream.Stream;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -104,5 +105,31 @@ class SnapV2BlockAccessListApplierForestTest {
 
     assertThat(h.readStorageSlot(ALICE, slotKey)).hasValue(UInt256.valueOf(99));
     assertThat(h.readAccount(ALICE).get().getStorageRoot()).isNotEqualTo(Hash.EMPTY_TRIE_HASH);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("harnesses")
+  void appliesCodeChange(final StateHarness h) {
+    final Bytes newCode = Bytes.fromHexString("0x60016002");
+    h.seedAccount(ALICE, 1L, Wei.of(10), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+
+    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+    final Block block2 = b.appendCanonical(block1.getHeader(), b.balWithCode(ALICE, newCode), 2L);
+
+    final Bytes32 newRoot =
+        new SnapV2BlockAccessListApplier(
+                h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule())
+            .applyBlockAccessLists(
+                block1.getHeader().getNumber() + 1,
+                block2.getHeader().getNumber(),
+                h.forestStartRoot(),
+                fullAccountRange(),
+                new DownloadedStorageRangeTracker())
+            .commit();
+    h.updateAccountRoot(newRoot);
+
+    assertThat(h.readAccount(ALICE).get().getCodeHash()).isEqualTo(Hash.hash(newCode));
+    assertThat(h.readCode(ALICE)).hasValue(newCode);
   }
 }
