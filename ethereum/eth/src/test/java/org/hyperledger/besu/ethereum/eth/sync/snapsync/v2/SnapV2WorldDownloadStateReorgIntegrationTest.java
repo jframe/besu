@@ -114,7 +114,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   private final AtomicInteger codeFetches = new AtomicInteger();
 
   @Test
-  void modifiedInOrphanedAndNewBlock_appliesNewBalWithoutReDownload() {
+  void accountModifiedInOrphanedAndNewBlock_appliesCanonicalBalWithoutReDownload() {
     final Block block1 =
         b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
     // orphaned (2s): Alice = 50  — appended first so it is initially canonical
@@ -137,8 +137,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     state.startPivotCatchup(newPivot.getHeader());
 
-    assertThat(readAccount(localCoordinator, ALICE).getBalance())
-        .isEqualTo(Wei.of(80)); // canonical value applied
+    assertThat(readAccount(localCoordinator, ALICE).getBalance()).isEqualTo(Wei.of(80));
     assertThat(accountFetches)
         .hasValue(
             0); // touched on both forks: canonical BAL applied directly, no re-download needed
@@ -147,7 +146,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   }
 
   @Test
-  void modifiedInOrphanedButNotNewBlock_reDownloadsAndUpdatesWhenPresent() {
+  void accountModifiedInOrphanedButNotNewBlock_reDownloadsWhenPresent() {
     final Block block1 =
         b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ORPHAN_EOA, Wei.of(75))), 1L);
     // orphaned (2s): ORPHAN_EOA = 60 — appended first so it is initially canonical
@@ -178,7 +177,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   }
 
   @Test
-  void modifiedInOrphanedButNotNewBlock_deletesWhenAbsentFromCanonical() {
+  void accountModifiedInOrphanedButNotNewBlock_deletesWhenAbsentFromCanonical() {
     final Block block1 =
         b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 1L);
 
@@ -237,19 +236,17 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     state.startPivotCatchup(newPivot.getHeader());
 
-    // NEW_CONTRACT must be gone from local state.
     assertThat(accountExists(localCoordinator, NEW_CONTRACT)).isFalse();
     assertThat(readStorageSlot(localCoordinator, NEW_CONTRACT, SLOT_BASE)).isEmpty();
     // Queued child requests for the doomed contract must have been purged.
     assertThat(state.pendingStorageRequests.asList()).isEmpty();
     assertThat(state.pendingCodeRequests.asList()).isEmpty();
-    // ALICE carries through from the canonical BAL.
     assertThat(readAccount(localCoordinator, ALICE).getBalance()).isEqualTo(Wei.of(80));
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
   @Test
-  void notModifiedInOrphanedButModifiedInNewBlock_appliesNewBal() {
+  void accountNotModifiedInOrphanedButModifiedInNewBlock_appliesCanonicalBal() {
     final Block block1 =
         b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
     final Block block2s =
@@ -279,7 +276,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   }
 
   @Test
-  void notModifiedInOrphanedOrNewBlock_skipsEntirely() {
+  void accountNotModifiedInOrphanedOrNewBlock_skipsEntirely() {
     final Block block1 =
         b.appendBlockWithBal(
             b.header(0),
@@ -302,8 +299,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     state.startPivotCatchup(newPivot.getHeader());
 
-    assertThat(readAccount(localCoordinator, UNTOUCHED).getBalance())
-        .isEqualTo(Wei.of(100)); // untouched by both forks
+    assertThat(readAccount(localCoordinator, UNTOUCHED).getBalance()).isEqualTo(Wei.of(100));
     assertThat(accountFetches).hasValue(0); // no account was orphaned-only; nothing to re-fetch
     assertThat(storageFetches).hasValue(0);
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
@@ -371,7 +367,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(readStorageSlot(localCoordinator, STORAGE_ACCT, SLOT_ORPHAN))
         .isEmpty(); // orphaned-only slot removed
     assertThat(readStorageSlot(localCoordinator, STORAGE_ACCT, SLOT_CANONICAL))
-        .hasValue(UInt256.valueOf(555)); // canonical slot applied
+        .hasValue(UInt256.valueOf(555));
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
 
     // Queued request retargeted to new pivot with STORAGE_ACCT's canonical root.
@@ -463,7 +459,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     state.startPivotCatchup(newPivot.getHeader());
 
-    // SLOT_DOWNLOADED restored; SLOT_DEFERRED stays absent; canonical balance applied.
     assertThat(readStorageSlot(localCoordinator, PENDING_ACCT, SLOT_DOWNLOADED))
         .hasValue(UInt256.valueOf(1));
     assertThat(readStorageSlot(localCoordinator, PENDING_ACCT, SLOT_DEFERRED)).isEmpty();
@@ -532,7 +527,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     final Block block3 =
         b.appendCanonical(block2.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 3L);
 
-    // block3 must be in the blockchain before applying its BAL.
     seedCanonical(3, 3);
 
     final SnapV2WorldDownloadState state =
@@ -553,11 +547,9 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(accountFetches).hasValue(0);
     assertThat(storageFetches).hasValue(0);
     assertThat(codeFetches).hasValue(0);
-    // Queued account request retargeted to the new pivot.
     final SnapV2AccountRangeRequest retargetedReq =
         (SnapV2AccountRangeRequest) state.pendingAccountRequests.asList().get(0);
     assertThat(retargetedReq.getPivotBlockHeader()).isEqualTo(block3.getHeader());
-    // Local and canonical world states agree.
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator))
         .isEqualTo(ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator));
   }
@@ -725,7 +717,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   }
 
   @Test
-  void accountWithNewCanonicalCode_fetchesAndStoresCode() {
+  void codeModifiedInOrphanedButNotNewBlock_fetchesCanonicalCode() {
     final Bytes carolCodeCanonical = Bytes.fromHexString("0x6080604052348015600f");
 
     // Block 1: CAROL gets balance + carolCodeCanonical.
@@ -765,9 +757,179 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     state.startPivotCatchup(newPivot.getHeader());
 
-    // Code bytes must have been fetched and stored during reorg recovery.
     assertThat(readCode(localCoordinator, CAROL)).hasValue(carolCodeCanonical);
     assertThat(codeFetches.get()).isGreaterThanOrEqualTo(1);
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
+  @Test
+  void slotsModifiedInOrphanedAndNewBlock_appliesCanonicalSlotWithoutRefetch() {
+    final Block block1 =
+        b.appendBlockWithBal(
+            b.header(0),
+            b.merge(
+                b.balWithBalances(Map.of(STORAGE_ACCT, Wei.of(200))),
+                b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_BASE, UInt256.valueOf(7)))),
+            1L);
+    final Block block2s =
+        b.appendStale(
+            block1.getHeader(),
+            b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_BASE, UInt256.valueOf(100))),
+            2L);
+
+    // Apply orphaned BALs locally while block2s is still canonical.
+    applyBals(
+        localCoordinator,
+        1,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    assertThat(readStorageSlot(localCoordinator, STORAGE_ACCT, SLOT_BASE))
+        .hasValue(UInt256.valueOf(100));
+
+    // Block 2c (canonical): also modifies SLOT_BASE — same slot as the orphaned fork.
+    final Block block2c =
+        b.appendCanonical(
+            block1.getHeader(),
+            b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_BASE, UInt256.valueOf(999))),
+            2L);
+
+    seedCanonical(1, 2);
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+
+    state.startPivotCatchup(newPivot.getHeader());
+
+    assertThat(readStorageSlot(localCoordinator, STORAGE_ACCT, SLOT_BASE))
+        .hasValue(UInt256.valueOf(999));
+    assertThat(accountFetches).hasValue(0);
+    assertThat(storageFetches).hasValue(0);
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
+  @Test
+  void slotsNotModifiedInOrphanedButModifiedInNewBlock_appliesCanonicalSlot() {
+    final Block block1 =
+        b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
+    final Block block2s =
+        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+
+    // Apply orphaned BALs locally while block2s is still canonical.
+    applyBals(
+        localCoordinator,
+        1,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    assertThat(accountExists(localCoordinator, STORAGE_ACCT)).isFalse();
+
+    final Block block2c =
+        b.appendCanonical(
+            block1.getHeader(),
+            b.merge(
+                b.balWithBalances(Map.of(ALICE, Wei.of(80))),
+                b.balWithBalances(Map.of(STORAGE_ACCT, Wei.of(100))),
+                b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_CANONICAL, UInt256.valueOf(42)))),
+            2L);
+
+    seedCanonical(1, 2);
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+
+    state.startPivotCatchup(newPivot.getHeader());
+
+    assertThat(accountExists(localCoordinator, STORAGE_ACCT)).isTrue();
+    assertThat(readStorageSlot(localCoordinator, STORAGE_ACCT, SLOT_CANONICAL))
+        .hasValue(UInt256.valueOf(42));
+    assertThat(accountFetches).hasValue(0);
+    assertThat(storageFetches).hasValue(0);
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
+  @Test
+  void codeModifiedInOrphanedAndNewBlock_appliesCanonicalCodeWithoutFetch() {
+    final Bytes codeV1 = Bytes.fromHexString("0xdeadbeef");
+    final Bytes codeV2 = Bytes.fromHexString("0xcafebabe");
+
+    final Block block1 =
+        b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(CAROL, Wei.of(100))), 1L);
+    final Block block2s = b.appendStale(block1.getHeader(), b.balWithCodeChange(CAROL, codeV1), 2L);
+
+    // Apply orphaned BALs locally while block2s is still canonical.
+    applyBals(
+        localCoordinator,
+        1,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    assertThat(readCode(localCoordinator, CAROL)).hasValue(codeV1);
+
+    // Block 2c (canonical): deploys different code to the same contract.
+    final Block block2c =
+        b.appendCanonical(block1.getHeader(), b.balWithCodeChange(CAROL, codeV2), 2L);
+
+    seedCanonical(1, 2);
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+
+    state.startPivotCatchup(newPivot.getHeader());
+
+    // codeV2 is written by the canonical BAL, not fetched from the network.
+    assertThat(readCode(localCoordinator, CAROL)).hasValue(codeV2);
+    assertThat(accountFetches).hasValue(0);
+    assertThat(codeFetches).hasValue(0);
+    assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
+  }
+
+  @Test
+  void codeNotModifiedInOrphanedButModifiedInNewBlock_appliesCanonicalCode() {
+    final Bytes canonicalCode = Bytes.fromHexString("0x60806040");
+
+    final Block block1 =
+        b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
+    final Block block2s =
+        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+
+    // Apply orphaned BALs locally while block2s is still canonical.
+    applyBals(
+        localCoordinator,
+        1,
+        2,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+    assertThat(accountExists(localCoordinator, NEW_CONTRACT)).isFalse();
+
+    final Block block2c =
+        b.appendCanonical(
+            block1.getHeader(),
+            b.merge(
+                b.balWithBalances(Map.of(ALICE, Wei.of(80))),
+                b.balWithBalances(Map.of(NEW_CONTRACT, Wei.ONE)),
+                b.balWithCodeChange(NEW_CONTRACT, canonicalCode)),
+            2L);
+
+    seedCanonical(1, 2);
+    final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
+    final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+
+    state.startPivotCatchup(newPivot.getHeader());
+
+    assertThat(accountExists(localCoordinator, NEW_CONTRACT)).isTrue();
+    assertThat(readCode(localCoordinator, NEW_CONTRACT)).hasValue(canonicalCode);
+    assertThat(accountFetches).hasValue(0);
+    assertThat(codeFetches).hasValue(0);
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
