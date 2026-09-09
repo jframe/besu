@@ -57,58 +57,33 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.Test;
 
-/**
- * Integration tests for the snap/2 reorg recovery pipeline driven through {@link
- * SnapV2WorldDownloadState#startPivotCatchup}. No mocks: a real blockchain, real Bonsai world
- * states (local + canonical), a real {@link SnapV2ReorgHealer} whose fetcher serves the canonical
- * state through a real {@link org.hyperledger.besu.ethereum.eth.manager.snap.SnapTestServing}, and
- * a real {@link EthContext}. Each test asserts the resulting world state, queue, and tracker
- * outcomes.
- */
+/** Integration tests for the snap/2 reorg recovery. */
 class SnapV2WorldDownloadStateReorgIntegrationTest {
 
   private static final Address ALICE =
       Address.fromHexString("0x1111111111111111111111111111111111111111");
-
-  // Test 2 — YES+NO (present in canonical): orphaned fork changed DAVE; canonical fork did not.
-  private static final Address DAVE =
-      Address.fromHexString("0x4444444444444444444444444444444444444444");
-
-  // Test 3 — YES+NO (absent from canonical): contract exists only on orphaned fork.
-  private static final Address NEW_CONTRACT =
-      Address.fromHexString("0x9999999999999999999999999999999999999999");
-
-  private static final Bytes NC_CODE = Bytes.fromHexString("0x60806040523480156010");
-
-  private static final UInt256 S1 = UInt256.valueOf(1);
-  private static final UInt256 S2 = UInt256.valueOf(2);
-  private static final UInt256 S3 = UInt256.valueOf(3);
-
-  // Test 4 — NO+YES: account created only on canonical fork.
-  private static final Address GRACE =
-      Address.fromHexString("0x7777777777777777777777777777777777777777");
-
-  // Test 5 — NO+NO: account exists at block1, neither fork touches it.
-  private static final Address BOB =
-      Address.fromHexString("0x2222222222222222222222222222222222222222");
-
-  // Test 6 — slot-level YES+NO: orphaned fork changes S1+S2, canonical fork sets S3.
-  private static final Address FRANK =
-      Address.fromHexString("0x6666666666666666666666666666666666666666");
-
-  // Tests 7, 8 — download-status rules (PENDING and not-yet-downloaded).
-  private static final Address PETE =
-      Address.fromHexString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-
-  private static final UInt256 SP1 = UInt256.valueOf(101);
-  private static final UInt256 SP2 = UInt256.valueOf(102);
-
-  private static final Bytes32 MAX_KEY =
-      Bytes32.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-
-  // Test 11 — unaffected account with storage (not touched by either fork)
   private static final Address CAROL =
       Address.fromHexString("0x3333333333333333333333333333333333333333");
+  private static final Address ORPHAN_EOA =
+      Address.fromHexString("0x4444444444444444444444444444444444444444");
+  private static final Address STORAGE_ACCT =
+      Address.fromHexString("0x6666666666666666666666666666666666666666");
+  private static final Address CANONICAL_NEW =
+      Address.fromHexString("0x7777777777777777777777777777777777777777");
+  private static final Address NEW_CONTRACT =
+      Address.fromHexString("0x9999999999999999999999999999999999999999");
+  private static final Address PENDING_ACCT =
+      Address.fromHexString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  private static final Address UNTOUCHED =
+      Address.fromHexString("0x2222222222222222222222222222222222222222");
+
+  private static final Bytes NEW_CONTRACT_CODE = Bytes.fromHexString("0x60806040523480156010");
+
+  private static final UInt256 SLOT_BASE = UInt256.valueOf(1);
+  private static final UInt256 SLOT_ORPHAN = UInt256.valueOf(2);
+  private static final UInt256 SLOT_CANONICAL = UInt256.valueOf(3);
+  private static final UInt256 SLOT_DOWNLOADED = UInt256.valueOf(101);
+  private static final UInt256 SLOT_DEFERRED = UInt256.valueOf(102);
 
   private final BonsaiWorldStateKeyValueStorage localStorage =
       ReorgBlockchainBuilder.newBonsaiStorage();
@@ -120,6 +95,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
       new WorldStateStorageCoordinator(canonicalStorage);
 
   private final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+
   private final EthContext ethContext =
       EthProtocolManagerTestBuilder.builder().build().ethContext();
 
@@ -127,11 +103,8 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   private final AtomicInteger storageFetches = new AtomicInteger();
   private final AtomicInteger codeFetches = new AtomicInteger();
 
-  // ── Test 1: matrix YES + YES → apply canonical BAL, no re-download ───────────────────────────
-
   @Test
   void modifiedInOrphanedAndNewBlock_appliesNewBalWithoutReDownload() {
-    // Build all blockchain blocks first.
     final Block block1 =
         b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(100))), 1L);
     // orphaned (2s): Alice = 50  — appended first so it is initially canonical
@@ -141,32 +114,16 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     final Block block2c =
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
 
-    // Build canonical world state.
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
 
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
-    // Create download state with stale pivot; then seed trackers and apply local BALs.
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
 
-    // Register the full address space as already downloaded.
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
 
-    // Apply canonical local BALs using the state's trackers so the healer sees a complete picture.
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
-    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    seedLocal(state, 1, 2);
 
     startCatchupAndAwait(state, newPivot.getHeader());
 
@@ -176,60 +133,38 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
-  // ── Test 2: matrix YES + NO (present in canonical) → re-download and restore ─────────────────
-
   @Test
   void modifiedInOrphanedButNotNewBlock_reDownloadsAndUpdatesWhenPresent() {
-    // Build all blockchain blocks first.
     final Block block1 =
-        b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(DAVE, Wei.of(75))), 1L);
-    // orphaned (2s): DAVE = 60 — appended first so it is initially canonical
+        b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ORPHAN_EOA, Wei.of(75))), 1L);
+    // orphaned (2s): ORPHAN_EOA = 60 — appended first so it is initially canonical
     final Block block2s =
-        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(DAVE, Wei.of(60))), 2L);
-    // canonical (2c): ALICE = 80, DAVE untouched — higher difficulty wins the reorg
+        b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ORPHAN_EOA, Wei.of(60))), 2L);
+    // canonical (2c): ALICE = 80, ORPHAN_EOA untouched — higher difficulty wins the reorg
     final Block block2c =
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
 
-    // Build canonical world state first so we can pin the state root.
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
 
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
-    // Create download state with stale pivot; then seed trackers and apply local BALs.
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
 
-    // Register the full address space as already downloaded.
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
 
-    // Apply canonical BALs to local using the state's trackers.
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
-    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    seedLocal(state, 1, 2);
 
     startCatchupAndAwait(state, newPivot.getHeader());
 
-    // DAVE was modified by orphaned fork but is absent from canonical BAL → re-downloaded.
-    assertThat(readAccount(DAVE).getBalance()).isEqualTo(Wei.of(75));
+    // ORPHAN_EOA was modified by orphaned fork but is absent from canonical BAL → re-downloaded.
+    assertThat(readAccount(ORPHAN_EOA).getBalance()).isEqualTo(Wei.of(75));
     assertThat(accountFetches.get()).isGreaterThanOrEqualTo(1);
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
-  // ── Test 3: matrix YES + NO (absent from canonical) → delete + purge queued child requests ────
-
   @Test
   void modifiedInOrphanedButNotNewBlock_deletesWhenAbsentFromCanonical() {
-    // Build common-ancestor block.
     final Block block1 =
         b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 1L);
 
@@ -239,12 +174,12 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
             block1.getHeader(),
             b.merge(
                 b.balWithBalances(Map.of(NEW_CONTRACT, Wei.ONE)),
-                b.balWithCodeChange(NEW_CONTRACT, NC_CODE),
-                b.balWithStorageChanges(NEW_CONTRACT, Map.of(S1, UInt256.valueOf(5)))),
+                b.balWithCodeChange(NEW_CONTRACT, NEW_CONTRACT_CODE),
+                b.balWithStorageChanges(NEW_CONTRACT, Map.of(SLOT_BASE, UInt256.valueOf(5)))),
             2L);
 
     // Pre-seed local with the orphaned state while block2s is still canonical at height 2.
-    applyTo(
+    applyBals(
         localCoordinator,
         1,
         2,
@@ -252,33 +187,20 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         new DownloadedStorageRangeTracker());
 
     // Verify NEW_CONTRACT is present locally before the canonical fork arrives.
-    assertThat(readStorageSlot(NEW_CONTRACT, S1)).hasValue(UInt256.valueOf(5));
+    assertThat(readStorageSlot(NEW_CONTRACT, SLOT_BASE)).hasValue(UInt256.valueOf(5));
     assertThat(accountExists(NEW_CONTRACT)).isTrue();
 
     // Canonical fork (block2c) wins the reorg; NEW_CONTRACT is absent from canonical chain.
     final Block block2c =
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
 
-    // Build canonical world state and compute its root.
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
 
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
-    // Create the download state with the orphaned block as its starting pivot.
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
 
     // Queue a storage-range and a bytecode request for the doomed contract so the purge is tested.
     final SnapV2StorageRangeRequest storageReq =
@@ -293,7 +215,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         new SnapV2BytecodeRequest(
             block2s.getHeader(),
             Bytes32.wrap(NEW_CONTRACT.addressHash().getBytes()),
-            Bytes32.wrap(Hash.hash(NC_CODE).getBytes()),
+            Bytes32.wrap(Hash.hash(NEW_CONTRACT_CODE).getBytes()),
             RangeManager.MIN_RANGE);
     state.enqueueRequest(storageReq);
     state.enqueueRequest(codeReq);
@@ -302,7 +224,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     // NEW_CONTRACT must be gone from local state.
     assertThat(accountExists(NEW_CONTRACT)).isFalse();
-    assertThat(readStorageSlot(NEW_CONTRACT, S1)).isEmpty();
+    assertThat(readStorageSlot(NEW_CONTRACT, SLOT_BASE)).isEmpty();
     // Queued child requests for the doomed contract must have been purged.
     assertThat(state.pendingStorageRequests.asList()).isEmpty();
     assertThat(state.pendingCodeRequests.asList()).isEmpty();
@@ -310,8 +232,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80));
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
-
-  // ── Test 4: matrix NO + YES → new account created from canonical BAL ─────────────────────────
 
   @Test
   void notModifiedInOrphanedButModifiedInNewBlock_appliesNewBal() {
@@ -324,37 +244,24 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
             block1.getHeader(),
             b.merge(
                 b.balWithBalances(Map.of(ALICE, Wei.of(80))),
-                b.balWithBalances(Map.of(GRACE, Wei.of(50)))),
+                b.balWithBalances(Map.of(CANONICAL_NEW, Wei.of(50)))),
             2L);
 
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
-    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+    seedLocal(state, 1, 2);
 
     startCatchupAndAwait(state, newPivot.getHeader());
 
-    assertThat(readAccount(GRACE).getBalance()).isEqualTo(Wei.of(50)); // created from canonical BAL
+    assertThat(readAccount(CANONICAL_NEW).getBalance())
+        .isEqualTo(Wei.of(50)); // created from canonical BAL
     assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80));
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
-
-  // ── Test 5: matrix NO + NO → untouched account is left intact ────────────────────────────────
 
   @Test
   void notModifiedInOrphanedOrNewBlock_skipsEntirely() {
@@ -363,103 +270,76 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
             b.header(0),
             b.merge(
                 b.balWithBalances(Map.of(ALICE, Wei.of(100))),
-                b.balWithBalances(Map.of(BOB, Wei.of(100)))),
+                b.balWithBalances(Map.of(UNTOUCHED, Wei.of(100)))),
             1L);
     final Block block2s =
         b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
     final Block block2c =
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
 
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
-    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+    seedLocal(state, 1, 2);
 
     startCatchupAndAwait(state, newPivot.getHeader());
 
-    assertThat(readAccount(BOB).getBalance()).isEqualTo(Wei.of(100)); // untouched by both forks
+    assertThat(readAccount(UNTOUCHED).getBalance())
+        .isEqualTo(Wei.of(100)); // untouched by both forks
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
-  // ── Test 6: slot-level YES+NO → orphaned-only slots restored, canonical slot applied ──────────
-
   @Test
   void slotsModifiedInOrphanedButNotNewBlock_reDownloadsSlots() {
-    // Block 1: FRANK has balance + S1=7 (base state).
+    // Block 1: STORAGE_ACCT has balance + SLOT_BASE=7 (base state).
     final var baseBal =
         b.merge(
-            b.balWithBalances(Map.of(FRANK, Wei.of(200))),
-            b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(7))));
+            b.balWithBalances(Map.of(STORAGE_ACCT, Wei.of(200))),
+            b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_BASE, UInt256.valueOf(7))));
     final Block block1 = b.appendBlockWithBal(b.header(0), baseBal, 1L);
 
-    // Block 2s (orphaned, lower difficulty): FRANK S1=100, S2=200 — canonical at height 2
-    // initially.
+    // Block 2s (orphaned): SLOT_BASE=100, SLOT_ORPHAN=200.
     final Block block2s =
         b.appendStale(
             block1.getHeader(),
             b.balWithStorageChanges(
-                FRANK, Map.of(S1, UInt256.valueOf(100), S2, UInt256.valueOf(200))),
+                STORAGE_ACCT,
+                Map.of(SLOT_BASE, UInt256.valueOf(100), SLOT_ORPHAN, UInt256.valueOf(200))),
             2L);
 
     // Pre-seed local with the orphaned state while block2s is still canonical at height 2.
-    applyTo(
+    applyBals(
         localCoordinator,
         1,
         2,
         ReorgBlockchainBuilder.fullAccountRange(),
         new DownloadedStorageRangeTracker());
 
-    // Block 2c (canonical, higher difficulty): FRANK S3=555 — triggers reorg.
+    // Block 2c (canonical, higher difficulty): STORAGE_ACCT SLOT_CANONICAL=555 — triggers reorg.
     final Block block2c =
         b.appendCanonical(
             block1.getHeader(),
-            b.balWithStorageChanges(FRANK, Map.of(S3, UInt256.valueOf(555))),
+            b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_CANONICAL, UInt256.valueOf(555))),
             2L);
 
-    // Build canonical world state (block2c is now canonical at height 2).
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
-    // Create download state with the stale (orphaned) pivot.
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
-    // Completing the full account range (initialChildCount=0) makes
-    // isAccountHashDownloaded(FRANK)=true so that computeSlotsToRefetch detects the
-    // diverged orphaned slots S1 and S2.
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    // initialChildCount=0 → isAccountHashDownloaded(STORAGE_ACCT)=true → computeSlotsToRefetch
+    // detects diverged orphaned slots SLOT_BASE and SLOT_ORPHAN.
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
 
-    // Queue a storage request for FRANK with the (soon-stale) orphaned storage root.
-    final Bytes32 oldRoot = Bytes32.wrap(readAccount(FRANK).getStorageRoot().getBytes());
+    // Queue a storage request for STORAGE_ACCT with the (soon-stale) orphaned storage root.
+    final Bytes32 oldRoot = Bytes32.wrap(readAccount(STORAGE_ACCT).getStorageRoot().getBytes());
     final SnapV2StorageRangeRequest frankReq =
         new SnapV2StorageRangeRequest(
             block2s.getHeader(),
-            Bytes32.wrap(FRANK.addressHash().getBytes()),
+            Bytes32.wrap(STORAGE_ACCT.addressHash().getBytes()),
             oldRoot,
             RangeManager.MIN_RANGE,
             RangeManager.MAX_RANGE,
@@ -468,122 +348,93 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     startCatchupAndAwait(state, newPivot.getHeader());
 
-    assertThat(readStorageSlot(FRANK, S1)).hasValue(UInt256.valueOf(7)); // restored to base value
-    assertThat(readStorageSlot(FRANK, S2)).isEmpty(); // orphaned-only slot removed
-    assertThat(readStorageSlot(FRANK, S3)).hasValue(UInt256.valueOf(555)); // canonical slot applied
+    assertThat(readStorageSlot(STORAGE_ACCT, SLOT_BASE))
+        .hasValue(UInt256.valueOf(7)); // restored to base value
+    assertThat(readStorageSlot(STORAGE_ACCT, SLOT_ORPHAN)).isEmpty(); // orphaned-only slot removed
+    assertThat(readStorageSlot(STORAGE_ACCT, SLOT_CANONICAL))
+        .hasValue(UInt256.valueOf(555)); // canonical slot applied
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
 
-    // The queued storage request was retargeted to the new pivot with FRANK's canonical root.
+    // Queued request retargeted to new pivot with STORAGE_ACCT's canonical root.
     final var queued = state.pendingStorageRequests.asList();
     assertThat(queued).hasSize(1);
     final SnapV2StorageRangeRequest retargeted = (SnapV2StorageRangeRequest) queued.get(0);
     assertThat(retargeted.getPivotBlockHeader()).isEqualTo(newPivot.getHeader());
-    final Bytes32 canonicalFrankRoot = Bytes32.wrap(readAccount(FRANK).getStorageRoot().getBytes());
+    final Bytes32 canonicalFrankRoot =
+        Bytes32.wrap(readAccount(STORAGE_ACCT).getStorageRoot().getBytes());
     assertThat(retargeted.getStorageRoot()).isEqualTo(canonicalFrankRoot);
   }
 
-  // ── Test 7: PENDING range — fix downloaded slot, defer not-downloaded slot ───────────────────
-
-  /**
-   * Account range is PENDING (has one outstanding child). PETE's slot SP1 is downloaded but SP2 is
-   * not. The orphaned fork rewrites both slots. After recovery:
-   *
-   * <ul>
-   *   <li>SP1 is re-fetched from the canonical peer and restored to its canonical value (1).
-   *   <li>SP2 remains absent (never downloaded, never re-fetched).
-   *   <li>The queued storage request is retargeted to the new pivot with PETE's canonical storage
-   *       root (installed via root-patch, not recomputed from the incomplete trie).
-   * </ul>
-   *
-   * <pre>
-   * gen -- 1(PETE=100, SP1=1) -- 2(SP2=2) -- 3s(SP1=10, SP2=20)   orphaned
-   *                                        \-- 3c(PETE=300 bal)     canonical
-   *                                              \-- 4c (pins canonicalRoot, new pivot)
-   * </pre>
-   */
   @Test
   void pendingRange_appliesToDownloadedSlotsAndDefersRest() {
-    // Throwaway trackers for local seeding: PENDING range, only SP1 slot downloaded.
+    // Seed trackers: PENDING range, SLOT_DOWNLOADED only.
     final DownloadedAccountRangeTracker seedAccountTracker = new DownloadedAccountRangeTracker();
-    seedAccountTracker.registerPending(Bytes32.ZERO, MAX_KEY, 1);
+    seedAccountTracker.registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 1);
     final DownloadedStorageRangeTracker seedStorageTracker = new DownloadedStorageRangeTracker();
     seedStorageTracker.registerSlotRange(
-        Bytes32.wrap(PETE.addressHash().getBytes()),
-        Bytes32.wrap(new StorageSlotKey(SP1).getSlotHash().getBytes()),
-        Bytes32.wrap(new StorageSlotKey(SP1).getSlotHash().getBytes()));
+        Bytes32.wrap(PENDING_ACCT.addressHash().getBytes()),
+        Bytes32.wrap(new StorageSlotKey(SLOT_DOWNLOADED).getSlotHash().getBytes()),
+        Bytes32.wrap(new StorageSlotKey(SLOT_DOWNLOADED).getSlotHash().getBytes()));
 
-    // Block 1 (shared): creates PETE with balance 100 and SP1=1.
-    // PETE is new (existingAccount == null) so isAccountCompleted=true; SP1 applied in full.
+    // Block 1: PENDING_ACCT=100 + SLOT_DOWNLOADED=1.
     final Block block1 =
         b.appendBlockWithBal(
             b.header(0),
             b.merge(
-                b.balWithBalances(Map.of(PETE, Wei.of(100))),
-                b.balWithStorageChanges(PETE, Map.of(SP1, UInt256.valueOf(1)))),
+                b.balWithBalances(Map.of(PENDING_ACCT, Wei.of(100))),
+                b.balWithStorageChanges(PENDING_ACCT, Map.of(SLOT_DOWNLOADED, UInt256.valueOf(1)))),
             1L);
-    applyTo(localCoordinator, 1, 1, seedAccountTracker, seedStorageTracker);
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    applyBals(localCoordinator, 1, 1, seedAccountTracker, seedStorageTracker);
+    seedCanonical(1, 1);
 
-    // Block 2 (shared): SP2 appears on the canonical side; SP2 is NOT downloaded locally
-    // (not in seedStorageTracker), so the slot-guard blocks it.
+    // Block 2: SLOT_DEFERRED added; not in seedStorageTracker so the slot-guard blocks it.
     final Block block2 =
         b.appendBlockWithBal(
-            block1.getHeader(), b.balWithStorageChanges(PETE, Map.of(SP2, UInt256.valueOf(2))), 2L);
-    applyTo(localCoordinator, 2, 2, seedAccountTracker, seedStorageTracker);
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+            block1.getHeader(),
+            b.balWithStorageChanges(PENDING_ACCT, Map.of(SLOT_DEFERRED, UInt256.valueOf(2))),
+            2L);
+    applyBals(localCoordinator, 2, 2, seedAccountTracker, seedStorageTracker);
+    seedCanonical(2, 2);
 
-    // Block 3s (orphaned, low difficulty): rewrites both slots; only SP1 lands locally.
+    // Block 3s (orphaned, low difficulty): rewrites both slots; only SLOT_DOWNLOADED lands locally.
     // appendStale uses LOW difficulty, so it is initially canonical at height 3.
     final Block block3s =
         b.appendStale(
             block2.getHeader(),
             b.balWithStorageChanges(
-                PETE, Map.of(SP1, UInt256.valueOf(10), SP2, UInt256.valueOf(20))),
+                PENDING_ACCT,
+                Map.of(SLOT_DOWNLOADED, UInt256.valueOf(10), SLOT_DEFERRED, UInt256.valueOf(20))),
             3L);
-    applyTo(localCoordinator, 3, 3, seedAccountTracker, seedStorageTracker);
-    assertThat(readStorageSlot(PETE, SP1)).hasValue(UInt256.valueOf(10)); // downloaded, rewritten
-    assertThat(readStorageSlot(PETE, SP2)).isEmpty(); // not downloaded, still absent
+    applyBals(localCoordinator, 3, 3, seedAccountTracker, seedStorageTracker);
+    assertThat(readStorageSlot(PENDING_ACCT, SLOT_DOWNLOADED))
+        .hasValue(UInt256.valueOf(10)); // downloaded, rewritten
+    assertThat(readStorageSlot(PENDING_ACCT, SLOT_DEFERRED))
+        .isEmpty(); // not downloaded, still absent
 
     // Block 3c (canonical, high difficulty): balance only; reorg makes it canonical at height 3.
     final Block block3c =
-        b.appendCanonical(block2.getHeader(), b.balWithBalances(Map.of(PETE, Wei.of(300))), 3L);
-    applyTo(
-        canonicalCoordinator,
-        3,
-        3,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+        b.appendCanonical(
+            block2.getHeader(), b.balWithBalances(Map.of(PENDING_ACCT, Wei.of(300))), 3L);
+    seedCanonical(3, 3);
 
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block3c.getHeader(), b.emptyBal(), 4L, canonicalRoot);
 
-    // Create download state; register the same PENDING+SP1 configuration on state's trackers
-    // (the healer reads these during planReorg / applyReorgCorrections).
     final SnapV2WorldDownloadState state = createDownloadState(block3s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 1);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 1);
     state
         .getStorageRangeTracker()
         .registerSlotRange(
-            Bytes32.wrap(PETE.addressHash().getBytes()),
-            Bytes32.wrap(new StorageSlotKey(SP1).getSlotHash().getBytes()),
-            Bytes32.wrap(new StorageSlotKey(SP1).getSlotHash().getBytes()));
+            Bytes32.wrap(PENDING_ACCT.addressHash().getBytes()),
+            Bytes32.wrap(new StorageSlotKey(SLOT_DOWNLOADED).getSlotHash().getBytes()),
+            Bytes32.wrap(new StorageSlotKey(SLOT_DOWNLOADED).getSlotHash().getBytes()));
 
-    // Queue PETE's still-in-progress storage request with the stale (orphaned) storage root.
-    final Bytes32 oldRoot = Bytes32.wrap(readAccount(PETE).getStorageRoot().getBytes());
+    // Queue PENDING_ACCT's in-progress storage request with the stale root.
+    final Bytes32 oldRoot = Bytes32.wrap(readAccount(PENDING_ACCT).getStorageRoot().getBytes());
     final SnapV2StorageRangeRequest peteReq =
         new SnapV2StorageRangeRequest(
             block3s.getHeader(),
-            Bytes32.wrap(PETE.addressHash().getBytes()),
+            Bytes32.wrap(PENDING_ACCT.addressHash().getBytes()),
             oldRoot,
             RangeManager.MIN_RANGE,
             RangeManager.MAX_RANGE,
@@ -592,19 +443,18 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     startCatchupAndAwait(state, newPivot.getHeader());
 
-    // Downloaded SP1 restored; not-downloaded SP2 stays absent; canonical balance applied.
-    assertThat(readStorageSlot(PETE, SP1)).hasValue(UInt256.valueOf(1));
-    assertThat(readStorageSlot(PETE, SP2)).isEmpty();
-    assertThat(readAccount(PETE).getBalance()).isEqualTo(Wei.of(300));
+    // SLOT_DOWNLOADED restored; SLOT_DEFERRED stays absent; canonical balance applied.
+    assertThat(readStorageSlot(PENDING_ACCT, SLOT_DOWNLOADED)).hasValue(UInt256.valueOf(1));
+    assertThat(readStorageSlot(PENDING_ACCT, SLOT_DEFERRED)).isEmpty();
+    assertThat(readAccount(PENDING_ACCT).getBalance()).isEqualTo(Wei.of(300));
 
-    // Pending account: retargeted storage request carries PETE's canonical storage root
-    // (installed via root-patch, not recomputed from the still-incomplete local trie).
+    // Storage root comes from root-patch, not recomputed from the still-incomplete trie.
     final PmtStateTrieAccountValue canonicalPete =
         PmtStateTrieAccountValue.readFrom(
             RLP.input(
                 canonicalCoordinator
                     .applyForStrategy(
-                        bonsai -> bonsai.getAccount(PETE.addressHash()),
+                        bonsai -> bonsai.getAccount(PENDING_ACCT.addressHash()),
                         forest -> Optional.<Bytes>empty())
                     .orElseThrow()));
     final SnapV2StorageRangeRequest retargeted =
@@ -614,19 +464,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         .isEqualTo(Bytes32.wrap(canonicalPete.getStorageRoot().getBytes()));
   }
 
-  // ── Test 8: not-yet-downloaded range → account deferred entirely ─────────────────────────────
-
-  /**
-   * ALICE's account hash lies outside the registered downloaded range (only [ZERO, ZERO] is
-   * persisted). The orphaned fork modified ALICE, but since her range is not persisted, recovery
-   * must skip her entirely — no re-download, no local change.
-   *
-   * <pre>
-   * gen -- 1(ALICE=100) -- 2s(ALICE=50)   orphaned
-   *                     \-- 2c(ALICE=80)  canonical
-   *                           \-- 3c (newPivot, canonicalRoot)
-   * </pre>
-   */
   @Test
   void notYetDownloadedRange_defersToLaterCycle() {
     // Verify that ALICE is NOT covered by the degenerate [ZERO, ZERO] range.
@@ -642,18 +479,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
 
     // Seed canonical coordinator only; ALICE is not applied to local (her range is not persisted).
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
 
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
@@ -672,14 +498,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(accountFetches).hasValue(0); // no re-download triggered
   }
 
-  // ── Test 14: same-chain advance → BALs [old+1,new] applied, request retargeted, no fetch ──────
-
-  /**
-   * Straight canonical chain: gen ─ 1(ALICE=100) ─ 2(ALICE=50)[old pivot] ─ 3(ALICE=80)[new pivot].
-   * All blocks have HIGH difficulty so all are canonical. {@code areBothBlocksOnCanonicalChain}
-   * returns {@code true} → the same-chain branch runs: apply BALs [3,3], retarget queued account
-   * request to new pivot. No peer fetches because ALICE has no storage (pendingAffected is empty).
-   */
   @Test
   void sameChainPivotAdvance_appliesBalsAndRetargets_noReorg() {
     final Block block1 =
@@ -687,32 +505,20 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     final Block block2 =
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
 
-    // Apply [1,2] to canonical coordinator.
-    applyTo(
-        canonicalCoordinator,
-        1,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
 
     // Build and append block3 (ALICE=80) before applying its BAL so the blockchain holds it.
     final Block block3 =
         b.appendCanonical(block2.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 3L);
 
-    // Apply [3,3] to canonical now that block3 is in the blockchain.
-    applyTo(
-        canonicalCoordinator,
-        3,
-        3,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    // block3 must be in the blockchain before applying its BAL.
+    seedCanonical(3, 3);
 
-    // Create download state with block2 as the (old) current pivot.
     final SnapV2WorldDownloadState state =
         createDownloadState(
             block2.getHeader(), ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator));
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
-    applyTo(localCoordinator, 1, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+    seedLocal(state, 1, 2);
 
     // Queue an account request targeted at block2 — it must be retargeted to block3.
     final SnapV2AccountRangeRequest accountReq =
@@ -722,7 +528,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     startCatchupAndAwait(state, block3.getHeader());
 
-    // BAL [3,3] applied: ALICE=80. No re-download (same canonical chain).
     assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80));
     assertThat(accountFetches).hasValue(0);
     // Queued account request retargeted to the new pivot.
@@ -734,20 +539,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         .isEqualTo(ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator));
   }
 
-  // ── Test 9: unrecoverable reorg → failure propagated through downloadFuture ─────────────────
-
-  /**
-   * The orphaned block's BAL is NOT stored locally (simulates a pruned orphaned BAL). The healer
-   * cannot plan the reorg → {@link SnapV2ReorgHealer#planReorg} throws {@link
-   * ReorgUnrecoverableException} → {@code startPivotCatchup} completes {@code internalFuture}
-   * exceptionally → {@code downloadFuture} is also completed exceptionally.
-   *
-   * <pre>
-   * gen -- 1() -- 2s(ALICE=50)   orphaned, BAL not stored
-   *            \-- 2c(ALICE=80)  canonical
-   *                  \-- 3c (pins canonicalRoot, new pivot)
-   * </pre>
-   */
   @Test
   void unrecoverableReorg_propagatesFailure() {
     final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
@@ -758,31 +549,16 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     final Block block2c =
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
 
-    // Build canonical world state and compute its root.
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
-    // Create download state with the stale (orphaned) block2s as the current pivot.
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
     // Apply only block1 locally; block2s was never applied (simulates partial download).
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    seedLocal(state, 1, 1);
 
-    // Trigger pivot catchup without awaiting — the reorg healer cannot read the orphaned BAL
-    // and must throw ReorgUnrecoverableException synchronously (0 in-flight tasks, pre-completed
-    // listener future → finishPivotCatchup runs on the calling thread).
+    // Orphaned BAL is unreadable → ReorgUnrecoverableException thrown synchronously.
     state.startPivotCatchup(newPivot.getHeader());
 
     assertThat(state.getDownloadFuture()).isCompletedExceptionally();
@@ -790,24 +566,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         .hasRootCauseInstanceOf(ReorgUnrecoverableException.class);
   }
 
-  // ── Test 10: multi-block reorg recovery ──────────────────────────────────────────────────────
-
-  /**
-   * Multi-block orphaned fork (block2s, block3s) and multi-block canonical fork (block2c, block3c).
-   * Exercises {@code collectOrphanedTouches} and {@code collectCanonicalTouches} walking multiple
-   * blocks and a 2-step ancestor walk. Common ancestor is block1.
-   *
-   * <pre>
-   * gen -- 1(ALICE=100, DAVE=75) -+- 2s(ALICE=50) -- 3s(DAVE=60)  [old pivot, orphaned]
-   *                               \- 2c(ALICE=80) -- 3c(GRACE=50) -- 4c(pins root) [new pivot]
-   * </pre>
-   *
-   * <ul>
-   *   <li>ALICE (YES+YES): apply canonical BAL → 80.
-   *   <li>DAVE (YES+NO): orphaned-only change → re-fetched from canonical → restored to 75.
-   *   <li>GRACE (NO+YES): canonical-only new account → applied from canonical BAL → 50.
-   * </ul>
-   */
   @Test
   void multiBlockReorg_recoversAcrossSeveralOrphanedAndCanonicalBlocks() {
     final Block block1 =
@@ -815,104 +573,66 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
             b.header(0),
             b.merge(
                 b.balWithBalances(Map.of(ALICE, Wei.of(100))),
-                b.balWithBalances(Map.of(DAVE, Wei.of(75)))),
+                b.balWithBalances(Map.of(ORPHAN_EOA, Wei.of(75)))),
             1L);
 
     // Orphaned fork: two blocks.
     final Block block2s =
         b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
     final Block block3s =
-        b.appendStale(block2s.getHeader(), b.balWithBalances(Map.of(DAVE, Wei.of(60))), 3L);
+        b.appendStale(block2s.getHeader(), b.balWithBalances(Map.of(ORPHAN_EOA, Wei.of(60))), 3L);
 
     // Canonical fork: two blocks + pivot pinner.
     final Block block2c =
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
     final Block block3c =
-        b.appendCanonical(block2c.getHeader(), b.balWithBalances(Map.of(GRACE, Wei.of(50))), 3L);
+        b.appendCanonical(
+            block2c.getHeader(), b.balWithBalances(Map.of(CANONICAL_NEW, Wei.of(50))), 3L);
 
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        3,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 3);
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block3c.getHeader(), b.emptyBal(), 4L, canonicalRoot);
 
     final SnapV2WorldDownloadState state = createDownloadState(block3s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
-    applyTo(localCoordinator, 2, 3, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+    seedLocal(state, 1, 3);
 
     startCatchupAndAwait(state, newPivot.getHeader());
 
     assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80)); // YES+YES: canonical value
-    assertThat(readAccount(DAVE).getBalance())
+    assertThat(readAccount(ORPHAN_EOA).getBalance())
         .isEqualTo(Wei.of(75)); // YES+NO: restored from block1
-    assertThat(readAccount(GRACE).getBalance())
+    assertThat(readAccount(CANONICAL_NEW).getBalance())
         .isEqualTo(Wei.of(50)); // NO+YES: new canonical account
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
-  // ── Test 11: unaffected account storage root kept, request retargeted
-  // ───────────────────────────
-
-  /**
-   * A queued storage request for CAROL — an account NOT touched by either fork — is retargeted to
-   * the new pivot while keeping CAROL's existing (unchanged) storage root. The root is read from
-   * the local DB after seeding; it must NOT be replaced by the {@code correctedRoots} map (which
-   * only contains accounts whose canonical storage root differs from the orphaned one).
-   *
-   * <pre>
-   * gen -- 1(FRANK+CAROL have storage, S1 set) -+- 2s(FRANK adds S2=200)  orphaned
-   *                                              \- 2c(FRANK adds S3=555)  canonical
-   *                                                   \- 3c (pins canonicalRoot, new pivot)
-   * </pre>
-   */
   @Test
   void queuedStorageRequestForUnaffectedAccount_retargetedKeepingExistingRoot() {
     final var baseBal =
         b.merge(
-            b.balWithBalances(Map.of(FRANK, Wei.of(200), CAROL, Wei.of(10))),
-            b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(7))),
-            b.balWithStorageChanges(CAROL, Map.of(S1, UInt256.valueOf(9))));
+            b.balWithBalances(Map.of(STORAGE_ACCT, Wei.of(200), CAROL, Wei.of(10))),
+            b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_BASE, UInt256.valueOf(7))),
+            b.balWithStorageChanges(CAROL, Map.of(SLOT_BASE, UInt256.valueOf(9))));
     final Block block1 = b.appendBlockWithBal(b.header(0), baseBal, 1L);
     final Block block2s =
         b.appendStale(
             block1.getHeader(),
-            b.balWithStorageChanges(FRANK, Map.of(S2, UInt256.valueOf(200))),
+            b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_ORPHAN, UInt256.valueOf(200))),
             2L);
     final Block block2c =
         b.appendCanonical(
             block1.getHeader(),
-            b.balWithStorageChanges(FRANK, Map.of(S3, UInt256.valueOf(555))),
+            b.balWithStorageChanges(STORAGE_ACCT, Map.of(SLOT_CANONICAL, UInt256.valueOf(555))),
             2L);
 
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
-    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+    seedLocal(state, 1, 2);
 
     // Read CAROL's storage root from the local DB after seeding (she is untouched by both forks).
     final Bytes32 carolRoot = Bytes32.wrap(readAccount(CAROL).getStorageRoot().getBytes());
@@ -937,18 +657,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(retargeted.getStorageRoot()).isEqualTo(carolRoot);
   }
 
-  // ── Test 12: queued code and account requests retargeted to new pivot ─────────────────────────
-
-  /**
-   * A queued bytecode request and a queued account-range request — both originally targeted at the
-   * stale (orphaned) pivot — are retargeted to the new pivot after the reorg completes.
-   *
-   * <pre>
-   * gen -- 1(ALICE=100) -+- 2s(ALICE=50)  orphaned
-   *                      \- 2c(ALICE=80)  canonical
-   *                           \- 3c (pins canonicalRoot, new pivot)
-   * </pre>
-   */
   @Test
   void queuedCodeAndAccountRequests_retargetedToNewPivot() {
     final Block block1 =
@@ -958,31 +666,19 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     final Block block2c =
         b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
 
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
-    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
+    seedLocal(state, 1, 2);
 
     final SnapV2BytecodeRequest codeReq =
         new SnapV2BytecodeRequest(
             block2s.getHeader(),
             Bytes32.wrap(ALICE.addressHash().getBytes()),
-            Bytes32.wrap(Hash.hash(NC_CODE).getBytes()),
+            Bytes32.wrap(Hash.hash(NEW_CONTRACT_CODE).getBytes()),
             RangeManager.MIN_RANGE);
     final SnapV2AccountRangeRequest accountReq =
         new SnapV2AccountRangeRequest(
@@ -1002,23 +698,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         .isEqualTo(newPivot.getHeader());
   }
 
-  // ── Test 13: account with missing code bytes → code fetched during reorg recovery ───────────
-
-  /**
-   * Forces the code-fetch path: CAROL's canonical code hash ({@code carolCodeCanonical}) is stored
-   * in her account record but the corresponding code bytes are absent locally. The healer detects
-   * CAROL as Category B (YES+NO): she appears in block2s (orphaned nonce change) but is absent from
-   * block2c (canonical fork has an empty BAL). On re-fetch, {@code collectMissingCodeHashes} sees
-   * that CAROL's code hash is not locally available and schedules a {@code fetchCodes} call. After
-   * recovery the code bytes must be present, {@code codeFetches >= 1}, and the local state root
-   * must match {@code canonicalRoot}.
-   *
-   * <pre>
-   * gen -- 1(CAROL balance=100, code=carolCodeCanonical) -+- 2s(CAROL nonce=5)  orphaned
-   *                                                       \- 2c(empty BAL)      canonical
-   *                                                            \- 3c (pins canonicalRoot, newPivot)
-   * </pre>
-   */
   @Test
   void accountWithNewCanonicalCode_fetchesAndStoresCode() {
     final Bytes carolCodeCanonical = Bytes.fromHexString("0x6080604052348015600f");
@@ -1038,41 +717,25 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     // Block 2c (canonical, high difficulty): empty BAL → CAROL absent from canonical touches.
     final Block block2c = b.appendCanonical(block1.getHeader(), b.emptyBal(), 2L);
 
-    // Build canonical world state (block2c is now canonical at height 2).
-    applyTo(
-        canonicalCoordinator,
-        1,
-        1,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
-    applyTo(
-        canonicalCoordinator,
-        2,
-        2,
-        ReorgBlockchainBuilder.fullAccountRange(),
-        new DownloadedStorageRangeTracker());
+    seedCanonical(1, 2);
 
     final Hash canonicalRoot = ReorgBlockchainBuilder.worldStateRoot(canonicalCoordinator);
     final Block newPivot = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
 
-    // Create download state with the orphaned block2s as pivot.
     final SnapV2WorldDownloadState state = createDownloadState(block2s.getHeader(), canonicalRoot);
-    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, MAX_KEY, 0);
+    state.getAccountRangeTracker().registerPending(Bytes32.ZERO, RangeManager.MAX_RANGE, 0);
 
     // Apply block 1 to local: stores CAROL's account record + carolCodeCanonical bytes.
-    applyTo(localCoordinator, 1, 1, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    seedLocal(state, 1, 1);
 
-    // Delete CAROL's code bytes from local storage so hasCodeLocally() returns false.
-    // BonsaiWorldStateKeyValueStorage uses CodeHashCodeStorageStrategy when "code stored using
-    // code hash" is enabled; its removeFlatCode() is a no-op, so we delete the code entry
-    // directly from the underlying CODE_STORAGE segment instead.
+    // removeFlatCode() is a no-op on CodeHashCodeStorageStrategy; delete directly.
     final Hash carolCodeHash = Hash.hash(carolCodeCanonical);
     final var codeTx = localStorage.getComposedWorldStateStorage().startTransaction();
     codeTx.remove(KeyValueSegmentIdentifier.CODE_STORAGE, carolCodeHash.getBytes().toArrayUnsafe());
     codeTx.commit();
 
     // Apply block 2 (canonical block2c has empty BAL — no-op for CAROL locally).
-    applyTo(localCoordinator, 2, 2, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+    seedLocal(state, 2, 2);
 
     startCatchupAndAwait(state, newPivot.getHeader());
 
@@ -1081,8 +744,6 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     assertThat(codeFetches.get()).isGreaterThanOrEqualTo(1);
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
-
-  // ── shared helpers ────────────────────────────────────────────────────────────────────────────
 
   /**
    * Builds a real {@link SnapV2WorldDownloadState} with the stale block as its starting pivot. The
@@ -1123,12 +784,27 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         1000L);
   }
 
-  private void applyTo(
+  private void seedCanonical(final long from, final long to) {
+    applyBals(
+        canonicalCoordinator,
+        from,
+        to,
+        ReorgBlockchainBuilder.fullAccountRange(),
+        new DownloadedStorageRangeTracker());
+  }
+
+  private void seedLocal(final SnapV2WorldDownloadState state, final long from, final long to) {
+    applyBals(
+        localCoordinator, from, to, state.getAccountRangeTracker(), state.getStorageRangeTracker());
+  }
+
+  private void applyBals(
       final WorldStateStorageCoordinator coordinator,
       final long fromBlock,
       final long toBlock,
       final DownloadedAccountRangeTracker accountTracker,
       final DownloadedStorageRangeTracker storageTracker) {
+
     new SnapV2BlockAccessListApplier(
             coordinator, b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule())
         .applyBlockAccessLists(fromBlock, toBlock, accountTracker, storageTracker)
@@ -1138,8 +814,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
   private void startCatchupAndAwait(
       final SnapV2WorldDownloadState state, final BlockHeader newPivot) {
     state.startPivotCatchup(newPivot);
-    // finishPivotCatchup runs synchronously (pre-completed listener future + 0 in-flight tasks);
-    // guard against a future refactor by joining the download future if it already resolved.
+    // finishPivotCatchup runs synchronously here (no in-flight tasks, pre-completed future).
   }
 
   private PmtStateTrieAccountValue readAccount(final Address address) {
