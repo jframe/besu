@@ -25,7 +25,6 @@ import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderBuilder;
 import org.hyperledger.besu.ethereum.core.Difficulty;
-import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.eth.manager.snap.SnapTestServing;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedAccountRangeTracker;
@@ -34,12 +33,12 @@ import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
-import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
 import java.util.ArrayList;
@@ -296,14 +295,6 @@ class ReorgBlockchainBuilder {
     return schedule;
   }
 
-  /** Creates a fresh in-memory Bonsai world state storage. */
-  static BonsaiWorldStateKeyValueStorage newBonsaiStorage() {
-    return new BonsaiWorldStateKeyValueStorage(
-        new InMemoryKeyValueStorageProvider(),
-        new NoOpMetricsSystem(),
-        DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
-  }
-
   /**
    * Returns the account trie root hash from {@code coordinator}'s flat storage, or {@link
    * Hash#EMPTY_TRIE_HASH} if the storage is empty.
@@ -451,6 +442,44 @@ class ReorgBlockchainBuilder {
 
   static Hash slotHash(final UInt256 slotKey) {
     return new StorageSlotKey(slotKey).getSlotHash();
+  }
+
+  static Optional<Bytes> readAccountBytes(
+      final WorldStateStorageCoordinator coordinator, final Address address) {
+    return coordinator.applyForStrategy(
+        bonsai -> bonsai.getAccount(address.addressHash()), forest -> Optional.<Bytes>empty());
+  }
+
+  static PmtStateTrieAccountValue readAccount(
+      final WorldStateStorageCoordinator coordinator, final Address address) {
+    return PmtStateTrieAccountValue.readFrom(
+        RLP.input(readAccountBytes(coordinator, address).orElseThrow()));
+  }
+
+  static boolean accountExists(
+      final WorldStateStorageCoordinator coordinator, final Address address) {
+    return readAccountBytes(coordinator, address).isPresent();
+  }
+
+  static Optional<UInt256> readStorageSlot(
+      final WorldStateStorageCoordinator coordinator,
+      final Address address,
+      final UInt256 slotKey) {
+    return coordinator
+        .applyForStrategy(
+            bonsai ->
+                bonsai.getStorageValueByStorageSlotKey(
+                    address.addressHash(), new StorageSlotKey(slotKey)),
+            forest -> Optional.<Bytes>empty())
+        .map(UInt256::fromBytes);
+  }
+
+  static Optional<Bytes> readCode(
+      final WorldStateStorageCoordinator coordinator, final Address address) {
+    final PmtStateTrieAccountValue account = readAccount(coordinator, address);
+    return coordinator.applyForStrategy(
+        bonsai -> bonsai.getCode(account.getCodeHash(), address.addressHash()),
+        forest -> Optional.<Bytes>empty());
   }
 
   BlockHeader header(final long number) {
