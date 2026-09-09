@@ -139,7 +139,9 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     assertThat(readAccount(localCoordinator, ALICE).getBalance())
         .isEqualTo(Wei.of(80)); // canonical value applied
-    assertThat(accountFetches).hasValue(0); // Category YES+YES: no re-download
+    assertThat(accountFetches)
+        .hasValue(
+            0); // touched on both forks: canonical BAL applied directly, no re-download needed
     assertThat(storageFetches).hasValue(0);
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
@@ -171,6 +173,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     // ORPHAN_EOA was modified by orphaned fork but is absent from canonical BAL → re-downloaded.
     assertThat(readAccount(localCoordinator, ORPHAN_EOA).getBalance()).isEqualTo(Wei.of(75));
     assertThat(accountFetches.get()).isGreaterThanOrEqualTo(1);
+    assertThat(storageFetches).hasValue(0); // ORPHAN_EOA has no storage; no storage fetch expected
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
@@ -301,6 +304,8 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     assertThat(readAccount(localCoordinator, UNTOUCHED).getBalance())
         .isEqualTo(Wei.of(100)); // untouched by both forks
+    assertThat(accountFetches).hasValue(0); // no account was orphaned-only; nothing to re-fetch
+    assertThat(storageFetches).hasValue(0);
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
@@ -546,6 +551,8 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     assertThat(readAccount(localCoordinator, ALICE).getBalance()).isEqualTo(Wei.of(80));
     assertThat(accountFetches).hasValue(0);
+    assertThat(storageFetches).hasValue(0);
+    assertThat(codeFetches).hasValue(0);
     // Queued account request retargeted to the new pivot.
     final SnapV2AccountRangeRequest retargetedReq =
         (SnapV2AccountRangeRequest) state.pendingAccountRequests.asList().get(0);
@@ -616,11 +623,11 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     state.startPivotCatchup(newPivot.getHeader());
 
     assertThat(readAccount(localCoordinator, ALICE).getBalance())
-        .isEqualTo(Wei.of(80)); // YES+YES: canonical value
+        .isEqualTo(Wei.of(80)); // touched on both forks: canonical BAL applied directly
     assertThat(readAccount(localCoordinator, ORPHAN_EOA).getBalance())
-        .isEqualTo(Wei.of(75)); // YES+NO: restored from block1
+        .isEqualTo(Wei.of(75)); // touched only on orphaned fork: re-fetched from canonical network
     assertThat(readAccount(localCoordinator, CANONICAL_NEW).getBalance())
-        .isEqualTo(Wei.of(50)); // NO+YES: new canonical account
+        .isEqualTo(Wei.of(50)); // touched only on canonical fork: created from canonical BAL
     assertThat(ReorgBlockchainBuilder.worldStateRoot(localCoordinator)).isEqualTo(canonicalRoot);
   }
 
@@ -706,6 +713,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
 
     state.startPivotCatchup(newPivot.getHeader());
 
+    assertThat(readAccount(localCoordinator, ALICE).getBalance()).isEqualTo(Wei.of(80));
     assertThat(
             ((SnapV2BytecodeRequest) state.pendingCodeRequests.asList().get(0))
                 .getPivotBlockHeader())
