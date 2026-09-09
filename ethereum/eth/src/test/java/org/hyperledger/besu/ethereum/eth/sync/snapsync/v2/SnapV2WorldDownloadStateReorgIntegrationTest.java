@@ -221,7 +221,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
         new SnapV2StorageRangeRequest(
             block2s.getHeader(),
             Bytes32.wrap(NEW_CONTRACT.addressHash().getBytes()),
-            Bytes32.random(),
+            Bytes32.ZERO,
             RangeManager.MIN_RANGE,
             RangeManager.MAX_RANGE,
             RangeManager.MIN_RANGE);
@@ -573,7 +573,7 @@ class SnapV2WorldDownloadStateReorgIntegrationTest {
     // Apply only block1 locally; block2s was never applied (simulates partial download).
     seedLocal(state, 1, 1);
 
-    // Orphaned BAL is unreadable → ReorgUnrecoverableException thrown synchronously.
+    // Orphaned BAL is unreadable → startPivotCatchup completes the download future exceptionally.
     state.startPivotCatchup(newPivot.getHeader());
 
     assertThat(state.getDownloadFuture()).isCompletedExceptionally();
