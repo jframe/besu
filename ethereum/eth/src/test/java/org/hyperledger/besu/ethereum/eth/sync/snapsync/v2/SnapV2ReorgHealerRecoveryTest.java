@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.eth.sync.snapsync.v2.ReorgBlockchainBuilder.accountExists;
+import static org.hyperledger.besu.ethereum.eth.sync.snapsync.v2.ReorgBlockchainBuilder.fullAccountRange;
 import static org.hyperledger.besu.ethereum.eth.sync.snapsync.v2.ReorgBlockchainBuilder.readAccount;
 import static org.hyperledger.besu.ethereum.eth.sync.snapsync.v2.ReorgBlockchainBuilder.readCode;
 import static org.hyperledger.besu.ethereum.eth.sync.snapsync.v2.ReorgBlockchainBuilder.readStorageSlot;
@@ -479,11 +480,5 @@ class SnapV2ReorgHealerRecoveryTest {
 
   private static Hash worldStateRoot(final WorldStateStorageCoordinator coordinator) {
     return coordinator.getTrieNodeUnsafe(Bytes.EMPTY).map(Hash::hash).orElse(Hash.EMPTY_TRIE_HASH);
-  }
-
-  private static DownloadedAccountRangeTracker fullAccountRange() {
-    final DownloadedAccountRangeTracker tracker = new DownloadedAccountRangeTracker();
-    tracker.registerPending(Bytes32.ZERO, MAX_KEY, 0);
-    return tracker;
   }
 }
