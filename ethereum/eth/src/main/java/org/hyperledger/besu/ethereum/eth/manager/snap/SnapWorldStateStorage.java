@@ -31,8 +31,7 @@ interface SnapWorldStateStorage {
   NavigableMap<Bytes32, Bytes> streamFlatAccounts(
       Bytes startKeyHash, Predicate<Pair<Bytes32, Bytes>> takeWhile);
 
-  NavigableMap<Bytes32, Bytes> streamFlatAccounts(
-      Bytes startKeyHash, Bytes32 endKeyHash, long max);
+  NavigableMap<Bytes32, Bytes> streamFlatAccounts(Bytes startKeyHash, Bytes32 endKeyHash, long max);
 
   NavigableMap<Bytes32, Bytes> streamFlatStorages(
       Hash accountHash, Bytes startKeyHash, Predicate<Pair<Bytes32, Bytes>> takeWhile);

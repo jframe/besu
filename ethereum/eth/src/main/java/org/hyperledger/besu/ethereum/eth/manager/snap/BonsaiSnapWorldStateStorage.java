@@ -56,10 +56,7 @@ class BonsaiSnapWorldStateStorage implements SnapWorldStateStorage {
 
   @Override
   public NavigableMap<Bytes32, Bytes> streamFlatStorages(
-      final Hash accountHash,
-      final Bytes startKeyHash,
-      final Bytes32 endKeyHash,
-      final long max) {
+      final Hash accountHash, final Bytes startKeyHash, final Bytes32 endKeyHash, final long max) {
     return storage.streamFlatStorages(accountHash, startKeyHash, endKeyHash, max);
   }
 

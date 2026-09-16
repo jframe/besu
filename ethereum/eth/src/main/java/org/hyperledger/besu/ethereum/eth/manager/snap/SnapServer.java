@@ -204,8 +204,7 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
         protocolContext
             .map(ProtocolContext::getWorldStateArchive)
             .map(BonsaiWorldStateProvider.class::cast);
-    var cachedStorageManagerOpt =
-        bonsaiArchive.map(archive -> archive.getWorldStateCacheManager());
+    var cachedStorageManagerOpt = bonsaiArchive.map(archive -> archive.getWorldStateCacheManager());
 
     if (cachedStorageManagerOpt.isPresent()) {
       var cachedStorageManager = cachedStorageManagerOpt.get();
@@ -852,8 +851,7 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
     }
   }
 
-  Hash getAccountStorageRoot(
-      final Bytes32 accountHash, final SnapWorldStateStorage storage) {
+  Hash getAccountStorageRoot(final Bytes32 accountHash, final SnapWorldStateStorage storage) {
     return storage.getAccountStorageRoot(Hash.wrap(accountHash));
   }
 

@@ -63,9 +63,7 @@ public class SnapTestServing {
                 new EthMessages(),
                 new WorldStateStorageCoordinator(storage),
                 rootHash ->
-                    servedStateRoot.equals(rootHash)
-                        ? Optional.of(snapStorage)
-                        : Optional.empty(),
+                    servedStateRoot.equals(rootHash) ? Optional.of(snapStorage) : Optional.empty(),
                 Long.MAX_VALUE)
             .start();
   }

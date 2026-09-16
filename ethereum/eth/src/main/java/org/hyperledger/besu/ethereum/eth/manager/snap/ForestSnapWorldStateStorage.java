@@ -38,7 +38,6 @@ import java.util.function.Predicate;
 import kotlin.Pair;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
-import org.apache.tuweni.units.bigints.UInt256;
 
 /**
  * Snap server world-state storage backed by Forest (hash-indexed MPT). Account and storage data is
@@ -51,8 +50,7 @@ class ForestSnapWorldStateStorage implements SnapWorldStateStorage {
   private final ForestWorldStateKeyValueStorage storage;
   private final StoredMerklePatriciaTrie<Bytes32, Bytes> accountTrie;
 
-  ForestSnapWorldStateStorage(
-      final ForestWorldStateKeyValueStorage storage, final Hash rootHash) {
+  ForestSnapWorldStateStorage(final ForestWorldStateKeyValueStorage storage, final Hash rootHash) {
     this.storage = storage;
     this.accountTrie =
         new StoredMerklePatriciaTrie<>(
@@ -119,8 +117,7 @@ class ForestSnapWorldStateStorage implements SnapWorldStateStorage {
                       false);
               storageTrie.entriesFrom(
                   root -> {
-                    root.accept(
-                        iterator, CompactEncoding.bytesToPath(Bytes32.wrap(startKeyHash)));
+                    root.accept(iterator, CompactEncoding.bytesToPath(Bytes32.wrap(startKeyHash)));
                     return result;
                   });
               return result;
@@ -130,18 +127,14 @@ class ForestSnapWorldStateStorage implements SnapWorldStateStorage {
 
   @Override
   public NavigableMap<Bytes32, Bytes> streamFlatStorages(
-      final Hash accountHash,
-      final Bytes startKeyHash,
-      final Bytes32 endKeyHash,
-      final long max) {
+      final Hash accountHash, final Bytes startKeyHash, final Bytes32 endKeyHash, final long max) {
     return getStorageTrie(accountHash)
         .map(
             storageTrie -> {
               NavigableMap<Bytes32, Bytes> all =
                   new TreeMap<>(
                       storageTrie.entriesFrom(
-                          Bytes32.wrap(startKeyHash),
-                          (int) Math.min(max, MAX_TRAVERSAL_ENTRIES)));
+                          Bytes32.wrap(startKeyHash), (int) Math.min(max, MAX_TRAVERSAL_ENTRIES)));
               return all.headMap(endKeyHash, true);
             })
         .orElseGet(TreeMap::new);
@@ -153,8 +146,7 @@ class ForestSnapWorldStateStorage implements SnapWorldStateStorage {
       // storage trie node: first 32 bytes = account hash, remainder = nibble path
       Hash accountHash = Hash.wrap(Bytes32.wrap(location.slice(0, Bytes32.SIZE)));
       Bytes storagePath = location.slice(Bytes32.SIZE);
-      return getStorageTrie(accountHash)
-          .flatMap(trie -> getNodeAtPath(trie, storagePath));
+      return getStorageTrie(accountHash).flatMap(trie -> getNodeAtPath(trie, storagePath));
     }
     return getNodeAtPath(accountTrie, location);
   }
