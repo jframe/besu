@@ -389,6 +389,40 @@ public class LayeredKeyValueStorageTest {
     verify(parentStorage, times(1)).isClosed();
   }
 
+  @Test
+  void deepChainStreamCallsIsClosedOnlyOnce() {
+    int depth = 500;
+    when(parentStorage.isClosed()).thenReturn(false);
+    when(parentStorage.stream(segmentId)).thenReturn(Stream.empty());
+
+    LayeredKeyValueStorage top = layeredKeyValueStorage;
+    for (int i = 1; i < depth; i++) {
+      top = new LayeredKeyValueStorage(top);
+    }
+
+    assertEquals(0L, top.stream(segmentId).count());
+
+    // With the old code this would be called 500 times (once per level).
+    verify(parentStorage, times(1)).isClosed();
+  }
+
+  @Test
+  void deepChainStreamKeysCallsIsClosedOnlyOnce() {
+    int depth = 500;
+    when(parentStorage.isClosed()).thenReturn(false);
+    when(parentStorage.streamKeys(segmentId)).thenReturn(Stream.empty());
+
+    LayeredKeyValueStorage top = layeredKeyValueStorage;
+    for (int i = 1; i < depth; i++) {
+      top = new LayeredKeyValueStorage(top);
+    }
+
+    assertEquals(0L, top.streamKeys(segmentId).count());
+
+    // With the old code this would be called 500 times (once per level).
+    verify(parentStorage, times(1)).isClosed();
+  }
+
   /**
    * Tests that the stream method correctly handles a parent layer and a current layer where the
    * current layer overrides the parent layer.

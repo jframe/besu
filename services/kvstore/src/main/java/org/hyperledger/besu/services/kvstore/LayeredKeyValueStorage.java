@@ -215,12 +215,20 @@ public class LayeredKeyValueStorage extends SegmentedInMemoryKeyValueStorage
   @Override
   public Stream<Pair<byte[], byte[]>> stream(final SegmentIdentifier segmentId) {
     throwIfClosed();
+    return streamUnchecked(segmentId);
+  }
+
+  private Stream<Pair<byte[], byte[]>> streamUnchecked(final SegmentIdentifier segmentId) {
     var ourLayerState = hashValueStore.computeIfAbsent(segmentId, s -> newSegmentMap());
 
     PeekingIterator<Map.Entry<Bytes, Optional<byte[]>>> ourIterator =
         new PeekingIterator<>(ourLayerState.entrySet().stream().iterator());
+    Stream<Pair<byte[], byte[]>> parentStream =
+        parent instanceof LayeredKeyValueStorage layered
+            ? layered.streamUnchecked(segmentId)
+            : parent.stream(segmentId);
     PeekingIterator<Pair<byte[], byte[]>> parentIterator =
-        new PeekingIterator<>(parent.stream(segmentId).iterator());
+        new PeekingIterator<>(parentStream.iterator());
 
     return StreamSupport.stream(
             Spliterators.spliteratorUnknownSize(
@@ -293,7 +301,10 @@ public class LayeredKeyValueStorage extends SegmentedInMemoryKeyValueStorage
   @Override
   public Stream<byte[]> streamKeys(final SegmentIdentifier segmentId) {
     throwIfClosed();
+    return streamKeysUnchecked(segmentId);
+  }
 
+  private Stream<byte[]> streamKeysUnchecked(final SegmentIdentifier segmentId) {
     final Lock lock = rwLock.readLock();
     lock.lock();
     try {
@@ -303,13 +314,18 @@ public class LayeredKeyValueStorage extends SegmentedInMemoryKeyValueStorage
               .map(HashMap::new)
               .orElse(new HashMap<>());
 
+      Stream<byte[]> parentStream =
+          parent instanceof LayeredKeyValueStorage layered
+              ? layered.streamKeysUnchecked(segmentId)
+              : parent.streamKeys(segmentId);
+
       return Streams.concat(
           ourLayerState.entrySet().stream()
               .filter(entry -> entry.getValue().isPresent())
               .map(bytesEntry -> bytesEntry.getKey().toArrayUnsafe())
           // since we are layered, concat a parent stream filtered by our map entries:
           ,
-          parent.streamKeys(segmentId).filter(e -> !ourLayerState.containsKey(Bytes.of(e))));
+          parentStream.filter(e -> !ourLayerState.containsKey(Bytes.of(e))));
 
     } finally {
       lock.unlock();
