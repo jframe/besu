@@ -1269,8 +1269,7 @@ public abstract class MainnetProtocolSpecs {
             .blockAccessListValidatorBuilder(MainnetBlockAccessListValidator::create)
             .stateRootCommitterFactory(new StateRootCommitterFactory(balConfiguration))
             // EIP-8037: Disable validation-time TX_MAX_GAS_LIMIT cap (enforced at runtime on
-            // regular
-            // gas)
+            // execution gas)
             .gasLimitCalculatorBuilder(
                 (feeMarket, gasCalculator, blobSchedule) -> {
                   final long londonForkBlock =
@@ -1288,9 +1287,14 @@ public abstract class MainnetProtocolSpecs {
             .gasCalculator(AmsterdamGasCalculator::new)
             // Amsterdam (EIP-7778 + EIP-8037): Pre-refund 2D gas accounting
             .blockGasAccountingStrategy(BlockGasAccountingStrategy.AMSTERDAM)
-            // Amsterdam: Validator uses pre-refund gas_metered = max(regular, state) from
+            // Amsterdam: Validator uses pre-refund gas_metered = max(execution, state) from
             // processing
             .blockGasUsedValidator(BlockGasUsedValidator.AMSTERDAM)
+            // EIP-7843: slotNumber is the last header field, so a header omitting it still
+            // decodes cleanly - only this rule rejects it.
+            .blockHeaderValidatorBuilder(
+                MainnetBlockHeaderValidator::slotNumberAwareBlockHeaderValidator)
+            .slotNumberRequired(true)
             .hardforkId(AMSTERDAM);
 
     // EIP-8282 introduces the builder deposit (0x03) and builder exit (0x04) system-contract

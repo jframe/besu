@@ -27,7 +27,7 @@ import static org.hyperledger.besu.ethereum.eth.transactions.layered.LayeredRemo
 import static org.hyperledger.besu.ethereum.eth.transactions.layered.LayeredRemovalReason.PoolRemovalReason.INVALIDATED;
 import static org.hyperledger.besu.ethereum.eth.transactions.layered.LayeredRemovalReason.PoolRemovalReason.REPLACED;
 import static org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason.GAS_PRICE_BELOW_CURRENT_BASE_FEE;
-import static org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason.UPFRONT_COST_EXCEEDS_BALANCE;
+import static org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason.UPFRONT_GAS_COST_EXCEEDS_BALANCE;
 import static org.hyperledger.besu.plugin.data.TransactionSelectionResult.SELECTED;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -487,7 +487,8 @@ public class LayeredPendingTransactionsTest extends BaseTransactionPoolTest {
         pendingTxs -> {
           assertThat(pendingTxs).containsExactly(pendingTx0);
           return Map.of(
-              pendingTx0, TransactionSelectionResult.invalid(UPFRONT_COST_EXCEEDS_BALANCE.name()));
+              pendingTx0,
+              TransactionSelectionResult.invalid(UPFRONT_GAS_COST_EXCEEDS_BALANCE.name()));
         });
 
     // assert that first tx is removed from the pool
@@ -933,6 +934,32 @@ public class LayeredPendingTransactionsTest extends BaseTransactionPoolTest {
 
     // since without the world state we cannot check the nonce of the code delegation, the txpool
     // under-purge and tx1 should still be present in the pool even if its nonce is now invalid
+    assertThat(pendingTransactions.getPendingTransactions())
+        .map(PendingTransaction::getTransaction)
+        .containsExactly(tx1);
+  }
+
+  @Test
+  public void shouldUnderPurgeIfWorldStateThrowsWhenCheckingConfirmedCodeDelegations() {
+    final Transaction tx1 = createEIP1559Transaction(0, KEYS1, 1);
+    final Transaction eip7702Tx =
+        createEIP7702Transaction(0, KEYS2, 1, List.of(CODE_DELEGATION_SENDER_1));
+
+    pendingTransactions.addTransaction(createRemotePendingTransaction(eip7702Tx), Optional.empty());
+    pendingTransactions.addTransaction(createRemotePendingTransaction(tx1), Optional.empty());
+
+    assertThat(pendingTransactions.getStatus().pendingCount()).isEqualTo(2);
+
+    when(worldStateArchive.getWorldState(any()))
+        .thenThrow(new RuntimeException("simulated world state failure"));
+
+    final BlockHeader mockBlockHeader = mockBlockHeader();
+    when(mockBlockHeader.getStateRoot()).thenReturn(Hash.ZERO);
+    pendingTransactions.manageBlockAdded(
+        mockBlockHeader, List.of(eip7702Tx), List.of(), FeeMarket.london(0L));
+
+    // getWorldState() threw before authority nonces could be checked; pool under-purges
+    // but manageBlockAdded must still complete — tx1 remains (sender-only reconciliation)
     assertThat(pendingTransactions.getPendingTransactions())
         .map(PendingTransaction::getTransaction)
         .containsExactly(tx1);

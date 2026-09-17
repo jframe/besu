@@ -62,6 +62,9 @@ import org.apache.tuweni.units.bigints.UInt256;
 import org.apache.tuweni.units.bigints.UInt256s;
 
 /** An operation submitted by an external actor to be applied to the system. */
+// implements the deprecated plugin.data.UnsignedPrivateMarkerTransaction until the next breaking
+// release
+@SuppressWarnings("removal")
 public class Transaction
     implements org.hyperledger.besu.datatypes.Transaction,
         org.hyperledger.besu.plugin.data.UnsignedPrivateMarkerTransaction {
@@ -249,9 +252,6 @@ public class Transaction
         checkArgument(
             maybeCodeDelegationList.isPresent(),
             "Must specify code delegation authorizations for code delegation transaction");
-        checkArgument(
-            !maybeCodeDelegationList.get().isEmpty(),
-            "Code delegation transaction must have at least one authorization");
       }
     }
 
@@ -652,7 +652,7 @@ public class Transaction
    *
    * @return the max up-front cost for the gas the transaction can use.
    */
-  private Wei getMaxUpfrontGasCost(final long blobGasPerBlock) {
+  public Wei getMaxUpfrontGasCost(final long blobGasPerBlock) {
     return getUpfrontGasCost(
         getMaxGasPrice(), getMaxFeePerBlobGas().orElse(Wei.ZERO), blobGasPerBlock);
   }
