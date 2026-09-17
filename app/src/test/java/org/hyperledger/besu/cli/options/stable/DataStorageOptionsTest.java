@@ -208,13 +208,13 @@ public class DataStorageOptionsTest
         dataStorageConfiguration -> {
           assertThat(
                   dataStorageConfiguration
-                      .getPathBasedExtraStorageConfiguration()
+                      .getExtraStorageConfiguration()
                       .getUnstable()
                       .getBonsaiArchiveShallowCheckpointInterval())
               .isEqualTo(24);
           assertThat(
                   dataStorageConfiguration
-                      .getPathBasedExtraStorageConfiguration()
+                      .getExtraStorageConfiguration()
                       .getUnstable()
                       .getBonsaiArchiveDeepCheckpointInterval())
               .isEqualTo(8);
@@ -231,13 +231,13 @@ public class DataStorageOptionsTest
         dataStorageConfiguration -> {
           assertThat(
                   dataStorageConfiguration
-                      .getPathBasedExtraStorageConfiguration()
+                      .getExtraStorageConfiguration()
                       .getUnstable()
                       .getBonsaiArchiveShallowCheckpointInterval())
               .isEqualTo(32);
           assertThat(
                   dataStorageConfiguration
-                      .getPathBasedExtraStorageConfiguration()
+                      .getExtraStorageConfiguration()
                       .getUnstable()
                       .getBonsaiArchiveDeepCheckpointInterval())
               .isEqualTo(16);
@@ -250,13 +250,13 @@ public class DataStorageOptionsTest
         dataStorageConfiguration -> {
           assertThat(
                   dataStorageConfiguration
-                      .getPathBasedExtraStorageConfiguration()
+                      .getExtraStorageConfiguration()
                       .getUnstable()
                       .getBonsaiArchiveShallowCheckpointInterval())
               .isEqualTo(256);
           assertThat(
                   dataStorageConfiguration
-                      .getPathBasedExtraStorageConfiguration()
+                      .getExtraStorageConfiguration()
                       .getUnstable()
                       .getBonsaiArchiveDeepCheckpointInterval())
               .isEqualTo(256);
@@ -366,7 +366,7 @@ public class DataStorageOptionsTest
                 .parallelTxProcessingEnabled(true)
                 .parallelStateRootComputationEnabled(true)
                 .unstable(
-                    ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
+                    ImmutableExtraStorageConfiguration.Unstable.builder()
                         .bonsaiArchiveShallowCheckpointInterval(24)
                         .bonsaiArchiveDeepCheckpointInterval(8)
                         .build())
