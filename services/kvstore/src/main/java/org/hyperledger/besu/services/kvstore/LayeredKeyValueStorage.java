@@ -93,13 +93,13 @@ public class LayeredKeyValueStorage extends SegmentedInMemoryKeyValueStorage
     throwIfClosed();
     final Bytes wrapKey = Bytes.wrap(key);
     LayeredKeyValueStorage cur = this;
-    while (true) {
-      final Optional<byte[]> found = cur.getLocal(segmentId, wrapKey);
-      if (found != null) return found;
-      if (!(cur.parent instanceof LayeredKeyValueStorage next))
-        return cur.parent.get(segmentId, key);
+    Optional<byte[]> found = cur.getLocal(segmentId, wrapKey);
+    while (found == null && cur.parent instanceof LayeredKeyValueStorage next) {
       cur = next;
+      found = cur.getLocal(segmentId, wrapKey);
     }
+    if (found != null) return found;
+    return cur.parent.get(segmentId, key);
   }
 
   /**
@@ -118,15 +118,15 @@ public class LayeredKeyValueStorage extends SegmentedInMemoryKeyValueStorage
       final Function<SegmentedKeyValueStorage, Optional<Bytes>> cacheGetFunction) {
     throwIfClosed();
     LayeredKeyValueStorage cur = this;
-    while (true) {
-      final Optional<byte[]> found = cur.getLocal(segmentId, key);
-      if (found != null) return found.map(Bytes::wrap);
-      if (!(cur.parent instanceof LayeredKeyValueStorage next))
-        return cacheGetFunction != null
-            ? cacheGetFunction.apply(cur.parent)
-            : cur.parent.get(segmentId, key.toArrayUnsafe()).map(Bytes::wrap);
+    Optional<byte[]> found = cur.getLocal(segmentId, key);
+    while (found == null && cur.parent instanceof LayeredKeyValueStorage next) {
       cur = next;
+      found = cur.getLocal(segmentId, key);
     }
+    if (found != null) return found.map(Bytes::wrap);
+    return cacheGetFunction != null
+        ? cacheGetFunction.apply(cur.parent)
+        : cur.parent.get(segmentId, key.toArrayUnsafe()).map(Bytes::wrap);
   }
 
   private Optional<byte[]> getLocal(final SegmentIdentifier segmentId, final Bytes key) {
