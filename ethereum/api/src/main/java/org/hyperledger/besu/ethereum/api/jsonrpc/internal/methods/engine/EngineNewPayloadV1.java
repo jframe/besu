@@ -247,11 +247,6 @@ public sealed class EngineNewPayloadV1<
       return respondWith(reqId, blockParam, null, SYNCING);
     }
 
-    if (mergeContext.get().isSyncing()) {
-      logger().debug("We are syncing");
-      return respondWith(reqId, blockParam, null, SYNCING);
-    }
-
     // an ancestor is always found here: the parent header is present in the chain (needsSync is
     // false) and getLatestValidAncestor only returns empty when it is not; this is also why Besu
     // never responds with ACCEPTED — a payload whose parent is known is always fully validated,
@@ -277,12 +272,19 @@ public sealed class EngineNewPayloadV1<
       return respondWith(reqId, blockParam, newBlockHeader.getHash(), VALID);
     } else {
       logger().debug("New payload is invalid: {}", executionResult);
+      if (executionResult.isWorldStateUnavailable()) {
+        // we respond with SYNCING here to ensure a VALID newPayload is not marked INVALID.
+        // however besu should not trigger a worldstate resync until/unless this chain is
+        // finalized via forkchoiceUpdated.
+        return respondWith(reqId, blockParam, null, SYNCING);
+      }
       if (executionResult.causedBy().isPresent()) {
         Throwable causedBy = executionResult.causedBy().get();
         if (causedBy instanceof StorageException || causedBy instanceof MerkleTrieException) {
           return new JsonRpcErrorResponse(reqId, RpcErrorType.INTERNAL_ERROR);
         }
       }
+      protocolContext.getBadBlockManager().addLatestValidHash(block.getHash(), latestValidAncestor);
       return respondWithInvalid(
           reqId,
           blockParam,
