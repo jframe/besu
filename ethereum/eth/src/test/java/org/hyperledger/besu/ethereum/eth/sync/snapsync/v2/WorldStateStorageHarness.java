@@ -29,7 +29,7 @@ import org.apache.tuweni.units.bigints.UInt256;
 /**
  * Seeds and reads world state through either Bonsai (flat DB) or Forest (MPT) for applier tests.
  */
-interface StateHarness {
+interface WorldStateStorageHarness {
   WorldStateStorageCoordinator coordinator();
 
   /** Current account-trie root, needed by the Forest applier; empty on Bonsai. */

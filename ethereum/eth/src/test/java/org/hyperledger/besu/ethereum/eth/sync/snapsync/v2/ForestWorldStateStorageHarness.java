@@ -38,7 +38,7 @@ import org.apache.tuweni.units.bigints.UInt256;
 /**
  * Forest MPT-backed harness. Builds consistent account/storage tries and tracks the account root.
  */
-final class ForestStateHarness implements StateHarness {
+final class ForestWorldStateStorageHarness implements WorldStateStorageHarness {
 
   private final WorldStateStorageCoordinator coordinator =
       new WorldStateStorageCoordinator(
@@ -85,7 +85,8 @@ final class ForestStateHarness implements StateHarness {
             WorldStateStorageCoordinator.applyForStrategy(
                 updater,
                 onBonsai -> {
-                  throw new IllegalStateException("ForestStateHarness used with Bonsai");
+                  throw new IllegalStateException(
+                      "ForestWorldStateStorageHarness used with Bonsai");
                 },
                 onForest -> onForest.putAccountStateTrieNode(hash, value));
     trie.commit(nodeUpdater);
@@ -117,7 +118,8 @@ final class ForestStateHarness implements StateHarness {
             WorldStateStorageCoordinator.applyForStrategy(
                 updater,
                 onBonsai -> {
-                  throw new IllegalStateException("ForestStateHarness used with Bonsai");
+                  throw new IllegalStateException(
+                      "ForestWorldStateStorageHarness used with Bonsai");
                 },
                 onForest -> onForest.putAccountStorageTrieNode(hash, val));
     trie.commit(nodeUpdater);
@@ -138,7 +140,7 @@ final class ForestStateHarness implements StateHarness {
     WorldStateStorageCoordinator.applyForStrategy(
         updater,
         onBonsai -> {
-          throw new IllegalStateException("ForestStateHarness used with Bonsai");
+          throw new IllegalStateException("ForestWorldStateStorageHarness used with Bonsai");
         },
         onForest -> onForest.putCode(Bytes32.wrap(codeHash.getBytes()), code));
     updater.commit();
@@ -174,7 +176,8 @@ final class ForestStateHarness implements StateHarness {
             a ->
                 coordinator.applyForStrategy(
                     onBonsai -> {
-                      throw new IllegalStateException("ForestStateHarness used with Bonsai");
+                      throw new IllegalStateException(
+                          "ForestWorldStateStorageHarness used with Bonsai");
                     },
                     onForest -> onForest.getCode(a.getCodeHash())));
   }

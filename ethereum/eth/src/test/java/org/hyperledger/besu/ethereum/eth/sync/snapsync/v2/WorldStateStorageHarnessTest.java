@@ -28,18 +28,18 @@ import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
-class StateHarnessTest {
+class WorldStateStorageHarnessTest {
 
   private static final Address ALICE =
       Address.fromHexString("0x1111111111111111111111111111111111111111");
 
-  static Stream<StateHarness> harnesses() {
-    return Stream.of(new BonsaiStateHarness(), new ForestStateHarness());
+  static Stream<WorldStateStorageHarness> harnesses() {
+    return Stream.of(new BonsaiWorldStateStorageHarness(), new ForestWorldStateStorageHarness());
   }
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("harnesses")
-  void accountWithStorageAndCodeRoundTrips(final StateHarness h) {
+  void accountWithStorageAndCodeRoundTrips(final WorldStateStorageHarness h) {
     final UInt256 slotKey = UInt256.valueOf(7);
     h.seedAccount(ALICE, 3L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     h.seedStorageSlot(ALICE, slotKey, UInt256.valueOf(42));

@@ -38,7 +38,7 @@ import org.apache.tuweni.units.bigints.UInt256;
 /**
  * Bonsai flat-DB backed harness. Storage root passed to seedAccount is ignored; Bonsai derives it.
  */
-final class BonsaiStateHarness implements StateHarness {
+final class BonsaiWorldStateStorageHarness implements WorldStateStorageHarness {
 
   private final WorldStateStorageCoordinator coordinator =
       new WorldStateStorageCoordinator(
