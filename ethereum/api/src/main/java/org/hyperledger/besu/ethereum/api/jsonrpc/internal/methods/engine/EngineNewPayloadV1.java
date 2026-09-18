@@ -191,12 +191,7 @@ public sealed class EngineNewPayloadV1<
 
     // 3. Client software MAY initiate a sync process if requisite data for payload validation is
     // missing. Sync process is specified in the Sync section.
-    final boolean needsSync =
-        maybeParentHeader.isEmpty()
-            || !protocolContext
-                .getWorldStateArchive()
-                .isWorldStateAvailable(
-                    maybeParentHeader.get().getStateRoot(), maybeParentHeader.get().getHash());
+    final boolean needsSync = maybeParentHeader.isEmpty();
     // Only start backward sync when the initial sync is done
     if (needsSync && mergeContext.get().isInitialSyncDone()) {
       logger()

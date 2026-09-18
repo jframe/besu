@@ -130,7 +130,6 @@ public class EngineNewPayloadV1Test extends AbstractScheduledApiTest {
     when(protocolContext.getBadBlockManager()).thenReturn(badBlockManager);
     when(protocolSchedule.getByBlockHeader(any())).thenReturn(protocolSpec);
     when(protocolContext.getWorldStateArchive()).thenReturn(worldStateArchive);
-    when(worldStateArchive.isWorldStateAvailable(any(), any())).thenReturn(true);
     when(ethPeers.peerCount()).thenReturn(1);
     createMethod();
   }
@@ -360,25 +359,6 @@ public class EngineNewPayloadV1Test extends AbstractScheduledApiTest {
     var resp = resp(requestParams(mockEnginePayloadParam(mockHeader, emptyList())));
 
     assertValidResponse(mockHeader, resp);
-  }
-
-  @Test
-  public void shouldRespondWithSyncingWhenParentWorldStateNotAvailable() {
-    BlockHeader mockHeader = setupPayloadV1(getMinSupportedTimestamp());
-    when(worldStateArchive.isWorldStateAvailable(any(), any())).thenReturn(false);
-    when(mergeContext.isInitialSyncDone()).thenReturn(true);
-    when(mergeCoordinator.appendNewPayloadToSync(any()))
-        .thenReturn(CompletableFuture.completedFuture(null));
-
-    var resp = resp(requestParams(mockEnginePayloadParam(mockHeader, emptyList())));
-
-    PayloadStatusV1 res = fromSuccessResp(resp);
-    assertThat(res.getStatus()).isEqualTo(SYNCING);
-    assertThat(res.getLatestValidHash()).isEmpty();
-    assertThat(res.getError()).isNull();
-    verify(mergeCoordinator).appendNewPayloadToSync(any());
-    verify(mergeCoordinator, never()).rememberBlock(any(), any());
-    verify(engineCallListener, times(1)).executionEngineCalled();
   }
 
   @Test
