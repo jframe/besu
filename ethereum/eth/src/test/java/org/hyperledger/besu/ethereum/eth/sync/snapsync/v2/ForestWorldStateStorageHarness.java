@@ -61,6 +61,21 @@ final class ForestWorldStateStorageHarness implements WorldStateStorageHarness {
     accountRoot = newRoot;
   }
 
+  @Override
+  public boolean isForest() {
+    return true;
+  }
+
+  @Override
+  public ForestWorldStateKeyValueStorage forestStorage() {
+    return coordinator.getStrategy(ForestWorldStateKeyValueStorage.class);
+  }
+
+  @Override
+  public Bytes32 commitAndGetAccountRoot() {
+    return accountRoot;
+  }
+
   private MerkleTrie<Bytes, Bytes> accountTrie() {
     final NodeLoader loader =
         (location, hash) -> coordinator.getAccountStateTrieNode(location, hash);

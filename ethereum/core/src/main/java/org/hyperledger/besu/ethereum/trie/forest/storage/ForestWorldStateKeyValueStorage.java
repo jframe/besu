@@ -82,6 +82,13 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     return keyValueStorage.get(ACCOUNT_TRIE_ROOT_KEY).map(Bytes32::wrap);
   }
 
+  /** Test helper: persists the tracked account-trie root pointer in a single committed updater. */
+  public void putAccountTrieRootForTest(final Bytes32 root) {
+    final Updater u = updater();
+    u.putAccountTrieRoot(root);
+    u.commit();
+  }
+
   public boolean isWorldStateAvailable(final Bytes32 rootHash) {
     return getAccountStateTrieNode(rootHash).isPresent();
   }

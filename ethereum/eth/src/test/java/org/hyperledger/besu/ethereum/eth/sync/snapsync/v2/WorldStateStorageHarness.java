@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 
 import java.util.Optional;
@@ -31,6 +32,29 @@ import org.apache.tuweni.units.bigints.UInt256;
  */
 interface WorldStateStorageHarness {
   WorldStateStorageCoordinator coordinator();
+
+  /** Returns {@code true} for Forest harnesses; {@code false} for Bonsai harnesses. */
+  default boolean isForest() {
+    return false;
+  }
+
+  /**
+   * Returns the underlying {@link ForestWorldStateKeyValueStorage}. Throws for non-Forest
+   * harnesses.
+   */
+  default ForestWorldStateKeyValueStorage forestStorage() {
+    throw new UnsupportedOperationException(
+        "forestStorage() is only available for Forest harnesses");
+  }
+
+  /**
+   * Returns the current committed account-trie root. Forest harnesses return the root tracked
+   * internally; calling this on a Bonsai harness throws.
+   */
+  default Bytes32 commitAndGetAccountRoot() {
+    throw new UnsupportedOperationException(
+        "commitAndGetAccountRoot() is only available for Forest harnesses");
+  }
 
   /** Current account-trie root, needed by the Forest applier; empty on Bonsai. */
   Optional<Bytes32> forestStartRoot();

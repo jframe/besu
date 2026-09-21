@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -556,6 +557,37 @@ class SnapV2BlockAccessListApplierReorgTest {
                         new DownloadedStorageRangeTracker()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("Missing block header");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Forest root pointer: persisted after BAL apply.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * After applying BALs the Forest storage's tracked account-trie root pointer must equal the
+   * committed root returned by the batch — i.e. the applier persisted it atomically.
+   */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("harnesses")
+  void forestTrackedRootPersistedAfterBalApply(final WorldStateStorageHarness h) {
+    assumeTrue(h.isForest());
+
+    h.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    final Bytes32 startRoot = h.commitAndGetAccountRoot();
+    h.forestStorage().putAccountTrieRootForTest(startRoot);
+
+    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+    b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+    final SnapV2BlockAccessListApplier applier =
+        new SnapV2BlockAccessListApplier(
+            h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
+
+    final var batch =
+        applier.applyBlockAccessLists(
+            1L, 1L, h.forestStartRoot(), fullAccountRange(), new DownloadedStorageRangeTracker());
+    final Bytes32 committed = batch.commit();
+
+    assertThat(h.forestStorage().getAccountTrieRoot()).contains(committed);
   }
 
   // ---------------------------------------------------------------------------

@@ -279,7 +279,12 @@ public class SnapV2BlockAccessListApplier {
     final MerkleTrie<Bytes, Bytes> accountTrie = openAccountTrie(forestStartRoot);
 
     if (refetchedAccounts.isEmpty()) {
-      return new ReorgRecoveryResult(Set.of(), Map.of(), Bytes32.wrap(accountTrie.getRootHash()));
+      final WorldStateKeyValueStorage.Updater emptyUpdater = worldStateStorageCoordinator.updater();
+      final Bytes32 currentRoot = Bytes32.wrap(accountTrie.getRootHash());
+      applyForStrategy(
+          emptyUpdater, onBonsai -> {}, onForest -> onForest.putAccountTrieRoot(currentRoot));
+      emptyUpdater.commit();
+      return new ReorgRecoveryResult(Set.of(), Map.of(), currentRoot);
     }
 
     final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
@@ -337,6 +342,8 @@ public class SnapV2BlockAccessListApplier {
       correctedRoots.put(accountHash, Bytes32.wrap(canonicalAccount.getStorageRoot().getBytes()));
     }
 
+    final Bytes32 finalRoot = Bytes32.wrap(accountTrie.getRootHash());
+    applyForStrategy(updater, onBonsai -> {}, onForest -> onForest.putAccountTrieRoot(finalRoot));
     stageAccountTrieChanges(accountTrie, updater);
     updater.commit();
 
@@ -344,8 +351,7 @@ public class SnapV2BlockAccessListApplier {
         "Applied snap/2 reorg corrections: {} accounts restored, {} accounts deleted",
         correctedRoots.size(),
         deletedAccounts.size());
-    return new ReorgRecoveryResult(
-        deletedAccounts, correctedRoots, Bytes32.wrap(accountTrie.getRootHash()));
+    return new ReorgRecoveryResult(deletedAccounts, correctedRoots, finalRoot);
   }
 
   private void deleteAccount(
@@ -503,10 +509,14 @@ public class SnapV2BlockAccessListApplier {
                     .map(node -> Bytes32.wrap(Hash.hash(node).getBytes()))
                     .orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH),
             forest ->
-                forestStartRoot.orElseThrow(
-                    () ->
-                        new IllegalStateException(
-                            "snap/2 Forest applier requires an account-trie start root")));
+                forest
+                    .getAccountTrieRoot()
+                    .orElseGet(
+                        () ->
+                            forestStartRoot.orElseThrow(
+                                () ->
+                                    new IllegalStateException(
+                                        "snap/2 Forest applier requires an account-trie start root"))));
 
     return new StoredMerklePatriciaTrie<>(accountNodeLoader, rootHash, identity, identity);
   }
@@ -785,8 +795,10 @@ public class SnapV2BlockAccessListApplier {
      */
     Bytes32 commit() {
       stageAccountTrieChanges(accountTrie, updater);
+      final Bytes32 newRoot = Bytes32.wrap(accountTrie.getRootHash());
+      applyForStrategy(updater, onBonsai -> {}, onForest -> onForest.putAccountTrieRoot(newRoot));
       updater.commit();
-      return Bytes32.wrap(accountTrie.getRootHash());
+      return newRoot;
     }
   }
 
