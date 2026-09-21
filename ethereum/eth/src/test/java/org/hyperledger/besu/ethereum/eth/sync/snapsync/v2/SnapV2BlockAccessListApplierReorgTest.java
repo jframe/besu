@@ -565,19 +565,23 @@ class SnapV2BlockAccessListApplierReorgTest {
 
   /**
    * After applying BALs the Forest storage's tracked account-trie root pointer must equal the
-   * committed root returned by the batch — i.e. the applier persisted it atomically.
+   * committed root returned by the batch — i.e. the applier persisted it atomically. The BAL
+   * includes a real balance change so the root actually moves; this ensures the assertion is not
+   * trivially satisfied by an unchanged root.
    */
   @ParameterizedTest(name = "{0}")
   @MethodSource("harnesses")
   void forestTrackedRootPersistedAfterBalApply(final WorldStateStorageHarness h) {
     assumeTrue(h.isForest());
 
+    // Seed ALICE into the trie and capture the pre-apply root.
     h.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     final Bytes32 startRoot = h.commitAndGetAccountRoot();
-    h.forestStorage().putAccountTrieRootForTest(startRoot);
+    h.seedAccountTrieRoot(startRoot);
 
+    // Block 1: balance change on ALICE so the account trie root moves.
     final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+    b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 1L);
     final SnapV2BlockAccessListApplier applier =
         new SnapV2BlockAccessListApplier(
             h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
@@ -587,7 +591,10 @@ class SnapV2BlockAccessListApplierReorgTest {
             1L, 1L, h.forestStartRoot(), fullAccountRange(), new DownloadedStorageRangeTracker());
     final Bytes32 committed = batch.commit();
 
+    // The applier must persist the new root atomically.
     assertThat(h.forestStorage().getAccountTrieRoot()).contains(committed);
+    // The root must have actually changed — otherwise the test is vacuous.
+    assertThat(committed).isNotEqualTo(startRoot);
   }
 
   // ---------------------------------------------------------------------------

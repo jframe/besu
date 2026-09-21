@@ -82,6 +82,12 @@ public class SnapV2BlockAccessListApplier {
         fromBlock, toBlock, Optional.empty(), accountRangeTracker, storageRangeTracker);
   }
 
+  /**
+   * Applies block-access-list changes for blocks in [{@code fromBlock}, {@code toBlock}].
+   *
+   * @param forestStartRoot for Forest only; consulted only when no root pointer is stored (i.e. on
+   *     the very first apply before any pointer has been persisted). Ignored on Bonsai.
+   */
   public BatchState applyBlockAccessLists(
       final long fromBlock,
       final long toBlock,
@@ -266,6 +272,12 @@ public class SnapV2BlockAccessListApplier {
         plan, fetched, Optional.empty(), accountRangeTracker, storageRangeTracker);
   }
 
+  /**
+   * Applies canonical peer-fetched state for entries listed by {@link ReorgPlan}.
+   *
+   * @param forestStartRoot for Forest only; consulted only when no root pointer is stored (i.e. on
+   *     the very first apply before any pointer has been persisted). Ignored on Bonsai.
+   */
   public ReorgRecoveryResult applyReorgCorrections(
       final ReorgPlan plan,
       final FetchedReorgState fetched,
