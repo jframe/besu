@@ -22,6 +22,7 @@ import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.util.Subscribers;
 
+import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -35,6 +36,10 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
 public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorage {
+
+  // Non-32-byte key so it can never collide with a 32-byte node or code hash.
+  private static final byte[] ACCOUNT_TRIE_ROOT_KEY =
+      "snap2:accountTrieRoot".getBytes(StandardCharsets.UTF_8);
 
   private final Subscribers<NodesAddedListener> nodeAddedListeners = Subscribers.create();
   private final KeyValueStorage keyValueStorage;
@@ -73,6 +78,10 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     }
   }
 
+  public Optional<Bytes32> getAccountTrieRoot() {
+    return keyValueStorage.get(ACCOUNT_TRIE_ROOT_KEY).map(Bytes32::wrap);
+  }
+
   public boolean isWorldStateAvailable(final Bytes32 rootHash) {
     return getAccountStateTrieNode(rootHash).isPresent();
   }
@@ -94,7 +103,9 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
           key -> {
             lock.lock();
             try {
-              if (!inUseCheck.test(key) && keyValueStorage.tryDelete(key)) {
+              if (key.length == Bytes32.SIZE
+                  && !inUseCheck.test(key)
+                  && keyValueStorage.tryDelete(key)) {
                 prunedKeys.incrementAndGet();
               }
             } finally {
@@ -163,6 +174,11 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
 
     public WorldStateKeyValueStorage.Updater removeAccountStateTrieNode(final Bytes32 nodeHash) {
       transaction.remove(nodeHash.toArrayUnsafe());
+      return this;
+    }
+
+    public Updater putAccountTrieRoot(final Bytes32 root) {
+      transaction.put(ACCOUNT_TRIE_ROOT_KEY, root.toArrayUnsafe());
       return this;
     }
 
