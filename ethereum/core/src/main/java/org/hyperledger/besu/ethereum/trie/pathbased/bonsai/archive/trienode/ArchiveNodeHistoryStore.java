@@ -96,12 +96,15 @@ public final class ArchiveNodeHistoryStore {
     return storage
         .getNearestBefore(TRIE_BRANCH_STORAGE_ARCHIVE, seekKey)
         .filter(nearest -> naturalKeyMatches(naturalKey, nearest.key()))
-        .flatMap(this::decodeNearest);
+        .flatMap(nearest -> decodeNearest(nearest, naturalKey));
   }
 
-  private Optional<HistoryEntry> decodeNearest(final NearestKeyValue nearest) {
+  private Optional<HistoryEntry> decodeNearest(
+      final NearestKeyValue nearest, final Bytes naturalKey) {
     final long block = ArchiveNodeKey.blockFromHistoryKey(nearest.key());
-    return nearest.wrapBytes().flatMap(storedValue -> decodeStoredValue(storedValue, block));
+    return nearest
+        .wrapBytes()
+        .flatMap(storedValue -> decodeStoredValue(storedValue, naturalKey, block));
   }
 
   /**
@@ -114,10 +117,12 @@ public final class ArchiveNodeHistoryStore {
         && ArchiveNodeKey.naturalKeyFromHistoryKey(foundKey).equals(naturalKey);
   }
 
-  private Optional<HistoryEntry> decodeStoredValue(final Bytes storedValue, final long block) {
+  private Optional<HistoryEntry> decodeStoredValue(
+      final Bytes storedValue, final Bytes naturalKey, final long block) {
     if (storedValue.size() < 2) {
-      LOG.warn(
-          "corrupt archive entry at block {}: stored value too short ({} bytes), skipping",
+      LOG.error(
+          "corrupt archive entry for key {} at block {}: stored value too short ({} bytes), skipping",
+          naturalKey,
           block,
           storedValue.size());
       return Optional.empty();
@@ -129,7 +134,11 @@ public final class ArchiveNodeHistoryStore {
           new HistoryEntry(
               counter, ArchiveTrieNodeCodec.decode(rawEntryBytes), rawEntryBytes, block));
     } catch (final IllegalArgumentException e) {
-      LOG.warn("corrupt archive entry at block {}: {}, skipping", block, e.getMessage());
+      LOG.error(
+          "corrupt archive entry for key {} at block {}: {}, skipping",
+          naturalKey,
+          block,
+          e.getMessage());
       return Optional.empty();
     }
   }
