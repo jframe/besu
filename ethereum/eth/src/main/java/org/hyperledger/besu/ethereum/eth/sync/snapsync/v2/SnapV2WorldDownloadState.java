@@ -169,14 +169,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       applyForStrategy(
           initUpdater,
           onBonsai -> {},
-          onForest ->
-              onForest.putAccountTrieRoot(
-                  Bytes32.wrap(
-                      snapSyncState
-                          .getPivotBlockHeader()
-                          .orElseThrow()
-                          .getStateRoot()
-                          .getBytes())));
+          onForest -> onForest.putAccountTrieRoot(MerkleTrie.EMPTY_TRIE_NODE_HASH));
       initUpdater.commit();
     }
 

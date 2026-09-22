@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.eth.sync.common.WorldStateHealFinishedListe
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncMetricsManager;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncProcessState;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.context.SnapSyncStatePersistenceManager;
+import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
@@ -41,15 +42,15 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Forest-specific tests for {@link SnapV2WorldDownloadState} construction — verifies that the
- * Forest account-trie root pointer is seeded from the initial pivot's state root at construction
- * time, giving Forest the same self-tracking property Bonsai has via its empty-path node.
+ * Forest account-trie root pointer is seeded to the empty-trie root at construction time, giving
+ * Forest the same self-tracking property Bonsai has via its empty-path node.
  */
 class SnapV2WorldDownloadStateForestTest {
 
   private static final Hash SOME_ROOT = Hash.fromHexString("0x" + "ab".repeat(32));
 
   @Test
-  void forestInitialisesTrackedRootToInitialPivotStateRoot() {
+  void forestInitialisesTrackedRootToEmptyTrieRoot() {
     final ForestWorldStateKeyValueStorage forest =
         new ForestWorldStateKeyValueStorage(new InMemoryKeyValueStorage());
     final WorldStateStorageCoordinator coordinator = new WorldStateStorageCoordinator(forest);
@@ -57,7 +58,7 @@ class SnapV2WorldDownloadStateForestTest {
 
     newForestDownloadState(coordinator, pivot); // constructor seeds the pointer
 
-    assertThat(forest.getAccountTrieRoot()).contains(Bytes32.wrap(SOME_ROOT.getBytes()));
+    assertThat(forest.getAccountTrieRoot()).contains(MerkleTrie.EMPTY_TRIE_NODE_HASH);
   }
 
   @Test
