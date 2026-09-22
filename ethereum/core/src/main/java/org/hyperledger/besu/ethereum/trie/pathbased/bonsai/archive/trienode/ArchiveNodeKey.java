@@ -60,7 +60,6 @@ public final class ArchiveNodeKey {
     return Bytes.concatenate(naturalKey, Bytes.ofUnsignedLong(block));
   }
 
-  /** Extracts the block number from the bytes of a history key. */
   public static long blockFromHistoryKey(final Bytes historyKey) {
     if (historyKey.size() < BLOCK_SUFFIX_BYTES) {
       throw new IllegalArgumentException(

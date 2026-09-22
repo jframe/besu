@@ -46,12 +46,7 @@ public final class ArchiveTrieNodeCodec {
     return Bytes.concatenate(Bytes.of(FULL), nodeBytes);
   }
 
-  /**
-   * Encodes the diff from {@code oldNode} to {@code newNode} as a binary patch entry. Returns a
-   * {@code FULL} entry when {@code oldNode} is null (creation), a {@code DELETION} tombstone when
-   * {@code newNode} is null (deletion), or a {@code FULL} entry when the patch body would be at
-   * least as large as the new node.
-   */
+  /** Encodes a diff entry; FULL for creations ({@code oldNode} null), DELETION for removals. */
   public static Bytes encodeDiff(final Bytes oldNode, final Bytes newNode) {
     if (oldNode == null && newNode == null) {
       throw new IllegalArgumentException("encodeDiff: both old and new nodes are null");

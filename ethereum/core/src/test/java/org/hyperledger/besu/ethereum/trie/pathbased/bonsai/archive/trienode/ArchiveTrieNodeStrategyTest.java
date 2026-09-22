@@ -137,7 +137,7 @@ class ArchiveTrieNodeStrategyTest {
   void keepsArchivingWhenInSyncButPeerless() {
     // SyncState reports "in sync" when there is no remote chain estimate (no peers). Such a
     // peer-less in-sync signal must NOT stop archiving: capture continues while
-    // hasRemoteChainEstimate is false, even for a non-genesis block.
+    // hasChainEstimate is false, even for a non-genesis block.
     final ArchiveTrieNodeStrategy strategy =
         new ArchiveTrieNodeStrategy(new BonsaiTrieNodeStrategy(), capture, () -> false);
     strategy.onInSyncStatusChange(true); // spurious in-sync caused by having no peers

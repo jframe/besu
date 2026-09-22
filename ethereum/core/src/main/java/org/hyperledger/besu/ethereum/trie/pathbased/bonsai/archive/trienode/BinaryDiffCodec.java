@@ -33,9 +33,8 @@ import org.apache.tuweni.bytes.Bytes;
  *
  * <p>REPLACE collapses the INSERT+SKIP pair used for same-length changed regions. After all ops,
  * any remaining bytes in the base are implicitly appended (zero-cost trailing suffix). Each op is 2
- * bytes: byte1 bits[7:6] = type (0=COPY, 1=SKIP, 2=INSERT, 3=REPLACE), byte1 bits[5:0] and byte2 =
- * 14-bit length (max 16383). This format is trie-structure agnostic: it works for MPT, PBT
- * (EIP-8297), or any future encoding without modification.
+ * bytes: the top 2 bits of byte1 encode the type (0=COPY, 1=SKIP, 2=INSERT, 3=REPLACE) and the
+ * remaining 14 bits (6 from byte1, 8 from byte2) encode the length (max 16383).
  *
  * <p>A patch is always correct but not always worth storing: {@link #encode} may return a patch at
  * least as large as the target (e.g. when every byte differs). Callers decide the fallback — {@link
@@ -53,9 +52,9 @@ public final class BinaryDiffCodec {
   private static final int OP_LENGTH_HIGH_MASK = 0x3F;
   private static final int OP_MAX_LENGTH = 0x3FFF; // 14 bits (2-byte op format)
   private static final int RESYNC_MATCH_MIN = 4;
-  // 64 covers all real MPT patterns (single/dual child-presence toggles peak at edit distance 68);
-  // rarer multi-toggle cases fall through to the (maxBase, maxTarget) fallback and encodeDiff →
-  // FULL.
+  // How far findResync looks for a re-alignment point before giving up and emitting a single
+  // spanning edit (encodeDiff then promotes it to FULL). 64 covers a single child hash (~33
+  // bytes including RLP length prefix) appearing or disappearing in a branch node
   private static final int RESYNC_MAX_RADIUS = 64;
 
   private BinaryDiffCodec() {}

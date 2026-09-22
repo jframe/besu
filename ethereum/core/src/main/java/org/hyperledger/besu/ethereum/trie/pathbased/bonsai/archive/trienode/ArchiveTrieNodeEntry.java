@@ -71,8 +71,8 @@ public final class ArchiveTrieNodeEntry {
   }
 
   /**
-   * Returns the raw binary patch body (COPY/SKIP/INSERT op sequence). Only valid when {@link
-   * #isFull()} and {@link #isDeletion()} are both false.
+   * Returns the raw binary patch body (COPY/SKIP/INSERT/REPLACE op sequence). Only valid when
+   * {@link #isFull()} and {@link #isDeletion()} are both false.
    *
    * @throws IllegalStateException if called on a full or deletion entry
    */

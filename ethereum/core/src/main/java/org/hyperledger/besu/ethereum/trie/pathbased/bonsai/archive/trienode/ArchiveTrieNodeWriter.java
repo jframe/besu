@@ -55,25 +55,6 @@ public class ArchiveTrieNodeWriter implements Closeable {
 
   private static final int BATCH_SIZE = 64;
 
-  /**
-   * Returns the checkpoint interval for a node at the given nibble-path depth (in {@code location}
-   * bytes).
-   *
-   * <ul>
-   *   <li>depth 0 (root) → the configured shallow interval (root and shallow share the same
-   *       interval)
-   *   <li>depth 1–2 → the configured shallow interval
-   *   <li>depth ≥ 3 → the configured deep interval
-   * </ul>
-   *
-   * @param locationSizeBytes the trie node's {@code location.size()} in bytes
-   * @return the mutation interval at which a FULL entry is emitted
-   */
-  @VisibleForTesting
-  int checkpointIntervalForDepth(final int locationSizeBytes) {
-    return locationSizeBytes <= 2 ? shallowCheckpointInterval : deepCheckpointInterval;
-  }
-
   private final ArchiveNodeHistoryStore historyStore;
   private final ArchiveCoverageTracker coverageTracker;
   private final ExecutorService capturePool;
@@ -97,6 +78,11 @@ public class ArchiveTrieNodeWriter implements Closeable {
     this.capturePool = Objects.requireNonNull(capturePool, "capturePool must not be null");
     this.shallowCheckpointInterval = shallowCheckpointInterval;
     this.deepCheckpointInterval = deepCheckpointInterval;
+  }
+
+  @VisibleForTesting
+  int checkpointIntervalForDepth(final int locationSizeBytes) {
+    return locationSizeBytes <= 2 ? shallowCheckpointInterval : deepCheckpointInterval;
   }
 
   /**

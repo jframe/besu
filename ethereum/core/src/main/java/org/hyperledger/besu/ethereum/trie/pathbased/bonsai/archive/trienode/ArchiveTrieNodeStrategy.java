@@ -65,8 +65,8 @@ public class ArchiveTrieNodeStrategy
   // and no-peers startup
   private final AtomicBoolean archiving = new AtomicBoolean(true);
 
-  // True when a remote chain estimate exists (we have a peer that knows the chain head)
-  private volatile BooleanSupplier hasRemoteChainEstimate;
+  // True when an external chain estimate exists (e.g. a peer or CL that knows the chain head)
+  private volatile BooleanSupplier hasChainEstimate;
 
   // Block number is constant within a transaction; cache it to avoid a storage read per node write.
   private final Cache<SegmentedKeyValueStorageTransaction, Long> txBlockNumberCache =
@@ -99,36 +99,34 @@ public class ArchiveTrieNodeStrategy
   }
 
   /**
-   * Supplies whether a remote chain estimate exists. Must be set before the in-sync subscription is
-   * registered, since it is consulted from {@link #onInSyncStatusChange(boolean)}.
-   *
-   * @param hasRemoteChainEstimate true when a peer with a known chain head is available
+   * Supplies whether an external chain estimate exists. Must be set before the in-sync subscription
+   * is registered, since it is consulted from {@link #onInSyncStatusChange(boolean)}.
    */
-  public void setHasRemoteChainEstimate(final BooleanSupplier hasRemoteChainEstimate) {
-    this.hasRemoteChainEstimate =
-        Objects.requireNonNull(hasRemoteChainEstimate, "hasRemoteChainEstimate must not be null");
+  public void setHasChainEstimate(final BooleanSupplier hasChainEstimate) {
+    this.hasChainEstimate =
+        Objects.requireNonNull(hasChainEstimate, "hasChainEstimate must not be null");
   }
 
   /**
    * @param base the delegate strategy for the live flat DB
    * @param trieNodeWriter the writer that persists archived history entries
-   * @param hasRemoteChainEstimate supplies whether a remote chain estimate exists (see field)
+   * @param hasChainEstimate supplies whether an external chain estimate exists (see field)
    */
   @VisibleForTesting
   public ArchiveTrieNodeStrategy(
       final TrieNodeStrategy base,
       final ArchiveTrieNodeWriter trieNodeWriter,
-      final BooleanSupplier hasRemoteChainEstimate) {
+      final BooleanSupplier hasChainEstimate) {
     this.base = Objects.requireNonNull(base);
     this.trieNodeWriter = Objects.requireNonNull(trieNodeWriter);
-    this.hasRemoteChainEstimate =
-        Objects.requireNonNull(hasRemoteChainEstimate, "hasRemoteChainEstimate must not be null");
+    this.hasChainEstimate =
+        Objects.requireNonNull(hasChainEstimate, "hasChainEstimate must not be null");
   }
 
   @Override
   public void onInSyncStatusChange(final boolean inSync) {
     // A peer-less node reports "in sync" forever, so only trust a corroborated in-sync signal.
-    archiving.set(!inSync || !hasRemoteChainEstimate.getAsBoolean());
+    archiving.set(!inSync || !hasChainEstimate.getAsBoolean());
   }
 
   @VisibleForTesting
@@ -147,14 +145,8 @@ public class ArchiveTrieNodeStrategy
     return block == 0L || archiving.get();
   }
 
-  /**
-   * A no-op re-write: the node is being written with the exact bytes already committed at this
-   * location (e.g. a storage slot set to its existing value, which Bonsai still re-commits along
-   * the touched path). Its history is already captured by the last real change — {@code
-   * getLatestBefore} resolves to that entry — so archiving an empty-diff entry here is redundant
-   * and would count toward the diff-chain length that forces FULL checkpoints. Creations ({@code
-   * prior == null}) are never no-ops.
-   */
+  // Bonsai re-commits unchanged nodes along a touched path; skip archiving them to avoid
+  // inflating the diff-chain counter. Creations (prior == null) are never no-ops.
   private boolean isNoOpRewrite(final Bytes prior, final Bytes node) {
     return prior != null && prior.equals(node);
   }

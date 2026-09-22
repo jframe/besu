@@ -907,7 +907,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
     ethPeers.setTrailingPeerRequirementsSupplier(synchronizer::calculateTrailingPeerRequirements);
 
     if (archiveTrieNodeStrategy != null) {
-      archiveTrieNodeStrategy.setHasRemoteChainEstimate(
+      archiveTrieNodeStrategy.setHasChainEstimate(
           () -> syncState.getBestPeerChainHead().isPresent());
       synchronizer.subscribeInSync(
           archiveTrieNodeStrategy,

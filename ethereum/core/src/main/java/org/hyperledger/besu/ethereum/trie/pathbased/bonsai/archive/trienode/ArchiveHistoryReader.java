@@ -35,11 +35,6 @@ public final class ArchiveHistoryReader {
 
   private final ArchiveNodeHistoryStore historyStore;
 
-  /**
-   * Creates a reader backed by the given history store.
-   *
-   * @param historyStore the store to read archived trie-node history from
-   */
   public ArchiveHistoryReader(final ArchiveNodeHistoryStore historyStore) {
     this.historyStore = Objects.requireNonNull(historyStore, "historyStore must not be null");
   }
