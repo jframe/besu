@@ -225,6 +225,49 @@ class SnapV2ForestMultiCatchupIntegrationTest {
         .isEqualTo(referenceTrie(ALICE, Wei.of(150), BOB, Wei.of(220), CHARLIE, Wei.of(300)));
   }
 
+  /**
+   * Simulates a Forest snap/2 session restart: accounts are downloaded and the pointer persisted in
+   * one "session," then a brand-new applier (same storage, fresh object) is created and used for
+   * the catch-up in the next "session." The new applier must read the stored pointer rather than
+   * relying on the caller-supplied {@code forestStartRoot}.
+   *
+   * <p>This is the Task 8 acceptance test. A wrong root is passed as {@code forestStartRoot} to
+   * make the test falsifiable: if the new applier blindly used the caller-supplied root (the
+   * pre-restart behaviour) it would open an empty or incorrect trie, producing a wrong result.
+   */
+  @Test
+  void newApplierReadsPersistedPointerAfterRestart() {
+    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+    b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(150))), 1L);
+
+    final ForestWorldStateStorageHarness h = new ForestWorldStateStorageHarness();
+
+    // --- "Session 1": download [ALICE=100] and persist the pointer ---
+    h.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    final Bytes32 rootAfterDownload = h.commitAndGetAccountRoot();
+    h.seedAccountTrieRoot(rootAfterDownload);
+
+    // --- "Session 2": create a NEW applier with the SAME coordinator ---
+    // This simulates a node restart where the storage is reloaded but all in-memory state is gone.
+    final SnapV2BlockAccessListApplier newSessionApplier =
+        new SnapV2BlockAccessListApplier(
+            h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
+
+    // Pass a completely wrong forestStartRoot — the new applier must ignore it and read from
+    // storage.
+    final Bytes32 wrongRoot = Bytes32.fromHexString("0x" + "ff".repeat(32));
+    final Bytes32 finalRoot =
+        newSessionApplier
+            .applyBlockAccessLists(1L, 1L, Optional.of(wrongRoot), fullRange(), emptyStorage())
+            .commit();
+    h.updateAccountRoot(finalRoot);
+
+    // The catch-up applied correctly: ALICE balance is 150, pointer is updated.
+    assertThat(h.forestStorage().getAccountTrieRoot()).contains(finalRoot);
+    assertThat(finalRoot).isNotEqualTo(rootAfterDownload);
+    assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(150));
+  }
+
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
