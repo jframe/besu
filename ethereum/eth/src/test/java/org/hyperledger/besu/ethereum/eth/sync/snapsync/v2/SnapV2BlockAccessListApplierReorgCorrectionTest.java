@@ -105,15 +105,9 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             Map.of(),
             Map.of(Hash.hash(CAROL_CODE_W), CAROL_CODE_W));
 
-    final ReorgRecoveryResult result =
-        applier(h, b)
-            .applyReorgCorrections(
-                plan,
-                fetched,
-                h.forestStartRoot(),
-                fullAccountRange(),
-                new DownloadedStorageRangeTracker());
-    h.updateAccountRoot(result.finalAccountRoot());
+    applier(h, b)
+        .applyReorgCorrections(
+            plan, fetched, fullAccountRange(), new DownloadedStorageRangeTracker());
 
     final PmtStateTrieAccountValue carol = h.readAccount(CAROL).orElseThrow();
     assertThat(carol.getCodeHash()).isEqualTo(Hash.hash(CAROL_CODE_W));
@@ -142,11 +136,7 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             () ->
                 applier(h, b)
                     .applyReorgCorrections(
-                        plan,
-                        fetched,
-                        h.forestStartRoot(),
-                        fullAccountRange(),
-                        new DownloadedStorageRangeTracker()))
+                        plan, fetched, fullAccountRange(), new DownloadedStorageRangeTracker()))
         .isInstanceOf(WorldStateDownloaderException.class)
         .hasMessageContaining("canonical code");
   }
@@ -166,11 +156,7 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             () ->
                 applier(h, b)
                     .applyReorgCorrections(
-                        plan,
-                        fetched,
-                        h.forestStartRoot(),
-                        fullAccountRange(),
-                        new DownloadedStorageRangeTracker()))
+                        plan, fetched, fullAccountRange(), new DownloadedStorageRangeTracker()))
         .isInstanceOf(WorldStateDownloaderException.class)
         .hasMessageContaining("did not cover account");
   }
@@ -191,16 +177,9 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             b.balWithBalances(Map.of(FRANK, Wei.of(200))),
             b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(100))));
     b.appendBlockWithBal(b.header(0), baseBal, 1L);
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                1L,
-                1L,
-                h.forestStartRoot(),
-                fullAccountRange(),
-                new DownloadedStorageRangeTracker())
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(1L, 1L, fullAccountRange(), new DownloadedStorageRangeTracker())
+        .commit();
 
     final ReorgPlan plan =
         planWithDivergedAccounts(
@@ -219,11 +198,7 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             () ->
                 applier(h, b)
                     .applyReorgCorrections(
-                        plan,
-                        fetched,
-                        h.forestStartRoot(),
-                        fullAccountRange(),
-                        new DownloadedStorageRangeTracker()))
+                        plan, fetched, fullAccountRange(), new DownloadedStorageRangeTracker()))
         .isInstanceOf(WorldStateDownloaderException.class)
         .hasMessageContaining("storage root mismatch");
   }

@@ -32,7 +32,6 @@ import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 
 /**
@@ -50,11 +49,6 @@ final class BonsaiWorldStateStorageHarness implements WorldStateStorageHarness {
   @Override
   public WorldStateStorageCoordinator coordinator() {
     return coordinator;
-  }
-
-  @Override
-  public Optional<Bytes32> forestStartRoot() {
-    return Optional.empty();
   }
 
   @Override

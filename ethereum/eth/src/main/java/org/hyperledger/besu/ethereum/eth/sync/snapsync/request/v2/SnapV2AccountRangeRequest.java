@@ -35,6 +35,7 @@ import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.NodeUpdater;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
@@ -109,9 +110,8 @@ public class SnapV2AccountRangeRequest extends SnapV2DataRequest {
 
     stackTrie.commit(flatDatabaseUpdater.get(), nodeUpdater, true);
 
-    // For Forest: stitch downloaded accounts into the tracked trie so every committed range
-    // becomes reachable from the stored Forest root pointer.  Bonsai uses flat-DB writes and
-    // does not need this step.
+    // Forest has no flat DB so trie nodes written are unreachable without updating the account
+    // trie root; Bonsai accounts are directly retrievable via the flat DB and need no trie update.
     worldStateStorageCoordinator.consumeForStrategy(
         onBonsai -> {},
         onForest -> {
@@ -125,10 +125,7 @@ public class SnapV2AccountRangeRequest extends SnapV2DataRequest {
           final Bytes32 newRoot =
               new ForestTrieStitcher(worldStateStorageCoordinator)
                   .stitchAccounts(currentRoot, inRangeAccounts, updater);
-          applyForStrategy(
-              updater,
-              onBonsaiUpdater -> {},
-              onForestUpdater -> onForestUpdater.putAccountTrieRoot(newRoot));
+          ((ForestWorldStateKeyValueStorage.Updater) updater).putAccountTrieRoot(newRoot);
         });
 
     downloadState.getMetricsManager().notifyAccountsDownloaded(stackTrie.getElementsCount().get());

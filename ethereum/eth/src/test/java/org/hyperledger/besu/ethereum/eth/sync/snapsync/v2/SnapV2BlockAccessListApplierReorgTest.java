@@ -107,16 +107,13 @@ class SnapV2BlockAccessListApplierReorgTest {
     final DownloadedStorageRangeTracker storageTracker = new DownloadedStorageRangeTracker();
 
     // Apply canonical BALs from the common ancestor + 1 (= block 2).
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                block1.getHeader().getNumber() + 1,
-                block2c.getHeader().getNumber(),
-                h.forestStartRoot(),
-                accountTracker,
-                storageTracker)
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(
+            block1.getHeader().getNumber() + 1,
+            block2c.getHeader().getNumber(),
+            accountTracker,
+            storageTracker)
+        .commit();
 
     // Alice: touched on both forks. Canonical BAL overwrites with the correct value (80).
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
@@ -158,16 +155,13 @@ class SnapV2BlockAccessListApplierReorgTest {
     h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     assertThat(h.readAccount(GRACE).isPresent()).isFalse();
 
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                block1.getHeader().getNumber() + 1,
-                block2c.getHeader().getNumber(),
-                h.forestStartRoot(),
-                fullAccountRange(),
-                new DownloadedStorageRangeTracker())
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(
+            block1.getHeader().getNumber() + 1,
+            block2c.getHeader().getNumber(),
+            fullAccountRange(),
+            new DownloadedStorageRangeTracker())
+        .commit();
 
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
     final PmtStateTrieAccountValue grace = h.readAccount(GRACE).orElseThrow();
@@ -206,16 +200,13 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                block1.getHeader().getNumber() + 1,
-                block3c.getHeader().getNumber(),
-                h.forestStartRoot(),
-                fullAccountRange(),
-                new DownloadedStorageRangeTracker())
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(
+            block1.getHeader().getNumber() + 1,
+            block3c.getHeader().getNumber(),
+            fullAccountRange(),
+            new DownloadedStorageRangeTracker())
+        .commit();
 
     // Alice was written by both canonical blocks: the latest value wins.
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(90));
@@ -243,16 +234,13 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     h.seedAccount(ALICE, 0L, Wei.of(10), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                2L,
-                block2.getHeader().getNumber(),
-                h.forestStartRoot(),
-                fullAccountRange(),
-                new DownloadedStorageRangeTracker())
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(
+            2L,
+            block2.getHeader().getNumber(),
+            fullAccountRange(),
+            new DownloadedStorageRangeTracker())
+        .commit();
 
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(70));
   }
@@ -296,16 +284,13 @@ class SnapV2BlockAccessListApplierReorgTest {
     h.seedStorageSlot(FRANK, slot1, UInt256.valueOf(200));
     h.seedStorageSlot(FRANK, slot2, UInt256.valueOf(200));
 
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                block1.getHeader().getNumber() + 1,
-                block2c.getHeader().getNumber(),
-                h.forestStartRoot(),
-                fullAccountRange(),
-                new DownloadedStorageRangeTracker())
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(
+            block1.getHeader().getNumber() + 1,
+            block2c.getHeader().getNumber(),
+            fullAccountRange(),
+            new DownloadedStorageRangeTracker())
+        .commit();
 
     // s1: canonical write applied, and the account's storage root moved off the empty trie.
     assertThat(h.readStorageSlot(FRANK, slot1)).hasValue(UInt256.valueOf(111));
@@ -342,16 +327,13 @@ class SnapV2BlockAccessListApplierReorgTest {
     h.seedAccount(FRANK, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     h.seedStorageSlot(FRANK, slot1, UInt256.valueOf(200));
 
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                block1.getHeader().getNumber() + 1,
-                block2c.getHeader().getNumber(),
-                h.forestStartRoot(),
-                fullAccountRange(),
-                new DownloadedStorageRangeTracker())
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(
+            block1.getHeader().getNumber() + 1,
+            block2c.getHeader().getNumber(),
+            fullAccountRange(),
+            new DownloadedStorageRangeTracker())
+        .commit();
 
     assertThat(h.readStorageSlot(FRANK, slot1)).isEmpty();
   }
@@ -388,16 +370,13 @@ class SnapV2BlockAccessListApplierReorgTest {
     // Only Alice's single-account range has been downloaded.
     final DownloadedAccountRangeTracker accountTracker = persistedAccounts(ALICE);
 
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                block1.getHeader().getNumber() + 1,
-                block2c.getHeader().getNumber(),
-                h.forestStartRoot(),
-                accountTracker,
-                new DownloadedStorageRangeTracker())
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(
+            block1.getHeader().getNumber() + 1,
+            block2c.getHeader().getNumber(),
+            accountTracker,
+            new DownloadedStorageRangeTracker())
+        .commit();
 
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
     assertThat(h.readAccount(DAVE).isPresent()).isFalse();
@@ -434,16 +413,13 @@ class SnapV2BlockAccessListApplierReorgTest {
     h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     h.seedAccount(CHARLIE, 0L, Wei.of(1), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
-    final Bytes32 newRoot =
-        applier(h, b)
-            .applyBlockAccessLists(
-                block1.getHeader().getNumber() + 1,
-                block2c.getHeader().getNumber(),
-                h.forestStartRoot(),
-                fullAccountRange(),
-                new DownloadedStorageRangeTracker())
-            .commit();
-    h.updateAccountRoot(newRoot);
+    applier(h, b)
+        .applyBlockAccessLists(
+            block1.getHeader().getNumber() + 1,
+            block2c.getHeader().getNumber(),
+            fullAccountRange(),
+            new DownloadedStorageRangeTracker())
+        .commit();
 
     // Alice: nonce applied, balance (untouched by the canonical BAL) preserved.
     final PmtStateTrieAccountValue alice = h.readAccount(ALICE).orElseThrow();
@@ -491,7 +467,6 @@ class SnapV2BlockAccessListApplierReorgTest {
                     .applyBlockAccessLists(
                         block1.getHeader().getNumber() + 1,
                         block2c.getHeader().getNumber(),
-                        h.forestStartRoot(),
                         fullAccountRange(),
                         new DownloadedStorageRangeTracker()))
         .isInstanceOf(WorldStateDownloaderException.class)
@@ -523,7 +498,6 @@ class SnapV2BlockAccessListApplierReorgTest {
                     .applyBlockAccessLists(
                         block1.getHeader().getNumber() + 1,
                         block2c.getHeader().getNumber(),
-                        h.forestStartRoot(),
                         fullAccountRange(),
                         new DownloadedStorageRangeTracker()))
         .isInstanceOf(IllegalStateException.class)
@@ -550,11 +524,7 @@ class SnapV2BlockAccessListApplierReorgTest {
             () ->
                 applier(h, b)
                     .applyBlockAccessLists(
-                        2L,
-                        5L,
-                        h.forestStartRoot(),
-                        fullAccountRange(),
-                        new DownloadedStorageRangeTracker()))
+                        2L, 5L, fullAccountRange(), new DownloadedStorageRangeTracker()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("Missing block header");
   }
@@ -577,7 +547,6 @@ class SnapV2BlockAccessListApplierReorgTest {
     // Seed ALICE into the trie and capture the pre-apply root.
     h.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     final Bytes32 startRoot = h.commitAndGetAccountRoot();
-    h.seedAccountTrieRoot(startRoot);
 
     // Block 1: balance change on ALICE so the account trie root moves.
     final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
@@ -586,10 +555,10 @@ class SnapV2BlockAccessListApplierReorgTest {
         new SnapV2BlockAccessListApplier(
             h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
 
-    final var batch =
-        applier.applyBlockAccessLists(
-            1L, 1L, h.forestStartRoot(), fullAccountRange(), new DownloadedStorageRangeTracker());
-    final Bytes32 committed = batch.commit();
+    applier
+        .applyBlockAccessLists(1L, 1L, fullAccountRange(), new DownloadedStorageRangeTracker())
+        .commit();
+    final Bytes32 committed = h.commitAndGetAccountRoot();
 
     // The applier must persist the new root atomically.
     assertThat(h.forestStorage().getAccountTrieRoot()).contains(committed);

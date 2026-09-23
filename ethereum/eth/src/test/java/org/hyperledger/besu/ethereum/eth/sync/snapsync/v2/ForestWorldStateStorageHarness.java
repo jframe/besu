@@ -44,21 +44,9 @@ final class ForestWorldStateStorageHarness implements WorldStateStorageHarness {
       new WorldStateStorageCoordinator(
           new ForestWorldStateKeyValueStorage(new InMemoryKeyValueStorage()));
 
-  private Bytes32 accountRoot = MerkleTrie.EMPTY_TRIE_NODE_HASH;
-
   @Override
   public WorldStateStorageCoordinator coordinator() {
     return coordinator;
-  }
-
-  @Override
-  public Optional<Bytes32> forestStartRoot() {
-    return Optional.of(accountRoot);
-  }
-
-  @Override
-  public void updateAccountRoot(final Bytes32 newRoot) {
-    accountRoot = newRoot;
   }
 
   @Override
@@ -73,7 +61,7 @@ final class ForestWorldStateStorageHarness implements WorldStateStorageHarness {
 
   @Override
   public Bytes32 commitAndGetAccountRoot() {
-    return accountRoot;
+    return forestStorage().getAccountTrieRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
   }
 
   @Override
@@ -91,8 +79,9 @@ final class ForestWorldStateStorageHarness implements WorldStateStorageHarness {
   private MerkleTrie<Bytes, Bytes> accountTrie() {
     final NodeLoader loader =
         (location, hash) -> coordinator.getAccountStateTrieNode(location, hash);
-    return new StoredMerklePatriciaTrie<>(
-        loader, accountRoot, Function.identity(), Function.identity());
+    final Bytes32 root =
+        forestStorage().getAccountTrieRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
+    return new StoredMerklePatriciaTrie<>(loader, root, Function.identity(), Function.identity());
   }
 
   private MerkleTrie<Bytes, Bytes> storageTrie(final Address address, final Hash storageRoot) {
@@ -117,8 +106,9 @@ final class ForestWorldStateStorageHarness implements WorldStateStorageHarness {
                 },
                 onForest -> onForest.putAccountStateTrieNode(hash, value));
     trie.commit(nodeUpdater);
+    ((ForestWorldStateKeyValueStorage.Updater) updater)
+        .putAccountTrieRoot(Bytes32.wrap(trie.getRootHash()));
     updater.commit();
-    accountRoot = Bytes32.wrap(trie.getRootHash());
   }
 
   @Override

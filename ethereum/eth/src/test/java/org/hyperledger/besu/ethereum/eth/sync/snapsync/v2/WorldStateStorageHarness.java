@@ -65,13 +65,9 @@ interface WorldStateStorageHarness {
         "commitAndGetAccountRoot() is only available for Forest harnesses");
   }
 
-  /** Current account-trie root, needed by the Forest applier; empty on Bonsai. */
-  Optional<Bytes32> forestStartRoot();
-
   /**
-   * Called after an applier batch commit to hand back the new account-trie root. Forest harnesses
-   * must update their cached root so subsequent {@link #readAccount} calls see the new state.
-   * Bonsai harnesses ignore this (flat DB is always up to date).
+   * Called after an applier batch commit to hand back the new account-trie root. No-op: Forest
+   * harnesses read the root from storage, so this is no longer needed.
    */
   default void updateAccountRoot(final Bytes32 newRoot) {}
 

@@ -156,23 +156,6 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     this.childQueueLowWatermark = computeChildQueueLowWatermark(storagePipelineInFlightCapacity);
     this.childQueueHighWatermark = computeChildQueueHighWatermark(childQueueLowWatermark);
 
-    // Seed the Forest account-trie root pointer from the initial pivot, but only if no pointer
-    // has been persisted yet. Skipping when already present preserves a valid pointer on resume
-    // and avoids clobbering the progress made by a previous run.
-    // This gives Forest the same "self-knows-its-root" property Bonsai has from its empty-path
-    // node, so the applier never needs to fall back to the caller-supplied canonical root.
-    final boolean needsForestSeed =
-        worldStateStorageCoordinator.applyForStrategy(
-            onBonsai -> false, onForest -> onForest.getAccountTrieRoot().isEmpty());
-    if (needsForestSeed) {
-      final WorldStateKeyValueStorage.Updater initUpdater = worldStateStorageCoordinator.updater();
-      applyForStrategy(
-          initUpdater,
-          onBonsai -> {},
-          onForest -> onForest.putAccountTrieRoot(MerkleTrie.EMPTY_TRIE_NODE_HASH));
-      initUpdater.commit();
-    }
-
     accountRangeTracker.setOnRangeCompleted(
         (rangeStart, rangeEnd) ->
             storageRangeTracker.removeAccountHashesInRange(rangeStart, rangeEnd));
@@ -689,10 +672,6 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     return blockAccessListApplier.applyBlockAccessLists(
         currentPivotBlockHeader.getNumber() + 1,
         newPivotBlockHeader.getNumber(),
-        // For Forest, the applier reads its start root from the stored pointer (see
-        // ForestWorldStateKeyValueStorage.getAccountTrieRoot), so this value is only consulted
-        // on the very first open before any pointer has been written. Do not remove.
-        Optional.of(Bytes32.wrap(currentPivotBlockHeader.getStateRoot().getBytes())),
         accountRangeTracker,
         storageRangeTracker);
   }

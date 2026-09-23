@@ -78,22 +78,6 @@ public class SnapV2BlockAccessListApplier {
       final long toBlock,
       final DownloadedAccountRangeTracker accountRangeTracker,
       final DownloadedStorageRangeTracker storageRangeTracker) {
-    return applyBlockAccessLists(
-        fromBlock, toBlock, Optional.empty(), accountRangeTracker, storageRangeTracker);
-  }
-
-  /**
-   * Applies block-access-list changes for blocks in [{@code fromBlock}, {@code toBlock}].
-   *
-   * @param forestStartRoot for Forest only; consulted only when no root pointer is stored (i.e. on
-   *     the very first apply before any pointer has been persisted). Ignored on Bonsai.
-   */
-  public BatchState applyBlockAccessLists(
-      final long fromBlock,
-      final long toBlock,
-      final Optional<Bytes32> forestStartRoot,
-      final DownloadedAccountRangeTracker accountRangeTracker,
-      final DownloadedStorageRangeTracker storageRangeTracker) {
 
     LOG.info(
         "Applying snap/2 BALs for blocks [{}, {}] (completed ranges: {}, pending ranges: {})",
@@ -103,7 +87,7 @@ public class SnapV2BlockAccessListApplier {
         accountRangeTracker.pendingRangeCount());
 
     final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
-    final MerkleTrie<Bytes, Bytes> accountTrie = openAccountTrie(forestStartRoot);
+    final MerkleTrie<Bytes, Bytes> accountTrie = openAccountTrie();
 
     final Map<Hash, PerAccountChanges> changes =
         collectAccountChanges(fromBlock, toBlock, accountRangeTracker);
@@ -268,27 +252,11 @@ public class SnapV2BlockAccessListApplier {
       final FetchedReorgState fetched,
       final DownloadedAccountRangeTracker accountRangeTracker,
       final DownloadedStorageRangeTracker storageRangeTracker) {
-    return applyReorgCorrections(
-        plan, fetched, Optional.empty(), accountRangeTracker, storageRangeTracker);
-  }
-
-  /**
-   * Applies canonical peer-fetched state for entries listed by {@link ReorgPlan}.
-   *
-   * @param forestStartRoot for Forest only; consulted only when no root pointer is stored (i.e. on
-   *     the very first apply before any pointer has been persisted). Ignored on Bonsai.
-   */
-  public ReorgRecoveryResult applyReorgCorrections(
-      final ReorgPlan plan,
-      final FetchedReorgState fetched,
-      final Optional<Bytes32> forestStartRoot,
-      final DownloadedAccountRangeTracker accountRangeTracker,
-      final DownloadedStorageRangeTracker storageRangeTracker) {
 
     final Set<Hash> refetchedAccounts = new HashSet<>(plan.accountsToRefetch());
     refetchedAccounts.addAll(plan.slotsToRefetch().keySet());
 
-    final MerkleTrie<Bytes, Bytes> accountTrie = openAccountTrie(forestStartRoot);
+    final MerkleTrie<Bytes, Bytes> accountTrie = openAccountTrie();
 
     if (refetchedAccounts.isEmpty()) {
       final WorldStateKeyValueStorage.Updater emptyUpdater = worldStateStorageCoordinator.updater();
@@ -296,7 +264,7 @@ public class SnapV2BlockAccessListApplier {
       applyForStrategy(
           emptyUpdater, onBonsai -> {}, onForest -> onForest.putAccountTrieRoot(currentRoot));
       emptyUpdater.commit();
-      return new ReorgRecoveryResult(Set.of(), Map.of(), currentRoot);
+      return new ReorgRecoveryResult(Set.of(), Map.of());
     }
 
     final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
@@ -363,7 +331,7 @@ public class SnapV2BlockAccessListApplier {
         "Applied snap/2 reorg corrections: {} accounts restored, {} accounts deleted",
         correctedRoots.size(),
         deletedAccounts.size());
-    return new ReorgRecoveryResult(deletedAccounts, correctedRoots, finalRoot);
+    return new ReorgRecoveryResult(deletedAccounts, correctedRoots);
   }
 
   private void deleteAccount(
@@ -396,7 +364,7 @@ public class SnapV2BlockAccessListApplier {
       final MerkleTrie<Bytes, Bytes> accountTrie,
       final WorldStateKeyValueStorage.Updater updater) {
 
-    final PmtStateTrieAccountValue localAccount = readCurrentAccount(accountHash, accountTrie);
+    final PmtStateTrieAccountValue localAccount = readAccount(accountHash, accountTrie);
     if (localAccount == null) {
       throw new WorldStateDownloaderException(
           "snap/2 reorg correction: account " + accountHash + " not found locally");
@@ -508,7 +476,7 @@ public class SnapV2BlockAccessListApplier {
         Function.identity());
   }
 
-  private MerkleTrie<Bytes, Bytes> openAccountTrie(final Optional<Bytes32> forestStartRoot) {
+  private MerkleTrie<Bytes, Bytes> openAccountTrie() {
     final Function<Bytes, Bytes> identity = Function.identity();
     final NodeLoader accountNodeLoader =
         (location, hash) -> worldStateStorageCoordinator.getAccountStateTrieNode(location, hash);
@@ -520,15 +488,7 @@ public class SnapV2BlockAccessListApplier {
                     .getTrieNodeUnsafe(Bytes.EMPTY)
                     .map(node -> Bytes32.wrap(Hash.hash(node).getBytes()))
                     .orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH),
-            forest ->
-                forest
-                    .getAccountTrieRoot()
-                    .orElseGet(
-                        () ->
-                            forestStartRoot.orElseThrow(
-                                () ->
-                                    new IllegalStateException(
-                                        "snap/2 Forest applier requires an account-trie start root"))));
+            forest -> forest.getAccountTrieRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH));
 
     return new StoredMerklePatriciaTrie<>(accountNodeLoader, rootHash, identity, identity);
   }
@@ -553,7 +513,7 @@ public class SnapV2BlockAccessListApplier {
       final Hash accountHash = entry.getKey();
       final PerAccountChanges perAccount = entry.getValue();
 
-      final PmtStateTrieAccountValue existingAccount = readCurrentAccount(accountHash, accountTrie);
+      final PmtStateTrieAccountValue existingAccount = readAccount(accountHash, accountTrie);
 
       final long newNonce = computeNewNonce(perAccount, existingAccount);
       final Wei newBalance = computeNewBalance(perAccount, existingAccount);
@@ -611,7 +571,7 @@ public class SnapV2BlockAccessListApplier {
     accountTrie.commit(nodeUpdater);
   }
 
-  private PmtStateTrieAccountValue readCurrentAccount(
+  private PmtStateTrieAccountValue readAccount(
       final Hash accountHash, final MerkleTrie<Bytes, Bytes> accountTrie) {
     return worldStateStorageCoordinator.applyForStrategy(
         bonsai -> readAccountData(bonsai.getAccount(accountHash)),
@@ -799,18 +759,12 @@ public class SnapV2BlockAccessListApplier {
 
   record BatchState(
       MerkleTrie<Bytes, Bytes> accountTrie, WorldStateKeyValueStorage.Updater updater) {
-    /**
-     * Stages and commits the account-trie changes and the updater batch.
-     *
-     * @return the new account-trie root hash after commit (useful for Forest callers that must
-     *     track the current root externally)
-     */
-    Bytes32 commit() {
+
+    void commit() {
       stageAccountTrieChanges(accountTrie, updater);
       final Bytes32 newRoot = Bytes32.wrap(accountTrie.getRootHash());
       applyForStrategy(updater, onBonsai -> {}, onForest -> onForest.putAccountTrieRoot(newRoot));
       updater.commit();
-      return newRoot;
     }
   }
 

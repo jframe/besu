@@ -29,10 +29,6 @@ import org.apache.tuweni.bytes.Bytes32;
  * @param correctedStorageRoots canonical storage roots at the new pivot for every account whose
  *     local record was rewritten during recovery, plus the patched pending accounts; used to
  *     retarget queued storage requests
- * @param finalAccountRoot account-trie root after all corrections are committed; needed by Forest
- *     callers that track the current root externally (Bonsai callers may ignore this)
  */
 public record ReorgRecoveryResult(
-    Set<Hash> deletedAccounts,
-    Map<Hash, Bytes32> correctedStorageRoots,
-    Bytes32 finalAccountRoot) {}
+    Set<Hash> deletedAccounts, Map<Hash, Bytes32> correctedStorageRoots) {}

@@ -24,7 +24,6 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedAccountRangeTra
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedStorageRangeTracker;
 
 import java.util.Map;
-import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
@@ -33,12 +32,9 @@ import org.junit.jupiter.api.Test;
  * Integration test verifying Forest account-trie root-pointer threading across multiple sequential
  * pivot catch-ups. This is the Phase 2 acceptance gate.
  *
- * <p>The bug exercised: before the fix, the second (and later) catch-up invocations passed the
- * canonical pivot block's state root as {@code forestStartRoot}. That root was never materialised
- * in Forest storage (Forest stores nodes by hash; the hybrid root produced after the first catch-up
- * has a different hash), so the trie opened at a dangling reference and subsequent reads / writes
- * produced incorrect results. With the fix the applier reads the persisted pointer and every
- * catch-up opens at the correct hybrid root.
+ * <p>The applier always reads the persisted account-trie root pointer from storage. Every seed call
+ * and every batch commit atomically update the stored pointer, so the applier always opens the trie
+ * at the correct hybrid root — even across multiple catch-ups and simulated restarts.
  */
 class SnapV2ForestMultiCatchupIntegrationTest {
 
@@ -60,15 +56,12 @@ class SnapV2ForestMultiCatchupIntegrationTest {
    * genesis → block1 (ALICE 100→150) → block2 (BOB 200→220)
    *
    * Sequence:
-   *   1. Download [ALICE=100, BOB=200]  → seed pointer R1
+   *   1. Download [ALICE=100, BOB=200]  → persisted pointer R1
    *   2. Catch-up A→B (block1)         → tracked root R2; applier persists
-   *   3. Download [CHARLIE=300]         → seed pointer R3
+   *   3. Download [CHARLIE=300]         → persisted pointer R3
    *   4. Catch-up B→C (block2)         → tracked root R4; applier persists
    *   5. Assert: ALICE=150, BOB=220, CHARLIE=300 readable; R4 = reference trie root
    * </pre>
-   *
-   * Without root threading, step 4 opens the trie at block2's canonical state root (never stored in
-   * Forest), producing wrong reads.
    */
   @Test
   void rootThreadedCorrectlyAcrossSequentialCatchups() {
@@ -88,14 +81,10 @@ class SnapV2ForestMultiCatchupIntegrationTest {
     h.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     h.seedAccount(BOB, 0L, Wei.of(200), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     final Bytes32 rootAfterDownload1 = h.commitAndGetAccountRoot();
-    h.seedAccountTrieRoot(rootAfterDownload1); // persist pointer so the applier can read it
 
     // --- Catch-up A→B (block1: ALICE 100→150) ---
-    final Bytes32 rootAfterCatchup1 =
-        applier
-            .applyBlockAccessLists(1L, 1L, h.forestStartRoot(), fullRange(), emptyStorage())
-            .commit();
-    h.updateAccountRoot(rootAfterCatchup1);
+    applier.applyBlockAccessLists(1L, 1L, fullRange(), emptyStorage()).commit();
+    final Bytes32 rootAfterCatchup1 = h.commitAndGetAccountRoot();
 
     // Applier must have persisted the pointer.
     assertThat(h.forestStorage().getAccountTrieRoot()).contains(rootAfterCatchup1);
@@ -107,20 +96,12 @@ class SnapV2ForestMultiCatchupIntegrationTest {
     // --- Phase 2: download [CHARLIE=300] at pivot B (on top of the hybrid trie at R2) ---
     h.seedAccount(CHARLIE, 0L, Wei.of(300), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     final Bytes32 rootAfterDownload2 = h.commitAndGetAccountRoot();
-    h.seedAccountTrieRoot(rootAfterDownload2); // persist pointer = R3
 
     // --- Catch-up B→C (block2: BOB 200→220) ---
-    // Pass rootAfterCatchup1 (before CHARLIE was added) as forestStartRoot to simulate the
-    // pre-fix caller, which passed the canonical pivot state root (never materialised in Forest
-    // storage, so effectively a wrong root). With the fix the applier ignores it and reads
-    // rootAfterDownload2 (which includes CHARLIE) from storage; without the fix it opens at
-    // rootAfterCatchup1 and CHARLIE is absent from the final trie → reference-trie check fails.
-    final Bytes32 rootAfterCatchup2 =
-        applier
-            .applyBlockAccessLists(
-                2L, 2L, Optional.of(rootAfterCatchup1), fullRange(), emptyStorage())
-            .commit();
-    h.updateAccountRoot(rootAfterCatchup2);
+    // The applier reads the persisted pointer (rootAfterDownload2, which includes CHARLIE) and
+    // opens at the correct hybrid root; all three accounts are present in the final trie.
+    applier.applyBlockAccessLists(2L, 2L, fullRange(), emptyStorage()).commit();
+    final Bytes32 rootAfterCatchup2 = h.commitAndGetAccountRoot();
 
     assertThat(h.forestStorage().getAccountTrieRoot()).contains(rootAfterCatchup2);
     assertThat(rootAfterCatchup2).isNotEqualTo(rootAfterDownload2);
@@ -146,10 +127,10 @@ class SnapV2ForestMultiCatchupIntegrationTest {
    *         → block2_canon  (BOB  200→220)
    *
    * Sequence:
-   *   1. Download [ALICE=100, BOB=200]   → seed pointer R1
+   *   1. Download [ALICE=100, BOB=200]   → persisted pointer R1
    *   2. Catch-up 1: apply block1_stale  → tracked root R2_stale (ALICE=180)
    *   3. Catch-up 2: apply block1_canon  → tracked root R2_canon (ALICE=150)
-   *   4. Download [CHARLIE=300]          → seed pointer R3
+   *   4. Download [CHARLIE=300]          → persisted pointer R3
    *   5. Catch-up 3: apply block2_canon  → tracked root R4 (BOB=220)
    *   6. Assert: ALICE=150, BOB=220, CHARLIE=300 readable
    * </pre>
@@ -174,7 +155,6 @@ class SnapV2ForestMultiCatchupIntegrationTest {
     // --- Phase 1: download [ALICE=100, BOB=200] ---
     h.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     h.seedAccount(BOB, 0L, Wei.of(200), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    h.seedAccountTrieRoot(h.commitAndGetAccountRoot());
 
     // --- Catch-up 1: apply the stale block's BAL (ALICE→180) ---
     // This simulates snap/2 having applied the orphaned fork before the reorg was detected.
@@ -187,35 +167,21 @@ class SnapV2ForestMultiCatchupIntegrationTest {
     final SnapV2BlockAccessListApplier staleApplier =
         new SnapV2BlockAccessListApplier(
             h.coordinator(), staleChain.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
-    final Bytes32 rootAfterStale =
-        staleApplier
-            .applyBlockAccessLists(1L, 1L, h.forestStartRoot(), fullRange(), emptyStorage())
-            .commit();
-    h.updateAccountRoot(rootAfterStale);
+    staleApplier.applyBlockAccessLists(1L, 1L, fullRange(), emptyStorage()).commit();
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(180));
 
     // --- Catch-up 2: reorg detected — apply block1_canonical BAL (ALICE→150) ---
-    // The applier reads the stored pointer (rootAfterStale) and patches on top of it.
-    final Bytes32 rootAfterCanon1 =
-        applier
-            .applyBlockAccessLists(1L, 1L, h.forestStartRoot(), fullRange(), emptyStorage())
-            .commit();
-    h.updateAccountRoot(rootAfterCanon1);
+    // The applier reads the stored pointer and patches on top of it.
+    applier.applyBlockAccessLists(1L, 1L, fullRange(), emptyStorage()).commit();
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(150));
 
     // --- Phase 2: download [CHARLIE=300] at pivot B ---
     h.seedAccount(CHARLIE, 0L, Wei.of(300), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    h.seedAccountTrieRoot(h.commitAndGetAccountRoot());
 
     // --- Catch-up 3: apply block2_canon BAL (BOB→220) ---
-    // Pass rootAfterCanon1 (before CHARLIE was added) as the wrong forestStartRoot; the fix
-    // reads the storage pointer (which includes CHARLIE) instead.
-    final Bytes32 rootFinal =
-        applier
-            .applyBlockAccessLists(
-                2L, 2L, Optional.of(rootAfterCanon1), fullRange(), emptyStorage())
-            .commit();
-    h.updateAccountRoot(rootFinal);
+    // The applier reads the stored pointer (which includes CHARLIE) and patches on top.
+    applier.applyBlockAccessLists(2L, 2L, fullRange(), emptyStorage()).commit();
+    final Bytes32 rootFinal = h.commitAndGetAccountRoot();
 
     assertThat(h.forestStorage().getAccountTrieRoot()).contains(rootFinal);
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(150));
@@ -229,11 +195,10 @@ class SnapV2ForestMultiCatchupIntegrationTest {
    * Simulates a Forest snap/2 session restart: accounts are downloaded and the pointer persisted in
    * one "session," then a brand-new applier (same storage, fresh object) is created and used for
    * the catch-up in the next "session." The new applier must read the stored pointer rather than
-   * relying on the caller-supplied {@code forestStartRoot}.
+   * relying on any caller-supplied value.
    *
-   * <p>This is the Task 8 acceptance test. A wrong root is passed as {@code forestStartRoot} to
-   * make the test falsifiable: if the new applier blindly used the caller-supplied root (the
-   * pre-restart behaviour) it would open an empty or incorrect trie, producing a wrong result.
+   * <p>This is the Task 8 acceptance test. The new applier has no in-memory state from Session 1,
+   * yet it correctly reads the persisted pointer and applies the BAL on top of the downloaded trie.
    */
   @Test
   void newApplierReadsPersistedPointerAfterRestart() {
@@ -242,10 +207,9 @@ class SnapV2ForestMultiCatchupIntegrationTest {
 
     final ForestWorldStateStorageHarness h = new ForestWorldStateStorageHarness();
 
-    // --- "Session 1": download [ALICE=100] and persist the pointer ---
+    // --- "Session 1": download [ALICE=100] ---
     h.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
     final Bytes32 rootAfterDownload = h.commitAndGetAccountRoot();
-    h.seedAccountTrieRoot(rootAfterDownload);
 
     // --- "Session 2": create a NEW applier with the SAME coordinator ---
     // This simulates a node restart where the storage is reloaded but all in-memory state is gone.
@@ -253,14 +217,8 @@ class SnapV2ForestMultiCatchupIntegrationTest {
         new SnapV2BlockAccessListApplier(
             h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
 
-    // Pass a completely wrong forestStartRoot — the new applier must ignore it and read from
-    // storage.
-    final Bytes32 wrongRoot = Bytes32.fromHexString("0x" + "ff".repeat(32));
-    final Bytes32 finalRoot =
-        newSessionApplier
-            .applyBlockAccessLists(1L, 1L, Optional.of(wrongRoot), fullRange(), emptyStorage())
-            .commit();
-    h.updateAccountRoot(finalRoot);
+    newSessionApplier.applyBlockAccessLists(1L, 1L, fullRange(), emptyStorage()).commit();
+    final Bytes32 finalRoot = h.commitAndGetAccountRoot();
 
     // The catch-up applied correctly: ALICE balance is 150, pointer is updated.
     assertThat(h.forestStorage().getAccountTrieRoot()).contains(finalRoot);
