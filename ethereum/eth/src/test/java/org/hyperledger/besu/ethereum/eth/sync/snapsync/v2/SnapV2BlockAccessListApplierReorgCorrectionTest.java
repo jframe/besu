@@ -79,7 +79,7 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
   private static final Bytes32 MAX_KEY =
       Bytes32.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
-  static Stream<WorldStateStorageHarness> harnesses() {
+  static Stream<WorldStateStorageHarness> storage() {
     return Stream.of(new BonsaiWorldStateStorageHarness(), new ForestWorldStateStorageHarness());
   }
 
@@ -88,13 +88,13 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
    * the orphaned fork) gets the fetched canonical code stored.
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void storesFetchedCanonicalCodeForRestoredAccount(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+  @MethodSource("storage")
+  void storesFetchedCanonicalCodeForRestoredAccount(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
 
     // Local state: Carol with the orphaned code only.
-    h.seedAccount(CAROL, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.hash(CAROL_CODE_O));
-    h.seedCode(CAROL, CAROL_CODE_O);
+    storage.seedAccount(CAROL, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.hash(CAROL_CODE_O));
+    storage.seedCode(CAROL, CAROL_CODE_O);
 
     final ReorgPlan plan = planWithDivergedAccounts(Set.of(CAROL.addressHash()), Map.of());
     final FetchedReorgState fetched =
@@ -105,23 +105,23 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             Map.of(),
             Map.of(Hash.hash(CAROL_CODE_W), CAROL_CODE_W));
 
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyReorgCorrections(
             plan, fetched, fullAccountRange(), new DownloadedStorageRangeTracker());
 
-    final PmtStateTrieAccountValue carol = h.readAccount(CAROL).orElseThrow();
+    final PmtStateTrieAccountValue carol = storage.readAccount(CAROL).orElseThrow();
     assertThat(carol.getCodeHash()).isEqualTo(Hash.hash(CAROL_CODE_W));
-    assertThat(h.readCode(CAROL)).hasValue(CAROL_CODE_W);
+    assertThat(storage.readCode(CAROL)).hasValue(CAROL_CODE_W);
   }
 
   /** A restored account whose canonical code is neither local nor fetched aborts the recovery. */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void failsWhenCanonicalCodeWasNotFetched(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+  @MethodSource("storage")
+  void failsWhenCanonicalCodeWasNotFetched(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
 
-    h.seedAccount(CAROL, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.hash(CAROL_CODE_O));
-    h.seedCode(CAROL, CAROL_CODE_O);
+    storage.seedAccount(CAROL, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.hash(CAROL_CODE_O));
+    storage.seedCode(CAROL, CAROL_CODE_O);
 
     final ReorgPlan plan = planWithDivergedAccounts(Set.of(CAROL.addressHash()), Map.of());
     final FetchedReorgState fetched =
@@ -134,7 +134,7 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
 
     assertThatThrownBy(
             () ->
-                applier(h, b)
+                applier(storage, reorgBuilder)
                     .applyReorgCorrections(
                         plan, fetched, fullAccountRange(), new DownloadedStorageRangeTracker()))
         .isInstanceOf(WorldStateDownloaderException.class)
@@ -143,18 +143,18 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
 
   /** Every account the plan asks to re-fetch must be covered by the fetched state. */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void failsWhenFetchDidNotCoverDivergedAccount(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+  @MethodSource("storage")
+  void failsWhenFetchDidNotCoverDivergedAccount(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
 
-    h.seedAccount(CAROL, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(CAROL, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
     final ReorgPlan plan = planWithDivergedAccounts(Set.of(CAROL.addressHash()), Map.of());
     final FetchedReorgState fetched = FetchedReorgState.empty();
 
     assertThatThrownBy(
             () ->
-                applier(h, b)
+                applier(storage, reorgBuilder)
                     .applyReorgCorrections(
                         plan, fetched, fullAccountRange(), new DownloadedStorageRangeTracker()))
         .isInstanceOf(WorldStateDownloaderException.class)
@@ -167,17 +167,17 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
    * the account clearly has storage, so recovery must abort.
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void failsOnStorageRootMismatchForCompletedAccount(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+  @MethodSource("storage")
+  void failsOnStorageRootMismatchForCompletedAccount(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
 
     // Local state built through the applier so Frank has a real storage trie with s1=100.
     final BlockAccessList baseBal =
-        b.merge(
-            b.balWithBalances(Map.of(FRANK, Wei.of(200))),
-            b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(100))));
-    b.appendBlockWithBal(b.header(0), baseBal, 1L);
-    applier(h, b)
+        reorgBuilder.merge(
+            reorgBuilder.balWithBalances(Map.of(FRANK, Wei.of(200))),
+            reorgBuilder.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(100))));
+    reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), baseBal, 1L);
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(1L, 1L, fullAccountRange(), new DownloadedStorageRangeTracker())
         .commit();
 
@@ -196,7 +196,7 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
 
     assertThatThrownBy(
             () ->
-                applier(h, b)
+                applier(storage, reorgBuilder)
                     .applyReorgCorrections(
                         plan, fetched, fullAccountRange(), new DownloadedStorageRangeTracker()))
         .isInstanceOf(WorldStateDownloaderException.class)
@@ -208,12 +208,9 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
    * nibble 0 and one child at nibble 1 referencing a never-persisted node — exactly what a
    * partially range-downloaded snap/2 local state looks like) is still deleted correctly: every
    * flat storage slot is removed via a flat-db prefix scan, bypassing the incomplete trie entirely.
-   *
-   * <p>This test is Bonsai-only: it exercises Bonsai-specific partial-trie node APIs and flat-DB
-   * storage scanning.
    */
   @Test
-  void deletesPendingAccountWithPartialStorageTrie() {
+  void bonsaiDeletesPendingAccountWithPartialStorageTrie() {
     final BonsaiWorldStateKeyValueStorage bonsaiStorage =
         new BonsaiWorldStateKeyValueStorage(
             new InMemoryKeyValueStorageProvider(),
@@ -221,7 +218,7 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
     final WorldStateStorageCoordinator coordinator =
         new WorldStateStorageCoordinator(bonsaiStorage);
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
 
     final StoredNodeFactory<Bytes> factory =
         new StoredNodeFactory<>(
@@ -283,7 +280,7 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
 
     final ReorgRecoveryResult result =
         new SnapV2BlockAccessListApplier(
-                coordinator, b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule())
+                coordinator, reorgBuilder.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule())
             .applyReorgCorrections(
                 plan, fetched, pendingRange, new DownloadedStorageRangeTracker());
 
@@ -307,9 +304,11 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
   // ---------------------------------------------------------------------------
 
   private static SnapV2BlockAccessListApplier applier(
-      final WorldStateStorageHarness h, final ReorgBlockchainBuilder b) {
+      final WorldStateStorageHarness storage, final ReorgBlockchainBuilder reorgBuilder) {
     return new SnapV2BlockAccessListApplier(
-        h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
+        storage.coordinator(),
+        reorgBuilder.blockchain(),
+        ReorgBlockchainBuilder.balEnabledSchedule());
   }
 
   private static ReorgPlan planWithDivergedAccounts(

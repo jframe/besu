@@ -46,7 +46,7 @@ final class ForestTrieStitcher {
   /**
    * Inserts {@code downloadedAccounts} into the trie at {@code currentTrackedRoot}, commits dirty
    * nodes via {@code updater}, and returns the new root. The caller must persist the returned root
-   * via {@code putAccountTrieRoot} in the same batch.
+   * via {@code putWorldStateRoot} in the same batch.
    */
   Bytes32 stitchAccounts(
       final Bytes32 currentTrackedRoot,

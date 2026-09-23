@@ -116,7 +116,7 @@ public class SnapV2AccountRangeRequest extends SnapV2DataRequest {
         onBonsai -> {},
         onForest -> {
           final Bytes32 currentRoot =
-              onForest.getAccountTrieRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
+              onForest.getWorldStateRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
           final NavigableMap<Bytes32, Bytes> inRangeAccounts =
               stackTrie
                   .getElement(startKeyHash)
@@ -125,7 +125,7 @@ public class SnapV2AccountRangeRequest extends SnapV2DataRequest {
           final Bytes32 newRoot =
               new ForestTrieStitcher(worldStateStorageCoordinator)
                   .stitchAccounts(currentRoot, inRangeAccounts, updater);
-          ((ForestWorldStateKeyValueStorage.Updater) updater).putAccountTrieRoot(newRoot);
+          ((ForestWorldStateKeyValueStorage.Updater) updater).putWorldStateRoot(newRoot);
         });
 
     downloadState.getMetricsManager().notifyAccountsDownloaded(stackTrie.getElementsCount().get());

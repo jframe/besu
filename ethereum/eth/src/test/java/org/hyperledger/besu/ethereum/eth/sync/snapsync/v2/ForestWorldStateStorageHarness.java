@@ -61,26 +61,14 @@ final class ForestWorldStateStorageHarness implements WorldStateStorageHarness {
 
   @Override
   public Bytes32 commitAndGetAccountRoot() {
-    return forestStorage().getAccountTrieRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
-  }
-
-  @Override
-  public void seedAccountTrieRoot(final Bytes32 root) {
-    final WorldStateKeyValueStorage.Updater u = coordinator.updater();
-    WorldStateStorageCoordinator.applyForStrategy(
-        u,
-        onBonsai -> {
-          throw new IllegalStateException("ForestWorldStateStorageHarness used with Bonsai");
-        },
-        onForest -> onForest.putAccountTrieRoot(root));
-    u.commit();
+    return forestStorage().getWorldStateRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
   }
 
   private MerkleTrie<Bytes, Bytes> accountTrie() {
     final NodeLoader loader =
         (location, hash) -> coordinator.getAccountStateTrieNode(location, hash);
     final Bytes32 root =
-        forestStorage().getAccountTrieRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
+        forestStorage().getWorldStateRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
     return new StoredMerklePatriciaTrie<>(loader, root, Function.identity(), Function.identity());
   }
 
@@ -107,7 +95,7 @@ final class ForestWorldStateStorageHarness implements WorldStateStorageHarness {
                 onForest -> onForest.putAccountStateTrieNode(hash, value));
     trie.commit(nodeUpdater);
     ((ForestWorldStateKeyValueStorage.Updater) updater)
-        .putAccountTrieRoot(Bytes32.wrap(trie.getRootHash()));
+        .putWorldStateRoot(Bytes32.wrap(trie.getRootHash()));
     updater.commit();
   }
 

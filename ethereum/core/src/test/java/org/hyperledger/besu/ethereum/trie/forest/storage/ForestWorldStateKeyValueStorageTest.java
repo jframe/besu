@@ -29,18 +29,18 @@ class ForestWorldStateKeyValueStorageTest {
   }
 
   @Test
-  void accountTrieRoot_absentByDefault() {
-    assertThat(newStorage().getAccountTrieRoot()).isEmpty();
+  void worldStateRoot_absentByDefault() {
+    assertThat(newStorage().getWorldStateRoot()).isEmpty();
   }
 
   @Test
-  void accountTrieRoot_roundTrips() {
+  void worldStateRoot_roundTrips() {
     final ForestWorldStateKeyValueStorage storage = newStorage();
     final Bytes32 root = Bytes32.fromHexString("0x" + "ab".repeat(32));
     final ForestWorldStateKeyValueStorage.Updater updater = storage.updater();
-    updater.putAccountTrieRoot(root);
+    updater.putWorldStateRoot(root);
     updater.commit();
-    assertThat(storage.getAccountTrieRoot()).contains(root);
+    assertThat(storage.getWorldStateRoot()).contains(root);
   }
 
   @Test
@@ -49,13 +49,13 @@ class ForestWorldStateKeyValueStorageTest {
     final Bytes32 root = Bytes32.fromHexString("0x" + "cd".repeat(32));
     final ForestWorldStateKeyValueStorage.Updater updater = storage.updater();
     updater.putAccountStateTrieNode(root, Bytes.fromHexString("0xdeadbeef"));
-    updater.putAccountTrieRoot(root);
+    updater.putWorldStateRoot(root);
     updater.commit();
 
     // inUseCheck marks nothing in use -> the node is pruned, the pointer must survive.
     final long pruned = storage.prune(key -> false);
 
     assertThat(pruned).isEqualTo(1L); // only the 32-byte node
-    assertThat(storage.getAccountTrieRoot()).contains(root);
+    assertThat(storage.getWorldStateRoot()).contains(root);
   }
 }

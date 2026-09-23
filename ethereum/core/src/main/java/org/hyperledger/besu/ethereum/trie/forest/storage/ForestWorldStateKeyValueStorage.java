@@ -38,7 +38,7 @@ import org.apache.tuweni.bytes.Bytes32;
 public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorage {
 
   // Non-32-byte key so it can never collide with a 32-byte node or code hash.
-  private static final byte[] ACCOUNT_TRIE_ROOT_KEY = "worldRoot".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] WORLD_STATE_ROOT_KEY = "worldRoot".getBytes(StandardCharsets.UTF_8);
 
   private final Subscribers<NodesAddedListener> nodeAddedListeners = Subscribers.create();
   private final KeyValueStorage keyValueStorage;
@@ -77,8 +77,8 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     }
   }
 
-  public Optional<Bytes32> getAccountTrieRoot() {
-    return keyValueStorage.get(ACCOUNT_TRIE_ROOT_KEY).map(Bytes32::wrap);
+  public Optional<Bytes32> getWorldStateRoot() {
+    return keyValueStorage.get(WORLD_STATE_ROOT_KEY).map(Bytes32::wrap);
   }
 
   public boolean isWorldStateAvailable(final Bytes32 rootHash) {
@@ -173,6 +173,11 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
 
     public WorldStateKeyValueStorage.Updater removeAccountStateTrieNode(final Bytes32 nodeHash) {
       transaction.remove(nodeHash.toArrayUnsafe());
+      return this;
+    }
+
+    public Updater putWorldStateRoot(final Bytes32 rootHash) {
+      transaction.put(WORLD_STATE_ROOT_KEY, rootHash.toArrayUnsafe());
       return this;
     }
 

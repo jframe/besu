@@ -41,14 +41,14 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Forest-specific tests for {@link SnapV2WorldDownloadState} construction — verifies that the
- * Forest account-trie root pointer is not disturbed by the constructor.
+ * Forest world state root pointer is not disturbed by the constructor.
  */
 class SnapV2WorldDownloadStateForestTest {
 
   private static final Hash SOME_ROOT = Hash.fromHexString("0x" + "ab".repeat(32));
 
   @Test
-  void forestAccountTrieRootAbsentBeforeFirstWrite() {
+  void forestWorldStateRootAbsentBeforeFirstWrite() {
     final ForestWorldStateKeyValueStorage forest =
         new ForestWorldStateKeyValueStorage(new InMemoryKeyValueStorage());
     final WorldStateStorageCoordinator coordinator = new WorldStateStorageCoordinator(forest);
@@ -56,8 +56,8 @@ class SnapV2WorldDownloadStateForestTest {
 
     newForestDownloadState(coordinator, pivot);
 
-    // Constructor does not seed the pointer; openAccountTrie() handles the fresh case internally.
-    assertThat(forest.getAccountTrieRoot()).isEmpty();
+    // Constructor does not seed the pointer; the applier handles the fresh case internally.
+    assertThat(forest.getWorldStateRoot()).isEmpty();
   }
 
   @Test
@@ -70,7 +70,7 @@ class SnapV2WorldDownloadStateForestTest {
     final Bytes32 existingRoot = Bytes32.fromHexString("0x" + "cc".repeat(32));
     final ForestWorldStateKeyValueStorage.Updater u =
         (ForestWorldStateKeyValueStorage.Updater) coordinator.updater();
-    u.putAccountTrieRoot(existingRoot);
+    u.putWorldStateRoot(existingRoot);
     u.commit();
 
     // Construct a download state with a different pivot — the constructor must NOT overwrite the
@@ -78,7 +78,7 @@ class SnapV2WorldDownloadStateForestTest {
     final Hash differentRoot = Hash.fromHexString("0x" + "dd".repeat(32));
     newForestDownloadState(coordinator, headerWithStateRoot(differentRoot));
 
-    assertThat(forest.getAccountTrieRoot()).contains(existingRoot);
+    assertThat(forest.getWorldStateRoot()).contains(existingRoot);
   }
 
   // ---------------------------------------------------------------------------

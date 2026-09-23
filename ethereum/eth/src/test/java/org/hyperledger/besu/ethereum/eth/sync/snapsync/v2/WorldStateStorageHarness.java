@@ -48,15 +48,6 @@ interface WorldStateStorageHarness {
   }
 
   /**
-   * Persists the given root as the Forest account-trie root pointer. Throws for non-Forest
-   * harnesses.
-   */
-  default void seedAccountTrieRoot(final Bytes32 root) {
-    throw new UnsupportedOperationException(
-        "seedAccountTrieRoot() is only available for Forest harnesses");
-  }
-
-  /**
    * Returns the current committed account-trie root. Forest harnesses return the root tracked
    * internally; calling this on a Bonsai harness throws.
    */
@@ -64,12 +55,6 @@ interface WorldStateStorageHarness {
     throw new UnsupportedOperationException(
         "commitAndGetAccountRoot() is only available for Forest harnesses");
   }
-
-  /**
-   * Called after an applier batch commit to hand back the new account-trie root. No-op: Forest
-   * harnesses read the root from storage, so this is no longer needed.
-   */
-  default void updateAccountRoot(final Bytes32 newRoot) {}
 
   void seedAccount(Address address, long nonce, Wei balance, Hash storageRoot, Hash codeHash);
 

@@ -16,7 +16,6 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -33,6 +32,7 @@ import java.util.stream.Stream;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -61,7 +61,7 @@ class SnapV2BlockAccessListApplierReorgTest {
   private static final Bytes32 MAX_KEY =
       Bytes32.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
-  static Stream<WorldStateStorageHarness> harnesses() {
+  static Stream<WorldStateStorageHarness> storage() {
     return Stream.of(new BonsaiWorldStateStorageHarness(), new ForestWorldStateStorageHarness());
   }
 
@@ -81,33 +81,37 @@ class SnapV2BlockAccessListApplierReorgTest {
    * </pre>
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void appliesCanonicalWritesAndLeavesDivergedEntriesStale(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+  @MethodSource("storage")
+  void appliesCanonicalWritesAndLeavesDivergedEntriesStale(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
 
     // Common ancestor = block 1.
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
 
     // Orphaned fork block 2o: BAL sets Alice=50, Dave=60.
-    b.appendStale(
-        block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50), DAVE, Wei.of(60))), 2L);
+    reorgBuilder.appendStale(
+        block1.getHeader(),
+        reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(50), DAVE, Wei.of(60))),
+        2L);
 
     // Canonical fork block 2c (wins the reorg): BAL sets Alice=80. Dave untouched.
     final Block block2c =
-        b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
+        reorgBuilder.appendCanonical(
+            block1.getHeader(), reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
 
     // Pre-seed flat state to reflect the state AFTER the orphaned fork was applied (the "current"
     // state when the reorg is detected): Alice=50, Dave=60, and Bob=100 (untouched by either fork).
-    h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    h.seedAccount(DAVE, 0L, Wei.of(60), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    h.seedAccount(BOB, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(DAVE, 0L, Wei.of(60), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(BOB, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
     // All three accounts are in downloaded ranges.
     final DownloadedAccountRangeTracker accountTracker = fullAccountRange();
     final DownloadedStorageRangeTracker storageTracker = new DownloadedStorageRangeTracker();
 
     // Apply canonical BALs from the common ancestor + 1 (= block 2).
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(
             block1.getHeader().getNumber() + 1,
             block2c.getHeader().getNumber(),
@@ -116,12 +120,12 @@ class SnapV2BlockAccessListApplierReorgTest {
         .commit();
 
     // Alice: touched on both forks. Canonical BAL overwrites with the correct value (80).
-    assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
+    assertThat(storage.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
     // Dave: touched only on the orphaned fork -> diverged. The applier does not touch it; it
     // retains its (incorrect) orphaned value. A later re-fetch step will correct this.
-    assertThat(h.readAccount(DAVE).orElseThrow().getBalance()).isEqualTo(Wei.of(60));
+    assertThat(storage.readAccount(DAVE).orElseThrow().getBalance()).isEqualTo(Wei.of(60));
     // Bob: untouched by either fork -> unchanged.
-    assertThat(h.readAccount(BOB).orElseThrow().getBalance()).isEqualTo(Wei.of(100));
+    assertThat(storage.readAccount(BOB).orElseThrow().getBalance()).isEqualTo(Wei.of(100));
   }
 
   /**
@@ -138,24 +142,26 @@ class SnapV2BlockAccessListApplierReorgTest {
    * root.
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void createsCanonicalOnlyAccounts(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+  @MethodSource("storage")
+  void createsCanonicalOnlyAccounts(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
 
-    b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    reorgBuilder.appendStale(
+        block1.getHeader(), reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
     final Block block2c =
-        b.appendCanonical(
+        reorgBuilder.appendCanonical(
             block1.getHeader(),
-            b.balWithBalances(Map.of(ALICE, Wei.of(80), GRACE, Wei.of(50))),
+            reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(80), GRACE, Wei.of(50))),
             2L);
 
     // Post-orphan flat state: only Alice exists; Grace was never seen on either fork at download
     // time.
-    h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    assertThat(h.readAccount(GRACE).isPresent()).isFalse();
+    storage.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    assertThat(storage.readAccount(GRACE).isPresent()).isFalse();
 
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(
             block1.getHeader().getNumber() + 1,
             block2c.getHeader().getNumber(),
@@ -163,8 +169,8 @@ class SnapV2BlockAccessListApplierReorgTest {
             new DownloadedStorageRangeTracker())
         .commit();
 
-    assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
-    final PmtStateTrieAccountValue grace = h.readAccount(GRACE).orElseThrow();
+    assertThat(storage.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
+    final PmtStateTrieAccountValue grace = storage.readAccount(GRACE).orElseThrow();
     assertThat(grace.getBalance()).isEqualTo(Wei.of(50));
     assertThat(grace.getNonce()).isZero();
     assertThat(grace.getCodeHash()).isEqualTo(Hash.EMPTY);
@@ -184,23 +190,26 @@ class SnapV2BlockAccessListApplierReorgTest {
    * Window [2, 3]: Alice ends at 90 (not 80), and Bob — first touched in block 3 — is created.
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void appliesLastWriteAcrossMultipleCanonicalBlocks(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+  @MethodSource("storage")
+  void appliesLastWriteAcrossMultipleCanonicalBlocks(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
 
-    b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    reorgBuilder.appendStale(
+        block1.getHeader(), reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
     final Block block2c =
-        b.appendCanonical(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
+        reorgBuilder.appendCanonical(
+            block1.getHeader(), reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(80))), 2L);
     final Block block3c =
-        b.appendCanonical(
+        reorgBuilder.appendCanonical(
             block2c.getHeader(),
-            b.balWithBalances(Map.of(ALICE, Wei.of(90), BOB, Wei.of(100))),
+            reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(90), BOB, Wei.of(100))),
             3L);
 
-    h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(
             block1.getHeader().getNumber() + 1,
             block3c.getHeader().getNumber(),
@@ -209,9 +218,9 @@ class SnapV2BlockAccessListApplierReorgTest {
         .commit();
 
     // Alice was written by both canonical blocks: the latest value wins.
-    assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(90));
+    assertThat(storage.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(90));
     // Bob appears only in block 3: the window must cover every block, not just the first.
-    assertThat(h.readAccount(BOB).orElseThrow().getBalance()).isEqualTo(Wei.of(100));
+    assertThat(storage.readAccount(BOB).orElseThrow().getBalance()).isEqualTo(Wei.of(100));
   }
 
   /**
@@ -224,17 +233,20 @@ class SnapV2BlockAccessListApplierReorgTest {
    * </pre>
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void fromBlockGeneralizationExcludesBlocksBeforeCommonAncestor(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+  @MethodSource("storage")
+  void fromBlockGeneralizationExcludesBlocksBeforeCommonAncestor(
+      final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
 
     final Block block2 =
-        b.appendBlockWithBal(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(70))), 2L);
+        reorgBuilder.appendBlockWithBal(
+            block1.getHeader(), reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(70))), 2L);
 
-    h.seedAccount(ALICE, 0L, Wei.of(10), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(ALICE, 0L, Wei.of(10), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(
             2L,
             block2.getHeader().getNumber(),
@@ -242,7 +254,7 @@ class SnapV2BlockAccessListApplierReorgTest {
             new DownloadedStorageRangeTracker())
         .commit();
 
-    assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(70));
+    assertThat(storage.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(70));
   }
 
   // ---------------------------------------------------------------------------
@@ -261,30 +273,32 @@ class SnapV2BlockAccessListApplierReorgTest {
    * </pre>
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void appliesCanonicalSlotWritesAndLeavesDivergedSlotsStale(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+  @MethodSource("storage")
+  void appliesCanonicalSlotWritesAndLeavesDivergedSlotsStale(
+      final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
     final UInt256 slot1 = UInt256.valueOf(1);
     final UInt256 slot2 = UInt256.valueOf(2);
 
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
-    b.appendStale(
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
+    reorgBuilder.appendStale(
         block1.getHeader(),
-        b.balWithStorageChanges(
+        reorgBuilder.balWithStorageChanges(
             FRANK, Map.of(slot1, UInt256.valueOf(200), slot2, UInt256.valueOf(200))),
         2L);
     final Block block2c =
-        b.appendCanonical(
+        reorgBuilder.appendCanonical(
             block1.getHeader(),
-            b.balWithStorageChanges(FRANK, Map.of(slot1, UInt256.valueOf(111))),
+            reorgBuilder.balWithStorageChanges(FRANK, Map.of(slot1, UInt256.valueOf(111))),
             2L);
 
     // Post-orphan flat state: Frank holds both orphaned slot values.
-    h.seedAccount(FRANK, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    h.seedStorageSlot(FRANK, slot1, UInt256.valueOf(200));
-    h.seedStorageSlot(FRANK, slot2, UInt256.valueOf(200));
+    storage.seedAccount(FRANK, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedStorageSlot(FRANK, slot1, UInt256.valueOf(200));
+    storage.seedStorageSlot(FRANK, slot2, UInt256.valueOf(200));
 
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(
             block1.getHeader().getNumber() + 1,
             block2c.getHeader().getNumber(),
@@ -293,11 +307,11 @@ class SnapV2BlockAccessListApplierReorgTest {
         .commit();
 
     // s1: canonical write applied, and the account's storage root moved off the empty trie.
-    assertThat(h.readStorageSlot(FRANK, slot1)).hasValue(UInt256.valueOf(111));
-    assertThat(h.readAccount(FRANK).orElseThrow().getStorageRoot())
+    assertThat(storage.readStorageSlot(FRANK, slot1)).hasValue(UInt256.valueOf(111));
+    assertThat(storage.readAccount(FRANK).orElseThrow().getStorageRoot())
         .isNotEqualTo(Hash.EMPTY_TRIE_HASH);
     // s2: diverged — stale orphaned value retained; a later re-fetch step will correct it.
-    assertThat(h.readStorageSlot(FRANK, slot2)).hasValue(UInt256.valueOf(200));
+    assertThat(storage.readStorageSlot(FRANK, slot2)).hasValue(UInt256.valueOf(200));
   }
 
   /**
@@ -310,24 +324,27 @@ class SnapV2BlockAccessListApplierReorgTest {
    * </pre>
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void removesSlotOnCanonicalZeroWrite(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+  @MethodSource("storage")
+  void removesSlotOnCanonicalZeroWrite(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
     final UInt256 slot1 = UInt256.valueOf(1);
 
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
-    b.appendStale(
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
+    reorgBuilder.appendStale(
         block1.getHeader(),
-        b.balWithStorageChanges(FRANK, Map.of(slot1, UInt256.valueOf(200))),
+        reorgBuilder.balWithStorageChanges(FRANK, Map.of(slot1, UInt256.valueOf(200))),
         2L);
     final Block block2c =
-        b.appendCanonical(
-            block1.getHeader(), b.balWithStorageChanges(FRANK, Map.of(slot1, UInt256.ZERO)), 2L);
+        reorgBuilder.appendCanonical(
+            block1.getHeader(),
+            reorgBuilder.balWithStorageChanges(FRANK, Map.of(slot1, UInt256.ZERO)),
+            2L);
 
-    h.seedAccount(FRANK, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    h.seedStorageSlot(FRANK, slot1, UInt256.valueOf(200));
+    storage.seedAccount(FRANK, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedStorageSlot(FRANK, slot1, UInt256.valueOf(200));
 
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(
             block1.getHeader().getNumber() + 1,
             block2c.getHeader().getNumber(),
@@ -335,7 +352,7 @@ class SnapV2BlockAccessListApplierReorgTest {
             new DownloadedStorageRangeTracker())
         .commit();
 
-    assertThat(h.readStorageSlot(FRANK, slot1)).isEmpty();
+    assertThat(storage.readStorageSlot(FRANK, slot1)).isEmpty();
   }
 
   // ---------------------------------------------------------------------------
@@ -355,22 +372,26 @@ class SnapV2BlockAccessListApplierReorgTest {
    * Dave is deferred: his range will download the canonical value directly at the new pivot.
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void skipsAccountsOutsidePersistedRanges(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+  @MethodSource("storage")
+  void skipsAccountsOutsidePersistedRanges(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
 
-    b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    reorgBuilder.appendStale(
+        block1.getHeader(), reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
     final Block block2c =
-        b.appendCanonical(
-            block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(80), DAVE, Wei.of(70))), 2L);
+        reorgBuilder.appendCanonical(
+            block1.getHeader(),
+            reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(80), DAVE, Wei.of(70))),
+            2L);
 
-    h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
     // Only Alice's single-account range has been downloaded.
     final DownloadedAccountRangeTracker accountTracker = persistedAccounts(ALICE);
 
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(
             block1.getHeader().getNumber() + 1,
             block2c.getHeader().getNumber(),
@@ -378,8 +399,8 @@ class SnapV2BlockAccessListApplierReorgTest {
             new DownloadedStorageRangeTracker())
         .commit();
 
-    assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
-    assertThat(h.readAccount(DAVE).isPresent()).isFalse();
+    assertThat(storage.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(80));
+    assertThat(storage.readAccount(DAVE).isPresent()).isFalse();
   }
 
   // ---------------------------------------------------------------------------
@@ -397,23 +418,27 @@ class SnapV2BlockAccessListApplierReorgTest {
    * </pre>
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void appliesNonceAndCodeChanges(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
+  @MethodSource("storage")
+  void appliesNonceAndCodeChanges(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
     final Bytes code = Bytes.of(0x60, 0x80);
 
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
-    b.appendStale(block1.getHeader(), b.balWithBalanceTouches(ALICE, CHARLIE), 2L);
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
+    reorgBuilder.appendStale(
+        block1.getHeader(), reorgBuilder.balWithBalanceTouches(ALICE, CHARLIE), 2L);
     final Block block2c =
-        b.appendCanonical(
+        reorgBuilder.appendCanonical(
             block1.getHeader(),
-            b.merge(b.balWithNonceChange(ALICE, 7L), b.balWithCodeChange(CHARLIE, code)),
+            reorgBuilder.merge(
+                reorgBuilder.balWithNonceChange(ALICE, 7L),
+                reorgBuilder.balWithCodeChange(CHARLIE, code)),
             2L);
 
-    h.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    h.seedAccount(CHARLIE, 0L, Wei.of(1), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(ALICE, 0L, Wei.of(50), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    storage.seedAccount(CHARLIE, 0L, Wei.of(1), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
 
-    applier(h, b)
+    applier(storage, reorgBuilder)
         .applyBlockAccessLists(
             block1.getHeader().getNumber() + 1,
             block2c.getHeader().getNumber(),
@@ -422,14 +447,14 @@ class SnapV2BlockAccessListApplierReorgTest {
         .commit();
 
     // Alice: nonce applied, balance (untouched by the canonical BAL) preserved.
-    final PmtStateTrieAccountValue alice = h.readAccount(ALICE).orElseThrow();
+    final PmtStateTrieAccountValue alice = storage.readAccount(ALICE).orElseThrow();
     assertThat(alice.getNonce()).isEqualTo(7L);
     assertThat(alice.getBalance()).isEqualTo(Wei.of(50));
 
     // Charlie: code stored and code hash updated (the "deployed on both forks" case).
-    final PmtStateTrieAccountValue charlie = h.readAccount(CHARLIE).orElseThrow();
+    final PmtStateTrieAccountValue charlie = storage.readAccount(CHARLIE).orElseThrow();
     assertThat(charlie.getCodeHash()).isEqualTo(Hash.hash(code));
-    assertThat(h.readCode(CHARLIE)).hasValue(code);
+    assertThat(storage.readCode(CHARLIE)).hasValue(code);
   }
 
   // ---------------------------------------------------------------------------
@@ -448,22 +473,24 @@ class SnapV2BlockAccessListApplierReorgTest {
    * here firing against corrupted local data.
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void throwsOnBalHashMismatch(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+  @MethodSource("storage")
+  void throwsOnBalHashMismatch(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
 
-    b.appendStale(block1.getHeader(), b.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
+    reorgBuilder.appendStale(
+        block1.getHeader(), reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(50))), 2L);
     final Block block2c =
-        b.appendCanonicalWithMismatchedBal(
+        reorgBuilder.appendCanonicalWithMismatchedBal(
             block1.getHeader(),
-            b.balWithBalances(Map.of(ALICE, Wei.of(80))),
-            b.balWithBalances(Map.of(BOB, Wei.ONE)),
+            reorgBuilder.balWithBalances(Map.of(ALICE, Wei.of(80))),
+            reorgBuilder.balWithBalances(Map.of(BOB, Wei.ONE)),
             2L);
 
     assertThatThrownBy(
             () ->
-                applier(h, b)
+                applier(storage, reorgBuilder)
                     .applyBlockAccessLists(
                         block1.getHeader().getNumber() + 1,
                         block2c.getHeader().getNumber(),
@@ -484,17 +511,20 @@ class SnapV2BlockAccessListApplierReorgTest {
    * IllegalStateException from loadBal.
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void throwsWhenAppliedCanonicalBalIsLocallyPruned(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+  @MethodSource("storage")
+  void throwsWhenAppliedCanonicalBalIsLocallyPruned(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
 
-    b.appendStale(block1.getHeader(), b.emptyBal(), 2L);
-    final Block block2c = b.appendCanonicalWithoutStoringBal(block1.getHeader(), b.emptyBal(), 2L);
+    reorgBuilder.appendStale(block1.getHeader(), reorgBuilder.emptyBal(), 2L);
+    final Block block2c =
+        reorgBuilder.appendCanonicalWithoutStoringBal(
+            block1.getHeader(), reorgBuilder.emptyBal(), 2L);
 
     assertThatThrownBy(
             () ->
-                applier(h, b)
+                applier(storage, reorgBuilder)
                     .applyBlockAccessLists(
                         block1.getHeader().getNumber() + 1,
                         block2c.getHeader().getNumber(),
@@ -514,56 +544,46 @@ class SnapV2BlockAccessListApplierReorgTest {
    * Block 3's header is not available locally: IllegalStateException from loadBlockHeader.
    */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void throwsWhenApplyWindowExceedsLocalChain(final WorldStateStorageHarness h) {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
-    b.appendBlockWithBal(block1.getHeader(), b.emptyBal(), 2L);
+  @MethodSource("storage")
+  void throwsWhenApplyWindowExceedsLocalChain(final WorldStateStorageHarness storage) {
+    final ReorgBlockchainBuilder reorgBuilder = new ReorgBlockchainBuilder();
+    final Block block1 =
+        reorgBuilder.appendBlockWithBal(reorgBuilder.header(0), reorgBuilder.emptyBal(), 1L);
+    reorgBuilder.appendBlockWithBal(block1.getHeader(), reorgBuilder.emptyBal(), 2L);
 
     assertThatThrownBy(
             () ->
-                applier(h, b)
+                applier(storage, reorgBuilder)
                     .applyBlockAccessLists(
                         2L, 5L, fullAccountRange(), new DownloadedStorageRangeTracker()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("Missing block header");
   }
 
-  // ---------------------------------------------------------------------------
-  // Forest root pointer: persisted after BAL apply.
-  // ---------------------------------------------------------------------------
-
-  /**
-   * After applying BALs the Forest storage's tracked account-trie root pointer must equal the
-   * committed root returned by the batch — i.e. the applier persisted it atomically. The BAL
-   * includes a real balance change so the root actually moves; this ensures the assertion is not
-   * trivially satisfied by an unchanged root.
-   */
-  @ParameterizedTest(name = "{0}")
-  @MethodSource("harnesses")
-  void forestTrackedRootPersistedAfterBalApply(final WorldStateStorageHarness h) {
-    assumeTrue(h.isForest());
+  @Test
+  void forestTrackedRootPersistedAfterBalApply() {
+    final ForestWorldStateStorageHarness storage = new ForestWorldStateStorageHarness();
 
     // Seed ALICE into the trie and capture the pre-apply root.
-    h.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
-    final Bytes32 startRoot = h.commitAndGetAccountRoot();
+    storage.seedAccount(ALICE, 0L, Wei.of(100), Hash.EMPTY_TRIE_HASH, Hash.EMPTY);
+    final Bytes32 startRoot = storage.commitAndGetAccountRoot();
 
     // Block 1: balance change on ALICE so the account trie root moves.
     final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
     b.appendBlockWithBal(b.header(0), b.balWithBalances(Map.of(ALICE, Wei.of(80))), 1L);
     final SnapV2BlockAccessListApplier applier =
         new SnapV2BlockAccessListApplier(
-            h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
+            storage.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
 
     applier
         .applyBlockAccessLists(1L, 1L, fullAccountRange(), new DownloadedStorageRangeTracker())
         .commit();
-    final Bytes32 committed = h.commitAndGetAccountRoot();
+    final Bytes32 committedRoot = storage.commitAndGetAccountRoot();
 
     // The applier must persist the new root atomically.
-    assertThat(h.forestStorage().getAccountTrieRoot()).contains(committed);
+    assertThat(storage.forestStorage().getWorldStateRoot()).contains(committedRoot);
     // The root must have actually changed — otherwise the test is vacuous.
-    assertThat(committed).isNotEqualTo(startRoot);
+    assertThat(committedRoot).isNotEqualTo(startRoot);
   }
 
   // ---------------------------------------------------------------------------
@@ -571,9 +591,11 @@ class SnapV2BlockAccessListApplierReorgTest {
   // ---------------------------------------------------------------------------
 
   private static SnapV2BlockAccessListApplier applier(
-      final WorldStateStorageHarness h, final ReorgBlockchainBuilder b) {
+      final WorldStateStorageHarness storage, final ReorgBlockchainBuilder reorgBuilder) {
     return new SnapV2BlockAccessListApplier(
-        h.coordinator(), b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
+        storage.coordinator(),
+        reorgBuilder.blockchain(),
+        ReorgBlockchainBuilder.balEnabledSchedule());
   }
 
   private static DownloadedAccountRangeTracker fullAccountRange() {

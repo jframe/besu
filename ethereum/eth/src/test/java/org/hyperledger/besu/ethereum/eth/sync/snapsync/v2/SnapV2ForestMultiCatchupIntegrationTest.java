@@ -87,7 +87,7 @@ class SnapV2ForestMultiCatchupIntegrationTest {
     final Bytes32 rootAfterCatchup1 = h.commitAndGetAccountRoot();
 
     // Applier must have persisted the pointer.
-    assertThat(h.forestStorage().getAccountTrieRoot()).contains(rootAfterCatchup1);
+    assertThat(h.forestStorage().getWorldStateRoot()).contains(rootAfterCatchup1);
     // Root must have moved — otherwise the assertions below are vacuous.
     assertThat(rootAfterCatchup1).isNotEqualTo(rootAfterDownload1);
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(150));
@@ -103,7 +103,7 @@ class SnapV2ForestMultiCatchupIntegrationTest {
     applier.applyBlockAccessLists(2L, 2L, fullRange(), emptyStorage()).commit();
     final Bytes32 rootAfterCatchup2 = h.commitAndGetAccountRoot();
 
-    assertThat(h.forestStorage().getAccountTrieRoot()).contains(rootAfterCatchup2);
+    assertThat(h.forestStorage().getWorldStateRoot()).contains(rootAfterCatchup2);
     assertThat(rootAfterCatchup2).isNotEqualTo(rootAfterDownload2);
 
     // All three accounts readable at their correct post-catch-up values.
@@ -183,7 +183,7 @@ class SnapV2ForestMultiCatchupIntegrationTest {
     applier.applyBlockAccessLists(2L, 2L, fullRange(), emptyStorage()).commit();
     final Bytes32 rootFinal = h.commitAndGetAccountRoot();
 
-    assertThat(h.forestStorage().getAccountTrieRoot()).contains(rootFinal);
+    assertThat(h.forestStorage().getWorldStateRoot()).contains(rootFinal);
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(150));
     assertThat(h.readAccount(BOB).orElseThrow().getBalance()).isEqualTo(Wei.of(220));
     assertThat(h.readAccount(CHARLIE).orElseThrow().getBalance()).isEqualTo(Wei.of(300));
@@ -221,7 +221,7 @@ class SnapV2ForestMultiCatchupIntegrationTest {
     final Bytes32 finalRoot = h.commitAndGetAccountRoot();
 
     // The catch-up applied correctly: ALICE balance is 150, pointer is updated.
-    assertThat(h.forestStorage().getAccountTrieRoot()).contains(finalRoot);
+    assertThat(h.forestStorage().getWorldStateRoot()).contains(finalRoot);
     assertThat(finalRoot).isNotEqualTo(rootAfterDownload);
     assertThat(h.readAccount(ALICE).orElseThrow().getBalance()).isEqualTo(Wei.of(150));
   }

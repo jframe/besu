@@ -262,7 +262,7 @@ public class SnapV2BlockAccessListApplier {
       final WorldStateKeyValueStorage.Updater emptyUpdater = worldStateStorageCoordinator.updater();
       final Bytes32 currentRoot = Bytes32.wrap(accountTrie.getRootHash());
       applyForStrategy(
-          emptyUpdater, onBonsai -> {}, onForest -> onForest.putAccountTrieRoot(currentRoot));
+          emptyUpdater, onBonsai -> {}, onForest -> onForest.putWorldStateRoot(currentRoot));
       emptyUpdater.commit();
       return new ReorgRecoveryResult(Set.of(), Map.of());
     }
@@ -323,7 +323,7 @@ public class SnapV2BlockAccessListApplier {
     }
 
     final Bytes32 finalRoot = Bytes32.wrap(accountTrie.getRootHash());
-    applyForStrategy(updater, onBonsai -> {}, onForest -> onForest.putAccountTrieRoot(finalRoot));
+    applyForStrategy(updater, onBonsai -> {}, onForest -> onForest.putWorldStateRoot(finalRoot));
     stageAccountTrieChanges(accountTrie, updater);
     updater.commit();
 
@@ -488,7 +488,7 @@ public class SnapV2BlockAccessListApplier {
                     .getTrieNodeUnsafe(Bytes.EMPTY)
                     .map(node -> Bytes32.wrap(Hash.hash(node).getBytes()))
                     .orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH),
-            forest -> forest.getAccountTrieRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH));
+            forest -> forest.getWorldStateRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH));
 
     return new StoredMerklePatriciaTrie<>(accountNodeLoader, rootHash, identity, identity);
   }
@@ -763,7 +763,7 @@ public class SnapV2BlockAccessListApplier {
     void commit() {
       stageAccountTrieChanges(accountTrie, updater);
       final Bytes32 newRoot = Bytes32.wrap(accountTrie.getRootHash());
-      applyForStrategy(updater, onBonsai -> {}, onForest -> onForest.putAccountTrieRoot(newRoot));
+      applyForStrategy(updater, onBonsai -> {}, onForest -> onForest.putWorldStateRoot(newRoot));
       updater.commit();
     }
   }
