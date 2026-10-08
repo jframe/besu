@@ -18,7 +18,6 @@ import static org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncConfigurat
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator.applyForStrategy;
 
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.snap.RetryingGetAccountRangeFromPeerTask;
@@ -68,6 +67,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -151,7 +151,6 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       final PivotUpdateListener pivotUpdateListener,
       final SnapV2BlockAccessListApplier blockAccessListApplier,
       final SnapV2ReorgHealer reorgHealer,
-      final Blockchain blockchain,
       final EthContext ethContext,
       final long storagePipelineInFlightCapacity,
       final LongSupplier networkHeadSupplier) {
@@ -414,6 +413,8 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     pivotCatchupFuture = null;
     catchupDataFuture = null;
     pivotCatchupStartMillis = 0;
+    // Wake a catch-up finish waiting for the in-flight drain so it sees the cancellation.
+    notifyAll();
   }
 
   @Override
@@ -597,7 +598,9 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     try {
       dataFuture = catchupDataSource.fetch(currentPivotBlockHeader, newPivotBlockHeader);
     } catch (final RuntimeException e) {
-      abandonPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader, e);
+      if (abandonPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader, e)) {
+        checkCompletion(currentPivotBlockHeader);
+      }
       return;
     }
     synchronized (this) {
@@ -609,20 +612,56 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
             abandonIfCurrent(dataFuture, currentPivotBlockHeader, newPivotBlockHeader, error);
           }
         });
+    // The data future may complete on a network I/O thread; finishing blocks (drain wait, storage
+    // root refetch, BAL application), so it always runs on a service worker.
+    final Supplier<CompletableFuture<Void>> finish =
+        () -> {
+          finishPivotCatchup(
+              currentPivotBlockHeader, newPivotBlockHeader, dataFuture, dataFuture.join());
+          return CompletableFuture.completedFuture(null);
+        };
     CompletableFuture.allOf(inflightDrained, dataFuture)
-        .thenRun(
-            () ->
-                finishPivotCatchup(
-                    currentPivotBlockHeader, newPivotBlockHeader, dataFuture, dataFuture.join()));
+        .thenCompose(v -> ethContext.getScheduler().scheduleServiceTask(finish))
+        .whenComplete(
+            (v, error) -> {
+              if (error != null && !dataFuture.isCompletedExceptionally()) {
+                handleFinishStageFailure(
+                    dataFuture, currentPivotBlockHeader, newPivotBlockHeader, error);
+              }
+            });
   }
 
-  private synchronized void abandonIfCurrent(
+  /**
+   * The finish stage failed outside finishPivotCatchup's own handling (e.g. the worker could not be
+   * scheduled). Fails the download if this catch-up is still current so it can never stay in
+   * progress forever.
+   */
+  private synchronized void handleFinishStageFailure(
       final CompletableFuture<SnapV2ChainSegment> dataFuture,
       final BlockHeader current,
       final BlockHeader next,
       final Throwable error) {
-    if (catchupDataFuture == dataFuture) {
-      abandonPivotCatchup(current, next, error);
+    LOG.error(
+        "snap/2 pivot catch-up {} -> {} failed to finish",
+        current.getNumber(),
+        next.getNumber(),
+        error);
+    if (!isStateDownloadFinished() && catchupDataFuture == dataFuture) {
+      failPivotCatchup(error);
+    }
+  }
+
+  private void abandonIfCurrent(
+      final CompletableFuture<SnapV2ChainSegment> dataFuture,
+      final BlockHeader current,
+      final BlockHeader next,
+      final Throwable error) {
+    final boolean abandoned;
+    synchronized (this) {
+      abandoned = catchupDataFuture == dataFuture && abandonPivotCatchup(current, next, error);
+    }
+    if (abandoned) {
+      checkCompletion(current);
     }
   }
 
@@ -630,11 +669,15 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
    * Gives up on this catch-up without touching state: the world state stays on {@code current} and
    * the next pivot check starts a fresh catch-up. Fails the download after {@link
    * #MAX_CATCHUP_REFRESH_FAILURES} consecutive abandons.
+   *
+   * @return true if the catch-up was abandoned and the download continues on {@code current}; the
+   *     caller must then run {@link #checkCompletion} at {@code current} outside the monitor, since
+   *     the last tasks may have completed during the catch-up and nothing else would re-check.
    */
-  private synchronized void abandonPivotCatchup(
+  private synchronized boolean abandonPivotCatchup(
       final BlockHeader current, final BlockHeader next, final Throwable error) {
     if (isStateDownloadFinished()) {
-      return;
+      return false;
     }
     final Throwable cause =
         error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
@@ -657,7 +700,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
                   + attempt
                   + " consecutive times; last cause: "
                   + cause.getMessage()));
-      return;
+      return false;
     }
     LOG.warn(
         "snap/2 abandoned pivot catch-up {} -> {} (attempt {}/{}): {}; staying on pivot {}",
@@ -668,6 +711,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
         cause.getMessage(),
         current.getNumber());
     notifyAll();
+    return true;
   }
 
   private void logPivotCatchupSkipped(final BlockHeader newPivotBlockHeader, final String reason) {
@@ -682,101 +726,28 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     notifyAll();
   }
 
+  private enum FinishOutcome {
+    /** Stale, cancelled or failed: nothing further to do. */
+    NONE,
+    /** Abandoned without touching state: re-check completion at the current pivot. */
+    ABANDONED,
+    /** Applied and retargeted to the new pivot. */
+    APPLIED
+  }
+
   private void finishPivotCatchup(
       final BlockHeader currentPivotBlockHeader,
       final BlockHeader newPivotBlockHeader,
       final CompletableFuture<SnapV2ChainSegment> dataFuture,
       final SnapV2ChainSegment segment) {
-    synchronized (this) {
-      if (isStateDownloadFinished() || catchupDataFuture != dataFuture) {
-        return;
-      }
-      // Drain in-flight tasks started when dequeue was allowed while the data was being fetched.
-      while (!areAllInflightTasksComplete()) {
-        try {
-          wait();
-        } catch (final InterruptedException e) {
-          Thread.currentThread().interrupt();
-          failPivotCatchup(e);
-          return;
-        }
-      }
-      try {
-        final Map<Hash, Bytes32> correctRoots;
-        if (!segment.isReorg()) {
-          // Building the request loads and verifies local BALs synchronously; those failures are
-          // fatal and must propagate. Only the peer-dependent root refetch is abandonable.
-          final CompletableFuture<Map<Hash, Bytes32>> rootsFuture =
-              fetchCorrectStorageRoots(segment.canonicalHeaders(), newPivotBlockHeader);
-          final Map<Hash, Bytes32> fetchedRoots;
-          try {
-            fetchedRoots = rootsFuture.join();
-          } catch (final RuntimeException e) {
-            abandonPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader, e);
-            return;
-          }
-          final var batch =
-              blockAccessListApplier.applyBlockAccessLists(
-                  segment.canonicalHeaders(), accountRangeTracker, storageRangeTracker);
-          final int patched = blockAccessListApplier.patchStorageRoots(batch, fetchedRoots);
-          batch.commit();
-          LOG.debug(
-              "snap/2 pivot catch-up ({} -> {}): {} storage roots patched",
-              currentPivotBlockHeader.getNumber(),
-              newPivotBlockHeader.getNumber(),
-              patched);
-          correctRoots = fetchedRoots;
-        } else {
-          LOG.info(
-              "snap/2 chain reorg detected at pivot catch-up: current pivot {} ({}) is no longer on the canonical chain; recovering towards new pivot {} ({}) from common ancestor {}",
-              currentPivotBlockHeader.getNumber(),
-              currentPivotBlockHeader.getHash(),
-              newPivotBlockHeader.getNumber(),
-              newPivotBlockHeader.getHash(),
-              segment.commonAncestor().getNumber());
-          final ReorgRecoveryResult recovery =
-              reorgHealer.recoverFromReorg(segment, accountRangeTracker, storageRangeTracker);
-          final int purged =
-              purgeChildRequestsForAccounts(
-                  pendingStorageRequests,
-                  pendingLargeStorageRequests,
-                  pendingCodeRequests,
-                  accountRangeTracker,
-                  recovery.deletedAccounts());
-          LOG.info(
-              "snap/2 reorg recovery applied at pivot catch-up ({} -> {}): {} accounts deleted ({} queued child requests purged)",
-              currentPivotBlockHeader.getNumber(),
-              newPivotBlockHeader.getNumber(),
-              recovery.deletedAccounts().size(),
-              purged);
-          correctRoots = recovery.correctedStorageRoots();
-        }
-        retargetQueuedRequests(newPivotBlockHeader, correctRoots);
-        snapSyncState.setCurrentHeader(newPivotBlockHeader);
-      } catch (final Throwable e) {
-        LOG.error(
-            "snap/2 pivot catch-up failed while applying BALs from pivot {} to {}",
-            currentPivotBlockHeader.getNumber(),
-            newPivotBlockHeader.getNumber(),
-            e);
-        failPivotCatchup(e);
-        return;
-      }
-      pivotCatchupFuture = null;
-      catchupDataFuture = null;
-      pivotCatchupStartMillis = 0;
-      consecutiveCatchupAbandons = 0;
-      if (catchupTimingContext != null) {
-        catchupTimingContext.stopTimer();
-        catchupTimingContext = null;
-      }
-      LOG.info(
-          "snap/2 pivot catch-up complete: {} -> {}, ranges completed={}, pending={}",
-          currentPivotBlockHeader.getNumber(),
-          newPivotBlockHeader.getNumber(),
-          accountRangeTracker.completedRangeCount(),
-          accountRangeTracker.pendingRangeCount());
-      notifyAll();
+    final FinishOutcome outcome =
+        applyPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader, dataFuture, segment);
+    if (outcome == FinishOutcome.ABANDONED) {
+      checkCompletion(currentPivotBlockHeader);
+      return;
+    }
+    if (outcome != FinishOutcome.APPLIED) {
+      return;
     }
     if (pivotUpdateListener != null) {
       try {
@@ -789,6 +760,110 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       }
     }
     checkCompletion(newPivotBlockHeader);
+  }
+
+  private boolean isCatchupStale(final CompletableFuture<SnapV2ChainSegment> dataFuture) {
+    return isStateDownloadFinished() || catchupDataFuture != dataFuture;
+  }
+
+  private synchronized FinishOutcome applyPivotCatchup(
+      final BlockHeader currentPivotBlockHeader,
+      final BlockHeader newPivotBlockHeader,
+      final CompletableFuture<SnapV2ChainSegment> dataFuture,
+      final SnapV2ChainSegment segment) {
+    // Drain in-flight tasks started when dequeue was allowed while the data was being fetched.
+    // Re-checked on every wake-up: a cancellation empties the queues, which would otherwise look
+    // like a completed drain.
+    while (!isCatchupStale(dataFuture) && !areAllInflightTasksComplete()) {
+      try {
+        wait();
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        failPivotCatchup(e);
+        return FinishOutcome.NONE;
+      }
+    }
+    if (isCatchupStale(dataFuture)) {
+      return FinishOutcome.NONE;
+    }
+    try {
+      final Map<Hash, Bytes32> correctRoots;
+      if (!segment.isReorg()) {
+        // Building the request loads and verifies local BALs synchronously; those failures are
+        // fatal and must propagate. Only the peer-dependent root refetch is abandonable.
+        final CompletableFuture<Map<Hash, Bytes32>> rootsFuture =
+            fetchCorrectStorageRoots(segment.canonicalHeaders(), newPivotBlockHeader);
+        final Map<Hash, Bytes32> fetchedRoots;
+        try {
+          fetchedRoots = rootsFuture.join();
+        } catch (final RuntimeException e) {
+          return abandonPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader, e)
+              ? FinishOutcome.ABANDONED
+              : FinishOutcome.NONE;
+        }
+        final var batch =
+            blockAccessListApplier.applyBlockAccessLists(
+                segment.canonicalHeaders(), accountRangeTracker, storageRangeTracker);
+        final int patched = blockAccessListApplier.patchStorageRoots(batch, fetchedRoots);
+        batch.commit();
+        LOG.debug(
+            "snap/2 pivot catch-up ({} -> {}): {} storage roots patched",
+            currentPivotBlockHeader.getNumber(),
+            newPivotBlockHeader.getNumber(),
+            patched);
+        correctRoots = fetchedRoots;
+      } else {
+        LOG.info(
+            "snap/2 chain reorg detected at pivot catch-up: current pivot {} ({}) is no longer on the canonical chain; recovering towards new pivot {} ({}) from common ancestor {}",
+            currentPivotBlockHeader.getNumber(),
+            currentPivotBlockHeader.getHash(),
+            newPivotBlockHeader.getNumber(),
+            newPivotBlockHeader.getHash(),
+            segment.commonAncestor().getNumber());
+        final ReorgRecoveryResult recovery =
+            reorgHealer.recoverFromReorg(segment, accountRangeTracker, storageRangeTracker);
+        final int purged =
+            purgeChildRequestsForAccounts(
+                pendingStorageRequests,
+                pendingLargeStorageRequests,
+                pendingCodeRequests,
+                accountRangeTracker,
+                recovery.deletedAccounts());
+        LOG.info(
+            "snap/2 reorg recovery applied at pivot catch-up ({} -> {}): {} accounts deleted ({} queued child requests purged)",
+            currentPivotBlockHeader.getNumber(),
+            newPivotBlockHeader.getNumber(),
+            recovery.deletedAccounts().size(),
+            purged);
+        correctRoots = recovery.correctedStorageRoots();
+      }
+      retargetQueuedRequests(newPivotBlockHeader, correctRoots);
+      snapSyncState.setCurrentHeader(newPivotBlockHeader);
+    } catch (final Throwable e) {
+      LOG.error(
+          "snap/2 pivot catch-up failed while applying BALs from pivot {} to {}",
+          currentPivotBlockHeader.getNumber(),
+          newPivotBlockHeader.getNumber(),
+          e);
+      failPivotCatchup(e);
+      return FinishOutcome.NONE;
+    }
+    pivotCatchupFuture = null;
+    catchupDataFuture = null;
+    pivotCatchupStartMillis = 0;
+    consecutiveCatchupAbandons = 0;
+    if (catchupTimingContext != null) {
+      catchupTimingContext.stopTimer();
+      catchupTimingContext = null;
+    }
+    LOG.info(
+        "snap/2 pivot catch-up complete: {} -> {}, ranges completed={}, pending={}",
+        currentPivotBlockHeader.getNumber(),
+        newPivotBlockHeader.getNumber(),
+        accountRangeTracker.completedRangeCount(),
+        accountRangeTracker.pendingRangeCount());
+    notifyAll();
+    return FinishOutcome.APPLIED;
   }
 
   /** Storage roots, at the new pivot, of pending accounts whose storage the gap's BALs touched. */

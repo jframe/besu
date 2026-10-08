@@ -216,7 +216,6 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
               pivotUpdateListener,
               blockAccessListApplier,
               reorgHealer,
-              blockchain,
               ethContext,
               storagePipelineInFlightCapacity,
               networkHeadSupplier);
