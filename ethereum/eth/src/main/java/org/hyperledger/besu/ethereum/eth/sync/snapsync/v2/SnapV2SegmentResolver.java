@@ -43,7 +43,9 @@ final class SnapV2SegmentResolver {
    *     contiguous
    * @param oldChainLookup old-chain header lookup by hash (local ancestry)
    * @return the segment, or empty if {@code canonicalDescending} does not yet reach the ancestor
-   * @throws InvalidCatchupHeadersException if the headers do not form a chain from {@code newPivot}
+   * @throws InvalidCatchupHeadersException if the headers do not form a chain from {@code
+   *     newPivot}, or {@code newPivot} is the old pivot or one of its ancestors (not above the old
+   *     chain)
    * @throws ReorgUnrecoverableException if no ancestor lies within {@link #MAX_ANCESTOR_WALK}
    *     blocks of the old pivot, or an old-chain parent is unknown
    */
@@ -66,6 +68,14 @@ final class SnapV2SegmentResolver {
         oldCursor = parentOf(oldCursor, oldChainLookup);
       }
       if (oldCursor.getHash().equals(canonical.getHash())) {
+        if (i == 0) {
+          throw new InvalidCatchupHeadersException(
+              "snap/2 catch-up new pivot "
+                  + newPivot.getNumber()
+                  + " is not above the old chain (old pivot "
+                  + oldPivot.getNumber()
+                  + ")");
+        }
         final List<BlockHeader> canonicalAscending =
             new ArrayList<>(canonicalDescending.subList(0, i));
         Collections.reverse(canonicalAscending);

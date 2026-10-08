@@ -116,6 +116,23 @@ class SnapV2SegmentResolverTest {
   }
 
   @Test
+  void rejectsNewPivotEqualToOldPivot() {
+    final BlockHeader block5 = b.appendCanonicalChain(b.header(0), 1L, 5);
+
+    assertThatThrownBy(() -> resolve(block5, block5, descendingFrom(block5)))
+        .isInstanceOf(SnapV2SegmentResolver.InvalidCatchupHeadersException.class);
+  }
+
+  @Test
+  void rejectsNewPivotThatIsAncestorOfOldPivot() {
+    final BlockHeader block5 = b.appendCanonicalChain(b.header(0), 1L, 5);
+    final BlockHeader block3 = b.header(3);
+
+    assertThatThrownBy(() -> resolve(block5, block3, descendingFrom(block3)))
+        .isInstanceOf(SnapV2SegmentResolver.InvalidCatchupHeadersException.class);
+  }
+
+  @Test
   void rejectsListNotStartingAtNewPivot() {
     final BlockHeader block5 = b.appendCanonicalChain(b.header(0), 1L, 5);
     final List<BlockHeader> wrongStart = List.of(b.header(4), b.header(3));
