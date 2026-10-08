@@ -15,8 +15,12 @@
 package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
@@ -27,6 +31,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedStorageRangeTra
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncMetricsManager;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncProcessState;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.context.SnapSyncStatePersistenceManager;
+import org.hyperledger.besu.ethereum.eth.sync.worldstate.WorldStateDownloaderException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
@@ -233,6 +238,26 @@ class SnapV2WorldDownloadStateCatchupTest {
     state.startPivotCatchup(b.header(7));
 
     assertThat(state.getDownloadFuture()).isCompletedExceptionally();
+    assertThatThrownBy(() -> state.getDownloadFuture().join())
+        .hasCauseInstanceOf(WorldStateDownloaderException.class)
+        .hasMessageContaining("3 consecutive");
+  }
+
+  @Test
+  void balHashMismatchIsFatalOnFirstAttempt() {
+    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
+    final Block block2 =
+        b.appendCanonicalWithMismatchedBal(
+            block1.getHeader(),
+            b.balWithBalances(Map.of(Address.fromHexString("0xaa"), Wei.of(80))),
+            b.balWithBalances(Map.of(Address.fromHexString("0xbb"), Wei.ONE)),
+            2L);
+    final RecordingState state = new RecordingState(block1.getHeader(), chainSource());
+
+    state.startPivotCatchup(block2.getHeader());
+
+    assertThat(state.getDownloadFuture()).isCompletedExceptionally();
+    assertThat(events).doesNotContain("pivotUpdated:2");
   }
 
   @Test

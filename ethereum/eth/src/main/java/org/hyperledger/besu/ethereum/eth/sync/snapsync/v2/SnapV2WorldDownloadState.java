@@ -664,10 +664,13 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       try {
         final Map<Hash, Bytes32> correctRoots;
         if (!segment.isReorg()) {
+          // Building the request loads and verifies local BALs synchronously; those failures are
+          // fatal and must propagate. Only the peer-dependent root refetch is abandonable.
+          final CompletableFuture<Map<Hash, Bytes32>> rootsFuture =
+              fetchCorrectStorageRoots(segment.canonicalHeaders(), newPivotBlockHeader);
           final Map<Hash, Bytes32> fetchedRoots;
           try {
-            fetchedRoots =
-                fetchCorrectStorageRoots(segment.canonicalHeaders(), newPivotBlockHeader).join();
+            fetchedRoots = rootsFuture.join();
           } catch (final RuntimeException e) {
             abandonPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader, e);
             return;
