@@ -31,12 +31,14 @@ import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +56,13 @@ public class SnapV2CatchupFetcher implements SnapV2CatchupDataSource {
   static final int BAL_REQUEST_WINDOW = 16;
   static final int HEADER_BATCH = SynchronizerConfiguration.DEFAULT_DOWNLOADER_HEADER_REQUEST_SIZE;
 
+  /**
+   * Overall deadline for one catch-up fetch. The pivot is only ~96s (128 - 120 blocks) inside the
+   * peers' serving window when a catch-up starts, so a fetch far slower than this is pointless;
+   * timing out turns it into an abandon and a fresh catch-up.
+   */
+  static final Duration CATCHUP_FETCH_TIMEOUT = Duration.ofMinutes(2);
+
   /** Fetches up to {@code count} headers starting at {@code startHash}, descending. */
   @FunctionalInterface
   interface HeaderSource {
@@ -70,6 +79,7 @@ public class SnapV2CatchupFetcher implements SnapV2CatchupDataSource {
   private final HeaderSource headerSource;
   private final BalSource balSource;
   private final DefaultBlockchain blockchain;
+  private final Duration fetchTimeout;
 
   /** Old-chain headers at or below the current pivot (most recent MAX_ANCESTOR_WALK + 1). */
   private final Map<Hash, BlockHeader> ancestry = new ConcurrentHashMap<>();
@@ -109,16 +119,19 @@ public class SnapV2CatchupFetcher implements SnapV2CatchupDataSource {
                     }),
         headers ->
             new RetryingGetBlockAccessListsFromPeerTask(ethContext, headers, metricsSystem).run(),
-        blockchain);
+        blockchain,
+        CATCHUP_FETCH_TIMEOUT);
   }
 
   SnapV2CatchupFetcher(
       final HeaderSource headerSource,
       final BalSource balSource,
-      final DefaultBlockchain blockchain) {
+      final DefaultBlockchain blockchain,
+      final Duration fetchTimeout) {
     this.headerSource = headerSource;
     this.balSource = balSource;
     this.blockchain = blockchain;
+    this.fetchTimeout = fetchTimeout;
   }
 
   @Override
@@ -139,7 +152,8 @@ public class SnapV2CatchupFetcher implements SnapV2CatchupDataSource {
             segment -> {
               rememberAncestry(segment.canonicalHeaders(), segment.newPivot());
               return segment;
-            });
+            })
+        .orTimeout(fetchTimeout.toMillis(), TimeUnit.MILLISECONDS);
   }
 
   /**
@@ -152,8 +166,11 @@ public class SnapV2CatchupFetcher implements SnapV2CatchupDataSource {
       return CompletableFuture.completedFuture(null);
     }
     final int count = (int) Math.min(MAX_ANCESTOR_WALK, pivot.getNumber());
-    return headerSource
-        .headersDescending(pivot.getParentHash(), pivot.getNumber() - 1, count)
+    // Started from a completed future so a synchronous throw (e.g. rejected at shutdown) is caught.
+    return CompletableFuture.<Void>completedFuture(null)
+        .thenCompose(
+            v ->
+                headerSource.headersDescending(pivot.getParentHash(), pivot.getNumber() - 1, count))
         .thenCompose(
             headers -> {
               final List<BlockHeader> chain = new ArrayList<>(List.of(pivot));

@@ -21,6 +21,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import org.hyperledger.besu.ethereum.ProtocolContext;
@@ -165,7 +166,8 @@ class SnapSyncChainDownloaderSnapV2Test {
   }
 
   @Test
-  void pivotUpdatesDuringTheInitialCycleRunOneContinuationCycleToTheLatestPivot() throws Exception {
+  void pivotUpdatesReportedBeforeTheCycleCompletesRunOneContinuationCycleToTheLatestPivot()
+      throws Exception {
     lenient().when(pipelineFactory.isSnap2Enabled()).thenReturn(true);
     final BlockHeader intermediatePivot = header(1500);
     final BlockHeader latestPivot = header(2000);
@@ -176,6 +178,7 @@ class SnapSyncChainDownloaderSnapV2Test {
     downloader.onWorldStateHealFinished();
     downloader.start().get(5, TimeUnit.SECONDS);
 
+    verify(pipelineFactory, times(2)).createBlockAccessListDownloadPipeline(anyLong(), any());
     verify(pipelineFactory).createBlockAccessListDownloadPipeline(anyLong(), eq(latestPivot));
     verify(pipelineFactory, never())
         .createBlockAccessListDownloadPipeline(anyLong(), eq(intermediatePivot));

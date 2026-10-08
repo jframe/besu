@@ -24,12 +24,15 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.SyncBlockAccessList;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.junit.jupiter.api.Test;
 
@@ -44,10 +47,16 @@ class SnapV2CatchupFetcherTest {
   private final List<Hash> requestedBals = new CopyOnWriteArrayList<>();
   private final List<SnapV2CatchupFetcher.HeaderSource> headerOverride = new ArrayList<>();
   private boolean failBals = false;
+  private final List<long[]> headerRequests = new CopyOnWriteArrayList<>();
 
   private SnapV2CatchupFetcher fetcher() {
+    return fetcher(SnapV2CatchupFetcher.CATCHUP_FETCH_TIMEOUT);
+  }
+
+  private SnapV2CatchupFetcher fetcher(final Duration fetchTimeout) {
     final SnapV2CatchupFetcher.HeaderSource headers =
         (startHash, startNumber, count) -> {
+          headerRequests.add(new long[] {startNumber, count});
           if (!headerOverride.isEmpty()) {
             return headerOverride.getFirst().headersDescending(startHash, startNumber, count);
           }
@@ -78,7 +87,7 @@ class SnapV2CatchupFetcherTest {
           }
           return CompletableFuture.completedFuture(out);
         };
-    return new SnapV2CatchupFetcher(headers, bals, local);
+    return new SnapV2CatchupFetcher(headers, bals, local, fetchTimeout);
   }
 
   private static <T> T get(final CompletableFuture<T> f) throws Exception {
@@ -89,6 +98,8 @@ class SnapV2CatchupFetcherTest {
   void sameChainSegmentPersistsBalsButNotHeaders() throws Exception {
     final BlockHeader p1 = remote.appendCanonicalChain(remote.header(0), 1L, 5);
     final BlockHeader p0 = remote.header(3);
+    final long localHeadBefore = local.getChainHeadBlockNumber();
+    final Hash localHeadHashBefore = local.getChainHeadHash();
     final SnapV2CatchupFetcher fetcher = fetcher();
     get(fetcher.prefetchAncestry(p0));
 
@@ -102,6 +113,11 @@ class SnapV2CatchupFetcherTest {
     // Gap headers must never reach blockchain storage.
     assertThat(local.getBlockHeader(p1.getHash())).isEmpty();
     assertThat(local.getBlockHeader(remote.header(4).getHash())).isEmpty();
+    // ...nor the canonical index or the chain head.
+    assertThat(local.getBlockHashByNumber(4)).isEmpty();
+    assertThat(local.getBlockHashByNumber(5)).isEmpty();
+    assertThat(local.getChainHeadBlockNumber()).isEqualTo(localHeadBefore);
+    assertThat(local.getChainHeadHash()).isEqualTo(localHeadHashBefore);
   }
 
   @Test
@@ -185,6 +201,34 @@ class SnapV2CatchupFetcherTest {
             .prefetchAncestry(p0)); // pivot 3 < MAX_ANCESTOR_WALK: must not fail or go negative
 
     assertThat(local.getBlockAccessList(remote.header(1).getHash())).isPresent();
+    assertThat(headerRequests).hasSize(1);
+    assertThat(headerRequests.getFirst()[0]).isEqualTo(2L).isGreaterThanOrEqualTo(0L);
+    assertThat(headerRequests.getFirst()[1]).isEqualTo(3L);
+  }
+
+  @Test
+  void prefetchSwallowsASynchronouslyThrowingHeaderSource() throws Exception {
+    final BlockHeader p0 = remote.appendCanonicalChain(remote.header(0), 1L, 3);
+    headerOverride.add(
+        (startHash, startNumber, count) -> {
+          throw new RejectedExecutionException("scheduler shut down");
+        });
+
+    final CompletableFuture<Void> prefetch = fetcher().prefetchAncestry(p0);
+
+    assertThat(get(prefetch)).isNull();
+    assertThat(prefetch).isCompleted().isNotCompletedExceptionally();
+  }
+
+  @Test
+  void slowFetchTimesOut() {
+    final BlockHeader p1 = remote.appendCanonicalChain(remote.header(0), 1L, 5);
+    headerOverride.add((startHash, startNumber, count) -> new CompletableFuture<>()); // never
+
+    final CompletableFuture<SnapV2ChainSegment> fetch =
+        fetcher(Duration.ofMillis(50)).fetch(remote.header(2), p1);
+
+    assertThatThrownBy(() -> get(fetch)).hasCauseInstanceOf(TimeoutException.class);
   }
 
   @Test
