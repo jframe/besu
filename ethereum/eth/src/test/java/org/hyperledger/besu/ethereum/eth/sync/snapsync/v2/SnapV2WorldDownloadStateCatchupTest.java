@@ -16,11 +16,14 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthProtocolManagerTestBuilder;
 import org.hyperledger.besu.ethereum.eth.sync.common.PivotUpdateListener;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedAccountRangeTracker;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedStorageRangeTracker;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncMetricsManager;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncProcessState;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.context.SnapSyncStatePersistenceManager;
@@ -33,9 +36,13 @@ import org.hyperledger.besu.services.tasks.InMemoryTasksPriorityQueues;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
 
 class SnapV2WorldDownloadStateCatchupTest {
@@ -56,9 +63,34 @@ class SnapV2WorldDownloadStateCatchupTest {
     return (current, next) -> CompletableFuture.completedFuture(b.segment(current, next));
   }
 
+  final AtomicInteger applyCalls = new AtomicInteger();
+
+  /** Applier that counts BAL applications so tests can prove the world state was not touched. */
+  class CountingApplier extends SnapV2BlockAccessListApplier {
+    CountingApplier() {
+      super(coordinator, b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule());
+    }
+
+    @Override
+    public BatchState applyBlockAccessLists(
+        final List<BlockHeader> headers,
+        final DownloadedAccountRangeTracker accountRangeTracker,
+        final DownloadedStorageRangeTracker storageRangeTracker) {
+      applyCalls.incrementAndGet();
+      return super.applyBlockAccessLists(headers, accountRangeTracker, storageRangeTracker);
+    }
+  }
+
   /** Records checkCompletion calls so ordering against onPivotUpdated can be asserted. */
   class RecordingState extends SnapV2WorldDownloadState {
     RecordingState(final BlockHeader pivot, final SnapV2CatchupDataSource source) {
+      this(pivot, source, pivotListener);
+    }
+
+    RecordingState(
+        final BlockHeader pivot,
+        final SnapV2CatchupDataSource source,
+        final PivotUpdateListener listener) {
       super(
           coordinator,
           new SnapSyncStatePersistenceManager(new InMemoryKeyValueStorageProvider()),
@@ -71,9 +103,8 @@ class SnapV2WorldDownloadStateCatchupTest {
           SyncDurationMetrics.NO_OP_SYNC_DURATION_METRICS,
           null,
           source,
-          pivotListener,
-          new SnapV2BlockAccessListApplier(
-              coordinator, b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule()),
+          listener,
+          new CountingApplier(),
           new SnapV2ReorgHealer(
               b.blockchain(),
               coordinator,
@@ -112,5 +143,133 @@ class SnapV2WorldDownloadStateCatchupTest {
     pending.complete(b.segment(b.header(3), p1));
 
     assertThat(events).doesNotContain("pivotUpdated:5");
+  }
+
+  /** State whose storage-root refetch always fails, as when peers no longer serve the pivot. */
+  class RootFetchFailingState extends RecordingState {
+    RootFetchFailingState(final BlockHeader pivot, final SnapV2CatchupDataSource source) {
+      super(pivot, source);
+    }
+
+    @Override
+    CompletableFuture<Map<Hash, Bytes32>> fetchCorrectStorageRoots(
+        final List<BlockHeader> headers, final BlockHeader newPivot) {
+      return CompletableFuture.failedFuture(new IllegalStateException("peers gone"));
+    }
+  }
+
+  static SnapV2CatchupDataSource failingSource() {
+    return (c, n) -> CompletableFuture.failedFuture(new IllegalStateException("no peers"));
+  }
+
+  @Test
+  void fetchFailureAbandonsWithoutFailingTheDownload() {
+    final BlockHeader p1 = b.appendCanonicalChain(b.header(0), 1L, 5);
+    final RecordingState state = new RecordingState(b.header(3), failingSource());
+
+    state.startPivotCatchup(p1);
+
+    assertThat(state.getDownloadFuture()).isNotDone();
+    assertThat(state.isPivotCatchupInProgress()).isFalse();
+    assertThat(events).doesNotContain("pivotUpdated:5");
+  }
+
+  @Test
+  void dataSourceThrowingAbandonsWithoutFailingTheDownload() {
+    final BlockHeader p1 = b.appendCanonicalChain(b.header(0), 1L, 5);
+    final RecordingState state =
+        new RecordingState(
+            b.header(3),
+            (c, n) -> {
+              throw new IllegalStateException("boom");
+            });
+
+    state.startPivotCatchup(p1);
+
+    assertThat(state.getDownloadFuture()).isNotDone();
+    assertThat(state.isPivotCatchupInProgress()).isFalse();
+  }
+
+  @Test
+  void abandonedCatchupCanBeRetriedAndSucceed() {
+    final BlockHeader p2 = b.appendCanonicalChain(b.header(0), 1L, 6);
+    final AtomicInteger calls = new AtomicInteger();
+    final SnapV2CatchupDataSource flaky =
+        (c, n) ->
+            calls.getAndIncrement() == 0
+                ? CompletableFuture.failedFuture(new IllegalStateException("no peers"))
+                : CompletableFuture.completedFuture(b.segment(c, n));
+    final RecordingState state = new RecordingState(b.header(3), flaky);
+
+    state.startPivotCatchup(b.header(5));
+    state.startPivotCatchup(p2);
+
+    assertThat(events).contains("pivotUpdated:6");
+    assertThat(state.getDownloadFuture()).isNotDone();
+  }
+
+  @Test
+  void rootFetchFailureAbandonsBeforeApplyingBals() {
+    final BlockHeader p1 = b.appendCanonicalChain(b.header(0), 1L, 5);
+    final RootFetchFailingState state = new RootFetchFailingState(b.header(3), chainSource());
+
+    state.startPivotCatchup(p1);
+
+    assertThat(applyCalls).hasValue(0);
+    assertThat(state.isPivotCatchupInProgress()).isFalse();
+    assertThat(state.getDownloadFuture()).isNotDone();
+    assertThat(events).doesNotContain("pivotUpdated:5");
+    assertThat(events).doesNotContain("checkCompletion:5");
+  }
+
+  @Test
+  void threeConsecutiveAbandonsFailTheDownload() {
+    b.appendCanonicalChain(b.header(0), 1L, 8);
+    final RecordingState state = new RecordingState(b.header(3), failingSource());
+
+    state.startPivotCatchup(b.header(5));
+    state.startPivotCatchup(b.header(6));
+    assertThat(state.getDownloadFuture()).isNotDone();
+    state.startPivotCatchup(b.header(7));
+
+    assertThat(state.getDownloadFuture()).isCompletedExceptionally();
+  }
+
+  @Test
+  void successResetsTheAbandonCounter() {
+    b.appendCanonicalChain(b.header(0), 1L, 10);
+    final AtomicBoolean fail = new AtomicBoolean(true);
+    final SnapV2CatchupDataSource source =
+        (c, n) ->
+            fail.get()
+                ? CompletableFuture.failedFuture(new IllegalStateException("no peers"))
+                : CompletableFuture.completedFuture(b.segment(c, n));
+    final RecordingState state = new RecordingState(b.header(3), source);
+
+    state.startPivotCatchup(b.header(4)); // abandon 1
+    state.startPivotCatchup(b.header(5)); // abandon 2
+    fail.set(false);
+    state.startPivotCatchup(b.header(6)); // success, counter reset
+    fail.set(true);
+    state.startPivotCatchup(b.header(7)); // abandon 1
+    state.startPivotCatchup(b.header(8)); // abandon 2
+
+    assertThat(state.getDownloadFuture()).isNotDone();
+  }
+
+  @Test
+  void pivotListenerFailureStillRunsCompletionCheck() {
+    final BlockHeader p1 = b.appendCanonicalChain(b.header(0), 1L, 5);
+    final RecordingState state =
+        new RecordingState(
+            b.header(3),
+            chainSource(),
+            h -> {
+              throw new IllegalStateException("listener broke");
+            });
+
+    state.startPivotCatchup(p1);
+
+    assertThat(events).contains("checkCompletion:5");
   }
 }

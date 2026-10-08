@@ -44,6 +44,8 @@ import org.hyperledger.besu.ethereum.trie.common.StateRootMismatchException;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
+import org.hyperledger.besu.plugin.services.metrics.Counter;
+import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.services.tasks.InMemoryTaskQueue;
 import org.hyperledger.besu.services.tasks.InMemoryTasksPriorityQueues;
@@ -58,6 +60,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -119,6 +122,13 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
   private volatile ScheduledFuture<?> heartbeatFuture;
   private volatile long lastCompletionDebugLogMillis;
   private volatile long pivotCatchupStartMillis;
+
+  static final int MAX_CATCHUP_REFRESH_FAILURES = 3;
+
+  private final Counter abandonedCatchupsCounter;
+  private final OperationTimer catchupDurationTimer;
+  private OperationTimer.TimingContext catchupTimingContext;
+  private int consecutiveCatchupAbandons;
   private boolean accountRequestsPaused;
 
   public SnapV2WorldDownloadState(
@@ -204,6 +214,20 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
             "snap_v2_world_state_pending_ranges_current",
             "Number of pending account ranges for snap/2 world state download",
             accountRangeTracker::pendingRangeCount);
+    abandonedCatchupsCounter =
+        metricsManager
+            .getMetricsSystem()
+            .createCounter(
+                BesuMetricCategory.SYNCHRONIZER,
+                "snap_v2_pivot_catchup_abandoned_total",
+                "Number of snap/2 pivot catch-ups abandoned without failing the download");
+    catchupDurationTimer =
+        metricsManager
+            .getMetricsSystem()
+            .createSimpleTimer(
+                BesuMetricCategory.SYNCHRONIZER,
+                "snap_v2_pivot_catchup_duration",
+                "Duration of successful snap/2 pivot catch-ups");
     syncDurationMetrics.startTimer(
         SyncDurationMetrics.Labels.SNAP_INITIAL_WORLD_STATE_DOWNLOAD_DURATION);
   }
@@ -417,7 +441,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     return internalFuture.isDone();
   }
 
-  private boolean isPivotCatchupInProgress() {
+  boolean isPivotCatchupInProgress() {
     return pivotCatchupFuture != null;
   }
 
@@ -491,6 +515,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
 
   public void startPivotCatchup(final BlockHeader newPivotBlockHeader) {
     final BlockHeader currentPivotBlockHeader;
+    final CompletableFuture<Void> inflightDrained;
     synchronized (this) {
       if (isStateDownloadFinished()) {
         logPivotCatchupSkipped(newPivotBlockHeader, "download is already finished");
@@ -524,18 +549,15 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
           pendingCodeRequests.outstandingTaskCount());
       pivotCatchupFuture = new CompletableFuture<>();
       pivotCatchupStartMillis = System.currentTimeMillis();
-      maybeCompleteInFlightTasks(); // handle case of 0 in-flight tasks when catchup starts
-    }
-
-    final CompletableFuture<Void> inflightDrained;
-    synchronized (this) {
+      catchupTimingContext = catchupDurationTimer.startTimer();
       inflightDrained = pivotCatchupFuture;
+      maybeCompleteInFlightTasks(); // handle case of 0 in-flight tasks when catchup starts
     }
     final CompletableFuture<SnapV2ChainSegment> dataFuture;
     try {
       dataFuture = catchupDataSource.fetch(currentPivotBlockHeader, newPivotBlockHeader);
     } catch (final RuntimeException e) {
-      failPivotCatchup(e); // replaced by abandon in Task 6
+      abandonPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader, e);
       return;
     }
     synchronized (this) {
@@ -544,7 +566,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     dataFuture.whenComplete(
         (segment, error) -> {
           if (error != null) {
-            failCatchupIfCurrent(dataFuture, error); // replaced by abandon in Task 6
+            abandonIfCurrent(dataFuture, currentPivotBlockHeader, newPivotBlockHeader, error);
           }
         });
     CompletableFuture.allOf(inflightDrained, dataFuture)
@@ -554,11 +576,58 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
                     currentPivotBlockHeader, newPivotBlockHeader, dataFuture, dataFuture.join()));
   }
 
-  private synchronized void failCatchupIfCurrent(
-      final CompletableFuture<SnapV2ChainSegment> dataFuture, final Throwable error) {
-    if (catchupDataFuture == dataFuture && !isStateDownloadFinished()) {
-      failPivotCatchup(error);
+  private synchronized void abandonIfCurrent(
+      final CompletableFuture<SnapV2ChainSegment> dataFuture,
+      final BlockHeader current,
+      final BlockHeader next,
+      final Throwable error) {
+    if (catchupDataFuture == dataFuture) {
+      abandonPivotCatchup(current, next, error);
     }
+  }
+
+  /**
+   * Gives up on this catch-up without touching state: the world state stays on {@code current} and
+   * the next pivot check starts a fresh catch-up. Fails the download after {@link
+   * #MAX_CATCHUP_REFRESH_FAILURES} consecutive abandons.
+   */
+  private synchronized void abandonPivotCatchup(
+      final BlockHeader current, final BlockHeader next, final Throwable error) {
+    if (isStateDownloadFinished()) {
+      return;
+    }
+    final Throwable cause =
+        error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
+    pivotCatchupFuture = null;
+    catchupDataFuture = null;
+    pivotCatchupStartMillis = 0;
+    catchupTimingContext = null; // durations are recorded for successful catch-ups only
+    abandonedCatchupsCounter.inc();
+    final int attempt = ++consecutiveCatchupAbandons;
+    if (attempt >= MAX_CATCHUP_REFRESH_FAILURES) {
+      LOG.error(
+          "snap/2 pivot catch-up {} -> {} abandoned {} times in a row, failing world state download",
+          current.getNumber(),
+          next.getNumber(),
+          attempt,
+          cause);
+      failPivotCatchup(
+          new WorldStateDownloaderException(
+              "snap/2 pivot catch-up failed "
+                  + attempt
+                  + " consecutive times; last cause: "
+                  + cause.getMessage()));
+      return;
+    }
+    LOG.warn(
+        "snap/2 abandoned pivot catch-up {} -> {} (attempt {}/{}): {}; staying on pivot {}",
+        current.getNumber(),
+        next.getNumber(),
+        attempt,
+        MAX_CATCHUP_REFRESH_FAILURES,
+        cause.getMessage(),
+        current.getNumber());
+    notifyAll();
   }
 
   private void logPivotCatchupSkipped(final BlockHeader newPivotBlockHeader, final String reason) {
@@ -595,8 +664,14 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       try {
         final Map<Hash, Bytes32> correctRoots;
         if (!segment.isReorg()) {
-          final Map<Hash, Bytes32> fetchedRoots =
-              fetchCorrectStorageRoots(segment.canonicalHeaders(), newPivotBlockHeader).join();
+          final Map<Hash, Bytes32> fetchedRoots;
+          try {
+            fetchedRoots =
+                fetchCorrectStorageRoots(segment.canonicalHeaders(), newPivotBlockHeader).join();
+          } catch (final RuntimeException e) {
+            abandonPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader, e);
+            return;
+          }
           final var batch =
               blockAccessListApplier.applyBlockAccessLists(
                   segment.canonicalHeaders(), accountRangeTracker, storageRangeTracker);
@@ -647,6 +722,11 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       pivotCatchupFuture = null;
       catchupDataFuture = null;
       pivotCatchupStartMillis = 0;
+      consecutiveCatchupAbandons = 0;
+      if (catchupTimingContext != null) {
+        catchupTimingContext.stopTimer();
+        catchupTimingContext = null;
+      }
       LOG.info(
           "snap/2 pivot catch-up complete: {} -> {}, ranges completed={}, pending={}",
           currentPivotBlockHeader.getNumber(),
@@ -656,7 +736,14 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       notifyAll();
     }
     if (pivotUpdateListener != null) {
-      pivotUpdateListener.onPivotUpdated(newPivotBlockHeader);
+      try {
+        pivotUpdateListener.onPivotUpdated(newPivotBlockHeader);
+      } catch (final RuntimeException e) {
+        LOG.warn(
+            "snap/2 pivot update listener failed for pivot {}; continuing",
+            newPivotBlockHeader.getNumber(),
+            e);
+      }
     }
     checkCompletion(newPivotBlockHeader);
   }
