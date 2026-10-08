@@ -464,7 +464,8 @@ class SnapV2ReorgHealerRecoveryTest {
       final DownloadedStorageRangeTracker storageTracker) {
     new SnapV2BlockAccessListApplier(
             coordinator, b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule())
-        .applyBlockAccessLists(fromBlock, toBlock, accountTracker, storageTracker)
+        .applyBlockAccessLists(
+            b.canonicalHeaders(fromBlock, toBlock), accountTracker, storageTracker)
         .commit();
   }
 

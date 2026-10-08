@@ -39,6 +39,7 @@ import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
@@ -74,11 +75,12 @@ public class SnapV2BlockAccessListApplier {
   }
 
   public BatchState applyBlockAccessLists(
-      final long fromBlock,
-      final long toBlock,
+      final List<BlockHeader> headers,
       final DownloadedAccountRangeTracker accountRangeTracker,
       final DownloadedStorageRangeTracker storageRangeTracker) {
 
+    final long fromBlock = headers.getFirst().getNumber();
+    final long toBlock = headers.getLast().getNumber();
     LOG.info(
         "Applying snap/2 BALs for blocks [{}, {}] (completed ranges: {}, pending ranges: {})",
         fromBlock,
@@ -90,7 +92,7 @@ public class SnapV2BlockAccessListApplier {
     final MerkleTrie<Bytes, Bytes> accountTrie = openAccountTrie();
 
     final Map<Hash, PerAccountChanges> changes =
-        collectAccountChanges(fromBlock, toBlock, accountRangeTracker);
+        collectAccountChanges(headers, accountRangeTracker);
     if (changes.isEmpty()) {
       LOG.info("No persisted accounts affected by BALs in blocks [{}, {}]", fromBlock, toBlock);
       return new BatchState(accountTrie, updater);
@@ -110,15 +112,12 @@ public class SnapV2BlockAccessListApplier {
   }
 
   private Map<Hash, PerAccountChanges> collectAccountChanges(
-      final long fromBlock,
-      final long toBlock,
-      final DownloadedAccountRangeTracker accountRangeTracker) {
+      final List<BlockHeader> headers, final DownloadedAccountRangeTracker accountRangeTracker) {
 
     final Map<Hash, PerAccountChanges> changesByHash = new LinkedHashMap<>();
 
-    for (long blockNumber = fromBlock; blockNumber <= toBlock; blockNumber++) {
-      final BlockHeader blockHeader = loadBlockHeader(blockNumber);
-
+    for (final BlockHeader blockHeader : headers) {
+      final long blockNumber = blockHeader.getNumber();
       if (!protocolSchedule.getByBlockHeader(blockHeader).isBlockAccessListEnabled()) {
         LOG.debug("Skipping block {}: BALs not enabled", blockNumber);
         continue;
@@ -148,17 +147,11 @@ public class SnapV2BlockAccessListApplier {
   }
 
   public Set<Hash> collectPendingStorageAffected(
-      final BlockHeader currentPivotBlockHeader,
-      final BlockHeader newPivotBlockHeader,
-      final DownloadedAccountRangeTracker accountRangeTracker) {
+      final List<BlockHeader> headers, final DownloadedAccountRangeTracker accountRangeTracker) {
 
-    final long fromBlock = currentPivotBlockHeader.getNumber() + 1;
-    final long toBlock = newPivotBlockHeader.getNumber();
     final Set<Hash> pendingAffected = new HashSet<>();
-
-    for (long blockNumber = fromBlock; blockNumber <= toBlock; blockNumber++) {
-      final BlockHeader blockHeader = loadBlockHeader(blockNumber);
-
+    for (final BlockHeader blockHeader : headers) {
+      final long blockNumber = blockHeader.getNumber();
       if (!protocolSchedule.getByBlockHeader(blockHeader).isBlockAccessListEnabled()) {
         continue;
       }
@@ -690,16 +683,6 @@ public class SnapV2BlockAccessListApplier {
 
   private static Bytes encodeTrieValue(final UInt256 storageValue) {
     return RLP.encode(out -> out.writeBytes(storageValue.toMinimalBytes()));
-  }
-
-  private BlockHeader loadBlockHeader(final long blockNumber) {
-    final long bn = blockNumber;
-    return blockchain
-        .getBlockHeader(bn)
-        .orElseThrow(
-            () ->
-                new IllegalStateException(
-                    "Missing block header " + bn + " for snap/2 BAL application"));
   }
 
   private void verifyBalHash(

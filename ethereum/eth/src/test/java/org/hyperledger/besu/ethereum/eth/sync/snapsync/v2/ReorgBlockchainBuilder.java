@@ -394,4 +394,31 @@ class ReorgBlockchainBuilder {
   BlockHeader header(final long number) {
     return blockchain.getBlockHeader(number).orElseThrow();
   }
+
+  /** Canonical headers {@code [from, to]} ascending, read from the canonical index. */
+  List<BlockHeader> canonicalHeaders(final long from, final long to) {
+    final List<BlockHeader> headers = new ArrayList<>();
+    for (long n = from; n <= to; n++) {
+      headers.add(header(n));
+    }
+    return headers;
+  }
+
+  /**
+   * The catch-up segment {@code oldPivot -> newPivot} built from the local chain, exactly as
+   * SnapV2CatchupFetcher would build it from peers.
+   */
+  SnapV2ChainSegment segment(final BlockHeader oldPivot, final BlockHeader newPivot) {
+    final List<BlockHeader> descending = new ArrayList<>();
+    BlockHeader h = newPivot;
+    while (true) {
+      descending.add(h);
+      if (h.getNumber() == 0) {
+        break;
+      }
+      h = blockchain.getBlockHeader(h.getParentHash()).orElseThrow();
+    }
+    return SnapV2SegmentResolver.resolve(oldPivot, newPivot, descending, blockchain::getBlockHeader)
+        .orElseThrow();
+  }
 }

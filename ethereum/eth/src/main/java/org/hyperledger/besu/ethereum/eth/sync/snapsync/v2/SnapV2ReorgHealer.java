@@ -200,8 +200,24 @@ public class SnapV2ReorgHealer {
       final DownloadedStorageRangeTracker storageRangeTracker) {
     final var batch =
         applier.applyBlockAccessLists(
-            plan.fromBlock(), plan.toBlock(), accountRangeTracker, storageRangeTracker);
+            canonicalHeadersBetween(plan.fromBlock(), plan.toBlock()),
+            accountRangeTracker,
+            storageRangeTracker);
     batch.commit();
+  }
+
+  // TEMPORARY bridge, removed in snap/2 catch-up Task 5
+  private List<BlockHeader> canonicalHeadersBetween(final long from, final long to) {
+    final List<BlockHeader> headers = new ArrayList<>();
+    for (long n = from; n <= to; n++) {
+      final long bn = n;
+      headers.add(
+          blockchain
+              .getBlockHeader(bn)
+              .orElseThrow(
+                  () -> new IllegalStateException("Missing block header " + bn + " for snap/2")));
+    }
+    return headers;
   }
 
   /**

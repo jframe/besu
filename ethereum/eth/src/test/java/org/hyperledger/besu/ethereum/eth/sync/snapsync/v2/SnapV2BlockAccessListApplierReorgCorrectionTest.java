@@ -169,7 +169,8 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(100))));
     b.appendBlockWithBal(b.header(0), baseBal, 1L);
     applier()
-        .applyBlockAccessLists(1L, 1L, fullAccountRange(), new DownloadedStorageRangeTracker())
+        .applyBlockAccessLists(
+            b.canonicalHeaders(1L, 1L), fullAccountRange(), new DownloadedStorageRangeTracker())
         .commit();
 
     final ReorgPlan plan =

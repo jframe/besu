@@ -101,7 +101,8 @@ class SnapV2ReorgStateFetcherTest {
 
     new SnapV2BlockAccessListApplier(
             canonicalCoordinator, b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule())
-        .applyBlockAccessLists(1L, 1L, fullAccountRange(), new DownloadedStorageRangeTracker())
+        .applyBlockAccessLists(
+            b.canonicalHeaders(1L, 1L), fullAccountRange(), new DownloadedStorageRangeTracker())
         .commit();
 
     canonicalRoot = worldStateRoot(canonicalCoordinator);

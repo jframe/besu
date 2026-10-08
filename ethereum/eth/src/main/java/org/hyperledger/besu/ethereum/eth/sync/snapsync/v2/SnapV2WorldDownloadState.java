@@ -590,7 +590,9 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
         if (sameCanonicalChain) {
           final Set<Hash> pendingAffected =
               blockAccessListApplier.collectPendingStorageAffected(
-                  currentPivotBlockHeader, newPivotBlockHeader, accountRangeTracker);
+                  canonicalHeadersBetween(
+                      currentPivotBlockHeader.getNumber() + 1, newPivotBlockHeader.getNumber()),
+                  accountRangeTracker);
           LOG.debug(
               "snap/2 pivot catch-up ({} -> {}): {} pending storage-affected accounts to refetch roots for",
               currentPivotBlockHeader.getNumber(),
@@ -673,10 +675,24 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
         pendingLargeStorageRequests.outstandingTaskCount(),
         pendingCodeRequests.outstandingTaskCount());
     return blockAccessListApplier.applyBlockAccessLists(
-        currentPivotBlockHeader.getNumber() + 1,
-        newPivotBlockHeader.getNumber(),
+        canonicalHeadersBetween(
+            currentPivotBlockHeader.getNumber() + 1, newPivotBlockHeader.getNumber()),
         accountRangeTracker,
         storageRangeTracker);
+  }
+
+  // TEMPORARY bridge, removed in snap/2 catch-up Task 3
+  private List<BlockHeader> canonicalHeadersBetween(final long from, final long to) {
+    final List<BlockHeader> headers = new ArrayList<>();
+    for (long n = from; n <= to; n++) {
+      final long bn = n;
+      headers.add(
+          blockchain
+              .getBlockHeader(bn)
+              .orElseThrow(
+                  () -> new IllegalStateException("Missing block header " + bn + " for snap/2")));
+    }
+    return headers;
   }
 
   private void retargetQueuedRequests(
