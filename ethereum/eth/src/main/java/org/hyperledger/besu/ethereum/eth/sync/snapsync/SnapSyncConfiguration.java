@@ -19,13 +19,16 @@ import org.immutables.value.Value;
 @Value.Immutable
 public class SnapSyncConfiguration {
 
+  /** Number of recent blocks whose state peers serve over snap (geth keeps 128 layers). */
+  public static final int SNAP_SERVING_WINDOW = 128;
+
   /**
    * Maximum distance (in blocks) the pivot can lag behind the chain head before {@code
-   * PivotSelectorFromSafeBlock} selects a new one. 120 = 128 (snap-serving window) − 8 (≈ 1.5 min
+   * PivotSelectorFromSafeBlock} selects a new one. {@link #SNAP_SERVING_WINDOW} − 8 (≈ 1.5 min
    * buffer at 12 s/slot), so the pivot is replaced while it still has ~1.5 minutes left in the
    * snap-serving window.
    */
-  public static final int DEFAULT_PIVOT_BLOCK_WINDOW_VALIDITY = 120;
+  public static final int DEFAULT_PIVOT_BLOCK_WINDOW_VALIDITY = SNAP_SERVING_WINDOW - 8;
 
   /** How often {@code DynamicPivotBlockSelector} re-evaluates whether to refresh the pivot. */
   public static final long DEFAULT_PIVOT_CHECK_INTERVAL_MILLIS = 60_000L;

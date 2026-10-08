@@ -47,6 +47,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
+import java.util.function.LongSupplier;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
@@ -78,6 +79,7 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
   private final ProtocolSchedule protocolSchedule;
   private final SnapV2BlockAccessListApplier blockAccessListApplier;
   private final SnapV2ReorgHealer reorgHealer;
+  private final LongSupplier networkHeadSupplier;
   private long lastNoPeerLogMillis;
 
   public SnapV2WorldStateDownloader(
@@ -93,7 +95,9 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
       final long minMillisBeforeStalling,
       final Clock clock,
       final MetricsSystem metricsSystem,
-      final SyncDurationMetrics syncDurationMetrics) {
+      final SyncDurationMetrics syncDurationMetrics,
+      final LongSupplier networkHeadSupplier) {
+    this.networkHeadSupplier = networkHeadSupplier;
     this.ethContext = ethContext;
     this.worldStateStorageCoordinator = worldStateStorageCoordinator;
     this.blockchain = blockchain;
@@ -214,7 +218,8 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
               reorgHealer,
               blockchain,
               ethContext,
-              storagePipelineInFlightCapacity);
+              storagePipelineInFlightCapacity,
+              networkHeadSupplier);
 
       final Map<Bytes32, Bytes32> ranges = RangeManager.generateAllRanges(16);
       snapsyncMetricsManager.initRange(ranges);

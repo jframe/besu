@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 
+import static org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncConfiguration.SNAP_SERVING_WINDOW;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator.applyForStrategy;
 
 import org.hyperledger.besu.datatypes.Hash;
@@ -66,8 +67,10 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 import java.util.stream.Stream;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
@@ -130,6 +133,8 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
   private OperationTimer.TimingContext catchupTimingContext;
   private int consecutiveCatchupAbandons;
   private boolean accountRequestsPaused;
+  private final LongSupplier networkHeadSupplier;
+  private boolean pausedForUnservablePivot;
 
   public SnapV2WorldDownloadState(
       final WorldStateStorageCoordinator worldStateStorageCoordinator,
@@ -148,7 +153,8 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       final SnapV2ReorgHealer reorgHealer,
       final Blockchain blockchain,
       final EthContext ethContext,
-      final long storagePipelineInFlightCapacity) {
+      final long storagePipelineInFlightCapacity,
+      final LongSupplier networkHeadSupplier) {
     super(
         worldStateStorageCoordinator,
         pendingRequests,
@@ -165,6 +171,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     this.blockAccessListApplier = blockAccessListApplier;
     this.reorgHealer = reorgHealer;
     this.ethContext = ethContext;
+    this.networkHeadSupplier = networkHeadSupplier;
     this.childQueueLowWatermark = computeChildQueueLowWatermark(storagePipelineInFlightCapacity);
     this.childQueueHighWatermark = computeChildQueueHighWatermark(childQueueLowWatermark);
 
@@ -446,11 +453,44 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
   }
 
   /**
-   * Blocks dequeueing only during the apply phase (chain catch-up done, BALs being applied). While
-   * the chain catch-up is still running, old-pivot requests keep flowing.
+   * Blocks dequeueing during the apply phase (chain catch-up done, BALs being applied), and while a
+   * catch-up is running but the current pivot has left the peers' serving window. Otherwise
+   * old-pivot requests keep flowing while the chain catch-up runs.
    */
-  private boolean isDequeueBlocked() {
-    return pivotCatchupFuture != null && catchupDataFuture != null && catchupDataFuture.isDone();
+  @VisibleForTesting
+  synchronized boolean isDequeueBlocked() {
+    final boolean applyPhase =
+        pivotCatchupFuture != null && catchupDataFuture != null && catchupDataFuture.isDone();
+    return applyPhase || isPivotUnservableDuringCatchup();
+  }
+
+  /**
+   * True while a catch-up is running and the current pivot has left the peers' serving window:
+   * requests against it can only come back empty, so they wait for the catch-up instead of
+   * spinning. Never true without a catch-up, because the pivot selector only runs when tasks flow.
+   */
+  private boolean isPivotUnservableDuringCatchup() {
+    boolean unservable = false;
+    long head = 0;
+    long pivot = 0;
+    if (isPivotCatchupInProgress()) {
+      head = networkHeadSupplier.getAsLong();
+      pivot = snapSyncState.getPivotBlockNumber().orElse(Long.MAX_VALUE);
+      unservable = head > 0 && head > pivot && head - pivot >= SNAP_SERVING_WINDOW;
+    }
+    if (unservable != pausedForUnservablePivot) {
+      pausedForUnservablePivot = unservable;
+      if (unservable) {
+        LOG.info(
+            "Pausing snap/2 requests: pivot {} is {} blocks behind head {}, waiting for catch-up",
+            pivot,
+            head - pivot,
+            head);
+      } else {
+        LOG.info("Resuming snap/2 requests");
+      }
+    }
+    return unservable;
   }
 
   private boolean isWaitingForInFlightCompletion() {

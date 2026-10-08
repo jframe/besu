@@ -149,7 +149,8 @@ public class SnapDownloaderFactory {
               syncConfig.getWorldStateMinMillisBeforeStalling(),
               clock,
               metricsSystem,
-              syncDurationMetrics);
+              syncDurationMetrics,
+              syncState::bestChainHeight);
     } else {
       snapWorldStateDownloader =
           new SnapWorldStateDownloader(

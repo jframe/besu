@@ -46,6 +46,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
@@ -69,6 +70,7 @@ class SnapV2WorldDownloadStateCatchupTest {
   }
 
   final AtomicInteger applyCalls = new AtomicInteger();
+  final AtomicLong head = new AtomicLong(0);
 
   /** Applier that counts BAL applications so tests can prove the world state was not touched. */
   class CountingApplier extends SnapV2BlockAccessListApplier {
@@ -117,7 +119,8 @@ class SnapV2WorldDownloadStateCatchupTest {
               ReorgBlockchainBuilder.neverCalledFetcher()),
           b.blockchain(),
           ethContext,
-          1000L);
+          1000L,
+          head::get);
     }
 
     @Override
@@ -296,5 +299,54 @@ class SnapV2WorldDownloadStateCatchupTest {
     state.startPivotCatchup(p1);
 
     assertThat(events).contains("checkCompletion:5");
+  }
+
+  @Test
+  void pausesOnlyWhilePivotIsBeyondServingWindowDuringCatchup() {
+    b.appendCanonicalChain(b.header(0), 1L, 5);
+    final RecordingState state =
+        new RecordingState(b.header(3), (c, n) -> new CompletableFuture<>()); // never completes
+
+    head.set(3 + 127);
+    assertThat(state.isDequeueBlocked()).isFalse(); // no catch-up yet
+    state.startPivotCatchup(b.header(5));
+    assertThat(state.isDequeueBlocked()).isFalse(); // 127 < 128
+    head.set(3 + 128);
+    assertThat(state.isDequeueBlocked()).isTrue();
+  }
+
+  @Test
+  void doesNotPauseWithoutCatchupEvenIfStale() {
+    final BlockHeader pivot = b.appendCanonicalChain(b.header(0), 1L, 3);
+    final RecordingState state = new RecordingState(pivot, (c, n) -> new CompletableFuture<>());
+    head.set(10_000);
+    assertThat(state.isDequeueBlocked()).isFalse();
+  }
+
+  @Test
+  void doesNotPauseWhenHeadUnknownOrBehindPivot() {
+    b.appendCanonicalChain(b.header(0), 1L, 5);
+    final RecordingState state =
+        new RecordingState(b.header(3), (c, n) -> new CompletableFuture<>());
+    state.startPivotCatchup(b.header(5));
+
+    head.set(0);
+    assertThat(state.isDequeueBlocked()).isFalse();
+    head.set(1); // CL behind the pivot
+    assertThat(state.isDequeueBlocked()).isFalse();
+  }
+
+  @Test
+  void pauseEndsWhenCatchupIsAbandoned() {
+    b.appendCanonicalChain(b.header(0), 1L, 5);
+    final CompletableFuture<SnapV2ChainSegment> pending = new CompletableFuture<>();
+    final RecordingState state = new RecordingState(b.header(3), (c, n) -> pending);
+    state.startPivotCatchup(b.header(5));
+    head.set(3 + 200);
+    assertThat(state.isDequeueBlocked()).isTrue();
+
+    pending.completeExceptionally(new IllegalStateException("no peers"));
+
+    assertThat(state.isDequeueBlocked()).isFalse();
   }
 }
