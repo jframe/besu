@@ -405,8 +405,8 @@ class ReorgBlockchainBuilder {
   }
 
   /**
-   * The catch-up segment {@code oldPivot -> newPivot} built from the local chain, exactly as
-   * SnapV2CatchupFetcher would build it from peers.
+   * The catch-up segment {@code oldPivot -> newPivot} built from the local chain, exactly as {@link
+   * SnapV2CatchupFetcher} would build it from peers.
    */
   SnapV2ChainSegment segment(final BlockHeader oldPivot, final BlockHeader newPivot) {
     final List<BlockHeader> descending = new ArrayList<>();
