@@ -35,7 +35,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
@@ -61,8 +60,6 @@ import org.slf4j.LoggerFactory;
 public class SnapV2ReorgHealer {
 
   private static final Logger LOG = LoggerFactory.getLogger(SnapV2ReorgHealer.class);
-
-  static final int MAX_ANCESTOR_WALK = 95;
 
   private final MutableBlockchain blockchain;
   private final ProtocolSchedule protocolSchedule;
@@ -98,83 +95,36 @@ public class SnapV2ReorgHealer {
   }
 
   /**
-   * Finds the common ancestor {@code W} of the old (now orphaned) and new (canonical) chains by
-   * walking the old pivot's parent chain back until a block that is still on the canonical chain is
-   * found. The walk is bounded by {@value #MAX_ANCESTOR_WALK} blocks; reorgs deeper than that are
-   * unrecoverable.
+   * Builds the deterministic reorg recovery plan from a verified catch-up segment. Headers come
+   * from the segment; BALs are read locally by block hash.
    *
-   * @throws ReorgUnrecoverableException if the new pivot is itself orphaned, a parent header is
-   *     missing locally, or the walk reaches the bound without finding a canonical ancestor.
-   */
-  @VisibleForTesting
-  public BlockHeader findCommonAncestor(final BlockHeader oldPivot, final BlockHeader newPivot) {
-    // TODO: use another pivot instead of throwing
-    if (!blockchain.blockIsOnCanonicalChain(newPivot.getHash())) {
-      throw new ReorgUnrecoverableException(
-          "Cannot recover reorg: new pivot "
-              + newPivot.getNumber()
-              + " ("
-              + newPivot.getHash()
-              + ") is not on the canonical chain");
-    }
-
-    long steps = 0;
-    BlockHeader header = oldPivot;
-    while (header != null) {
-      if (blockchain.blockIsOnCanonicalChain(header.getHash())) {
-        return header;
-      }
-      final Hash parentHash = header.getParentHash();
-      final Optional<BlockHeader> parent = blockchain.getBlockHeader(parentHash);
-      if (parent.isEmpty()) {
-        break;
-      }
-      header = parent.get();
-      if (++steps > MAX_ANCESTOR_WALK) {
-        break;
-      }
-    }
-    throw new ReorgUnrecoverableException(
-        "Cannot recover reorg: no common ancestor within "
-            + MAX_ANCESTOR_WALK
-            + " blocks of old pivot "
-            + oldPivot.getNumber()
-            + " ("
-            + oldPivot.getHash()
-            + "); orphaned chain data is no longer retained");
-  }
-
-  /**
-   * Builds the deterministic reorg recovery plan. All inputs are read locally: canonical headers
-   * and BALs by number, orphaned headers and BALs by hash.
-   *
-   * @throws ReorgUnrecoverableException if no common ancestor is found within the walk bound
-   * @throws IllegalStateException if a canonical header or BAL in the apply window is missing
-   *     locally.
+   * @throws ReorgUnrecoverableException if an orphaned BAL is no longer retained, or the apply
+   *     window starts below BAL activation
+   * @throws IllegalStateException if a canonical BAL in the apply window is missing locally.
    */
   public ReorgPlan planReorg(
-      final BlockHeader oldPivot,
-      final BlockHeader newPivot,
+      final SnapV2ChainSegment segment,
       final DownloadedAccountRangeTracker accountRangeTracker,
       final DownloadedStorageRangeTracker storageRangeTracker) {
 
-    final BlockHeader commonAncestor = findCommonAncestor(oldPivot, newPivot);
-    final long fromBlock = commonAncestor.getNumber() + 1;
-    final long toBlock = newPivot.getNumber();
+    final BlockHeader commonAncestor = segment.commonAncestor();
+    final BlockHeader oldPivot = segment.oldPivot();
+    final BlockHeader newPivot = segment.newPivot();
+    final List<BlockHeader> canonicalHeaders = segment.canonicalHeaders();
 
     LOG.info(
         "snap/2 reorg plan: oldPivot={}, newPivot={}, commonAncestor={}, applying canonical BALs [{}, {}]",
         oldPivot.getNumber(),
         newPivot.getNumber(),
         commonAncestor.getNumber(),
-        fromBlock,
-        toBlock);
+        canonicalHeaders.getFirst().getNumber(),
+        newPivot.getNumber());
 
-    checkBalActivation(commonAncestor, fromBlock);
+    checkBalActivation(commonAncestor, canonicalHeaders.getFirst());
 
     final Map<Hash, AccountTouches> orphanedTouches =
-        collectOrphanedTouches(oldPivot, commonAncestor);
-    final Map<Hash, AccountTouches> canonicalTouches = collectCanonicalTouches(fromBlock, toBlock);
+        collectOrphanedTouches(segment.orphanedHeaders());
+    final Map<Hash, AccountTouches> canonicalTouches = collectCanonicalTouches(canonicalHeaders);
     final Set<Hash> accountsToRefetch =
         computeAccountsToRefetch(orphanedTouches, canonicalTouches, accountRangeTracker);
     final Map<Hash, Set<Hash>> slotsToRefetch =
@@ -186,7 +136,8 @@ public class SnapV2ReorgHealer {
         accountsToRefetch.size(),
         slotsToRefetch.size());
 
-    return new ReorgPlan(commonAncestor, oldPivot, newPivot, accountsToRefetch, slotsToRefetch);
+    return new ReorgPlan(
+        commonAncestor, oldPivot, newPivot, canonicalHeaders, accountsToRefetch, slotsToRefetch);
   }
 
   /**
@@ -200,24 +151,8 @@ public class SnapV2ReorgHealer {
       final DownloadedStorageRangeTracker storageRangeTracker) {
     final var batch =
         applier.applyBlockAccessLists(
-            canonicalHeadersBetween(plan.fromBlock(), plan.toBlock()),
-            accountRangeTracker,
-            storageRangeTracker);
+            plan.canonicalHeaders(), accountRangeTracker, storageRangeTracker);
     batch.commit();
-  }
-
-  // TEMPORARY bridge, removed in snap/2 catch-up Task 5
-  private List<BlockHeader> canonicalHeadersBetween(final long from, final long to) {
-    final List<BlockHeader> headers = new ArrayList<>();
-    for (long n = from; n <= to; n++) {
-      final long bn = n;
-      headers.add(
-          blockchain
-              .getBlockHeader(bn)
-              .orElseThrow(
-                  () -> new IllegalStateException("Missing block header " + bn + " for snap/2")));
-    }
-    return headers;
   }
 
   /**
@@ -230,12 +165,12 @@ public class SnapV2ReorgHealer {
    *     peer-fetched state is unavailable, invalid, or inconsistent with the local state
    */
   public ReorgRecoveryResult recoverFromReorg(
-      final BlockHeader oldPivot,
-      final BlockHeader newPivot,
+      final SnapV2ChainSegment segment,
       final DownloadedAccountRangeTracker accountRangeTracker,
       final DownloadedStorageRangeTracker storageRangeTracker) {
 
-    final ReorgPlan plan = planReorg(oldPivot, newPivot, accountRangeTracker, storageRangeTracker);
+    final BlockHeader newPivot = segment.newPivot();
+    final ReorgPlan plan = planReorg(segment, accountRangeTracker, storageRangeTracker);
 
     LOG.info(
         "snap/2 reorg recovery: {} accounts to refetch, {} accounts with slots to refetch",
@@ -341,11 +276,9 @@ public class SnapV2ReorgHealer {
   }
 
   private Map<Hash, AccountTouches> collectOrphanedTouches(
-      final BlockHeader oldPivot, final BlockHeader commonAncestor) {
+      final List<BlockHeader> orphanedHeaders) {
     final Map<Hash, AccountTouches> touches = new HashMap<>();
-    BlockHeader header = oldPivot;
-    while (header != null && header.getNumber() > commonAncestor.getNumber()) {
-      final BlockHeader current = header;
+    for (final BlockHeader current : orphanedHeaders) {
       final BlockAccessList bal =
           blockchain
               .getBlockAccessList(current.getHash())
@@ -358,30 +291,24 @@ public class SnapV2ReorgHealer {
                               + current.getHash()
                               + ") is no longer retained locally"));
       collectTouches(bal, touches);
-      final Hash parentHash = header.getParentHash();
-      final Optional<BlockHeader> parent = blockchain.getBlockHeader(parentHash);
-      if (parent.isEmpty()) {
-        throw new ReorgUnrecoverableException(
-            "Cannot recover reorg: orphaned parent of block " + header.getNumber() + " missing");
-      }
-      header = parent.get();
     }
     return touches;
   }
 
-  private Map<Hash, AccountTouches> collectCanonicalTouches(
-      final long fromBlock, final long toBlock) {
+  private Map<Hash, AccountTouches> collectCanonicalTouches(final List<BlockHeader> headers) {
     final Map<Hash, AccountTouches> touches = new HashMap<>();
-    for (long blockNumber = fromBlock; blockNumber <= toBlock; blockNumber++) {
-      final long bn = blockNumber;
-      final BlockHeader header = loadCanonicalHeader(bn);
+    for (final BlockHeader header : headers) {
       final BlockAccessList bal =
           blockchain
               .getBlockAccessList(header.getHash())
               .orElseThrow(
                   () ->
                       new IllegalStateException(
-                          "Missing canonical BAL for block " + bn + " (" + header.getHash() + ")"));
+                          "Missing canonical BAL for block "
+                              + header.getNumber()
+                              + " ("
+                              + header.getHash()
+                              + ")"));
       collectTouches(bal, touches);
     }
     return touches;
@@ -405,12 +332,12 @@ public class SnapV2ReorgHealer {
     }
   }
 
-  private void checkBalActivation(final BlockHeader commonAncestor, final long fromBlock) {
-    final BlockHeader firstCanonicalHeader = loadCanonicalHeader(fromBlock);
+  private void checkBalActivation(
+      final BlockHeader commonAncestor, final BlockHeader firstCanonicalHeader) {
     if (!protocolSchedule.getByBlockHeader(firstCanonicalHeader).isBlockAccessListEnabled()) {
       throw new ReorgUnrecoverableException(
           "Cannot recover reorg: block "
-              + fromBlock
+              + firstCanonicalHeader.getNumber()
               + " (common ancestor "
               + commonAncestor.getNumber()
               + " + 1) is below EIP-7928 (BAL) activation; reorg is deeper than the BAL-enabled"
@@ -476,15 +403,6 @@ public class SnapV2ReorgHealer {
       }
     }
     return diverged;
-  }
-
-  private BlockHeader loadCanonicalHeader(final long blockNumber) {
-    return blockchain
-        .getBlockHeader(blockNumber)
-        .orElseThrow(
-            () ->
-                new IllegalStateException(
-                    "Missing canonical block header for block " + blockNumber));
   }
 
   private static Bytes32 asBytes32(final Hash hash) {

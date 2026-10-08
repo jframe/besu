@@ -156,7 +156,9 @@ class SnapV2ReorgHealerRecoveryTest {
 
     final ReorgRecoveryResult result =
         healer.recoverFromReorg(
-            block2s.getHeader(), newPivotBlock.getHeader(), accountTracker, storageTracker);
+            b.segment(block2s.getHeader(), newPivotBlock.getHeader()),
+            accountTracker,
+            storageTracker);
 
     // Accounts the canonical fork touched come from the canonical BALs.
     assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80));
@@ -229,7 +231,9 @@ class SnapV2ReorgHealerRecoveryTest {
 
     final ReorgRecoveryResult result =
         healer.recoverFromReorg(
-            block2s.getHeader(), newPivotBlock.getHeader(), accountTracker, storageTracker);
+            b.segment(block2s.getHeader(), newPivotBlock.getHeader()),
+            accountTracker,
+            storageTracker);
 
     assertThat(accountFetches).hasValue(0);
     assertThat(storageFetches).hasValue(0);
@@ -315,7 +319,9 @@ class SnapV2ReorgHealerRecoveryTest {
 
     final ReorgRecoveryResult result =
         healer.recoverFromReorg(
-            block3s.getHeader(), newPivotBlock.getHeader(), accountTracker, storageTracker);
+            b.segment(block3s.getHeader(), newPivotBlock.getHeader()),
+            accountTracker,
+            storageTracker);
 
     // Balance from the canonical BAL; the downloaded slot is restored from the re-fetch. sp2 was
     // never downloaded and the canonical fork never touched it, so it is not re-fetched.
@@ -386,7 +392,9 @@ class SnapV2ReorgHealerRecoveryTest {
 
     final ReorgRecoveryResult result =
         healer.recoverFromReorg(
-            block2s.getHeader(), newPivotBlock.getHeader(), accountTracker, storageTracker);
+            b.segment(block2s.getHeader(), newPivotBlock.getHeader()),
+            accountTracker,
+            storageTracker);
 
     assertThat(accountExists(NEW_CONTRACT)).isFalse();
     assertThat(readStorageSlot(NEW_CONTRACT, SN)).isEmpty();
@@ -418,8 +426,7 @@ class SnapV2ReorgHealerRecoveryTest {
     assertThatThrownBy(
             () ->
                 healer.recoverFromReorg(
-                    block2s.getHeader(),
-                    block2c.getHeader(),
+                    b.segment(block2s.getHeader(), block2c.getHeader()),
                     fullAccountRange(),
                     new DownloadedStorageRangeTracker()))
         .isInstanceOf(ReorgUnrecoverableException.class)

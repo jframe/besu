@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -25,6 +26,8 @@ public record ReorgPlan(
     BlockHeader commonAncestor,
     BlockHeader oldPivot,
     BlockHeader newPivot,
+    /** Canonical blocks (commonAncestor, newPivot] ascending; BALs are applied for these. */
+    List<BlockHeader> canonicalHeaders,
     /**
      * Persisted accounts whose canonical record must be re-fetched via GetAccountRange: either a
      * scalar field (balance, nonce, code) changed only on the orphaned fork, or the storage root

@@ -616,10 +616,23 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
               currentPivotBlockHeader.getHash(),
               newPivotBlockHeader.getNumber(),
               newPivotBlockHeader.getHash());
+          // TEMPORARY bridge, removed in snap/2 catch-up Task 5
+          final List<BlockHeader> descending = new ArrayList<>();
+          for (BlockHeader h = newPivotBlockHeader; ; ) {
+            descending.add(h);
+            if (h.getNumber() == 0) {
+              break;
+            }
+            h = blockchain.getBlockHeader(h.getParentHash()).orElseThrow();
+          }
           final ReorgRecoveryResult recovery =
               reorgHealer.recoverFromReorg(
-                  currentPivotBlockHeader,
-                  newPivotBlockHeader,
+                  SnapV2SegmentResolver.resolve(
+                          currentPivotBlockHeader,
+                          newPivotBlockHeader,
+                          descending,
+                          blockchain::getBlockHeader)
+                      .orElseThrow(),
                   accountRangeTracker,
                   storageRangeTracker);
           final int purged =

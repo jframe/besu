@@ -295,7 +295,8 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
     final BlockHeader ancestor = new BlockHeaderTestFixture().number(1).buildHeader();
     final BlockHeader oldPivot = new BlockHeaderTestFixture().number(2).buildHeader();
     final BlockHeader newPivot = new BlockHeaderTestFixture().number(3).buildHeader();
-    return new ReorgPlan(ancestor, oldPivot, newPivot, divergedAccounts, divergedSlotsByAccount);
+    return new ReorgPlan(
+        ancestor, oldPivot, newPivot, List.of(newPivot), divergedAccounts, divergedSlotsByAccount);
   }
 
   private static PmtStateTrieAccountValue accountValue(final Wei balance, final Hash codeHash) {

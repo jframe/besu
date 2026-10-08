@@ -20,7 +20,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
-import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.DownloadedAccountRangeTracker;
@@ -30,13 +29,11 @@ import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 
 import java.util.Arrays;
 import java.util.Map;
-import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 /**
  * Tests for {@link SnapV2ReorgHealer#planReorg}, covering every reorg divergence category (accounts
@@ -562,26 +559,26 @@ class SnapV2ReorgHealerPlanTest {
   }
 
   /**
-   * The ancestor walk succeeds at exactly MAX_ANCESTOR_WALK (64) steps.
+   * The ancestor walk succeeds at exactly MAX_ANCESTOR_WALK (95) steps.
    *
    * <pre>
-   * gen -- 1 -- ... -- 64 (oldPivot)        stale, diff 10
-   *  +-- 1' -- ... -- 64' -- 65' (newPivot)  canonical, diff 100
+   * gen -- 1 -- ... -- 95 (oldPivot)        stale, diff 10
+   *  +-- 1' -- ... -- 95' -- 96' (newPivot)  canonical, diff 100
    * </pre>
    *
-   * Common ancestor = genesis, 64 steps below the old pivot: just within bound.
+   * Common ancestor = genesis, 95 steps below the old pivot: just within bound.
    */
   @Test
   void ancestorWalkAtExactMaxSucceeds() {
     // Original chain: MAX_ANCESTOR_WALK blocks above genesis.
     final BlockHeader oldPivot =
-        b.appendStaleChain(b.header(0), 1L, SnapV2ReorgHealer.MAX_ANCESTOR_WALK);
+        b.appendStaleChain(b.header(0), 1L, SnapV2SegmentResolver.MAX_ANCESTOR_WALK);
 
     // Competing chain: MAX_ANCESTOR_WALK + 1 blocks from genesis -> wins the reorg.
     final BlockHeader newPivot =
-        b.appendCanonicalChain(b.header(0), 1L, SnapV2ReorgHealer.MAX_ANCESTOR_WALK + 1);
+        b.appendCanonicalChain(b.header(0), 1L, SnapV2SegmentResolver.MAX_ANCESTOR_WALK + 1);
 
-    // Common ancestor is genesis (depth 64 from oldPivot) -> walk just within bound.
+    // Common ancestor is genesis (depth 95 from oldPivot) -> walk just within bound.
     final ReorgPlan plan =
         plan(oldPivot, newPivot, fullAccountRange(), new DownloadedStorageRangeTracker());
     assertThat(plan.commonAncestor().getNumber()).isZero();
@@ -591,24 +588,24 @@ class SnapV2ReorgHealerPlanTest {
    * One block deeper than MAX_ANCESTOR_WALK is unrecoverable.
    *
    * <pre>
-   * gen -- 1 -- ... -- 64 -- 65 (oldPivot)     stale, diff 10
-   *  +-- 1' -- ... -- 65' -- 66' (newPivot)     canonical, diff 100
+   * gen -- 1 -- ... -- 95 -- 96 (oldPivot)     stale, diff 10
+   *  +-- 1' -- ... -- 96' -- 97' (newPivot)     canonical, diff 100
    * </pre>
    *
-   * Common ancestor = genesis, 65 steps below the old pivot: ReorgUnrecoverableException (per
+   * Common ancestor = genesis, 96 steps below the old pivot: ReorgUnrecoverableException (per
    * snap/2, a reorg this deep forces a sync restart).
    */
   @Test
   void throwsWhenAncestorWalkExceedsMax() {
     // Original chain: MAX_ANCESTOR_WALK + 1 blocks above genesis.
     final BlockHeader oldPivot =
-        b.appendStaleChain(b.header(0), 1L, SnapV2ReorgHealer.MAX_ANCESTOR_WALK + 1);
+        b.appendStaleChain(b.header(0), 1L, SnapV2SegmentResolver.MAX_ANCESTOR_WALK + 1);
 
     // Competing chain: MAX_ANCESTOR_WALK + 2 blocks from genesis -> wins the reorg.
     final BlockHeader newPivot =
-        b.appendCanonicalChain(b.header(0), 1L, SnapV2ReorgHealer.MAX_ANCESTOR_WALK + 2);
+        b.appendCanonicalChain(b.header(0), 1L, SnapV2SegmentResolver.MAX_ANCESTOR_WALK + 2);
 
-    // Common ancestor is genesis (depth 65 from oldPivot) -> walk exceeds MAX_ANCESTOR_WALK (64).
+    // Common ancestor is genesis (depth 96 from oldPivot) -> walk exceeds MAX_ANCESTOR_WALK (95).
     assertThat(b.blockchain().blockIsOnCanonicalChain(oldPivot.getHash())).isFalse();
     assertThat(b.blockchain().blockIsOnCanonicalChain(newPivot.getHash())).isTrue();
 
@@ -687,49 +684,6 @@ class SnapV2ReorgHealerPlanTest {
   }
 
   /**
-   * Walking the orphaned chain to collect touches requires every orphaned parent header.
-   *
-   * <pre>
-   * gen -- 1 +-- 2s -- 3s (oldPivot)   stale; 2s header pruned before collectOrphanedTouches
-   *          +-- 2c -- 3c (newPivot)   canonical
-   * </pre>
-   *
-   * The spy hands out the 2s header once (for findCommonAncestor) and then empty, so the
-   * touch-collection walk from 3s aborts: ReorgUnrecoverableException.
-   */
-  @Test
-  void throwsWhenOrphanedParentHeaderMissing() {
-    // Common ancestor at block 1, orphaned chain at blocks 2s and 3s, canonical chain at 2c and 3c.
-    final Block ancestor = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
-
-    final Block block2s = b.appendStale(ancestor.getHeader(), b.emptyBal(), 2L);
-    final Block block3s = b.appendStale(block2s.getHeader(), b.emptyBal(), 3L);
-
-    final Block block2c = b.appendCanonical(ancestor.getHeader(), b.emptyBal(), 2L);
-    final Block block3c = b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L);
-
-    assertThat(b.blockchain().blockIsOnCanonicalChain(block3s.getHash())).isFalse();
-    assertThat(b.blockchain().blockIsOnCanonicalChain(block3c.getHash())).isTrue();
-
-    // Spy: getBlockHeader(block2s.hash) succeeds once during findCommonAncestor, then fails during
-    // collectOrphanedTouches (simulating a pruned orphaned parent header).
-    final MutableBlockchain spy = Mockito.spy(b.blockchain());
-    Mockito.when(spy.getBlockHeader(block2s.getHash()))
-        .thenReturn(Optional.of(block2s.getHeader()))
-        .thenReturn(Optional.empty());
-
-    assertThatThrownBy(
-            () ->
-                plan(
-                    healerFor(spy),
-                    block3s.getHeader(),
-                    block3c.getHeader(),
-                    fullAccountRange(),
-                    new DownloadedStorageRangeTracker()))
-        .isInstanceOf(ReorgUnrecoverableException.class);
-  }
-
-  /**
    * Every canonical BAL in the apply window [fromBlock, toBlock] must be present locally.
    *
    * <pre>
@@ -750,40 +704,6 @@ class SnapV2ReorgHealerPlanTest {
         b.appendCanonicalWithoutStoringBal(ancestor.getHeader(), b.emptyBal(), 2L);
 
     assertThatThrownBy(() -> plan(staleBlock, canonicalBlock))
-        .isInstanceOf(IllegalStateException.class);
-  }
-
-  /**
-   * The canonical header at fromBlock must be loadable (it carries the balHash and feeds the
-   * activation check).
-   *
-   * <pre>
-   * gen -- 1 +-- 2s   stale
-   *          +-- 2c   canonical; spy: getBlockHeader(2L) returns empty
-   * </pre>
-   *
-   * loadCanonicalHeader inside checkBalActivation: IllegalStateException.
-   */
-  @Test
-  void throwsWhenCanonicalHeaderMissing() {
-    final Block ancestor = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
-
-    final Block staleBlock = b.appendStale(ancestor.getHeader(), b.emptyBal(), 2L);
-    final Block canonicalBlock = b.appendCanonical(ancestor.getHeader(), b.emptyBal(), 2L);
-
-    // Spy: getBlockHeader(2L) returns empty -> loadCanonicalHeader throws IllegalStateException
-    // during checkBalActivation (fromBlock = ancestor.getNumber() + 1 = 2).
-    final MutableBlockchain spy = Mockito.spy(b.blockchain());
-    Mockito.when(spy.getBlockHeader(2L)).thenReturn(Optional.empty());
-
-    assertThatThrownBy(
-            () ->
-                plan(
-                    healerFor(spy),
-                    staleBlock.getHeader(),
-                    canonicalBlock.getHeader(),
-                    fullAccountRange(),
-                    new DownloadedStorageRangeTracker()))
         .isInstanceOf(IllegalStateException.class);
   }
 
@@ -1272,44 +1192,6 @@ class SnapV2ReorgHealerPlanTest {
   // Error paths: ancestor walk failures.
   // ---------------------------------------------------------------------------
 
-  /**
-   * The ancestor walk itself aborts when a parent header is missing mid-walk.
-   *
-   * <pre>
-   * gen -- 1 +-- 2s (oldPivot)   stale; spy: header of block 1 returns empty
-   *          +-- 2c (newPivot)   canonical
-   * </pre>
-   *
-   * The walk from 2s can never reach a canonical ancestor: ReorgUnrecoverableException. Covers the
-   * findCommonAncestor missing-parent branch, distinct from throwsWhenOrphanedParentHeaderMissing
-   * which fails later in collectOrphanedTouches.
-   */
-  @Test
-  void throwsWhenAncestorWalkParentHeaderMissing() {
-    final Block ancestor = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
-
-    final Block staleBlock = b.appendStale(ancestor.getHeader(), b.emptyBal(), 2L);
-    final Block canonicalBlock = b.appendCanonical(ancestor.getHeader(), b.emptyBal(), 2L);
-
-    assertThat(b.blockchain().blockIsOnCanonicalChain(staleBlock.getHash())).isFalse();
-    assertThat(b.blockchain().blockIsOnCanonicalChain(canonicalBlock.getHash())).isTrue();
-
-    // Spy: the ancestor header is unavailable during findCommonAncestor's walk (simulating a
-    // pruned header), so the walk cannot reach a canonical ancestor.
-    final MutableBlockchain spy = Mockito.spy(b.blockchain());
-    Mockito.when(spy.getBlockHeader(ancestor.getHash())).thenReturn(Optional.empty());
-
-    assertThatThrownBy(
-            () ->
-                plan(
-                    healerFor(spy),
-                    staleBlock.getHeader(),
-                    canonicalBlock.getHeader(),
-                    fullAccountRange(),
-                    new DownloadedStorageRangeTracker()))
-        .isInstanceOf(ReorgUnrecoverableException.class);
-  }
-
   // ---------------------------------------------------------------------------
   // Account re-fetch: pending accounts whose storage root can't recompute locally.
   // ---------------------------------------------------------------------------
@@ -1444,14 +1326,6 @@ class SnapV2ReorgHealerPlanTest {
         ReorgBlockchainBuilder.neverCalledFetcher());
   }
 
-  private static SnapV2ReorgHealer healerFor(final MutableBlockchain blockchain) {
-    return new SnapV2ReorgHealer(
-        blockchain,
-        unusedStorageCoordinator(),
-        ReorgBlockchainBuilder.balEnabledSchedule(),
-        ReorgBlockchainBuilder.neverCalledFetcher());
-  }
-
   private static DownloadedStorageRangeTracker singleSlotRange(
       final Address account, final UInt256 slotKey) {
     final DownloadedStorageRangeTracker tracker = new DownloadedStorageRangeTracker();
@@ -1484,13 +1358,13 @@ class SnapV2ReorgHealerPlanTest {
     return plan(healer(), stale, canonical, accountTracker, storageTracker);
   }
 
-  private static ReorgPlan plan(
+  private ReorgPlan plan(
       final SnapV2ReorgHealer healer,
       final BlockHeader stale,
       final BlockHeader canonical,
       final DownloadedAccountRangeTracker accountTracker,
       final DownloadedStorageRangeTracker storageTracker) {
-    return healer.planReorg(stale, canonical, accountTracker, storageTracker);
+    return healer.planReorg(b.segment(stale, canonical), accountTracker, storageTracker);
   }
 
   private static Bytes32 accountHash(final Address account) {
