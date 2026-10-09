@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods;
 
 import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType.BLOCK_NOT_FOUND;
 import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType.INTERNAL_ERROR;
+import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType.WORLD_STATE_UNAVAILABLE;
 
 import org.hyperledger.besu.ethereum.api.ApiConfiguration;
 import org.hyperledger.besu.ethereum.api.jsonrpc.RpcMethod;
@@ -121,15 +122,20 @@ public class TraceCallMany extends TraceCall implements JsonRpcMethod {
 
     final List<JsonNode> traceCallResults = new ArrayList<>();
 
+    // unwrap the Optional: AbstractBlockParameterMethod only sends a bare JsonRpcErrorResponse as
+    // an error, and would serialize one inside an Optional as a successful result
     return getBlockchainQueries()
-        .getAndMapWorldState(
+        .<Object>getAndMapWorldState(
             blockHeader.getBlockHash(),
             ws -> {
-              final WorldUpdater updater = transactionSimulator.getEffectiveWorldStateUpdater(ws);
               try {
                 Arrays.stream(transactionsAndTraceTypeParameters)
                     .forEachOrdered(
                         param -> {
+                          // a fresh updater per call, as in block processing: Bonsai returns its
+                          // accumulator again, Forest one over the state committed so far
+                          final WorldUpdater updater =
+                              transactionSimulator.getEffectiveWorldStateUpdater(ws);
                           final WorldUpdater localUpdater = updater.updater();
                           traceCallResults.add(
                               getSingleCallResult(
@@ -138,16 +144,19 @@ public class TraceCallMany extends TraceCall implements JsonRpcMethod {
                                   blockHeader,
                                   localUpdater));
                           localUpdater.commit();
+                          // each call is a separate transaction, so later calls must take
+                          // this state as the original storage for SSTORE gas and refunds;
+                          // committed first, as in block processing, the boundary only resets
+                          // the accounts this call touched
+                          updater.commit();
+                          updater.markTransactionBoundary();
                         });
               } catch (final TransactionInvalidException e) {
                 LOG.error("Invalid transaction simulator result");
                 return Optional.of(
                     new JsonRpcErrorResponse(requestContext.getRequest().getId(), INTERNAL_ERROR));
               } catch (final EmptySimulatorResultException e) {
-                LOG.error(
-                    "Empty simulator result, call params: {}, blockHeader: {} ",
-                    CallParameterUtil.validateAndGetCallParams(requestContext),
-                    blockHeader);
+                LOG.error("Empty simulator result, blockHeader: {}", blockHeader);
                 return Optional.of(
                     new JsonRpcErrorResponse(requestContext.getRequest().getId(), INTERNAL_ERROR));
               } catch (final Exception e) {
@@ -155,7 +164,11 @@ public class TraceCallMany extends TraceCall implements JsonRpcMethod {
                     new JsonRpcErrorResponse(requestContext.getRequest().getId(), INTERNAL_ERROR));
               }
               return Optional.of(traceCallResults);
-            });
+            })
+        .orElseGet(
+            () ->
+                new JsonRpcErrorResponse(
+                    requestContext.getRequest().getId(), WORLD_STATE_UNAVAILABLE));
   }
 
   private JsonNode getSingleCallResult(
@@ -176,7 +189,7 @@ public class TraceCallMany extends TraceCall implements JsonRpcMethod {
         transactionSimulator.processWithWorldUpdater(
             callParameter,
             Optional.empty(),
-            buildTransactionValidationParams(),
+            buildTransactionValidationParams(header, callParameter),
             tracer,
             header,
             worldUpdater,

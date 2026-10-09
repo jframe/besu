@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 
@@ -119,7 +120,8 @@ final class BonsaiWorldStateStorageHarness implements WorldStateStorageHarness {
         .flatMap(
             a ->
                 coordinator.applyForStrategy(
-                    bonsai -> bonsai.getCode(a.getCodeHash(), address.addressHash()),
+                    bonsai ->
+                        bonsai.getCode(a.getCodeHash(), address.addressHash()).map(Code::getBytes),
                     forest -> Optional.<Bytes>empty()));
   }
 
