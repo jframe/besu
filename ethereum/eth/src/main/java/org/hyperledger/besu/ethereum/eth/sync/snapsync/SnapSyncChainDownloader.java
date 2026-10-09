@@ -58,6 +58,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 
 /**
  * Two-stage fast sync chain downloader that orchestrates:
@@ -80,8 +81,8 @@ public class SnapSyncChainDownloader
   private static final int MAX_SAME_STATE_RETRIES = 20;
   private static final long RETRY_WARN_INTERVAL_MS = 30_000L;
   private static final long RETRY_MAX_BACKOFF_MS = 30_000L;
-  static final int MAX_CATCHUP_DOWNLOAD_ATTEMPTS = 3;
-  private static final Duration CATCHUP_RETRY_DELAY = Duration.ofSeconds(1);
+  static final Duration CATCHUP_MAX_RETRY_DELAY = Duration.ofSeconds(30);
+  private static final int CATCHUP_RETRY_WARN_ATTEMPT = 3;
 
   private final SnapSyncChainDownloadPipelineFactory pipelineFactory;
 
@@ -320,30 +321,40 @@ public class SnapSyncChainDownloader
                 return CompletableFuture.<Void>completedFuture(null);
               }
               final Throwable cause = ExceptionUtils.rootCause(error);
-              if (attempt >= MAX_CATCHUP_DOWNLOAD_ATTEMPTS
-                  || cancelled.get()
+              if (cancelled.get()
                   || cause instanceof CancellationException
                   || cause instanceof WrongChainException) {
                 return CompletableFuture.<Void>failedFuture(error);
               }
-              // Transient failures include peer errors and write conflicts with the main cycle,
+              // Retry until it succeeds: a failed catch-up fails the snap/2 world state download,
+              // which then restarts from scratch, so waiting is far cheaper than giving up.
+              // Transient failures include peer timeouts and write conflicts with the main cycle,
               // which downloads the same range when it starts at the new pivot (e.g. on restart).
-              LOG.debug(
-                  "snap/2 pivot catch-up download from block {} to {} failed (attempt {}/{}), retrying: {}",
-                  currentPivotBlockHeader.getNumber(),
-                  newPivotBlockHeader.getNumber(),
-                  attempt,
-                  MAX_CATCHUP_DOWNLOAD_ATTEMPTS,
-                  cause.toString());
+              final Duration delay = catchupRetryDelay(attempt);
+              LOG.atLevel(attempt < CATCHUP_RETRY_WARN_ATTEMPT ? Level.DEBUG : Level.WARN)
+                  .setMessage(
+                      "snap/2 pivot catch-up download from block {} to {} failed (attempt {}), retrying in {}s: {}")
+                  .addArgument(currentPivotBlockHeader.getNumber())
+                  .addArgument(newPivotBlockHeader.getNumber())
+                  .addArgument(attempt)
+                  .addArgument(delay.toSeconds())
+                  .addArgument(cause.toString())
+                  .log();
               return ethContext
                   .getScheduler()
                   .scheduleFutureTask(
                       () ->
                           downloadPivotCatchupRange(
                               currentPivotBlockHeader, newPivotBlockHeader, attempt + 1),
-                      CATCHUP_RETRY_DELAY);
+                      delay);
             })
         .thenCompose(f -> f);
+  }
+
+  /** 1s, 2s, 4s, ... doubling per failed attempt, capped at {@link #CATCHUP_MAX_RETRY_DELAY}. */
+  static Duration catchupRetryDelay(final int attempt) {
+    final long seconds = 1L << Math.min(attempt - 1, 5);
+    return Duration.ofSeconds(Math.min(seconds, CATCHUP_MAX_RETRY_DELAY.toSeconds()));
   }
 
   private CompletableFuture<Void> downloadPivotCatchupRangeOnce(

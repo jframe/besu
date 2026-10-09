@@ -50,12 +50,16 @@ import org.hyperledger.besu.services.pipeline.Pipeline;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -93,6 +97,7 @@ class SnapSyncChainDownloaderSnapV2Test {
   private SynchronizerConfiguration syncConfig;
   private Pipeline<List<BlockHeader>> balPipeline;
   private Pipeline<List<BlockHeader>> forwardPipeline;
+  private final Deque<Runnable> scheduledRetries = new ArrayDeque<>();
 
   @BeforeEach
   @SuppressWarnings("unchecked")
@@ -134,10 +139,33 @@ class SnapSyncChainDownloaderSnapV2Test {
     lenient()
         .when(scheduler.startPipeline(any()))
         .thenReturn(CompletableFuture.completedFuture(null));
-    // Run delayed retries immediately.
+    // Delayed retries are queued and run by runScheduledRetries().
     lenient()
         .when(scheduler.scheduleFutureTask(any(Supplier.class), any(Duration.class)))
-        .thenAnswer(inv -> ((Supplier<CompletableFuture<?>>) inv.getArgument(0)).get());
+        .thenAnswer(
+            inv -> {
+              final Supplier<CompletableFuture<Object>> task = inv.getArgument(0);
+              final CompletableFuture<Object> result = new CompletableFuture<>();
+              scheduledRetries.add(
+                  () ->
+                      task.get()
+                          .whenComplete(
+                              (value, error) -> {
+                                if (error != null) {
+                                  result.completeExceptionally(error);
+                                } else {
+                                  result.complete(value);
+                                }
+                              }));
+              return result;
+            });
+  }
+
+  private void runScheduledRetries() {
+    Runnable retry;
+    while ((retry = scheduledRetries.poll()) != null) {
+      retry.run();
+    }
   }
 
   @Test
@@ -279,23 +307,69 @@ class SnapSyncChainDownloaderSnapV2Test {
   }
 
   @Test
-  void pivotCatchupFailsWhenItsDownloadFails() {
+  @SuppressWarnings("unchecked")
+  void pivotCatchupKeepsRetryingUntilTheDownloadSucceeds() throws Exception {
+    // A failed catch-up fails the snap/2 world state download, which restarts from scratch, so
+    // the catch-up must never give up on its own.
     final BlockHeader catchupPivot = header(2000);
     final SnapSyncChainDownloader downloader = downloader();
     startWithCycleBlockedInStage2(downloader);
-    catchupHeaderDownload(
-        catchupPivot, CompletableFuture.failedFuture(new IllegalStateException("no peers")));
+    final Pipeline<Long> catchupHeaderPipeline = mock(Pipeline.class);
+    final CompletableFuture<Void> timeout =
+        CompletableFuture.failedFuture(new TimeoutException("BALs timed out"));
+    catchupHeaderDownload(catchupPivot, catchupHeaderPipeline, timeout);
+    when(scheduler.startPipeline(catchupHeaderPipeline))
+        .thenReturn(
+            timeout,
+            timeout,
+            timeout,
+            timeout,
+            timeout,
+            timeout,
+            timeout,
+            timeout,
+            CompletableFuture.completedFuture(null));
+    catchupBalDownload(catchupPivot);
 
     final CompletableFuture<Void> catchup =
         downloader.preparePivotCatchup(initialPivot, catchupPivot);
+    assertThat(catchup).isNotDone();
+    runScheduledRetries();
 
-    assertThatThrownBy(() -> catchup.get(5, TimeUnit.SECONDS))
-        .hasRootCauseInstanceOf(IllegalStateException.class);
-    verify(pipelineFactory, times(SnapSyncChainDownloader.MAX_CATCHUP_DOWNLOAD_ATTEMPTS))
-        .createBackwardHeaderDownloadPipeline(
-            argThat(s -> s.pivotBlockHeader().equals(catchupPivot)));
-    verify(pipelineFactory, never())
-        .createBlockAccessListDownloadPipeline(anyLong(), eq(catchupPivot));
+    catchup.get(5, TimeUnit.SECONDS);
+    verify(scheduler, times(9)).startPipeline(catchupHeaderPipeline);
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void pivotCatchupStopsRetryingWhenTheChainDownloadIsCancelled() {
+    final BlockHeader catchupPivot = header(2000);
+    final SnapSyncChainDownloader downloader = downloader();
+    startWithCycleBlockedInStage2(downloader);
+    final Pipeline<Long> catchupHeaderPipeline = mock(Pipeline.class);
+    catchupHeaderDownload(
+        catchupPivot,
+        catchupHeaderPipeline,
+        CompletableFuture.failedFuture(new TimeoutException("BALs timed out")));
+    final CompletableFuture<Void> catchup =
+        downloader.preparePivotCatchup(initialPivot, catchupPivot);
+
+    downloader.cancel();
+    runScheduledRetries();
+
+    assertThatThrownBy(() -> catchup.get(1, TimeUnit.SECONDS))
+        .isInstanceOf(CancellationException.class);
+    verify(scheduler, times(1)).startPipeline(catchupHeaderPipeline);
+  }
+
+  @Test
+  void pivotCatchupRetryDelayDoublesUpToTheCap() {
+    assertThat(
+            IntStream.rangeClosed(1, 8)
+                .mapToObj(SnapSyncChainDownloader::catchupRetryDelay)
+                .map(Duration::toSeconds)
+                .toList())
+        .containsExactly(1L, 2L, 4L, 8L, 16L, 30L, 30L, 30L);
   }
 
   @Test
@@ -316,8 +390,11 @@ class SnapSyncChainDownloaderSnapV2Test {
             CompletableFuture.completedFuture(null));
     catchupBalDownload(catchupPivot);
 
-    downloader.preparePivotCatchup(initialPivot, catchupPivot).get(5, TimeUnit.SECONDS);
+    final CompletableFuture<Void> catchup =
+        downloader.preparePivotCatchup(initialPivot, catchupPivot);
+    runScheduledRetries();
 
+    catchup.get(5, TimeUnit.SECONDS);
     verify(pipelineFactory).createBlockAccessListDownloadPipeline(anyLong(), eq(catchupPivot));
   }
 
