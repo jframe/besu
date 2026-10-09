@@ -40,6 +40,8 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.common.StateRootMismatchException;
+import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
@@ -62,8 +64,10 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
@@ -735,9 +739,9 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     for (final SnapDataRequest request : queuedRequests) {
       if (request instanceof SnapV2StorageRangeRequest storageRequest) {
         // Old root is still valid for pending without changes
+        final Bytes32 correctRoot = correctRoots.get(storageRequest.getAccountHash());
         final Bytes32 newRoot =
-            correctRoots.getOrDefault(
-                storageRequest.getAccountHash(), readStorageRoot(storageRequest.getAccountHash()));
+            correctRoot != null ? correctRoot : readStorageRoot(storageRequest.getAccountHash());
         queue.add(storageRequest.retarget(newPivotBlockHeader, newRoot));
       } else {
         throw new IllegalStateException(
@@ -791,10 +795,12 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     return purged;
   }
 
-  private Bytes32 readStorageRoot(final Hash accountHash) {
+  @VisibleForTesting
+  Bytes32 readStorageRoot(final Hash accountHash) {
     return worldStateStorageCoordinator
         .applyForStrategy(
-            bonsai -> bonsai.getAccount(accountHash), forest -> Optional.<Bytes>empty())
+            bonsai -> bonsai.getAccount(accountHash),
+            forest -> readForestAccount(forest, accountHash))
         .map(
             b ->
                 Bytes32.wrap(
@@ -805,6 +811,21 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
                     "Storage root not found for account "
                         + accountHash
                         + " after BAL application during pivot catch-up"));
+  }
+
+  /**
+   * Forest has no flat account store, so the account is looked up in the account trie at the
+   * tracked world state root, which the account range requests and the BAL applier keep current.
+   */
+  private Optional<Bytes> readForestAccount(
+      final ForestWorldStateKeyValueStorage forest, final Hash accountHash) {
+    final Bytes32 root = forest.getWorldStateRoot().orElse(MerkleTrie.EMPTY_TRIE_NODE_HASH);
+    return new StoredMerklePatriciaTrie<>(
+            worldStateStorageCoordinator::getAccountStateTrieNode,
+            root,
+            Function.identity(),
+            Function.identity())
+        .get(accountHash.getBytes());
   }
 
   private CompletableFuture<Map<Hash, Bytes32>> fetchAccountStorageRoots(
