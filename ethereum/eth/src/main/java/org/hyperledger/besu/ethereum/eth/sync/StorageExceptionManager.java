@@ -15,14 +15,19 @@
 package org.hyperledger.besu.ethereum.eth.sync;
 
 import org.hyperledger.besu.plugin.services.exception.StorageException;
+import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 
 import java.util.EnumSet;
 import java.util.Optional;
 
 import org.rocksdb.RocksDBException;
 import org.rocksdb.Status;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class StorageExceptionManager {
+
+  private static final Logger LOG = LoggerFactory.getLogger(StorageExceptionManager.class);
 
   private static final EnumSet<Status.Code> RETRYABLE_STATUS_CODES =
       EnumSet.of(Status.Code.TimedOut, Status.Code.TryAgain, Status.Code.Busy);
@@ -53,6 +58,21 @@ public final class StorageExceptionManager {
               return result;
             })
         .orElse(false);
+  }
+
+  /**
+   * Rolls back an updater that will not be committed. An abandoned updater keeps its underlying
+   * transaction open, and with it every row lock it took, so concurrent writers that touch the same
+   * keys (for example identical Forest trie nodes) time out until the process restarts.
+   *
+   * @param updater the updater to discard
+   */
+  public static void rollbackQuietly(final WorldStateKeyValueStorage.Updater updater) {
+    try {
+      updater.rollback();
+    } catch (final RuntimeException e) {
+      LOG.debug("Ignoring failure while rolling back an abandoned world state updater", e);
+    }
   }
 
   public static long getRetryableErrorCounter() {

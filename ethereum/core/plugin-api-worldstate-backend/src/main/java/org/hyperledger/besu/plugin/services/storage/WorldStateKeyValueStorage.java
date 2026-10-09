@@ -54,5 +54,11 @@ public interface WorldStateKeyValueStorage {
 
     /** Atomically persists all staged write operations to the underlying storage. */
     void commit();
+
+    /**
+     * Discards all staged write operations and releases the underlying transaction, including any
+     * locks it holds. Must be called on an updater that will not be committed.
+     */
+    void rollback();
   }
 }

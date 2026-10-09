@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.canRetryOnError;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.errorCountAtThreshold;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.getRetryableErrorCounter;
+import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.rollbackQuietly;
 import static org.hyperledger.besu.ethereum.trie.RangeManager.MAX_RANGE;
 import static org.hyperledger.besu.ethereum.trie.RangeManager.MIN_RANGE;
 
@@ -76,8 +77,9 @@ public class SnapV2PersistDataStep {
 
   public List<Task<SnapDataRequest>> persist(final List<Task<SnapDataRequest>> tasks) {
     final List<Runnable> pendingUpdates = new ArrayList<>();
+    final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
+    boolean commitStarted = false;
     try {
-      final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
       for (final Task<SnapDataRequest> task : tasks) {
         final SnapDataRequest request = task.getData();
         if (request.isExpired(snapSyncState)) {
@@ -100,6 +102,7 @@ public class SnapV2PersistDataStep {
           pendingUpdates.add(() -> trackRangesAndEnqueueChildren(request, children));
         }
       }
+      commitStarted = true;
       updater.commit();
     } catch (final StorageException storageException) {
       if (canRetryOnError(storageException)) {
@@ -113,6 +116,11 @@ public class SnapV2PersistDataStep {
         return tasks;
       }
       throw storageException;
+    } finally {
+      // A failed commit closes its own transaction; anything earlier leaves it open with its locks.
+      if (!commitStarted) {
+        rollbackQuietly(updater);
+      }
     }
     // Only reached after successful commit — apply tracking + enqueue atomically
     for (final Runnable update : pendingUpdates) {

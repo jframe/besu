@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.canRetryOnError;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.errorCountAtThreshold;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.getRetryableErrorCounter;
+import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.rollbackQuietly;
 
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapRequestContext;
@@ -54,8 +55,9 @@ public class PersistDataStep {
   }
 
   public List<Task<SnapDataRequest>> persist(final List<Task<SnapDataRequest>> tasks) {
+    final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
+    boolean commitStarted = false;
     try {
-      final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
       for (Task<SnapDataRequest> task : tasks) {
         if (task.getData().isResponseReceived()) {
           // enqueue child requests
@@ -90,6 +92,7 @@ public class PersistDataStep {
           }
         }
       }
+      commitStarted = true;
       updater.commit();
     } catch (StorageException storageException) {
       if (canRetryOnError(storageException)) {
@@ -105,6 +108,11 @@ public class PersistDataStep {
         tasks.forEach(task -> task.getData().clear());
       } else {
         throw storageException;
+      }
+    } finally {
+      // A failed commit closes its own transaction; anything earlier leaves it open with its locks.
+      if (!commitStarted) {
+        rollbackQuietly(updater);
       }
     }
     return tasks;

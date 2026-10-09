@@ -670,6 +670,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
       trieLogStorageTransaction.close();
     }
 
+    @Override
     public void rollback() {
       trieNodeStrategy.onRollback(composedWorldStateTransaction);
       composedWorldStateTransaction.rollback();

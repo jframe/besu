@@ -202,6 +202,7 @@ public class ForestWorldStateKeyValueStorage implements WorldStateKeyValueStorag
       }
     }
 
+    @Override
     public void rollback() {
       addedNodes.clear();
       transaction.rollback();

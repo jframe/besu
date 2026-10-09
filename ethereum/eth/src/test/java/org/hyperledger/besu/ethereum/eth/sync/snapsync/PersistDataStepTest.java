@@ -16,7 +16,9 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -33,16 +35,20 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldSt
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
+import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.services.tasks.Task;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.rocksdb.RocksDBException;
+import org.rocksdb.Status;
 
 public class PersistDataStepTest {
 
@@ -135,6 +141,47 @@ public class PersistDataStepTest {
           "NullPointerException occurred during persist step, taskElement might be null: "
               + e.getMessage());
     }
+  }
+
+  @Test
+  public void shouldRollBackUpdaterWhenRetryableErrorOccursBeforeCommit() {
+    // An abandoned updater keeps its transaction open and holds its row locks, which makes every
+    // later batch touching the same keys time out.
+    final WorldStateKeyValueStorage.Updater updater =
+        mock(BonsaiWorldStateKeyValueStorage.Updater.class);
+    when(worldStateKeyValueStorage.updater()).thenReturn(updater);
+    final SnapDataRequest request = lockTimeoutRequest();
+
+    final List<Task<SnapDataRequest>> tasks = List.of(new StubTask(request));
+    final List<Task<SnapDataRequest>> result = persistDataStep.persist(tasks);
+
+    assertThat(result).isSameAs(tasks);
+    verify(request).clear();
+    verify(updater).rollback();
+    verify(updater, never()).commit();
+  }
+
+  @Test
+  public void shouldNotRollBackUpdaterThatWasCommitted() {
+    final WorldStateKeyValueStorage.Updater updater = spy(worldStateKeyValueStorage.updater());
+    when(worldStateKeyValueStorage.updater()).thenReturn(updater);
+
+    persistDataStep.persist(TaskGenerator.createAccountRequest(true, false));
+
+    verify(updater).commit();
+    verify(updater, never()).rollback();
+  }
+
+  private static SnapDataRequest lockTimeoutRequest() {
+    final SnapDataRequest request = mock(SnapDataRequest.class);
+    when(request.isResponseReceived()).thenReturn(true);
+    when(request.getChildRequests(any(), any(), any())).thenReturn(Stream.empty());
+    when(request.persist(any(), any(), any(), any(), any()))
+        .thenThrow(
+            new StorageException(
+                new RocksDBException(
+                    new Status(Status.Code.TimedOut, Status.SubCode.LockTimeout, "lock timeout"))));
+    return request;
   }
 
   private void assertDataPersisted(final List<Task<SnapDataRequest>> tasks) {

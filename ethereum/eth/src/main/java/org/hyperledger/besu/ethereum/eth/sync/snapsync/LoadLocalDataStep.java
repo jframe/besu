@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.canRetryOnError;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.errorCountAtThreshold;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.getRetryableErrorCounter;
+import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.rollbackQuietly;
 
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.TrieNodeHealingRequest;
@@ -75,13 +76,21 @@ public class LoadLocalDataStep {
           request.setData(existingData.get());
           request.setRequiresPersisting(false);
           final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
-          request.persist(
-              worldStateStorageCoordinator,
-              updater,
-              downloadState,
-              snapSyncState,
-              snapSyncConfiguration);
-          updater.commit();
+          boolean commitStarted = false;
+          try {
+            request.persist(
+                worldStateStorageCoordinator,
+                updater,
+                downloadState,
+                snapSyncState,
+                snapSyncConfiguration);
+            commitStarted = true;
+            updater.commit();
+          } finally {
+            if (!commitStarted) {
+              rollbackQuietly(updater);
+            }
+          }
           downloadState.enqueueRequests(
               request.getRootStorageRequests(worldStateStorageCoordinator));
           completedTasks.put(task);
