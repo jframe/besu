@@ -22,6 +22,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
+import java.util.OptionalLong;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -90,5 +91,22 @@ class ArchiveCoverageTrackerTest {
     // NOT committed
 
     assertThat(progress.hasArchiveBlock(7L)).isFalse();
+  }
+
+  @Test
+  void lastIndexedBlockEmptyWhenNothingRecorded() {
+    assertThat(progress.lastIndexedBlock()).isEmpty();
+  }
+
+  @Test
+  void lastIndexedBlockTracksMostRecentRecord() {
+    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
+    progress.record(tx1, 0L);
+    tx1.commit();
+    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
+    progress.record(tx2, 1L);
+    tx2.commit();
+
+    assertThat(progress.lastIndexedBlock()).isEqualTo(OptionalLong.of(1L));
   }
 }

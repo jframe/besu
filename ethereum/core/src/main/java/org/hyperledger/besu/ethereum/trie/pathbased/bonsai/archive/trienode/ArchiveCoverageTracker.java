@@ -21,6 +21,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.OptionalLong;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -57,6 +58,15 @@ public final class ArchiveCoverageTracker {
               return block >= b.getLong(0) && block <= b.getLong(8);
             })
         .orElse(false);
+  }
+
+  /** Returns the last block indexed into the archive, or empty if nothing has been indexed. */
+  public OptionalLong lastIndexedBlock() {
+    return storage
+        .get(TRIE_BRANCH_STORAGE_ARCHIVE, COVERAGE_KEY)
+        .filter(raw -> raw.length >= 16)
+        .map(raw -> OptionalLong.of(Bytes.wrap(raw).getLong(8)))
+        .orElse(OptionalLong.empty());
   }
 
   /**
