@@ -127,16 +127,62 @@ class ArchiveTrieNodeWriterTest {
   }
 
   @Test
-  void nonContiguousUpdateForcesFullCheckpoint() {
+  void detachedCommitWritesToCanonicalStorageNotTheGivenTransaction() {
+    final SegmentedKeyValueStorage scratch =
+        new SegmentedInMemoryKeyValueStorage(
+            List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    final SegmentedKeyValueStorageTransaction scratchTx = scratch.startTransaction();
+
+    trieNodeWriter.capture(
+        nk,
+        LOCATION,
+        0L,
+        branchNode(0),
+        null,
+        scratchTx,
+        ArchiveTrieNodeWriter.CommitMode.DETACHED);
+    trieNodeWriter.onBeforeCommit(scratchTx);
+    scratchTx.rollback(); // the scratch world state is discarded
+
+    assertThat(historyStore.getLatestBefore(nk, 0L)).isPresent();
+    assertThat(coverageTracker.hasArchiveBlock(0L)).isTrue();
+    assertThat(scratch.stream(TRIE_BRANCH_STORAGE_ARCHIVE).count()).isZero();
+  }
+
+  @Test
+  void inlineCommitIsInvisibleUntilTheTransactionCommits() {
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    trieNodeWriter.capture(nk, LOCATION, 0L, branchNode(0), null, tx);
+    trieNodeWriter.onBeforeCommit(tx);
+
+    assertThat(historyStore.getLatestBefore(nk, 0L)).isEmpty();
+    tx.commit();
+    assertThat(historyStore.getLatestBefore(nk, 0L)).isPresent();
+  }
+
+  @Test
+  void updateAfterWriterRestartIsStillDiff() {
+    // contiguity now comes from coverage, not from in-memory writer state
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
     enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
-    // block 5 does not follow block 0 — chain is not contiguous
-    enqueueAndCommit(5L, nk, LOCATION, branchNode(5), branchNode(4));
 
-    final var entry = historyStore.getLatestBefore(nk, 5L).orElseThrow();
-    assertThat(entry.block()).isEqualTo(5L);
-    assertThat(entry.codecEntry().isFull()).isTrue();
-    assertThat(entry.counter()).isZero();
+    final ArchiveTrieNodeWriter restarted =
+        new ArchiveTrieNodeWriter(
+            historyStore,
+            coverageTracker,
+            Executors.newFixedThreadPool(1),
+            DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    restarted.capture(nk, LOCATION, 1L, branchNode(1), branchNode(0), tx);
+    restarted.onBeforeCommit(tx);
+    tx.commit();
+
+    final var entry = historyStore.getLatestBefore(nk, 1L).orElseThrow();
+    assertThat(entry.codecEntry().isFull()).isFalse();
+    assertThat(entry.counter()).isEqualTo(1);
   }
 
   @Test

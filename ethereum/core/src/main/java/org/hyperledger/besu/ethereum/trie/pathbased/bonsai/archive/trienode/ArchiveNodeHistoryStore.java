@@ -69,6 +69,16 @@ public final class ArchiveNodeHistoryStore {
   }
 
   /**
+   * Starts a low-priority transaction on the canonical archive storage, for history writes that
+   * must not ride a world-state transaction.
+   *
+   * @return a new low-priority transaction
+   */
+  public SegmentedKeyValueStorageTransaction startLowPriorityTransaction() {
+    return storage.startLowPriorityTransaction();
+  }
+
+  /**
    * Writes a pre-built history entry.
    *
    * @param tx the transaction to write through

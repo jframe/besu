@@ -41,15 +41,25 @@ public class ArchiveTrieNodeWriter implements Closeable {
 
   private record EncodedEntry(Bytes historyKey, Bytes storedValue) {}
 
+  /** Where a block's history entries and coverage record are committed. */
+  enum CommitMode {
+    /** Into the world-state transaction being committed, atomically with the live trie writes. */
+    INLINE,
+    /**
+     * Into a separate canonical transaction, for scratch world states whose writes are discarded.
+     */
+    DETACHED
+  }
+
   private static class CaptureBuffer {
     final long block;
-    final boolean chainContiguous;
+    final CommitMode mode;
     final List<CaptureRequest> pendingRequests = new ArrayList<>();
     final List<Future<List<EncodedEntry>>> inFlight = new ArrayList<>();
 
-    CaptureBuffer(final long block, final boolean chainContiguous) {
+    CaptureBuffer(final long block, final CommitMode mode) {
       this.block = block;
-      this.chainContiguous = chainContiguous;
+      this.mode = mode;
     }
   }
 
@@ -64,7 +74,6 @@ public class ArchiveTrieNodeWriter implements Closeable {
   // One buffer per open transaction, keyed by identity; removed on commit or rollback.
   private final ConcurrentHashMap<SegmentedKeyValueStorageTransaction, CaptureBuffer> buffers =
       new ConcurrentHashMap<>();
-  private volatile long lastArchivedBlock = -1L;
 
   public ArchiveTrieNodeWriter(
       final ArchiveNodeHistoryStore historyStore,
@@ -85,16 +94,6 @@ public class ArchiveTrieNodeWriter implements Closeable {
     return locationSizeBytes <= 2 ? shallowCheckpointInterval : deepCheckpointInterval;
   }
 
-  /**
-   * Captures a trie-node write for async history-entry computation.
-   *
-   * @param naturalKey the archive key for this node (account or storage form)
-   * @param location the nibble-path location in bytes, used to select the checkpoint interval
-   * @param block the block number being imported
-   * @param newNode the new RLP-encoded node value, or {@code null} if the node is being deleted
-   * @param priorNode the previous RLP-encoded node value, or {@code null} if this is a creation
-   * @param transaction the open transaction that will commit this block's writes
-   */
   void capture(
       final Bytes naturalKey,
       final Bytes location,
@@ -102,9 +101,30 @@ public class ArchiveTrieNodeWriter implements Closeable {
       final Bytes newNode,
       final Bytes priorNode,
       final SegmentedKeyValueStorageTransaction transaction) {
+    capture(naturalKey, location, block, newNode, priorNode, transaction, CommitMode.INLINE);
+  }
+
+  /**
+   * Captures a trie-node write for async history-entry computation.
+   *
+   * @param naturalKey the archive key for this node (account or storage form)
+   * @param location the nibble-path location in bytes, used to select the checkpoint interval
+   * @param block the block number being archived
+   * @param newNode the new RLP-encoded node value, or {@code null} if the node is being deleted
+   * @param priorNode the previous RLP-encoded node value, or {@code null} if this is a creation
+   * @param transaction the open transaction that will commit this block's writes
+   * @param mode where the block's history entries are committed
+   */
+  void capture(
+      final Bytes naturalKey,
+      final Bytes location,
+      final long block,
+      final Bytes newNode,
+      final Bytes priorNode,
+      final SegmentedKeyValueStorageTransaction transaction,
+      final CommitMode mode) {
     final CaptureBuffer buf =
-        buffers.computeIfAbsent(
-            transaction, tx -> new CaptureBuffer(block, block == lastArchivedBlock + 1L));
+        buffers.computeIfAbsent(transaction, tx -> new CaptureBuffer(block, mode));
     synchronized (buf) {
       if (buf.block != block) {
         throw new IllegalStateException(
@@ -124,12 +144,10 @@ public class ArchiveTrieNodeWriter implements Closeable {
     final List<CaptureRequest> batch = List.copyOf(buf.pendingRequests);
     buf.pendingRequests.clear();
     buf.inFlight.add(
-        capturePool.submit(
-            () -> batch.stream().map(r -> encodeHistoryEntry(r, buf.chainContiguous)).toList()));
+        capturePool.submit(() -> batch.stream().map(this::encodeHistoryEntry).toList()));
   }
 
-  private EncodedEntry encodeHistoryEntry(
-      final CaptureRequest request, final boolean chainContiguous) {
+  private EncodedEntry encodeHistoryEntry(final CaptureRequest request) {
     final Bytes priorNode = request.priorNode();
     final Bytes newNode = request.newNode();
 
@@ -137,7 +155,7 @@ public class ArchiveTrieNodeWriter implements Closeable {
       return createEncodedEntry(request, 0, ArchiveTrieNodeCodec.encodeDiff(priorNode, newNode));
     }
 
-    if (request.block() != 0L && chainContiguous) {
+    if (request.block() != 0L) {
       final Optional<ArchiveNodeHistoryStore.HistoryEntry> priorEntry =
           historyStore.getLatestBefore(request.naturalKey(), request.block() - 1L);
       if (priorEntry.isPresent() && !priorEntry.get().codecEntry().isDeletion()) {
@@ -169,11 +187,10 @@ public class ArchiveTrieNodeWriter implements Closeable {
       if (!buf.pendingRequests.isEmpty()) {
         dispatchBatch(buf);
       }
+      final List<EncodedEntry> entries = new ArrayList<>();
       try {
         for (final Future<List<EncodedEntry>> future : buf.inFlight) {
-          for (final EncodedEntry entry : future.get()) {
-            historyStore.putEncoded(transaction, entry.historyKey(), entry.storedValue());
-          }
+          entries.addAll(future.get());
         }
       } catch (final InterruptedException e) {
         Thread.currentThread().interrupt();
@@ -181,9 +198,30 @@ public class ArchiveTrieNodeWriter implements Closeable {
       } catch (final ExecutionException e) {
         throw new RuntimeException("trie-node capture failed", e.getCause());
       }
-      coverageTracker.record(transaction, buf.block);
-      lastArchivedBlock = buf.block;
+      if (buf.mode == CommitMode.DETACHED) {
+        final SegmentedKeyValueStorageTransaction detached =
+            historyStore.startLowPriorityTransaction();
+        try {
+          writeEntries(detached, entries, buf.block);
+          detached.commit();
+        } catch (final RuntimeException e) {
+          detached.rollback();
+          throw e;
+        }
+      } else {
+        writeEntries(transaction, entries, buf.block);
+      }
     }
+  }
+
+  private void writeEntries(
+      final SegmentedKeyValueStorageTransaction target,
+      final List<EncodedEntry> entries,
+      final long block) {
+    for (final EncodedEntry entry : entries) {
+      historyStore.putEncoded(target, entry.historyKey(), entry.storedValue());
+    }
+    coverageTracker.record(target, block);
   }
 
   public void onRollback(final SegmentedKeyValueStorageTransaction transaction) {
