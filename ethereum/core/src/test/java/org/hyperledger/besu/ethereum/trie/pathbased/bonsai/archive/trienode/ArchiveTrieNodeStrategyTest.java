@@ -86,7 +86,7 @@ class ArchiveTrieNodeStrategyTest {
   private void put(final ArchiveTrieNodeStrategy strategy, final Bytes key, final Bytes node) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putTrieNode(storage, tx, key, hash(node), node);
-    strategy.onBeforeCommit(storage, tx);
+    strategy.onBeforeBlockCommit(storage, tx);
     tx.commit();
   }
 
@@ -322,6 +322,11 @@ class ArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorage other =
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
+    // stored block 0 makes the candidate block 1, which is "next" for the coverage seeded above
+    final SegmentedKeyValueStorageTransaction seedOther = other.startTransaction();
+    seedOther.put(
+        TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
+    seedOther.commit();
     final SegmentedKeyValueStorageTransaction tx = other.startTransaction();
     final Bytes node = Bytes.fromHexString("0xeeee");
     strategy.putTrieNode(other, tx, Bytes.of(0x0e), hash(node), node);
@@ -355,6 +360,11 @@ class ArchiveTrieNodeStrategyTest {
     assertThat(coverageTracker.lastIndexedBlock()).hasValue(1L);
     assertThat(roller.stream(TRIE_BRANCH_STORAGE_ARCHIVE).count()).isZero();
 
+    // advance the roller's stored block so block 2 would be "next": only unregistration blocks it
+    final SegmentedKeyValueStorageTransaction advance = roller.startTransaction();
+    advance.put(
+        TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(1L).toArrayUnsafe());
+    advance.commit();
     strategy.unregisterRollerStorage(roller);
     final SegmentedKeyValueStorageTransaction after = roller.startTransaction();
     strategy.putTrieNode(roller, after, Bytes.of(0x0f), hash(node), node);
@@ -392,5 +402,56 @@ class ArchiveTrieNodeStrategyTest {
     assertThatThrownBy(() -> unarmed.putTrieNode(storage, tx, Bytes.of(0x02), hash(node), node))
         .isInstanceOf(NullPointerException.class)
         .hasMessageContaining("frontier");
+  }
+
+  private void blockCommitWithoutPuts(final ArchiveTrieNodeStrategy strategy) {
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.onBeforeBlockCommit(storage, tx);
+    tx.commit();
+  }
+
+  @Test
+  void emptyBlockStillAdvancesCoverage() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    seedCoverageAt(0L);
+    setStoredBlockNumber(0L);
+    blockCommitWithoutPuts(strategy); // block 1, no node writes
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(1L);
+
+    setStoredBlockNumber(1L);
+    put(strategy, Bytes.of(0x21), Bytes.fromHexString("0x2121")); // block 2
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(2L);
+  }
+
+  @Test
+  void blockWithOnlyNoOpRewriteStillAdvancesCoverage() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    final Bytes location = Bytes.of(0x22);
+    final Bytes node = Bytes.fromHexString("0x2222");
+    put(strategy, location, node); // genesis
+    setStoredBlockNumber(0L);
+    put(strategy, location, node); // block 1: identical bytes, skipped as no-op
+
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(1L);
+  }
+
+  @Test
+  void plainCommitWithoutPutsDoesNotAdvanceCoverage() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    seedCoverageAt(0L);
+    setStoredBlockNumber(0L);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.onBeforeCommit(storage, tx);
+    tx.commit();
+
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
+  }
+
+  @Test
+  void emptyAllocGenesisRecordsCoverage() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    blockCommitWithoutPuts(strategy);
+
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
   }
 }

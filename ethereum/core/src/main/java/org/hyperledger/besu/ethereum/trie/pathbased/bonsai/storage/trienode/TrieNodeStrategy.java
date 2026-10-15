@@ -46,5 +46,18 @@ public interface TrieNodeStrategy {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {}
 
+  /**
+   * Called instead of {@link #onBeforeCommit} when the transaction persists a block's world state.
+   * Defaults to {@link #onBeforeCommit}.
+   *
+   * @param storage the storage the transaction writes to
+   * @param transaction the transaction about to be committed
+   */
+  default void onBeforeBlockCommit(
+      final SegmentedKeyValueStorage storage,
+      final SegmentedKeyValueStorageTransaction transaction) {
+    onBeforeCommit(storage, transaction);
+  }
+
   default void onRollback(final SegmentedKeyValueStorageTransaction transaction) {}
 }

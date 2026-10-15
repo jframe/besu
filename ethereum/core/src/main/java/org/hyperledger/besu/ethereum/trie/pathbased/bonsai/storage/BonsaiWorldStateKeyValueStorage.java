@@ -531,6 +531,8 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     // code keyed by its hash is shared by every account holding it, so it is written only once
     private final Set<Hash> writtenCodeHashes = ConcurrentHashMap.newKeySet();
 
+    private boolean persistingBlock;
+
     public Updater(
         final SegmentedKeyValueStorageTransaction composedWorldStateTransaction,
         final KeyValueStorageTransaction trieLogStorageTransaction,
@@ -632,6 +634,25 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
           worldStorage, composedWorldStateTransaction, accountHash, slotHash);
     }
 
+    /**
+     * Marks this updater as persisting a block's world state, so the trie-node strategy sees a
+     * block commit rather than an arbitrary one.
+     *
+     * @return this updater
+     */
+    public Updater markBlockPersist() {
+      persistingBlock = true;
+      return this;
+    }
+
+    private void notifyBeforeCommit() {
+      if (persistingBlock) {
+        trieNodeStrategy.onBeforeBlockCommit(worldStorage, composedWorldStateTransaction);
+      } else {
+        trieNodeStrategy.onBeforeCommit(worldStorage, composedWorldStateTransaction);
+      }
+    }
+
     public SegmentedKeyValueStorageTransaction getWorldStateTransaction() {
       return composedWorldStateTransaction;
     }
@@ -644,7 +665,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     public void commit() {
       // onBeforeCommit can throw; rollback to avoid leaking open transactions
       try {
-        trieNodeStrategy.onBeforeCommit(worldStorage, composedWorldStateTransaction);
+        notifyBeforeCommit();
       } catch (final Exception e) {
         rollback();
         throw e;
@@ -662,7 +683,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     public void commitComposedOnly() {
       // onBeforeCommit can throw; rollback to avoid leaking open transactions
       try {
-        trieNodeStrategy.onBeforeCommit(worldStorage, composedWorldStateTransaction);
+        notifyBeforeCommit();
       } catch (final Exception e) {
         rollback();
         throw e;

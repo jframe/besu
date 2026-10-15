@@ -224,6 +224,9 @@ public abstract class PathBasedWorldState
         trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this);
       }
 
+      if (blockHeader != null) {
+        stateUpdater.markBlockPersist();
+      }
       stateUpdater.commitComposedOnly();
       // Advance in-memory head only after trielog + composed commit succeeded, so a failing
       // observer (e.g. TrieLogPruner during EthScheduler shutdown) cannot leave a half-updated

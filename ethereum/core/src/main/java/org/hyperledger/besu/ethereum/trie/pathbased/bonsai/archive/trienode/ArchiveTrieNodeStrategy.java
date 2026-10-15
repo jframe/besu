@@ -36,6 +36,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A {@link TrieNodeStrategy} that archives every trie-node write into {@code
@@ -61,7 +63,12 @@ import org.apache.tuweni.bytes.Bytes32;
  */
 public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
 
-  /** The capture decision for one transaction; block number and gate are constant within it. */
+  private static final Logger LOG = LoggerFactory.getLogger(ArchiveTrieNodeStrategy.class);
+
+  /**
+   * The capture decision for one transaction; block number and capture decision are constant within
+   * it.
+   */
   private record TxCapture(long block, boolean capture, ArchiveTrieNodeWriter.CommitMode mode) {}
 
   private final TrieNodeStrategy base;
@@ -144,7 +151,9 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
    * @param storage the storage to unregister
    */
   public void unregisterRollerStorage(final SegmentedKeyValueStorage storage) {
-    rollerStorage.compareAndSet(storage, null);
+    if (!rollerStorage.compareAndSet(storage, null)) {
+      LOG.warn("unregisterRollerStorage called with a storage that is not the registered one");
+    }
   }
 
   /**
@@ -159,6 +168,10 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
   // Capture rule: only the canonical head storage or the registered roller storage, only the block
   // directly after the last indexed one (genesis when nothing is indexed), and only at or below
   // the frontier. Everything else (RPC and cache layers, reorg rolls) is never captured.
+  //
+  // Invariant: the live and roller paths never target the same block. The roller's target is at or
+  // below the local head, while a live capture requires last == head, so the decision cached at
+  // the first put stays valid even though record() re-reads coverage at commit.
   private TxCapture decide(final SegmentedKeyValueStorage storage) {
     final long block = readBlockNumber(storage);
     final boolean isRoller = storage == rollerStorage.get();
@@ -261,6 +274,20 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {
     txCaptureCache.invalidate(transaction);
+    trieNodeWriter.onBeforeCommit(transaction);
+  }
+
+  @Override
+  public void onBeforeBlockCommit(
+      final SegmentedKeyValueStorage storage,
+      final SegmentedKeyValueStorageTransaction transaction) {
+    // A block persist records coverage even if it wrote no captured nodes (empty blocks, no-op
+    // rewrites), otherwise coverage would freeze at the first such block.
+    final TxCapture txCapture = txCaptureCache.get(transaction, ignored -> decide(storage));
+    txCaptureCache.invalidate(transaction);
+    if (txCapture.capture()) {
+      trieNodeWriter.beginBlock(transaction, txCapture.block(), txCapture.mode());
+    }
     trieNodeWriter.onBeforeCommit(transaction);
   }
 

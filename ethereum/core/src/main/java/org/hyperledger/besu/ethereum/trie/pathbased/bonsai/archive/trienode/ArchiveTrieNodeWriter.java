@@ -123,6 +123,34 @@ public class ArchiveTrieNodeWriter implements Closeable {
       final Bytes priorNode,
       final SegmentedKeyValueStorageTransaction transaction,
       final CommitMode mode) {
+    final CaptureBuffer buf = openBuffer(transaction, block, mode);
+    synchronized (buf) {
+      buf.pendingRequests.add(new CaptureRequest(naturalKey, location, block, newNode, priorNode));
+      if (buf.pendingRequests.size() >= BATCH_SIZE) {
+        dispatchBatch(buf);
+      }
+    }
+  }
+
+  /**
+   * Opens the capture buffer for a block persist without adding a request, so a block with no
+   * captured writes still records coverage in {@link #onBeforeCommit}.
+   *
+   * @param transaction the open transaction that will commit this block's writes
+   * @param block the block number being archived
+   * @param mode where the block's history entries are committed
+   */
+  void beginBlock(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final long block,
+      final CommitMode mode) {
+    openBuffer(transaction, block, mode);
+  }
+
+  private CaptureBuffer openBuffer(
+      final SegmentedKeyValueStorageTransaction transaction,
+      final long block,
+      final CommitMode mode) {
     final CaptureBuffer buf =
         buffers.computeIfAbsent(transaction, tx -> new CaptureBuffer(block, mode));
     synchronized (buf) {
@@ -133,11 +161,8 @@ public class ArchiveTrieNodeWriter implements Closeable {
                 + " but its transaction received a write for block "
                 + block);
       }
-      buf.pendingRequests.add(new CaptureRequest(naturalKey, location, block, newNode, priorNode));
-      if (buf.pendingRequests.size() >= BATCH_SIZE) {
-        dispatchBatch(buf);
-      }
     }
+    return buf;
   }
 
   private void dispatchBatch(final CaptureBuffer buf) {

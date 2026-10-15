@@ -17,16 +17,18 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage.WORLD_BLOCK_NUMBER_KEY;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.core.Synchronizer;
@@ -43,11 +45,15 @@ import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -194,13 +200,24 @@ class BonsaiArchiveFactoryTest {
     final BonsaiWorldStateKeyValueStorage storage = storage(config);
     archive = createArchive(config, storage);
 
-    archive.start(synchronizer, () -> 0L);
+    final ArchiveTrieNodeStrategy strategy =
+        (ArchiveTrieNodeStrategy) storage.getTrieNodeStrategy();
+    final SegmentedKeyValueStorage live = storage.getComposedWorldStateStorage();
+    final SegmentedKeyValueStorageTransaction seed = live.startTransaction();
+    strategy.getCoverageTracker().record(seed, 0L);
+    seed.put(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(0L).toArrayUnsafe());
+    seed.commit();
 
-    // The flat-DB migration may subscribe, but the capture strategy no longer does.
-    final ArgumentCaptor<Synchronizer.InSyncListener> listeners =
-        ArgumentCaptor.forClass(Synchronizer.InSyncListener.class);
-    verify(synchronizer, atLeast(0)).subscribeInSync(listeners.capture(), anyLong());
-    assertThat(listeners.getAllValues()).noneMatch(l -> l instanceof ArchiveTrieNodeStrategy);
+    archive.start(synchronizer, () -> 1_000L); // frontier = 1000 - 256
+
+    // Block 1 is non-genesis, so it consults the frontier: an unarmed strategy would throw.
+    final SegmentedKeyValueStorageTransaction tx = live.startTransaction();
+    final Bytes node = Bytes.fromHexString("0xabcd");
+    strategy.putTrieNode(live, tx, Bytes.of(0x01), Bytes32.wrap(Hash.hash(node).getBytes()), node);
+    strategy.onBeforeBlockCommit(live, tx);
+    tx.commit();
+
+    assertThat(strategy.getCoverageTracker().lastIndexedBlock()).hasValue(1L);
   }
 
   @Test
