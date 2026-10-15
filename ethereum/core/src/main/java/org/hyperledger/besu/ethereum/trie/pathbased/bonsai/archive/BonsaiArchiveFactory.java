@@ -53,10 +53,11 @@ public final class BonsaiArchiveFactory {
       final Blockchain blockchain,
       final MetricsSystem metricsSystem,
       final ExecutorService trieCapturePool,
-      final ScheduledExecutorService migrationExecutor) {
+      final ScheduledExecutorService migrationExecutor,
+      final ScheduledExecutorService rollerExecutor) {
     if (!DataStorageFormat.X_BONSAI_ARCHIVE.equals(dataStorageConfiguration.getDataStorageFormat())
         || !(worldStateArchive instanceof BonsaiArchiveWorldStateProvider provider)) {
-      return new NoOpBonsaiArchive(trieCapturePool, migrationExecutor);
+      return new NoOpBonsaiArchive(trieCapturePool, migrationExecutor, rollerExecutor);
     }
     final ExtraStorageConfiguration extraStorage =
         dataStorageConfiguration.getExtraStorageConfiguration();
@@ -83,6 +84,7 @@ public final class BonsaiArchiveFactory {
         extraStorage.getMaxLayersToLoad(),
         trieNodeStrategy,
         trieCapturePool,
-        migrationExecutor);
+        migrationExecutor,
+        rollerExecutor);
   }
 }

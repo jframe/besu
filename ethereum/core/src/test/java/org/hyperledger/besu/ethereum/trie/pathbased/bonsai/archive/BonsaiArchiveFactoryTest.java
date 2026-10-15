@@ -65,6 +65,7 @@ class BonsaiArchiveFactoryTest {
   private Synchronizer synchronizer;
   private ExecutorService trieCapturePool;
   private ScheduledExecutorService migrationExecutor;
+  private ScheduledExecutorService rollerExecutor;
   private BonsaiArchive archive;
 
   @BeforeEach
@@ -73,6 +74,7 @@ class BonsaiArchiveFactoryTest {
     synchronizer = mock(Synchronizer.class);
     trieCapturePool = Executors.newFixedThreadPool(1);
     migrationExecutor = Executors.newSingleThreadScheduledExecutor();
+    rollerExecutor = Executors.newSingleThreadScheduledExecutor();
   }
 
   @AfterEach
@@ -119,7 +121,8 @@ class BonsaiArchiveFactoryTest {
         blockchain,
         new NoOpMetricsSystem(),
         trieCapturePool,
-        migrationExecutor);
+        migrationExecutor,
+        rollerExecutor);
   }
 
   @Test
@@ -132,7 +135,8 @@ class BonsaiArchiveFactoryTest {
             blockchain,
             new NoOpMetricsSystem(),
             trieCapturePool,
-            migrationExecutor);
+            migrationExecutor,
+            rollerExecutor);
 
     archive.start(synchronizer, () -> 0L);
     verifyNoInteractions(synchronizer);
@@ -141,6 +145,7 @@ class BonsaiArchiveFactoryTest {
     archive = null;
     assertThat(trieCapturePool.isShutdown()).isTrue();
     assertThat(migrationExecutor.isShutdown()).isTrue();
+    assertThat(rollerExecutor.isShutdown()).isTrue();
   }
 
   @Test
@@ -221,6 +226,40 @@ class BonsaiArchiveFactoryTest {
   }
 
   @Test
+  void proofsEnabledWithSeededCoverageStartsRoller() {
+    final DataStorageConfiguration config = archiveConfig(true);
+    final BonsaiWorldStateKeyValueStorage storage = storage(config);
+    archive = createArchive(config, storage);
+    seedCoverage(storage, 0L);
+
+    archive.start(synchronizer, () -> 0L);
+
+    // roller registers a canonical-head observer; the flat migrator registers none in FULL mode
+    verify(blockchain).observeBlockAdded(any());
+  }
+
+  @Test
+  void emptyCoverageAboveGenesisDoesNotStartRoller() {
+    final DataStorageConfiguration config = archiveConfig(true);
+    final BonsaiWorldStateKeyValueStorage storage = storage(config);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(1_000L);
+    archive = createArchive(config, storage);
+
+    archive.start(synchronizer, () -> 1_000L);
+
+    verify(blockchain, never()).observeBlockAdded(any());
+  }
+
+  private static void seedCoverage(
+      final BonsaiWorldStateKeyValueStorage storage, final long block) {
+    final var tx = storage.getComposedWorldStateStorage().startTransaction();
+    ((ArchiveTrieNodeStrategy) storage.getTrieNodeStrategy())
+        .getCoverageTracker()
+        .record(tx, block);
+    tx.commit();
+  }
+
+  @Test
   void secondStartThrows() {
     final DataStorageConfiguration config = archiveConfig(false);
     archive = createArchive(config, storage(config));
@@ -241,5 +280,6 @@ class BonsaiArchiveFactoryTest {
 
     assertThat(trieCapturePool.isShutdown()).isTrue();
     assertThat(migrationExecutor.isShutdown()).isTrue();
+    assertThat(rollerExecutor.isShutdown()).isTrue();
   }
 }

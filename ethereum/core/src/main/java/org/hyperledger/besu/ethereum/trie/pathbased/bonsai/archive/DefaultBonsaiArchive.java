@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.Synchronizer;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveFrontier;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeRoller;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
@@ -45,8 +46,10 @@ final class DefaultBonsaiArchive implements BonsaiArchive {
   private final Optional<ArchiveTrieNodeStrategy> trieNodeStrategy;
   private final ExecutorService trieCapturePool;
   private final ScheduledExecutorService migrationExecutor;
+  private final ScheduledExecutorService rollerExecutor;
   private final AtomicBoolean started = new AtomicBoolean(false);
   private volatile BonsaiFlatDbToArchiveMigrator migrator;
+  private volatile ArchiveTrieNodeRoller roller;
 
   DefaultBonsaiArchive(
       final BonsaiArchiveWorldStateProvider provider,
@@ -56,7 +59,8 @@ final class DefaultBonsaiArchive implements BonsaiArchive {
       final long maxLayersToLoad,
       final Optional<ArchiveTrieNodeStrategy> trieNodeStrategy,
       final ExecutorService trieCapturePool,
-      final ScheduledExecutorService migrationExecutor) {
+      final ScheduledExecutorService migrationExecutor,
+      final ScheduledExecutorService rollerExecutor) {
     this.provider = provider;
     this.worldStateStorage = worldStateStorage;
     this.blockchain = blockchain;
@@ -65,6 +69,7 @@ final class DefaultBonsaiArchive implements BonsaiArchive {
     this.trieNodeStrategy = trieNodeStrategy;
     this.trieCapturePool = trieCapturePool;
     this.migrationExecutor = migrationExecutor;
+    this.rollerExecutor = rollerExecutor;
   }
 
   @Override
@@ -72,11 +77,27 @@ final class DefaultBonsaiArchive implements BonsaiArchive {
     if (!started.compareAndSet(false, true)) {
       throw new IllegalStateException("Bonsai archive already started");
     }
-    trieNodeStrategy.ifPresent(
-        strategy ->
-            strategy.armFrontier(
-                new ArchiveFrontier(blockchain, bestChainHeight, maxLayersToLoad)));
+    trieNodeStrategy.ifPresent(strategy -> startProofCapture(strategy, bestChainHeight));
     startMigration(synchronizer);
+  }
+
+  private void startProofCapture(
+      final ArchiveTrieNodeStrategy strategy, final LongSupplier bestChainHeight) {
+    final ArchiveFrontier frontier =
+        new ArchiveFrontier(blockchain, bestChainHeight, maxLayersToLoad);
+    strategy.armFrontier(frontier);
+    if (strategy.getCoverageTracker().lastIndexedBlock().isEmpty()
+        && blockchain.getChainHeadBlockNumber() > 0) {
+      LOG.warn(
+          "Bonsai archive proofs have no trie-node history (chain head {}); archive proofs need a "
+              + "full sync from genesis. Historical proofs fall back to trie-log rolls.",
+          blockchain.getChainHeadBlockNumber());
+      return;
+    }
+    final ArchiveTrieNodeRoller trieNodeRoller =
+        new ArchiveTrieNodeRoller(provider, blockchain, strategy, frontier, rollerExecutor);
+    roller = trieNodeRoller;
+    trieNodeRoller.start();
   }
 
   private void startMigration(final Synchronizer synchronizer) {
@@ -122,14 +143,18 @@ final class DefaultBonsaiArchive implements BonsaiArchive {
 
   @Override
   public void close() {
-    // Migrator first so its in-flight callback finishes before storage closes, then the capture
-    // strategy (drains and shuts down the trie-capture pool). shutdownNow afterwards is idempotent
-    // and covers components that were never started.
+    // Roller and migrator first so in-flight work finishes before storage closes, then the capture
+    // strategy (drains the trie-capture pool). shutdownNow afterwards is idempotent and covers
+    // components that were never started.
+    if (roller != null) {
+      roller.close();
+    }
     if (migrator != null) {
       migrator.close();
     }
     trieNodeStrategy.ifPresent(ArchiveTrieNodeStrategy::close);
     trieCapturePool.shutdownNow();
     migrationExecutor.shutdownNow();
+    rollerExecutor.shutdownNow();
   }
 }

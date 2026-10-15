@@ -728,7 +728,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             metricsSystem,
             MonitoredExecutors.newFixedThreadPool(
                 "trie-capture", syncConfig.getComputationParallelism(), metricsSystem),
-            MonitoredExecutors.newScheduledThreadPool("archive-migrator", 1, metricsSystem));
+            MonitoredExecutors.newScheduledThreadPool("archive-migrator", 1, metricsSystem),
+            MonitoredExecutors.newScheduledThreadPool("archive-proof-roller", 1, metricsSystem));
     // Close before storageProvider so background work finishes before RocksDB is closed
     closeables.addFirst(bonsaiArchive);
 
