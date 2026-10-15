@@ -1,0 +1,321 @@
+/*
+ * Copyright contributors to Besu.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
+import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL;
+import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL;
+import static org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead;
+
+import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.core.Block;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.BlockchainSetupUtil;
+import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
+import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.proof.WorldStateProof;
+import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.code.BonsaiCodeCache;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
+import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.ImmutableDataStorageConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.ImmutableExtraStorageConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
+import org.hyperledger.besu.evm.internal.EvmConfiguration;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
+
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.apache.tuweni.bytes.Bytes;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+
+class ArchiveTrieNodeRollerIntegrationTest {
+
+  private final AtomicLong frontier = new AtomicLong(Long.MAX_VALUE);
+  private BlockchainSetupUtil chain;
+  private BonsaiWorldStateKeyValueStorage storage;
+  private BonsaiArchiveWorldStateProvider provider;
+  private ArchiveTrieNodeStrategy strategy;
+  private ArchiveTrieNodeRoller roller;
+
+  @AfterEach
+  void tearDown() {
+    if (roller != null) {
+      roller.close();
+    }
+    if (strategy != null) {
+      strategy.close();
+    }
+  }
+
+  private void setUpChain(final long maxLayersToLoad) {
+    final DataStorageConfiguration config =
+        ImmutableDataStorageConfiguration.builder()
+            .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
+            .extraStorageConfiguration(
+                ImmutableExtraStorageConfiguration.builder()
+                    .maxLayersToLoad(maxLayersToLoad)
+                    .unstable(
+                        ImmutableExtraStorageConfiguration.Unstable.builder()
+                            .bonsaiArchiveStateProofsEnabled(true)
+                            .build())
+                    .build())
+            .build();
+    chain =
+        BlockchainSetupUtil.forTesting(
+            blockchain -> {
+              storage =
+                  new BonsaiWorldStateKeyValueStorage(
+                      new InMemoryKeyValueStorageProvider(), new NoOpMetricsSystem(), config);
+              provider =
+                  new BonsaiArchiveWorldStateProvider(
+                      storage,
+                      blockchain,
+                      config,
+                      new BonsaiCachedMerkleTrieLoader(new NoOpMetricsSystem()),
+                      null,
+                      EvmConfiguration.DEFAULT,
+                      new BonsaiCodeCache(),
+                      new NoOpMetricsSystem());
+              strategy =
+                  ArchiveTrieNodeStrategy.createArchiveStrategy(
+                      storage.getComposedWorldStateStorage(),
+                      Executors.newFixedThreadPool(2),
+                      DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
+                      DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+              storage.setTrieNodeStrategy(strategy);
+              strategy.armFrontier(frontier::get);
+              return provider;
+            });
+  }
+
+  private ArchiveTrieNodeRoller roller(final int maxBatch) {
+    return new ArchiveTrieNodeRoller(
+        provider,
+        chain.getBlockchain(),
+        strategy,
+        frontier::get,
+        Executors.newSingleThreadScheduledExecutor(),
+        1,
+        maxBatch);
+  }
+
+  private long lastIndexed() {
+    return strategy.getCoverageTracker().lastIndexedBlock().orElse(-1L);
+  }
+
+  private long head() {
+    return chain.getBlockchain().getChainHeadBlockNumber();
+  }
+
+  private BlockHeader header(final long number) {
+    return chain.getBlockchain().getBlockHeader(number).orElseThrow();
+  }
+
+  /** Addresses touched by the test chain's transactions (senders and recipients). */
+  private Set<Address> touchedAddresses() {
+    final Set<Address> addresses = new LinkedHashSet<>();
+    for (final Block block : chain.getBlocks()) {
+      for (final Transaction tx : block.getBody().getTransactions()) {
+        addresses.add(tx.getSender());
+        tx.getTo().ifPresent(addresses::add);
+      }
+    }
+    return addresses;
+  }
+
+  private Optional<List<Bytes>> archiveAccountProof(final long block, final Address address) {
+    return provider.getAccountProof(
+        header(block),
+        address,
+        List.of(),
+        maybeProof -> maybeProof.map(WorldStateProof::getAccountProof));
+  }
+
+  /** Oracle: the proof from a world state rolled to {@code block} via trie logs. */
+  private List<Bytes> rolledAccountProof(final long block, final Address address) {
+    final BlockHeader blockHeader = header(block);
+    try (var worldState =
+        provider.getWorldState(withBlockHeaderAndNoUpdateNodeHead(blockHeader)).orElseThrow()) {
+      final BonsaiWorldStateKeyValueStorage rolledStorage =
+          ((BonsaiWorldState) worldState).getWorldStateStorage();
+      return new WorldStateProofProvider(new WorldStateStorageCoordinator(rolledStorage))
+          .getAccountProof(blockHeader.getStateRoot(), address, List.of())
+          .orElseThrow()
+          .getAccountProof();
+    } catch (final Exception e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private Map<Bytes, Bytes> segmentContents(
+      final org.hyperledger.besu.plugin.services.storage.SegmentIdentifier segment) {
+    final Map<Bytes, Bytes> contents = new HashMap<>();
+    storage.getComposedWorldStateStorage().stream(segment)
+        .forEach(pair -> contents.put(Bytes.wrap(pair.getKey()), Bytes.wrap(pair.getValue())));
+    return contents;
+  }
+
+  @Test
+  void inlineCaptureTracksHeadWhileFrontierIsAhead() {
+    setUpChain(512L);
+    chain.importAllBlocks();
+    assertThat(lastIndexed()).isEqualTo(head());
+  }
+
+  @Test
+  void inlineCaptureStopsAtFrontierAndRollerCatchesUp() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    assertThat(lastIndexed()).isEqualTo(10L);
+
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(5);
+    roller.catchUp();
+
+    assertThat(lastIndexed()).isEqualTo(head());
+  }
+
+  @Test
+  void archiveProofsMatchRolledStateAcrossHandoffAndBatchBoundaries() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(5); // reseeds every 5 blocks: boundaries at 15/16, 20/21, ...
+    roller.catchUp();
+
+    for (long block = 1; block <= head(); block++) {
+      for (final Address address : touchedAddresses()) {
+        assertThat(archiveAccountProof(block, address))
+            .as("block %d address %s", block, address)
+            .contains(rolledAccountProof(block, address));
+      }
+    }
+  }
+
+  @Test
+  void rollerLeavesHeadTrieStorageUntouched() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    final Map<Bytes, Bytes> headTrieBefore = segmentContents(TRIE_BRANCH_STORAGE);
+    final Hash headRootBefore = provider.getWorldState().rootHash();
+
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(5);
+    roller.catchUp();
+
+    assertThat(segmentContents(TRIE_BRANCH_STORAGE)).isEqualTo(headTrieBefore);
+    assertThat(provider.getWorldState().rootHash()).isEqualTo(headRootBefore);
+  }
+
+  @Test
+  void historicalQueriesDoNotCapture() throws Exception {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    frontier.set(
+        Long.MAX_VALUE); // gate would now accept block 11 — but only from live/roller storage
+    final Map<Bytes, Bytes> archiveBefore = segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE);
+
+    for (final long block : new long[] {5L, 11L, 12L, head() - 1}) {
+      final var worldState =
+          provider.getWorldState(withBlockHeaderAndNoUpdateNodeHead(header(block)));
+      assertThat(worldState).as("historical world state at block %d", block).isPresent();
+      worldState.get().close();
+    }
+
+    assertThat(segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE)).isEqualTo(archiveBefore);
+    assertThat(lastIndexed()).isEqualTo(10L);
+  }
+
+  @Test
+  void restartedRollerResumesFromCoverage() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+
+    frontier.set(15L);
+    roller = roller(5);
+    roller.catchUp();
+    roller.close();
+    assertThat(lastIndexed()).isEqualTo(15L);
+
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(5);
+    roller.catchUp();
+    assertThat(lastIndexed()).isEqualTo(head());
+    for (long block = 13; block <= 18; block++) {
+      for (final Address address : touchedAddresses()) {
+        assertThat(archiveAccountProof(block, address))
+            .contains(rolledAccountProof(block, address));
+      }
+    }
+  }
+
+  @Test
+  void catchesUpBeyondHistoricalBlockLimit() {
+    setUpChain(8L); // historical queries refuse blocks more than 8 behind head
+    frontier.set(4L);
+    chain.importAllBlocks();
+    assertThat(head() - lastIndexed()).isGreaterThan(8L);
+
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(256);
+    roller.catchUp();
+
+    assertThat(lastIndexed()).isEqualTo(head());
+    // archive proof roots must hash to the header state root for every recovered block
+    for (long block = 5; block <= head(); block++) {
+      for (final Address address : touchedAddresses()) {
+        final List<Bytes> proof = archiveAccountProof(block, address).orElseThrow();
+        assertThat(Hash.hash(proof.get(0))).isEqualTo(header(block).getStateRoot());
+      }
+    }
+  }
+
+  @Test
+  void missingTrieLogLeavesCoverageUnchanged() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    final var trieLogTx = storage.getTrieLogStorage().startTransaction();
+    trieLogTx.remove(header(14L).getHash().getBytes().toArrayUnsafe());
+    trieLogTx.commit();
+
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(256);
+    roller.catchUp(); // seeding needs block 14's trie log → fails, logged
+
+    assertThat(lastIndexed()).isEqualTo(10L);
+  }
+}

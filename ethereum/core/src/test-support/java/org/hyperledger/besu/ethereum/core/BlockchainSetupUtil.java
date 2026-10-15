@@ -51,6 +51,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 
 public class BlockchainSetupUtil {
   private final GenesisState genesisState;
@@ -147,6 +148,7 @@ public class BlockchainSetupUtil {
         BlockchainSetupUtil::mainnetProtocolScheduleProvider,
         BlockchainSetupUtil::mainnetProtocolContextProvider,
         new EthScheduler(1, 1, 1, 1, new NoOpMetricsSystem()),
+        null,
         null);
   }
 
@@ -160,7 +162,24 @@ public class BlockchainSetupUtil {
         BlockchainSetupUtil::mainnetProtocolScheduleProvider,
         BlockchainSetupUtil::mainnetProtocolContextProvider,
         new EthScheduler(1, 1, 1, 1, new NoOpMetricsSystem()),
-        serviceManager);
+        serviceManager,
+        null);
+  }
+
+  /**
+   * Test chain whose world-state archive comes from {@code worldArchiveFactory}, which runs before
+   * the genesis state is written (so storage strategies installed there see block 0).
+   */
+  public static BlockchainSetupUtil forTesting(
+      final Function<MutableBlockchain, WorldStateArchive> worldArchiveFactory) {
+    return create(
+        BlockTestUtil.getTestChainResources(),
+        DataStorageFormat.BONSAI,
+        BlockchainSetupUtil::mainnetProtocolScheduleProvider,
+        BlockchainSetupUtil::mainnetProtocolContextProvider,
+        new EthScheduler(1, 1, 1, 1, new NoOpMetricsSystem()),
+        null,
+        worldArchiveFactory);
   }
 
   private static ProtocolSchedule mainnetProtocolScheduleProvider(
@@ -190,7 +209,8 @@ public class BlockchainSetupUtil {
       final ProtocolScheduleProvider protocolScheduleProvider,
       final ProtocolContextProvider protocolContextProvider,
       final EthScheduler scheduler,
-      final ServiceManager serviceManager) {
+      final ServiceManager serviceManager,
+      final Function<MutableBlockchain, WorldStateArchive> worldArchiveFactory) {
     try {
       final GenesisConfig genesisConfig = GenesisConfig.fromSource(chainResources.getGenesisURL());
       final ProtocolSchedule protocolSchedule = protocolScheduleProvider.get(genesisConfig);
@@ -200,9 +220,11 @@ public class BlockchainSetupUtil {
           GenesisState.fromConfig(genesisConfig, protocolSchedule, new BonsaiCodeCache());
       final MutableBlockchain blockchain = createInMemoryBlockchain(genesisState.getBlock());
       final WorldStateArchive worldArchive =
-          storageFormat == DataStorageFormat.BONSAI
-              ? createBonsaiInMemoryWorldStateArchive(blockchain, serviceManager)
-              : createInMemoryWorldStateArchive();
+          worldArchiveFactory != null
+              ? worldArchiveFactory.apply(blockchain)
+              : storageFormat == DataStorageFormat.BONSAI
+                  ? createBonsaiInMemoryWorldStateArchive(blockchain, serviceManager)
+                  : createInMemoryWorldStateArchive();
       final TransactionPool transactionPool = mock(TransactionPool.class);
 
       genesisState.writeStateTo(worldArchive.getWorldState());
