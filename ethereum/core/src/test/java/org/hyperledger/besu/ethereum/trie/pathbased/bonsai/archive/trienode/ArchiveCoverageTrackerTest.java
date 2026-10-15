@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -56,20 +57,37 @@ class ArchiveCoverageTrackerTest {
 
   @Test
   void indexStartTracksFirstRecordedBlock() {
-    // Blocks are always archived in ascending order.
+    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
+    progress.record(tx1, 5L);
+    tx1.commit();
+    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
+    progress.record(tx2, 6L);
+    tx2.commit();
+
+    assertThat(progress.hasArchiveBlock(4L)).isFalse();
+    assertThat(progress.hasArchiveBlock(5L)).isTrue();
+    assertThat(progress.hasArchiveBlock(6L)).isTrue();
+    assertThat(progress.hasArchiveBlock(7L)).isFalse();
+  }
+
+  @Test
+  void recordingAGapThrows() {
     final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
     progress.record(tx1, 5L);
     tx1.commit();
 
     final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
-    progress.record(tx2, 10L);
-    tx2.commit();
+    assertThatThrownBy(() -> progress.record(tx2, 7L)).isInstanceOf(IllegalStateException.class);
+  }
 
-    // Covered range is [5, 10]
-    assertThat(progress.hasArchiveBlock(5L)).isTrue();
-    assertThat(progress.hasArchiveBlock(10L)).isTrue();
-    assertThat(progress.hasArchiveBlock(4L)).isFalse();
-    assertThat(progress.hasArchiveBlock(11L)).isFalse();
+  @Test
+  void recordingTheSameBlockAgainThrows() {
+    final SegmentedKeyValueStorageTransaction tx1 = storage.startTransaction();
+    progress.record(tx1, 5L);
+    tx1.commit();
+
+    final SegmentedKeyValueStorageTransaction tx2 = storage.startTransaction();
+    assertThatThrownBy(() -> progress.record(tx2, 5L)).isInstanceOf(IllegalStateException.class);
   }
 
   @Test

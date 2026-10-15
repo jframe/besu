@@ -386,6 +386,12 @@ class ArchiveTrieNodeWriterTest {
    */
   private long replayAndSumStoredBytes(
       final Bytes location, final int blocks, final IntFunction<Bytes> nodeAt) {
+    // Fresh storage per replay: coverage must start empty, and records are strictly contiguous.
+    final SegmentedKeyValueStorage storage =
+        new SegmentedInMemoryKeyValueStorage(
+            List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
+    final ArchiveNodeHistoryStore historyStore = new ArchiveNodeHistoryStore(storage);
+    final ArchiveCoverageTracker coverageTracker = new ArchiveCoverageTracker(storage);
     final Bytes nk = ArchiveNodeKey.account(location);
     final ExecutorService pool = Executors.newFixedThreadPool(2);
     final ArchiveTrieNodeWriter localCapture =

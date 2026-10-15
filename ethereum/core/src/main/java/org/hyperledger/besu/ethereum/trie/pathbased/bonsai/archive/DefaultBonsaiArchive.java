@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.Synchronizer;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveFrontier;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
@@ -72,10 +73,9 @@ final class DefaultBonsaiArchive implements BonsaiArchive {
       throw new IllegalStateException("Bonsai archive already started");
     }
     trieNodeStrategy.ifPresent(
-        strategy -> {
-          strategy.setHasChainEstimate(() -> synchronizer.getBestPeerChainHead().isPresent());
-          synchronizer.subscribeInSync(strategy, maxLayersToLoad);
-        });
+        strategy ->
+            strategy.armFrontier(
+                new ArchiveFrontier(blockchain, bestChainHeight, maxLayersToLoad)));
     startMigration(synchronizer);
   }
 

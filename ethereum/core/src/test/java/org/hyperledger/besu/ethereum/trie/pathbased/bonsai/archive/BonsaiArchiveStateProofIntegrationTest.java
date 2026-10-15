@@ -74,7 +74,8 @@ class BonsaiArchiveStateProofIntegrationTest {
             Executors.newFixedThreadPool(2),
             DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
             DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
-    archiveStrategy = new ArchiveTrieNodeStrategy(baseStrategy, capture, () -> true);
+    archiveStrategy = new ArchiveTrieNodeStrategy(baseStrategy, capture, storage, coverageTracker);
+    archiveStrategy.armFrontier(() -> Long.MAX_VALUE);
   }
 
   private static Bytes32 hash(final Bytes value) {

@@ -21,6 +21,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -70,18 +71,29 @@ public final class ArchiveCoverageTracker {
   }
 
   /**
-   * Writes updated progress for {@code block} into {@code tx}. The write is atomic with the
-   * archive-node writes that precede it in the same transaction.
+   * Writes updated progress for {@code block} into {@code tx}, atomically with the archive-node
+   * writes that precede it in the same transaction.
    *
-   * <p>{@code indexStartBlock} is set to {@code min(existing, block)} so the recorded window only
-   * ever grows backwards; {@code lastIndexedBlock} is always set to {@code block}.
+   * <p>Coverage only advances one block at a time: the first record sets {@code indexStartBlock};
+   * every later record must be exactly {@code lastIndexedBlock + 1}, so the covered range never
+   * contains a block whose history was not captured.
+   *
+   * @throws IllegalStateException if {@code block} does not directly follow the last indexed block
    */
   public void record(final SegmentedKeyValueStorageTransaction tx, final long block) {
-    final long startBlock =
+    final Optional<Bytes> existing =
         storage
             .get(TRIE_BRANCH_STORAGE_ARCHIVE, COVERAGE_KEY)
-            .map(raw -> Math.min(Bytes.wrap(raw).getLong(0), block))
-            .orElse(block);
+            .filter(raw -> raw.length >= 16)
+            .map(Bytes::wrap);
+    if (existing.isPresent() && block != existing.get().getLong(8) + 1L) {
+      throw new IllegalStateException(
+          "archive coverage must advance contiguously: last indexed block "
+              + existing.get().getLong(8)
+              + ", recording block "
+              + block);
+    }
+    final long startBlock = existing.map(b -> b.getLong(0)).orElse(block);
     tx.put(
         TRIE_BRANCH_STORAGE_ARCHIVE,
         COVERAGE_KEY,

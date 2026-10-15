@@ -20,6 +20,7 @@ import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -188,17 +189,18 @@ class BonsaiArchiveFactoryTest {
   }
 
   @Test
-  void proofsGateSubscribesWithHistoricalBlockLimitTolerance() {
+  void proofsEnabledArmsFrontierWithoutInSyncSubscription() {
     final DataStorageConfiguration config = archiveConfig(true);
     final BonsaiWorldStateKeyValueStorage storage = storage(config);
     archive = createArchive(config, storage);
 
     archive.start(synchronizer, () -> 0L);
 
-    verify(synchronizer)
-        .subscribeInSync(
-            (ArchiveTrieNodeStrategy) storage.getTrieNodeStrategy(),
-            config.getExtraStorageConfiguration().getMaxLayersToLoad());
+    // The flat-DB migration may subscribe, but the capture strategy no longer does.
+    final ArgumentCaptor<Synchronizer.InSyncListener> listeners =
+        ArgumentCaptor.forClass(Synchronizer.InSyncListener.class);
+    verify(synchronizer, atLeast(0)).subscribeInSync(listeners.capture(), anyLong());
+    assertThat(listeners.getAllValues()).noneMatch(l -> l instanceof ArchiveTrieNodeStrategy);
   }
 
   @Test
