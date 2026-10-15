@@ -51,10 +51,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.LongStream;
 
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.AfterEach;
@@ -133,6 +140,7 @@ class ArchiveTrieNodeRollerIntegrationTest {
         strategy,
         frontier::get,
         Executors.newSingleThreadScheduledExecutor(),
+        new NoOpMetricsSystem(),
         maxLayersToLoad,
         minBatch,
         maxBatch);
@@ -347,6 +355,53 @@ class ArchiveTrieNodeRollerIntegrationTest {
       sawStorage |= assertArchiveProofsMatchRolled(block);
     }
     assertThat(sawStorage).as("at least one compared proof carries non-trivial storage").isTrue();
+  }
+
+  /** Runs {@code action} and returns the roller's INFO messages. */
+  @SuppressWarnings("BannedMethod")
+  private List<String> rollerInfoLogs(final Runnable action) {
+    final Logger logger = (Logger) LogManager.getLogger(ArchiveTrieNodeRoller.class);
+    final List<LogEvent> events = new CopyOnWriteArrayList<>();
+    final AbstractAppender appender =
+        new AbstractAppender("roller-it-capture", null, null, false, Property.EMPTY_ARRAY) {
+          @Override
+          public void append(final LogEvent event) {
+            events.add(event.toImmutable());
+          }
+        };
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      action.run();
+    } finally {
+      logger.removeAppender(appender);
+      appender.stop();
+    }
+    return events.stream()
+        .filter(e -> Level.INFO.equals(e.getLevel()))
+        .map(e -> e.getMessage().getFormattedMessage())
+        .toList();
+  }
+
+  @Test
+  void completedCatchUpLogsIndexedRangeOnceAtInfo() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(5); // several batches, one catch-up run
+    final List<String> infos = rollerInfoLogs(roller::catchUp);
+
+    assertThat(infos)
+        .containsExactly(
+            "Bonsai archive proofs indexed blocks 11.."
+                + head()
+                + " (frontier "
+                + Long.MAX_VALUE
+                + ", head "
+                + head()
+                + ")");
   }
 
   @Test

@@ -31,8 +31,8 @@ import java.util.function.LongSupplier;
  *
  * <p>The frontier never moves backwards: each call returns the highest value computed so far. The
  * best peer height can drop transiently during sync (a peer disconnects, a lagging peer becomes
- * best); a lower frontier would fail the capture gate for the next head block and hand capture
- * from inline to the roller, which then has to reseed. Thread-safe.
+ * best); a lower frontier would fail the capture gate for the next head block and hand capture from
+ * inline to the roller, which then has to reseed. Thread-safe.
  */
 public final class ArchiveFrontier implements LongSupplier {
 

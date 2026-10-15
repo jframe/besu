@@ -18,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -30,6 +31,8 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
+import org.hyperledger.besu.metrics.BesuMetricCategory;
+import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
@@ -40,6 +43,7 @@ import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
@@ -50,6 +54,7 @@ import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class ArchiveTrieNodeRollerTest {
 
@@ -62,6 +67,7 @@ class ArchiveTrieNodeRollerTest {
   private ArchiveTrieNodeRoller roller;
   private SegmentedKeyValueStorage storage;
   private TrieLogManager trieLogManager;
+  private MetricsSystem metricsSystem;
   private final List<LogEvent> logEvents = new CopyOnWriteArrayList<>();
   private AbstractAppender appender;
 
@@ -90,9 +96,18 @@ class ArchiveTrieNodeRollerTest {
     trieLogManager = mock(TrieLogManager.class);
     when(provider.getTrieLogManager()).thenReturn(trieLogManager);
     executor = mock(ScheduledExecutorService.class);
+    metricsSystem = mock(MetricsSystem.class);
     roller =
         new ArchiveTrieNodeRoller(
-            provider, blockchain, strategy, frontier::get, executor, MAX_LAYERS, 4, 8);
+            provider,
+            blockchain,
+            strategy,
+            frontier::get,
+            executor,
+            metricsSystem,
+            MAX_LAYERS,
+            4,
+            8);
   }
 
   @AfterEach
@@ -265,5 +280,93 @@ class ArchiveTrieNodeRollerTest {
   void startRegistersCanonicalHeadObserver() {
     roller.start();
     verify(blockchain).observeBlockAdded(any());
+  }
+
+  /** Coverage at 10, head 100: every catch-up fails because the cursor header is missing. */
+  private void failingCatchUpSetup() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    headerAt(11L, true);
+    when(blockchain.getBlockHeader(10L)).thenReturn(Optional.empty());
+    frontier.set(20L);
+  }
+
+  @Test
+  void failedCatchUpBacksOffExponentiallyInHeadBlocks() {
+    failingCatchUpSetup();
+
+    roller.catchUp(); // failure 1 at head 100: retry once head reaches 101
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, never()).execute(any());
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(101L);
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, times(1)).execute(any());
+
+    roller.catchUp(); // failure 2 at head 101: retry once head reaches 103
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(102L);
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, times(1)).execute(any());
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(103L);
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, times(2)).execute(any());
+  }
+
+  @Test
+  void backoffIsCappedAt1024Blocks() {
+    failingCatchUpSetup();
+    for (int i = 0; i < 15; i++) {
+      roller.catchUp();
+    }
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L + 1023L);
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, never()).execute(any());
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L + 1024L);
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, times(1)).execute(any());
+  }
+
+  @Test
+  void successfulCatchUpResetsBackoff() {
+    failingCatchUpSetup();
+    roller.catchUp();
+    roller.catchUp(); // two failures at head 100: retry at 102
+
+    frontier.set(12L); // gap 2 < minBatch: a catch-up that completes without failing
+    roller.catchUp();
+
+    frontier.set(20L);
+    roller.scheduleCatchUpIfNeeded(); // still head 100, but the streak is over
+    verify(executor, times(1)).execute(any());
+  }
+
+  @Test
+  void onlyTheFirstFailureOfAStreakLogsAnErrorWithStackTrace() {
+    failingCatchUpSetup();
+
+    roller.catchUp();
+    roller.catchUp();
+    roller.catchUp();
+
+    assertThat(logEvents.stream().filter(e -> Level.ERROR.equals(e.getLevel())))
+        .singleElement()
+        .satisfies(e -> assertThat(e.getThrown()).isNotNull());
+    assertThat(logEvents.stream().filter(e -> Level.WARN.equals(e.getLevel())))
+        .hasSize(2)
+        .allSatisfy(e -> assertThat(e.getThrown()).isNull());
+  }
+
+  @Test
+  void registersLastIndexedBlockGauge() {
+    @SuppressWarnings("unchecked")
+    final ArgumentCaptor<LongSupplier> gauge = ArgumentCaptor.forClass(LongSupplier.class);
+    verify(metricsSystem)
+        .createLongGauge(
+            eq(BesuMetricCategory.BLOCKCHAIN),
+            eq("bonsai_archive_proofs_last_indexed_block"),
+            any(),
+            gauge.capture());
+    coverageAt(42L);
+    assertThat(gauge.getValue().getAsLong()).isEqualTo(42L);
   }
 }

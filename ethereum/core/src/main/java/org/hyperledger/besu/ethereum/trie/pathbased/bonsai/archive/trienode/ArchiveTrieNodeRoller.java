@@ -21,6 +21,8 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiSnapsho
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateLayerStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
+import org.hyperledger.besu.metrics.BesuMetricCategory;
+import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
@@ -57,6 +59,8 @@ public class ArchiveTrieNodeRoller implements Closeable {
 
   static final int MIN_BATCH = 16;
   static final int MAX_BATCH = 256;
+  static final long MAX_BACKOFF_BLOCKS = 1024L;
+  private static final long PROGRESS_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
   private final BonsaiWorldStateProvider provider;
   private final Blockchain blockchain;
@@ -72,14 +76,35 @@ public class ArchiveTrieNodeRoller implements Closeable {
   private volatile boolean stopped;
   private OptionalLong observerId = OptionalLong.empty();
 
+  // Failure backoff: after a failed catch-up, no retry is scheduled until the chain head reaches
+  // retryAtHead. Written only on the roller thread.
+  private volatile long retryAtHead = Long.MIN_VALUE;
+  private int consecutiveFailures;
+
+  // Progress logging, roller thread only: INFO at most every 30 s; ranges suppressed in between
+  // are folded into the next INFO line.
+  private long lastProgressLogNanos;
+  private boolean progressLogged;
+  private long unloggedFrom = -1L;
+
   public ArchiveTrieNodeRoller(
       final BonsaiWorldStateProvider provider,
       final Blockchain blockchain,
       final ArchiveTrieNodeStrategy strategy,
       final LongSupplier frontier,
       final ScheduledExecutorService executor,
+      final MetricsSystem metricsSystem,
       final long maxLayersToLoad) {
-    this(provider, blockchain, strategy, frontier, executor, maxLayersToLoad, MIN_BATCH, MAX_BATCH);
+    this(
+        provider,
+        blockchain,
+        strategy,
+        frontier,
+        executor,
+        metricsSystem,
+        maxLayersToLoad,
+        MIN_BATCH,
+        MAX_BATCH);
   }
 
   @VisibleForTesting
@@ -89,6 +114,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
       final ArchiveTrieNodeStrategy strategy,
       final LongSupplier frontier,
       final ScheduledExecutorService executor,
+      final MetricsSystem metricsSystem,
       final long maxLayersToLoad,
       final int minBatch,
       final int maxBatch) {
@@ -101,6 +127,11 @@ public class ArchiveTrieNodeRoller implements Closeable {
     this.maxLayersToLoad = maxLayersToLoad;
     this.minBatch = minBatch;
     this.maxBatch = maxBatch;
+    metricsSystem.createLongGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_archive_proofs_last_indexed_block",
+        "The last block whose trie-node history is indexed for Bonsai archive proofs",
+        () -> coverage.lastIndexedBlock().orElse(-1L));
   }
 
   /** Observes new canonical heads and schedules a catch-up when enough blocks are final. */
@@ -121,7 +152,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
   }
 
   void scheduleCatchUpIfNeeded() {
-    if (closed || stopped) {
+    if (closed || stopped || blockchain.getChainHeadBlockNumber() < retryAtHead) {
       return;
     }
     final OptionalLong last = coverage.lastIndexedBlock();
@@ -140,6 +171,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
   @VisibleForTesting
   void catchUp() {
     boolean failed = false;
+    final long startedAfter = coverage.lastIndexedBlock().orElse(-1L);
     try {
       while (!closed && !stopped) {
         final OptionalLong last = coverage.lastIndexedBlock();
@@ -159,16 +191,68 @@ public class ArchiveTrieNodeRoller implements Closeable {
       }
     } catch (final RuntimeException e) {
       failed = true;
-      LOG.error(
-          "Archive trie-node roller failed after block {}; retrying on the next canonical head",
-          coverage.lastIndexedBlock().orElse(-1L),
-          e);
+      onFailure(e);
     } finally {
+      if (!failed) {
+        consecutiveFailures = 0;
+        retryAtHead = Long.MIN_VALUE;
+      }
+      logProgress(startedAfter);
       running.set(false);
       if (!failed) {
         scheduleCatchUpIfNeeded();
       }
     }
+  }
+
+  // Deterministic failures (e.g. a missing trie log deep in the seed roll) would otherwise repeat
+  // on every new head: wait 1, 2, 4, ... up to MAX_BACKOFF_BLOCKS head blocks between attempts, and
+  // log the stack trace only once per streak.
+  private void onFailure(final RuntimeException e) {
+    consecutiveFailures++;
+    final long backoff = Math.min(MAX_BACKOFF_BLOCKS, 1L << Math.min(consecutiveFailures - 1, 30));
+    final long head = blockchain.getChainHeadBlockNumber();
+    retryAtHead = head + backoff;
+    final long last = coverage.lastIndexedBlock().orElse(-1L);
+    if (consecutiveFailures == 1) {
+      LOG.error(
+          "Archive trie-node roller failed after block {}; retrying once the chain head reaches {}",
+          last,
+          retryAtHead,
+          e);
+    } else {
+      LOG.warn(
+          "Archive trie-node roller failed again after block {} ({} consecutive failures): {}; "
+              + "retrying once the chain head reaches {}",
+          last,
+          consecutiveFailures,
+          e.toString(),
+          retryAtHead);
+    }
+  }
+
+  private void logProgress(final long startedAfter) {
+    final long last = coverage.lastIndexedBlock().orElse(-1L);
+    if (last <= startedAfter) {
+      return;
+    }
+    if (unloggedFrom < 0) {
+      unloggedFrom = startedAfter + 1L;
+    }
+    final long now = System.nanoTime();
+    if (progressLogged && now - lastProgressLogNanos < PROGRESS_LOG_INTERVAL_NANOS) {
+      LOG.debug("Archive trie-node roller indexed blocks {}..{}", startedAfter + 1L, last);
+      return;
+    }
+    LOG.info(
+        "Bonsai archive proofs indexed blocks {}..{} (frontier {}, head {})",
+        unloggedFrom,
+        last,
+        frontier.getAsLong(),
+        blockchain.getChainHeadBlockNumber());
+    progressLogged = true;
+    lastProgressLogNanos = now;
+    unloggedFrom = -1L;
   }
 
   /**
