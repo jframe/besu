@@ -55,6 +55,10 @@ import org.slf4j.LoggerFactory;
  * in the common case (the prior value is hot in the in-memory layered chain) and eliminates any
  * need for worker threads to access the layered storage.
  *
+ * <p>Roller (detached) captures are the exception: their prior node comes from the archive's own
+ * reconstructed state at {@code block - 1}, because the roller's scratch storage can hold stale
+ * nodes from later blocks at locations unreachable in the state being rolled.
+ *
  * <p>Capture rule: a block {@code b} is captured iff the storage is the live storage or the
  * registered roller storage, {@code b} directly follows the last indexed block (or {@code b == 0}
  * when nothing is indexed), and {@code b == 0 || b <= frontier}. Live-storage captures commit
@@ -73,6 +77,7 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
 
   private final TrieNodeStrategy base;
   private final ArchiveTrieNodeWriter trieNodeWriter;
+  private final ArchiveHistoryReader archiveHistoryReader;
   private final SegmentedKeyValueStorage liveStorage;
   private final ArchiveCoverageTracker coverageTracker;
   private final AtomicReference<LongSupplier> frontier = new AtomicReference<>();
@@ -123,6 +128,7 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
       final ArchiveCoverageTracker coverageTracker) {
     this.base = Objects.requireNonNull(base);
     this.trieNodeWriter = Objects.requireNonNull(trieNodeWriter);
+    this.archiveHistoryReader = new ArchiveHistoryReader(trieNodeWriter.historyStore());
     this.liveStorage = Objects.requireNonNull(liveStorage);
     this.coverageTracker = Objects.requireNonNull(coverageTracker);
   }
@@ -223,7 +229,7 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
     final TxCapture txCapture = txCaptureCache.get(transaction, ignored -> decide(storage));
     base.putTrieNode(storage, transaction, key, nodeHash, node);
     if (txCapture.capture()) {
-      final Bytes prior = readPriorNode(storage, key, txCapture.block());
+      final Bytes prior = readPriorNode(storage, key, txCapture);
       if (isNoOpRewrite(prior, node)) {
         return;
       }
@@ -239,7 +245,7 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
     final TxCapture txCapture = txCaptureCache.get(transaction, ignored -> decide(storage));
     base.removeTrieNode(storage, transaction, key);
     if (txCapture.capture()) {
-      final Bytes prior = readPriorNode(storage, key, txCapture.block());
+      final Bytes prior = readPriorNode(storage, key, txCapture);
       // Removing a node that doesn't exist is a no-op for the archive.
       if (prior != null) {
         capture(key, txCapture, null, prior, transaction);
@@ -248,9 +254,23 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
   }
 
   // Genesis (block 0) has no prior node by definition.
+  //
+  // Roller (DETACHED) captures take the prior from the archive's own view at block - 1, never from
+  // the scratch storage: the roller seeds by rolling a head snapshot backwards, and Bonsai leaves
+  // orphaned head-era nodes at locations unreachable at the seed. Reading those as the prior would
+  // skip writes equal to a stale node as no-ops and hand the diff codec a base the archive never
+  // held. The archive view is exactly the base readers reconstruct block - 1 from. A deleted node
+  // (tombstone) or a node that never existed reads as absent.
   private Bytes readPriorNode(
-      final SegmentedKeyValueStorage storage, final Bytes key, final long block) {
-    return block == 0L ? null : base.getTrieNode(storage, key, Bytes32.ZERO).orElse(null);
+      final SegmentedKeyValueStorage storage, final Bytes key, final TxCapture txCapture) {
+    final long block = txCapture.block();
+    if (block == 0L) {
+      return null;
+    }
+    if (txCapture.mode() == ArchiveTrieNodeWriter.CommitMode.DETACHED) {
+      return archiveHistoryReader.nodeAt(ArchiveNodeKey.of(key), block - 1L).orElse(null);
+    }
+    return base.getTrieNode(storage, key, Bytes32.ZERO).orElse(null);
   }
 
   private void capture(

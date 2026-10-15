@@ -89,6 +89,11 @@ public class ArchiveTrieNodeWriter implements Closeable {
     this.deepCheckpointInterval = deepCheckpointInterval;
   }
 
+  /** The history store this writer appends to, shared with readers of the same archive. */
+  ArchiveNodeHistoryStore historyStore() {
+    return historyStore;
+  }
+
   @VisibleForTesting
   int checkpointIntervalForDepth(final int locationSizeBytes) {
     return locationSizeBytes <= 2 ? shallowCheckpointInterval : deepCheckpointInterval;

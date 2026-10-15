@@ -500,4 +500,142 @@ class ArchiveTrieNodeStrategyTest {
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.of(0x41)), 10L)).isEmpty();
     assertThat(coverageTracker.lastIndexedBlock()).hasValue(3L);
   }
+
+  /** A scratch storage registered as the roller's, with its stored block number at {@code head}. */
+  private SegmentedKeyValueStorage registerRollerAt(
+      final ArchiveTrieNodeStrategy strategy, final long head) {
+    final SegmentedKeyValueStorage roller =
+        new SegmentedInMemoryKeyValueStorage(
+            List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
+    final SegmentedKeyValueStorageTransaction seed = roller.startTransaction();
+    seed.put(
+        TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY, Bytes.ofUnsignedLong(head).toArrayUnsafe());
+    seed.commit();
+    strategy.registerRollerStorage(roller);
+    return roller;
+  }
+
+  /** Leaves {@code node} at {@code key} in {@code roller}, bypassing capture (a stale node). */
+  private static void plantStaleNode(
+      final SegmentedKeyValueStorage roller, final Bytes key, final Bytes node) {
+    final SegmentedKeyValueStorageTransaction tx = roller.startTransaction();
+    new BonsaiTrieNodeStrategy().putTrieNode(roller, tx, key, hash(node), node);
+    tx.commit();
+  }
+
+  /** One roller block persist writing {@code node} at {@code key}; scratch writes discarded. */
+  private void rollerPut(
+      final ArchiveTrieNodeStrategy strategy,
+      final SegmentedKeyValueStorage roller,
+      final Bytes key,
+      final Bytes node,
+      final long block) {
+    final SegmentedKeyValueStorageTransaction tx = roller.startTransaction();
+    strategy.putTrieNode(roller, tx, key, hash(node), node);
+    strategy.onBeforeBlockCommit(roller, tx, block);
+    tx.rollback();
+  }
+
+  /** A 96-byte node varying only at bytes 10 and 50, so a DIFF between two is smaller than FULL. */
+  private static Bytes bigNode(final int at10, final int at50) {
+    final byte[] bytes = new byte[96];
+    for (int i = 0; i < bytes.length; i++) {
+      bytes[i] = (byte) i;
+    }
+    bytes[10] = (byte) at10;
+    bytes[50] = (byte) at50;
+    return Bytes.wrap(bytes);
+  }
+
+  @Test
+  void rollerArchivesWriteEqualToStaleScratchNodeWhenArchiveHasNothing() {
+    // The roller's scratch state still holds a head-era node at L that the archive never held at
+    // block 0. Writing the same bytes at block 1 is a creation from the archive's view, not a
+    // no-op.
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    seedCoverageAt(0L);
+    final SegmentedKeyValueStorage roller = registerRollerAt(strategy, 0L);
+    final Bytes location = Bytes.of(0x51);
+    final Bytes node = Bytes.fromHexString("0x5151");
+    plantStaleNode(roller, location, node);
+
+    rollerPut(strategy, roller, location, node, 1L);
+
+    final var entry = historyStore.getLatestBefore(ArchiveNodeKey.account(location), 1L);
+    assertThat(entry).isPresent();
+    assertThat(entry.get().block()).isEqualTo(1L);
+    assertThat(new ArchiveHistoryReader(historyStore).nodeAt(ArchiveNodeKey.account(location), 1L))
+        .contains(node);
+  }
+
+  @Test
+  void rollerArchivesWriteEqualToStaleScratchNodeWhenArchiveHasTombstone() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    final Hash accountHash = Hash.hash(Bytes.of(0x52));
+    final Bytes location = Bytes.of(0x05, 0x02);
+    final Bytes key = TrieNodeKey.of(accountHash, location);
+    final Bytes naturalKey = ArchiveNodeKey.storage(accountHash.getBytes(), location);
+    final Bytes node = Bytes.fromHexString("0x5252");
+
+    // block 0 creates the node, block 1 deletes it (live captures): tombstone at block 1
+    put(strategy, key, node);
+    setStoredBlockNumber(0L);
+    final SegmentedKeyValueStorageTransaction removal = storage.startTransaction();
+    strategy.removeTrieNode(storage, removal, key);
+    strategy.onBeforeBlockCommit(storage, removal, 1L);
+    removal.commit();
+    assertThat(historyStore.getLatestBefore(naturalKey, 1L).orElseThrow().codecEntry().isDeletion())
+        .isTrue();
+
+    final SegmentedKeyValueStorage roller = registerRollerAt(strategy, 1L);
+    plantStaleNode(roller, key, node);
+    rollerPut(strategy, roller, key, node, 2L);
+
+    final var entry = historyStore.getLatestBefore(naturalKey, 2L);
+    assertThat(entry).isPresent();
+    assertThat(entry.get().block()).isEqualTo(2L);
+    assertThat(new ArchiveHistoryReader(historyStore).nodeAt(naturalKey, 2L)).contains(node);
+  }
+
+  @Test
+  void rollerSkipsWriteEqualToArchiveStateEvenWhenScratchNodeDiffers() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    final Bytes location = Bytes.of(0x53);
+    final Bytes node = Bytes.fromHexString("0x5353");
+    put(strategy, location, node); // genesis: archive holds node at L
+
+    final SegmentedKeyValueStorage roller = registerRollerAt(strategy, 0L);
+    plantStaleNode(roller, location, Bytes.fromHexString("0x9999"));
+    rollerPut(strategy, roller, location, node, 1L);
+
+    assertThat(
+            historyStore
+                .getLatestBefore(ArchiveNodeKey.account(location), 1L)
+                .orElseThrow()
+                .block())
+        .as("no-op from the archive's view: no entry at block 1")
+        .isEqualTo(0L);
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(1L);
+  }
+
+  @Test
+  void rollerDiffIsEncodedAgainstArchiveStateNotStaleScratchNode() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    final Bytes location = Bytes.of(0x54);
+    final Bytes naturalKey = ArchiveNodeKey.account(location);
+    final Bytes archived = bigNode(1, 0); // A
+    final Bytes stale = bigNode(2, 9); // Y: equals X at byte 10, differs at byte 50
+    final Bytes written = bigNode(2, 0); // X
+    put(strategy, location, archived); // genesis: FULL A
+
+    final SegmentedKeyValueStorage roller = registerRollerAt(strategy, 0L);
+    plantStaleNode(roller, location, stale);
+    // a diff taken against Y would only patch byte 50, so A + diff(Y, X) would not be X
+    rollerPut(strategy, roller, location, written, 1L);
+
+    final var entry = historyStore.getLatestBefore(naturalKey, 1L).orElseThrow();
+    assertThat(entry.block()).isEqualTo(1L);
+    assertThat(entry.codecEntry().isFull()).as("small change is stored as a DIFF").isFalse();
+    assertThat(new ArchiveHistoryReader(historyStore).nodeAt(naturalKey, 1L)).contains(written);
+  }
 }
