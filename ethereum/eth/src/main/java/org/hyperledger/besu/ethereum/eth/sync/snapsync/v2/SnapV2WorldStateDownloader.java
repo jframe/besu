@@ -15,13 +15,14 @@
 package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.chain.DefaultBlockchain;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.sync.ChainDownloader;
 import org.hyperledger.besu.ethereum.eth.sync.common.PivotSyncActions;
+import org.hyperledger.besu.ethereum.eth.sync.common.PivotUpdateListener;
 import org.hyperledger.besu.ethereum.eth.sync.common.WorldStateHealFinishedListener;
-import org.hyperledger.besu.ethereum.eth.sync.snapsync.DynamicPivotBlockSelector;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncMetricsManager;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncProcessState;
@@ -68,11 +69,15 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
   private final int maxOutstandingRequests;
   private final int maxNodeRequestsWithoutProgress;
   private final WorldStateStorageCoordinator worldStateStorageCoordinator;
+
   private final MutableBlockchain blockchain;
+  private final ProtocolSchedule protocolSchedule;
+  private volatile PivotUpdateListener pivotUpdateListener;
+  private volatile SnapV2PivotMover pivotMover;
+
   private final AtomicReference<SnapV2WorldDownloadState> downloadState = new AtomicReference<>();
   private final SyncDurationMetrics syncDurationMetrics;
   private volatile WorldStateHealFinishedListener worldStateHealFinishedListener;
-  private volatile SnapV2PivotCatchupListener pivotCatchupListener;
   private final SnapV2BlockAccessListApplier blockAccessListApplier;
   private final SnapV2ReorgHealer reorgHealer;
   private long lastNoPeerLogMillis;
@@ -94,6 +99,7 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
     this.ethContext = ethContext;
     this.worldStateStorageCoordinator = worldStateStorageCoordinator;
     this.blockchain = blockchain;
+    this.protocolSchedule = protocolSchedule;
     this.snapContext = snapContext;
     this.snapTaskCollection = snapTaskCollection;
     this.snapSyncConfiguration = snapSyncConfiguration;
@@ -136,11 +142,11 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
 
   @Override
   public void setChainDownloader(final ChainDownloader chainDownloader) {
+    if (chainDownloader instanceof PivotUpdateListener listener) {
+      this.pivotUpdateListener = listener;
+    }
     if (chainDownloader instanceof WorldStateHealFinishedListener listener) {
       this.worldStateHealFinishedListener = listener;
-    }
-    if (chainDownloader instanceof SnapV2PivotCatchupListener listener) {
-      this.pivotCatchupListener = listener;
     }
   }
 
@@ -179,13 +185,6 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
 
       final SnapSyncMetricsManager snapsyncMetricsManager =
           new SnapSyncMetricsManager(metricsSystem, ethContext);
-      final DynamicPivotBlockSelector pivotBlockSelector =
-          new DynamicPivotBlockSelector(
-              ethContext,
-              fastSyncActions,
-              snapSyncState,
-              null,
-              snapSyncConfiguration.getPivotBlockCheckIntervalMillis());
       final long storagePipelineInFlightCapacity =
           (long) snapSyncConfiguration.getStorageCountPerRequest() * maxOutstandingRequests;
       final SnapV2WorldDownloadState newDownloadState =
@@ -200,10 +199,8 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
               clock,
               syncDurationMetrics,
               worldStateHealFinishedListener,
-              pivotCatchupListener,
               blockAccessListApplier,
               reorgHealer,
-              blockchain,
               ethContext,
               storagePipelineInFlightCapacity);
 
@@ -219,19 +216,46 @@ public class SnapV2WorldStateDownloader implements WorldStateDownloader {
               worldStateStorageCoordinator,
               snapSyncState,
               newDownloadState,
-              pivotBlockSelector,
               snapSyncConfiguration,
               maxOutstandingRequests,
               metricsSystem);
 
       downloadState.set(newDownloadState);
       newDownloadState.startHeartbeat();
-      return newDownloadState.startDownload(downloadProcess, ethContext.getScheduler());
+      final CompletableFuture<Void> download =
+          newDownloadState.startDownload(downloadProcess, ethContext.getScheduler());
+      if (fastSyncActions.getPivotBlockSelector() instanceof SnapV2HeadSource headSource) {
+        final SnapV2BalFetcher balFetcher =
+            SnapV2BalFetcher.create(ethContext, (DefaultBlockchain) blockchain, metricsSystem);
+        final SnapV2PivotMover mover =
+            new SnapV2PivotMover(
+                headSource,
+                SnapV2HeaderFetcher.create(ethContext, protocolSchedule),
+                balFetcher::fetch,
+                newDownloadState,
+                pivot -> {
+                  final PivotUpdateListener listener = pivotUpdateListener;
+                  if (listener != null) {
+                    listener.onPivotUpdated(pivot);
+                  }
+                },
+                task -> ethContext.getScheduler().scheduleServiceTask(task));
+        pivotMover = mover;
+        mover.start(ethContext.getScheduler());
+        download.whenComplete((result, error) -> mover.stop());
+      } else {
+        LOG.warn("snap/2 has no head source: the pivot will not move during this download");
+      }
+      return download;
     }
   }
 
   @Override
   public void cancel() {
+    final SnapV2PivotMover mover = pivotMover;
+    if (mover != null) {
+      mover.stop();
+    }
     synchronized (this) {
       final SnapV2WorldDownloadState state = this.downloadState.get();
       if (state != null) {

@@ -120,8 +120,7 @@ class SnapV2BlockAccessListApplierReorgTest {
     // Apply canonical BALs from the common ancestor + 1 (= block 2).
     applier(b)
         .applyBlockAccessLists(
-            block1.getHeader().getNumber() + 1,
-            block2c.getHeader().getNumber(),
+            b.canonicalHeaders(block1.getHeader().getNumber() + 1, block2c.getHeader().getNumber()),
             accountTracker,
             storageTracker)
         .commit();
@@ -167,8 +166,7 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     applier(b)
         .applyBlockAccessLists(
-            block1.getHeader().getNumber() + 1,
-            block2c.getHeader().getNumber(),
+            b.canonicalHeaders(block1.getHeader().getNumber() + 1, block2c.getHeader().getNumber()),
             fullAccountRange(),
             new DownloadedStorageRangeTracker())
         .commit();
@@ -211,8 +209,7 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     applier(b)
         .applyBlockAccessLists(
-            block1.getHeader().getNumber() + 1,
-            block3c.getHeader().getNumber(),
+            b.canonicalHeaders(block1.getHeader().getNumber() + 1, block3c.getHeader().getNumber()),
             fullAccountRange(),
             new DownloadedStorageRangeTracker())
         .commit();
@@ -244,8 +241,7 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     applier(b)
         .applyBlockAccessLists(
-            2L,
-            block2.getHeader().getNumber(),
+            b.canonicalHeaders(2L, block2.getHeader().getNumber()),
             fullAccountRange(),
             new DownloadedStorageRangeTracker())
         .commit();
@@ -293,8 +289,7 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     applier(b)
         .applyBlockAccessLists(
-            block1.getHeader().getNumber() + 1,
-            block2c.getHeader().getNumber(),
+            b.canonicalHeaders(block1.getHeader().getNumber() + 1, block2c.getHeader().getNumber()),
             fullAccountRange(),
             new DownloadedStorageRangeTracker())
         .commit();
@@ -334,8 +329,7 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     applier(b)
         .applyBlockAccessLists(
-            block1.getHeader().getNumber() + 1,
-            block2c.getHeader().getNumber(),
+            b.canonicalHeaders(block1.getHeader().getNumber() + 1, block2c.getHeader().getNumber()),
             fullAccountRange(),
             new DownloadedStorageRangeTracker())
         .commit();
@@ -376,8 +370,7 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     applier(b)
         .applyBlockAccessLists(
-            block1.getHeader().getNumber() + 1,
-            block2c.getHeader().getNumber(),
+            b.canonicalHeaders(block1.getHeader().getNumber() + 1, block2c.getHeader().getNumber()),
             accountTracker,
             new DownloadedStorageRangeTracker())
         .commit();
@@ -418,8 +411,7 @@ class SnapV2BlockAccessListApplierReorgTest {
 
     applier(b)
         .applyBlockAccessLists(
-            block1.getHeader().getNumber() + 1,
-            block2c.getHeader().getNumber(),
+            b.canonicalHeaders(block1.getHeader().getNumber() + 1, block2c.getHeader().getNumber()),
             fullAccountRange(),
             new DownloadedStorageRangeTracker())
         .commit();
@@ -467,8 +459,8 @@ class SnapV2BlockAccessListApplierReorgTest {
             () ->
                 applier(b)
                     .applyBlockAccessLists(
-                        block1.getHeader().getNumber() + 1,
-                        block2c.getHeader().getNumber(),
+                        b.canonicalHeaders(
+                            block1.getHeader().getNumber() + 1, block2c.getHeader().getNumber()),
                         fullAccountRange(),
                         new DownloadedStorageRangeTracker()))
         .isInstanceOf(WorldStateDownloaderException.class)
@@ -497,36 +489,12 @@ class SnapV2BlockAccessListApplierReorgTest {
             () ->
                 applier(b)
                     .applyBlockAccessLists(
-                        block1.getHeader().getNumber() + 1,
-                        block2c.getHeader().getNumber(),
+                        b.canonicalHeaders(
+                            block1.getHeader().getNumber() + 1, block2c.getHeader().getNumber()),
                         fullAccountRange(),
                         new DownloadedStorageRangeTracker()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("Missing BAL");
-  }
-
-  /**
-   * The apply window must not run past the locally available canonical chain.
-   *
-   * <pre>
-   * gen -- 1 -- 2   canonical chain head; apply window [2, 5]
-   * </pre>
-   *
-   * Block 3's header is not available locally: IllegalStateException from loadBlockHeader.
-   */
-  @Test
-  void throwsWhenApplyWindowExceedsLocalChain() {
-    final ReorgBlockchainBuilder b = new ReorgBlockchainBuilder();
-    final Block block1 = b.appendBlockWithBal(b.header(0), b.emptyBal(), 1L);
-    b.appendBlockWithBal(block1.getHeader(), b.emptyBal(), 2L);
-
-    assertThatThrownBy(
-            () ->
-                applier(b)
-                    .applyBlockAccessLists(
-                        2L, 5L, fullAccountRange(), new DownloadedStorageRangeTracker()))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("Missing block header");
   }
 
   // ---------------------------------------------------------------------------

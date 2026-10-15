@@ -21,11 +21,13 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeerImmutableAttributes;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncProcessState;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.v2.SnapV2HeadSource;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 
@@ -47,7 +49,8 @@ import org.slf4j.LoggerFactory;
  * syncMinimumPeerCount} peers downstream by {@code PivotBlockRetriever}). The pivot never moves
  * backwards.
  */
-public class PivotSelectorAtHead extends AbstractForkchoicePivotSelector {
+public class PivotSelectorAtHead extends AbstractForkchoicePivotSelector
+    implements SnapV2HeadSource {
 
   private static final Logger LOG = LoggerFactory.getLogger(PivotSelectorAtHead.class);
 
@@ -145,6 +148,15 @@ public class PivotSelectorAtHead extends AbstractForkchoicePivotSelector {
               return selectPivotFromFcuHead(head, sinceLastFcu, peerBest);
             })
         .thenApply(this::recordLastPivot);
+  }
+
+  @Override
+  public CompletableFuture<Optional<BlockHeader>> head() {
+    final Hash headHash = getLatestHeadHash();
+    if (Hash.ZERO.equals(headHash)) {
+      return CompletableFuture.completedFuture(Optional.empty());
+    }
+    return getOrDownload(headHash).thenApply(Optional::of);
   }
 
   @Override

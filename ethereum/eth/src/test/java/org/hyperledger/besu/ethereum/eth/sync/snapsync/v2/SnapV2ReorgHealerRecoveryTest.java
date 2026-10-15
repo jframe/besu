@@ -37,6 +37,7 @@ import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -156,7 +157,7 @@ class SnapV2ReorgHealerRecoveryTest {
 
     final ReorgRecoveryResult result =
         healer.recoverFromReorg(
-            block2s.getHeader(), newPivotBlock.getHeader(), accountTracker, storageTracker);
+            b.move(block2s.getHeader(), newPivotBlock.getHeader()), accountTracker, storageTracker);
 
     // Accounts the canonical fork touched come from the canonical BALs.
     assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(80));
@@ -229,7 +230,7 @@ class SnapV2ReorgHealerRecoveryTest {
 
     final ReorgRecoveryResult result =
         healer.recoverFromReorg(
-            block2s.getHeader(), newPivotBlock.getHeader(), accountTracker, storageTracker);
+            b.move(block2s.getHeader(), newPivotBlock.getHeader()), accountTracker, storageTracker);
 
     assertThat(accountFetches).hasValue(0);
     assertThat(storageFetches).hasValue(0);
@@ -315,7 +316,7 @@ class SnapV2ReorgHealerRecoveryTest {
 
     final ReorgRecoveryResult result =
         healer.recoverFromReorg(
-            block3s.getHeader(), newPivotBlock.getHeader(), accountTracker, storageTracker);
+            b.move(block3s.getHeader(), newPivotBlock.getHeader()), accountTracker, storageTracker);
 
     // Balance from the canonical BAL; the downloaded slot is restored from the re-fetch. sp2 was
     // never downloaded and the canonical fork never touched it, so it is not re-fetched.
@@ -386,7 +387,7 @@ class SnapV2ReorgHealerRecoveryTest {
 
     final ReorgRecoveryResult result =
         healer.recoverFromReorg(
-            block2s.getHeader(), newPivotBlock.getHeader(), accountTracker, storageTracker);
+            b.move(block2s.getHeader(), newPivotBlock.getHeader()), accountTracker, storageTracker);
 
     assertThat(accountExists(NEW_CONTRACT)).isFalse();
     assertThat(readStorageSlot(NEW_CONTRACT, SN)).isEmpty();
@@ -418,8 +419,7 @@ class SnapV2ReorgHealerRecoveryTest {
     assertThatThrownBy(
             () ->
                 healer.recoverFromReorg(
-                    block2s.getHeader(),
-                    block2c.getHeader(),
+                    b.move(block2s.getHeader(), block2c.getHeader()),
                     fullAccountRange(),
                     new DownloadedStorageRangeTracker()))
         .isInstanceOf(ReorgUnrecoverableException.class)
@@ -431,6 +431,80 @@ class SnapV2ReorgHealerRecoveryTest {
   // ---------------------------------------------------------------------------
 
   /** A healer whose fetcher serves from the canonical world state, counting calls per seam. */
+  /**
+   * A reorg whose state re-fetch fails must leave the local state exactly as it was, so that the
+   * move can be retried: nothing may be committed before every fetch has succeeded.
+   */
+  @Test
+  void failedStateFetchLeavesTheLocalStateUntouched() {
+    final DownloadedAccountRangeTracker accountTracker = fullAccountRange();
+    final DownloadedStorageRangeTracker storageTracker = new DownloadedStorageRangeTracker();
+
+    final BlockAccessList baseBal =
+        b.merge(
+            b.balWithBalances(
+                Map.of(
+                    ALICE, Wei.of(100),
+                    BOB, Wei.of(100),
+                    DAVE, Wei.of(75),
+                    FRANK, Wei.of(200))),
+            b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(7))),
+            b.balWithCodeChange(CAROL, CAROL_CODE_W));
+    final Block block1 = b.appendBlockWithBal(b.header(0), baseBal, 1L);
+    applyTo(localCoordinator, 1, 1, accountTracker, storageTracker);
+    applyTo(canonicalCoordinator, 1, 1, accountTracker, storageTracker);
+
+    final BlockAccessList orphanedBal =
+        b.merge(
+            b.balWithBalances(Map.of(ALICE, Wei.of(50), DAVE, Wei.of(60))),
+            b.balWithStorageChanges(
+                FRANK, Map.of(S1, UInt256.valueOf(100), S2, UInt256.valueOf(200))),
+            b.balWithBalances(Map.of(NEW_CONTRACT, Wei.ONE)),
+            b.balWithCodeChange(NEW_CONTRACT, NC_CODE),
+            b.balWithStorageChanges(NEW_CONTRACT, Map.of(SN, UInt256.valueOf(5))),
+            b.balWithCodeChange(CAROL, CAROL_CODE_O));
+    final Block block2s = b.appendStale(block1.getHeader(), orphanedBal, 2L);
+    applyTo(localCoordinator, 2, 2, accountTracker, storageTracker);
+
+    final BlockAccessList canonicalBal =
+        b.merge(
+            b.balWithBalances(Map.of(ALICE, Wei.of(80), FRANK, Wei.of(140), GRACE, Wei.of(50))),
+            b.balWithStorageChanges(FRANK, Map.of(S3, UInt256.valueOf(555))));
+    final Block block2c = b.appendCanonical(block1.getHeader(), canonicalBal, 2L);
+    applyTo(canonicalCoordinator, 2, 2, accountTracker, storageTracker);
+    final Hash canonicalRoot = worldStateRoot(canonicalCoordinator);
+    final Block newPivotBlock =
+        b.appendCanonical(block2c.getHeader(), b.emptyBal(), 3L, canonicalRoot);
+
+    final SnapV2ReorgStateFetcher failingFetcher =
+        new SnapV2ReorgStateFetcher(
+            (start, end, pivot) -> CompletableFuture.failedFuture(new RuntimeException("timeout")),
+            (accounts, start, end, pivot) ->
+                CompletableFuture.failedFuture(new RuntimeException("timeout")),
+            (codeHashes, pivot) -> CompletableFuture.failedFuture(new RuntimeException("timeout")),
+            localCoordinator);
+    final SnapV2ReorgHealer healer =
+        new SnapV2ReorgHealer(
+            b.blockchain(),
+            localCoordinator,
+            ReorgBlockchainBuilder.balEnabledSchedule(),
+            failingFetcher);
+    final Hash rootBefore = worldStateRoot(localCoordinator);
+
+    assertThatThrownBy(
+            () ->
+                healer.recoverFromReorg(
+                    b.move(block2s.getHeader(), newPivotBlock.getHeader()),
+                    accountTracker,
+                    storageTracker))
+        .isInstanceOf(RuntimeException.class);
+
+    // The canonical BALs (ALICE=80, GRACE=50) must not have been committed.
+    assertThat(readAccount(ALICE).getBalance()).isEqualTo(Wei.of(50));
+    assertThat(accountExists(GRACE)).isFalse();
+    assertThat(worldStateRoot(localCoordinator)).isEqualTo(rootBefore);
+  }
+
   private SnapV2ReorgHealer healerServing(
       final Hash canonicalRoot,
       final AtomicInteger accountFetches,
@@ -464,7 +538,8 @@ class SnapV2ReorgHealerRecoveryTest {
       final DownloadedStorageRangeTracker storageTracker) {
     new SnapV2BlockAccessListApplier(
             coordinator, b.blockchain(), ReorgBlockchainBuilder.balEnabledSchedule())
-        .applyBlockAccessLists(fromBlock, toBlock, accountTracker, storageTracker)
+        .applyBlockAccessLists(
+            b.canonicalHeaders(fromBlock, toBlock), accountTracker, storageTracker)
         .commit();
   }
 

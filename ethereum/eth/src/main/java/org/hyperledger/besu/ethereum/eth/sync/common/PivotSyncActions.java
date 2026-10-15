@@ -265,6 +265,10 @@ public class PivotSyncActions {
    *
    * @return the pivot update listener, or null if not set
    */
+  public PivotBlockSelector getPivotBlockSelector() {
+    return pivotBlockSelector;
+  }
+
   public PivotUpdateListener getChainDownloaderListener() {
     return chainDownloaderListener;
   }

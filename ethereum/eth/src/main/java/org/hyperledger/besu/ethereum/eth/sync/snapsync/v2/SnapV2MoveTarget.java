@@ -16,11 +16,24 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 
-import java.util.concurrent.CompletableFuture;
+/** What the pivot mover moves (cf. snap-new2 StateSync.moveTo). */
+public interface SnapV2MoveTarget {
 
-/** Listener used by snap/2 world-state download to request chain-side pivot catch-up. */
-public interface SnapV2PivotCatchupListener {
+  BlockHeader currentPivot();
 
-  CompletableFuture<Void> preparePivotCatchup(
-      final BlockHeader currentPivotBlockHeader, final BlockHeader newPivotBlockHeader);
+  /** True once the download completed, failed or was cancelled. */
+  boolean isFinished();
+
+  /**
+   * Moves the download to {@code move.newPivot()}.
+   *
+   * @return false if the download finished before the move could start (nothing applied)
+   * @throws SnapV2MoveFailedException if the move failed before anything was written
+   */
+  boolean applyMove(SnapV2PivotMove move);
+
+  boolean checkCompletion(BlockHeader header);
+
+  /** Fails the download: the state cannot be recovered (cf. snap-new2 RestartException). */
+  void abort(Throwable cause);
 }

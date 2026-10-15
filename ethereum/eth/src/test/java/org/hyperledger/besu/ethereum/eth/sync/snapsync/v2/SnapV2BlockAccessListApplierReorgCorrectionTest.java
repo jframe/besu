@@ -170,7 +170,8 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
             b.balWithStorageChanges(FRANK, Map.of(S1, UInt256.valueOf(100))));
     b.appendBlockWithBal(b.header(0), baseBal, 1L);
     applier()
-        .applyBlockAccessLists(1L, 1L, fullAccountRange(), new DownloadedStorageRangeTracker())
+        .applyBlockAccessLists(
+            b.canonicalHeaders(1L, 1L), fullAccountRange(), new DownloadedStorageRangeTracker())
         .commit();
 
     final ReorgPlan plan =
@@ -295,7 +296,8 @@ class SnapV2BlockAccessListApplierReorgCorrectionTest {
     final BlockHeader ancestor = new BlockHeaderTestFixture().number(1).buildHeader();
     final BlockHeader oldPivot = new BlockHeaderTestFixture().number(2).buildHeader();
     final BlockHeader newPivot = new BlockHeaderTestFixture().number(3).buildHeader();
-    return new ReorgPlan(ancestor, oldPivot, newPivot, divergedAccounts, divergedSlotsByAccount);
+    return new ReorgPlan(
+        ancestor, oldPivot, newPivot, List.of(newPivot), divergedAccounts, divergedSlotsByAccount);
   }
 
   private static PmtStateTrieAccountValue accountValue(final Wei balance, final Hash codeHash) {

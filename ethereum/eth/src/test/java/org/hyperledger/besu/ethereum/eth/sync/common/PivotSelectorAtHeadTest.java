@@ -438,6 +438,22 @@ public class PivotSelectorAtHeadTest {
     return result;
   }
 
+  // --- head(): the snap/2 pivot mover's head source ---
+
+  @Test
+  void headIsEmptyBeforeAnyForkchoiceUpdate() {
+    assertThat(selector.head().join()).isEmpty();
+  }
+
+  @Test
+  void headIsTheForkchoiceHeadHeader() {
+    final BlockHeader head = new BlockHeaderTestFixture().number(500).buildHeader();
+    selector.onNewPayload(head);
+    selector.onNewUnverifiedForkchoice(fcu(head.getHash(), Hash.ZERO, Hash.ZERO));
+
+    assertThat(selector.head().join()).contains(head);
+  }
+
   private static ForkchoiceEvent fcu(final Hash head, final Hash safe, final Hash finalized) {
     return new ForkchoiceEvent(head, safe, finalized);
   }

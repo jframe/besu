@@ -391,6 +391,31 @@ class ReorgBlockchainBuilder {
     return new StorageSlotKey(slotKey).getSlotHash();
   }
 
+  /** Canonical headers [from, to] from the test chain. */
+  List<BlockHeader> canonicalHeaders(final long from, final long to) {
+    final List<BlockHeader> headers = new ArrayList<>();
+    for (long n = from; n <= to; n++) {
+      headers.add(blockchain().getBlockHeader(n).orElseThrow());
+    }
+    return headers;
+  }
+
+  /**
+   * The move from {@code oldPivot} to {@code newPivot} as the pivot mover builds it: the old
+   * pivot's parents down to the first canonical block, then the canonical blocks up to the new
+   * pivot.
+   */
+  SnapV2PivotMove move(final BlockHeader oldPivot, final BlockHeader newPivot) {
+    final List<BlockHeader> orphaned = new ArrayList<>();
+    BlockHeader cursor = oldPivot;
+    while (!blockchain().blockIsOnCanonicalChain(cursor.getHash())) {
+      orphaned.addFirst(cursor);
+      cursor = blockchain().getBlockHeader(cursor.getParentHash()).orElseThrow();
+    }
+    return new SnapV2PivotMove(
+        cursor, orphaned, canonicalHeaders(cursor.getNumber() + 1, newPivot.getNumber()));
+  }
+
   BlockHeader header(final long number) {
     return blockchain.getBlockHeader(number).orElseThrow();
   }

@@ -17,7 +17,6 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync.v2;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator.applyForStrategy;
 
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.snap.RetryingGetAccountRangeFromPeerTask;
@@ -62,8 +61,10 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
@@ -71,7 +72,7 @@ import org.slf4j.LoggerFactory;
 
 /** Static-pivot snap/2 leaf download state. */
 public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest>
-    implements SnapRequestContext {
+    implements SnapRequestContext, SnapV2MoveTarget {
 
   private static final Logger LOG = LoggerFactory.getLogger(SnapV2WorldDownloadState.class);
 
@@ -93,18 +94,12 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       new DownloadedAccountRangeTracker();
   private final DownloadedStorageRangeTracker storageRangeTracker =
       new DownloadedStorageRangeTracker();
-  private final SnapV2PivotCatchupListener pivotCatchupListener;
   private final SnapV2BlockAccessListApplier blockAccessListApplier;
   private final SnapV2ReorgHealer reorgHealer;
-  private final Blockchain blockchain;
   private final EthContext ethContext;
 
-  // Completes once every in-flight (already-dequeued) world-state task has finished.
-  // Non-null only while a pivot catch-up is in progress.
-  private CompletableFuture<Void> pivotCatchupFuture;
-  // Completes once the chain-side BAL fetch for the pivot gap is done.
-  // Non-null only while a pivot catch-up is in progress.
-  private CompletableFuture<Void> chainCatchupFuture;
+  // True while a pivot move drains in-flight requests and applies; dequeue is blocked meanwhile.
+  private boolean moveInProgress;
 
   private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
   private static final long COMPLETION_DEBUG_LOG_INTERVAL_MS = TimeUnit.SECONDS.toMillis(10);
@@ -117,7 +112,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
 
   private volatile ScheduledFuture<?> heartbeatFuture;
   private volatile long lastCompletionDebugLogMillis;
-  private volatile long pivotCatchupStartMillis;
+  private volatile long moveStartMillis;
   private boolean accountRequestsPaused;
 
   public SnapV2WorldDownloadState(
@@ -131,10 +126,8 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       final Clock clock,
       final SyncDurationMetrics syncDurationMetrics,
       final WorldStateHealFinishedListener worldStateHealFinishedListener,
-      final SnapV2PivotCatchupListener pivotCatchupListener,
       final SnapV2BlockAccessListApplier blockAccessListApplier,
       final SnapV2ReorgHealer reorgHealer,
-      final Blockchain blockchain,
       final EthContext ethContext,
       final long storagePipelineInFlightCapacity) {
     super(
@@ -148,10 +141,8 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     this.snapSyncState = snapSyncState;
     this.metricsManager = metricsManager;
     this.worldStateHealFinishedListener = worldStateHealFinishedListener;
-    this.pivotCatchupListener = pivotCatchupListener;
     this.blockAccessListApplier = blockAccessListApplier;
     this.reorgHealer = reorgHealer;
-    this.blockchain = blockchain;
     this.ethContext = ethContext;
     this.childQueueLowWatermark = computeChildQueueLowWatermark(storagePipelineInFlightCapacity);
     this.childQueueHighWatermark = computeChildQueueHighWatermark(childQueueLowWatermark);
@@ -209,7 +200,9 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
   @Override
   public synchronized boolean checkCompletion(final BlockHeader header) {
     if (!isStateDownloadFinished()
-        && !isPivotCatchupInProgress()
+        && !moveInProgress
+        // a header read before a pivot move must not be verified against the moved state
+        && isCurrentPivot(header)
         && accountRangeTracker.completedRangeCount() > 0
         && pendingAccountRequests.allTasksCompleted()
         && pendingCodeRequests.allTasksCompleted()
@@ -245,7 +238,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
             pendingStorageRequests.allTasksCompleted(),
             pendingLargeStorageRequests.allTasksCompleted(),
             pendingCodeRequests.allTasksCompleted(),
-            isPivotCatchupInProgress());
+            moveInProgress);
       }
     }
     return false;
@@ -347,13 +340,13 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
       stopHeartbeat();
       return;
     }
-    final String pivotCatchup =
-        pivotCatchupStartMillis > 0
-            ? "running for " + ((System.currentTimeMillis() - pivotCatchupStartMillis) / 1000) + "s"
+    final String pivotMove =
+        moveStartMillis > 0
+            ? "running for " + ((System.currentTimeMillis() - moveStartMillis) / 1000) + "s"
             : "idle";
     LOG.info(
         "snap/2 world state download in progress: {}%, pivot={}, ranges completed={}, pending={}, "
-            + "queued=[acc={}, stor={}, bigStor={}, code={}], in-flight={}, pivot-catchup={}, "
+            + "queued=[acc={}, stor={}, bigStor={}, code={}], in-flight={}, pivot-move={}, "
             + "peers={}",
         metricsManager.getPercentageProgress(),
         snapSyncState.getPivotBlockHeader().map(BlockHeader::getNumber).orElse(-1L),
@@ -364,7 +357,7 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
         pendingLargeStorageRequests.size(),
         pendingCodeRequests.size(),
         getOutstandingTaskCount(),
-        pivotCatchup,
+        pivotMove,
         ethContext.getEthPeers().peerCount());
   }
 
@@ -379,9 +372,8 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     accountRangeTracker.clear();
     storageRangeTracker.clear();
     accountRequestsPaused = false;
-    pivotCatchupFuture = null;
-    chainCatchupFuture = null;
-    pivotCatchupStartMillis = 0;
+    moveInProgress = false;
+    moveStartMillis = 0;
   }
 
   @Override
@@ -416,20 +408,9 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
     return internalFuture.isDone();
   }
 
-  private boolean isPivotCatchupInProgress() {
-    return pivotCatchupFuture != null;
-  }
-
-  /**
-   * Blocks dequeueing only during the apply phase (chain catch-up done, BALs being applied). While
-   * the chain catch-up is still running, old-pivot requests keep flowing.
-   */
+  /** Blocks dequeueing while a pivot move drains in-flight requests and applies. */
   private boolean isDequeueBlocked() {
-    return pivotCatchupFuture != null && chainCatchupFuture != null && chainCatchupFuture.isDone();
-  }
-
-  private boolean isWaitingForInFlightCompletion() {
-    return pivotCatchupFuture != null && !pivotCatchupFuture.isDone();
+    return moveInProgress;
   }
 
   public synchronized Task<SnapDataRequest> dequeueRequestBlocking(
@@ -476,208 +457,160 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
         && pendingCodeRequests.outstandingTaskCount() == 0;
   }
 
-  private synchronized void maybeCompleteInFlightTasks() {
-    if (isWaitingForInFlightCompletion() && areAllInflightTasksComplete()) {
-      pivotCatchupFuture.complete(null);
-    }
+  @Override
+  public synchronized void notifyTaskAvailable() {
+    super.notifyTaskAvailable();
+    notifyAll(); // wakes a move draining in-flight requests
+  }
+
+  private boolean isCurrentPivot(final BlockHeader header) {
+    return snapSyncState
+        .getPivotBlockHeader()
+        .map(pivot -> pivot.getHash().equals(header.getHash()))
+        .orElse(false);
   }
 
   @Override
-  public synchronized void notifyTaskAvailable() {
-    maybeCompleteInFlightTasks();
-    super.notifyTaskAvailable();
+  public BlockHeader currentPivot() {
+    return snapSyncState.getPivotBlockHeader().orElseThrow();
   }
 
-  public void startPivotCatchup(final BlockHeader newPivotBlockHeader) {
-    final BlockHeader currentPivotBlockHeader;
-    synchronized (this) {
-      if (isStateDownloadFinished()) {
-        logPivotCatchupSkipped(newPivotBlockHeader, "download is already finished");
-        return;
-      }
-      currentPivotBlockHeader = snapSyncState.getPivotBlockHeader().orElseThrow();
-      if (newPivotBlockHeader.getNumber() <= currentPivotBlockHeader.getNumber()) {
-        logPivotCatchupSkipped(
-            newPivotBlockHeader,
-            "new pivot is not after current pivot " + currentPivotBlockHeader.getNumber());
-        return;
-      }
-      if (isPivotCatchupInProgress()) {
-        logPivotCatchupSkipped(newPivotBlockHeader, "another catch-up is in progress");
-        return;
-      }
-
-      if (pivotCatchupListener == null) {
-        internalFuture.completeExceptionally(
-            new WorldStateDownloaderException("snap/2 pivot catch-up listener is not available"));
-        return;
-      }
-      LOG.info(
-          "snap/2 pivot catch-up initiated: {} -> {}, in-flight=[acc={}, stor={}, bigStor={}, code={}]",
-          currentPivotBlockHeader.getNumber(),
-          newPivotBlockHeader.getNumber(),
-          pendingAccountRequests.outstandingTaskCount(),
-          pendingStorageRequests.outstandingTaskCount(),
-          pendingLargeStorageRequests.outstandingTaskCount(),
-          pendingCodeRequests.outstandingTaskCount());
-      pivotCatchupFuture = new CompletableFuture<>();
-      pivotCatchupStartMillis = System.currentTimeMillis();
-      maybeCompleteInFlightTasks(); // handle case of 0 in-flight tasks when catchup starts
-    }
-
-    try {
-      chainCatchupFuture =
-          pivotCatchupListener.preparePivotCatchup(currentPivotBlockHeader, newPivotBlockHeader);
-    } catch (final RuntimeException e) {
-      failPivotCatchup(e);
-      return;
-    }
-    if (chainCatchupFuture == null) {
-      failPivotCatchup(
-          new WorldStateDownloaderException("snap/2 pivot catch-up listener returned null"));
-      return;
-    }
-
-    CompletableFuture.allOf(pivotCatchupFuture, chainCatchupFuture)
-        .whenComplete(
-            (unused, error) -> {
-              if (error != null) {
-                failPivotCatchup(error);
-                return;
-              }
-              finishPivotCatchup(currentPivotBlockHeader, newPivotBlockHeader);
-            });
+  @Override
+  public boolean isFinished() {
+    return isStateDownloadFinished();
   }
 
-  private void logPivotCatchupSkipped(final BlockHeader newPivotBlockHeader, final String reason) {
-    LOG.debug("snap/2 pivot catch-up to {} skipped: {}", newPivotBlockHeader.getNumber(), reason);
-  }
-
-  private synchronized void failPivotCatchup(final Throwable error) {
-    pivotCatchupStartMillis = 0;
-    pivotCatchupFuture = null;
-    chainCatchupFuture = null;
-    internalFuture.completeExceptionally(error);
+  @Override
+  public synchronized void abort(final Throwable cause) {
+    LOG.error("snap/2 world state download cannot recover: {}", cause.getMessage());
+    internalFuture.completeExceptionally(cause);
     notifyAll();
   }
 
-  private void finishPivotCatchup(
-      final BlockHeader currentPivotBlockHeader, final BlockHeader newPivotBlockHeader) {
+  @Override
+  public boolean applyMove(final SnapV2PivotMove move) {
     synchronized (this) {
       if (isStateDownloadFinished()) {
-        return;
+        return false;
       }
-      // Drain in-flight tasks started when dequeue was allowed while the chain catch-up ran.
-      if (!areAllInflightTasksComplete()) {
-        LOG.debug(
-            "snap/2 pivot catch-up: draining in-flight tasks before applying BALs ({} -> {})",
-            currentPivotBlockHeader.getNumber(),
-            newPivotBlockHeader.getNumber());
+      final BlockHeader oldPivot = currentPivot();
+      final BlockHeader newPivot = move.newPivot();
+      if (!move.oldPivot().getHash().equals(oldPivot.getHash())) {
+        throw new SnapV2MoveFailedException(
+            "snap/2 move starts at "
+                + move.oldPivot().getNumber()
+                + ", pivot is "
+                + oldPivot.getNumber());
       }
-      while (!areAllInflightTasksComplete()) {
-        try {
-          wait();
-        } catch (final InterruptedException e) {
-          Thread.currentThread().interrupt();
-          failPivotCatchup(e);
-          return;
-        }
-      }
-      final boolean sameCanonicalChain =
-          blockchain.areBothBlocksOnCanonicalChain(
-              currentPivotBlockHeader.getHash(), newPivotBlockHeader.getHash());
+      moveInProgress = true;
+      moveStartMillis = System.currentTimeMillis();
       try {
+        while (!isStateDownloadFinished() && !areAllInflightTasksComplete()) {
+          try {
+            wait();
+          } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SnapV2MoveFailedException("interrupted while draining", e);
+          }
+        }
+        if (isStateDownloadFinished()) {
+          return false;
+        }
         final Map<Hash, Bytes32> correctRoots;
-        if (sameCanonicalChain) {
+        if (!move.isReorg()) {
+          // local reads of just-fetched BALs; a missing or mismatched BAL is a local
+          // inconsistency, so it is fatal like a failed write
           final Set<Hash> pendingAffected =
-              blockAccessListApplier.collectPendingStorageAffected(
-                  currentPivotBlockHeader, newPivotBlockHeader, accountRangeTracker);
-          LOG.debug(
-              "snap/2 pivot catch-up ({} -> {}): {} pending storage-affected accounts to refetch roots for",
-              currentPivotBlockHeader.getNumber(),
-              newPivotBlockHeader.getNumber(),
-              pendingAffected.size());
-          final CompletableFuture<Map<Hash, Bytes32>> rootsFuture =
-              fetchAccountStorageRoots(pendingAffected, newPivotBlockHeader);
-          final var batch = applyBlockAccessLists(currentPivotBlockHeader, newPivotBlockHeader);
-          correctRoots = rootsFuture.join();
-          final int patched = blockAccessListApplier.patchStorageRoots(batch, correctRoots);
-          batch.commit();
-          LOG.debug(
-              "snap/2 pivot catch-up ({} -> {}): {} storage roots patched",
-              currentPivotBlockHeader.getNumber(),
-              newPivotBlockHeader.getNumber(),
-              patched);
+              writing(
+                  () ->
+                      blockAccessListApplier.collectPendingStorageAffected(
+                          move.canonical(), accountRangeTracker));
+          final Map<Hash, Bytes32> fetchedRoots =
+              beforeWriting(() -> fetchAccountStorageRoots(pendingAffected, newPivot).join());
+          writing(
+              () -> {
+                final var batch =
+                    blockAccessListApplier.applyBlockAccessLists(
+                        move.canonical(), accountRangeTracker, storageRangeTracker);
+                blockAccessListApplier.patchStorageRoots(batch, fetchedRoots);
+                batch.commit();
+              });
+          correctRoots = fetchedRoots;
         } else {
           LOG.info(
-              "snap/2 chain reorg detected at pivot catch-up: current pivot {} ({}) is no longer on the canonical chain; recovering towards new pivot {} ({})",
-              currentPivotBlockHeader.getNumber(),
-              currentPivotBlockHeader.getHash(),
-              newPivotBlockHeader.getNumber(),
-              newPivotBlockHeader.getHash());
+              "snap/2 chain reorg at pivot move: pivot {} ({}) was orphaned; common ancestor {}, new pivot {}",
+              oldPivot.getNumber(),
+              oldPivot.getHash(),
+              move.ancestor().getNumber(),
+              newPivot.getNumber());
+          final SnapV2ReorgHealer.PreparedReorg prepared =
+              beforeWriting(
+                  () -> reorgHealer.prepareReorg(move, accountRangeTracker, storageRangeTracker));
           final ReorgRecoveryResult recovery =
-              reorgHealer.recoverFromReorg(
-                  currentPivotBlockHeader,
-                  newPivotBlockHeader,
-                  accountRangeTracker,
-                  storageRangeTracker);
-          final int purged =
-              purgeChildRequestsForAccounts(
-                  pendingStorageRequests,
-                  pendingLargeStorageRequests,
-                  pendingCodeRequests,
-                  accountRangeTracker,
-                  recovery.deletedAccounts());
-          LOG.info(
-              "snap/2 reorg recovery applied at pivot catch-up ({} -> {}): {} accounts deleted ({} queued child requests purged)",
-              currentPivotBlockHeader.getNumber(),
-              newPivotBlockHeader.getNumber(),
-              recovery.deletedAccounts().size(),
-              purged);
+              writing(
+                  () -> {
+                    final ReorgRecoveryResult result =
+                        reorgHealer.applyReorg(prepared, accountRangeTracker, storageRangeTracker);
+                    purgeChildRequestsForAccounts(
+                        pendingStorageRequests,
+                        pendingLargeStorageRequests,
+                        pendingCodeRequests,
+                        accountRangeTracker,
+                        result.deletedAccounts());
+                    return result;
+                  });
           correctRoots = recovery.correctedStorageRoots();
         }
-        retargetQueuedRequests(newPivotBlockHeader, correctRoots);
-        snapSyncState.setCurrentHeader(newPivotBlockHeader);
-      } catch (final Throwable e) {
-        LOG.error(
-            "snap/2 pivot catch-up failed while applying BALs from pivot {} to {}",
-            currentPivotBlockHeader.getNumber(),
-            newPivotBlockHeader.getNumber(),
-            e);
-        failPivotCatchup(e);
-        return;
+        writing(
+            () -> {
+              retargetQueuedRequests(newPivot, correctRoots);
+              snapSyncState.setCurrentHeader(newPivot);
+            });
+        LOG.info(
+            "snap/2 pivot moved: {} -> {}, ranges completed={}, pending={}",
+            oldPivot.getNumber(),
+            newPivot.getNumber(),
+            accountRangeTracker.completedRangeCount(),
+            accountRangeTracker.pendingRangeCount());
+        return true;
+      } finally {
+        moveInProgress = false;
+        moveStartMillis = 0;
+        notifyAll();
       }
-      pivotCatchupFuture = null;
-      chainCatchupFuture = null;
-      pivotCatchupStartMillis = 0;
-      LOG.info(
-          "snap/2 pivot catch-up complete: {} -> {}, ranges completed={}, pending={}",
-          currentPivotBlockHeader.getNumber(),
-          newPivotBlockHeader.getNumber(),
-          accountRangeTracker.completedRangeCount(),
-          accountRangeTracker.pendingRangeCount());
-      notifyAll();
     }
-    checkCompletion(newPivotBlockHeader);
   }
 
-  private SnapV2BlockAccessListApplier.BatchState applyBlockAccessLists(
-      final BlockHeader currentPivotBlockHeader, final BlockHeader newPivotBlockHeader) {
-    LOG.info(
-        "snap/2 applying BALs: pivot {} -> {} (ranges: completed={}, pending={}) outstanding=[account={}, storage={}, largeStorage={}, code={}]",
-        currentPivotBlockHeader.getNumber(),
-        newPivotBlockHeader.getNumber(),
-        accountRangeTracker.completedRangeCount(),
-        accountRangeTracker.pendingRangeCount(),
-        pendingAccountRequests.outstandingTaskCount(),
-        pendingStorageRequests.outstandingTaskCount(),
-        pendingLargeStorageRequests.outstandingTaskCount(),
-        pendingCodeRequests.outstandingTaskCount());
-    return blockAccessListApplier.applyBlockAccessLists(
-        currentPivotBlockHeader.getNumber() + 1,
-        newPivotBlockHeader.getNumber(),
-        accountRangeTracker,
-        storageRangeTracker);
+  // a failure here has written nothing: the move can be retried
+  private <T> T beforeWriting(final Supplier<T> step) {
+    try {
+      return step.get();
+    } catch (final SnapV2MoveFailedException | ReorgUnrecoverableException e) {
+      // an unrecoverable reorg is not retried: the mover aborts the download
+      throw e;
+    } catch (final RuntimeException e) {
+      throw new SnapV2MoveFailedException("snap/2 pivot move failed before writing: " + e, e);
+    }
+  }
+
+  // a failure here may have written part of the move: the download cannot continue
+  private void writing(final Runnable step) {
+    writing(
+        () -> {
+          step.run();
+          return null;
+        });
+  }
+
+  private <T> T writing(final Supplier<T> step) {
+    try {
+      return step.get();
+    } catch (final RuntimeException e) {
+      LOG.error("snap/2 pivot move failed while writing, failing the world state download", e);
+      internalFuture.completeExceptionally(e);
+      notifyAll();
+      throw e;
+    }
   }
 
   private void retargetQueuedRequests(
@@ -808,7 +741,8 @@ public class SnapV2WorldDownloadState extends WorldDownloadState<SnapDataRequest
                         + " after BAL application during pivot catch-up"));
   }
 
-  private CompletableFuture<Map<Hash, Bytes32>> fetchAccountStorageRoots(
+  @VisibleForTesting
+  CompletableFuture<Map<Hash, Bytes32>> fetchAccountStorageRoots(
       final Set<Hash> accountHashes, final BlockHeader pivotHeader) {
     if (accountHashes.isEmpty()) {
       return CompletableFuture.completedFuture(Map.of());
