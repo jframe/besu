@@ -175,9 +175,13 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
   // directly after the last indexed one (genesis when nothing is indexed), and only at or below
   // the frontier. Everything else (RPC and cache layers, reorg rolls) is never captured.
   //
-  // Invariant: the live and roller paths never target the same block. The roller's target is at or
-  // below the local head, while a live capture requires last == head, so the decision cached at
-  // the first put stays valid even though record() re-reads coverage at commit.
+  // The decision is cached at the first put and coverage is re-read by record() at commit. The live
+  // and roller paths normally target different blocks: the roller stays at or below the chain
+  // head, and a live capture needs the persisted block to directly follow coverage. The chain head
+  // and the world-state head can diverge transiently (e.g. while a forkchoice update rolls the
+  // world state), so both paths may briefly decide the same block. Such a race is still safe: both
+  // compute identical entries for the same block, and whichever commits second fails loudly on the
+  // coverage contiguity check in record() rather than archiving anything inconsistent.
   private TxCapture decide(final SegmentedKeyValueStorage storage) {
     final long block = readBlockNumber(storage);
     final boolean isRoller = storage == rollerStorage.get();
@@ -319,8 +323,9 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
     } else if (txCapture.capture()) {
       // e.g. a rollFullWorldStateToBlockHash persist merging rollbacks and roll-forwards: the write
       // set is not the content of any single block, so it must never be archived.
-      LOG.debug(
-          "archive decided block {} but persisting block {}; not archiving",
+      LOG.info(
+          "Bonsai archive proofs: decided block {} but persisting block {}; not archived inline, "
+              + "the roller will index it",
           txCapture.block(),
           blockNumber);
       trieNodeWriter.onRollback(transaction);

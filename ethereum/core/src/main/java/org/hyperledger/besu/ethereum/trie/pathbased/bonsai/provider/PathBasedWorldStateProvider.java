@@ -401,9 +401,17 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
    * target. Unlike historical queries this applies no historical-block limit, so callers must only
    * use it where every needed trie log is retained (e.g. Bonsai archive, which never prunes them).
    *
+   * <p>Not every failure is reported through the return value: a missing trie log or block header
+   * on the roll path throws {@link MerkleTrieException} (after a WARN with stack trace), as does a
+   * trie inconsistency hit while applying the roll. Other failures while applying the roll are
+   * logged and reported as {@code false}.
+   *
    * @param worldState the world state to roll
    * @param blockHash the target block hash
-   * @return {@code true} if the world state now sits at {@code blockHash}
+   * @return {@code true} if the world state now sits at {@code blockHash}; {@code false} if
+   *     applying the roll failed for a reason other than a trie inconsistency
+   * @throws MerkleTrieException if a trie log or header needed for the roll is missing, or the roll
+   *     hits a trie inconsistency
    */
   public boolean rollWorldStateToBlockHash(
       final PathBasedWorldState worldState, final Hash blockHash) {

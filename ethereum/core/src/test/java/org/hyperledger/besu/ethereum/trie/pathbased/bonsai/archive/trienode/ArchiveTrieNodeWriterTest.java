@@ -15,10 +15,15 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -28,6 +33,8 @@ import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.IntFunction;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -148,6 +155,99 @@ class ArchiveTrieNodeWriterTest {
     assertThat(historyStore.getLatestBefore(nk, 0L)).isPresent();
     assertThat(coverageTracker.hasArchiveBlock(0L)).isTrue();
     assertThat(scratch.stream(TRIE_BRANCH_STORAGE_ARCHIVE).count()).isZero();
+  }
+
+  /** The detached transaction the spied canonical storage handed out most recently. */
+  private final AtomicReference<SegmentedKeyValueStorageTransaction> detachedTx =
+      new AtomicReference<>();
+
+  /**
+   * Rebuilds the writer over a spied canonical storage whose low-priority (detached) transactions
+   * are spies, customised by {@code customise} before they are handed out.
+   */
+  private void spyDetachedTransactions(
+      final Consumer<SegmentedKeyValueStorageTransaction> customise) {
+    final SegmentedKeyValueStorage spiedStorage = spy(storage);
+    doAnswer(
+            invocation -> {
+              final SegmentedKeyValueStorageTransaction tx =
+                  spy((SegmentedKeyValueStorageTransaction) invocation.callRealMethod());
+              customise.accept(tx);
+              detachedTx.set(tx);
+              return tx;
+            })
+        .when(spiedStorage)
+        .startLowPriorityTransaction();
+    historyStore = new ArchiveNodeHistoryStore(spiedStorage);
+    trieNodeWriter =
+        new ArchiveTrieNodeWriter(
+            historyStore,
+            coverageTracker,
+            Executors.newFixedThreadPool(2),
+            DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+  }
+
+  private SegmentedKeyValueStorageTransaction detachedCapture(final long block, final Bytes nk) {
+    final SegmentedKeyValueStorageTransaction scratchTx = storage.startTransaction();
+    trieNodeWriter.capture(
+        nk,
+        LOCATION,
+        block,
+        branchNode(1),
+        branchNode(0),
+        scratchTx,
+        ArchiveTrieNodeWriter.CommitMode.DETACHED);
+    return scratchTx;
+  }
+
+  @Test
+  void detachedCoverageFailureRollsBackAndPersistsNothing() {
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
+    spyDetachedTransactions(tx -> {});
+
+    final SegmentedKeyValueStorageTransaction scratchTx = detachedCapture(5L, nk); // not 0 + 1
+    assertThatThrownBy(() -> trieNodeWriter.onBeforeCommit(scratchTx))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("contiguously");
+
+    verify(detachedTx.get()).rollback();
+    assertThat(historyStore.getLatestBefore(nk, 5L).orElseThrow().block()).isZero();
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
+  }
+
+  @Test
+  void detachedCommitFailureRollsBackRethrowsAndPersistsNothing() {
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
+    final RuntimeException commitFailure = new RuntimeException("commit failed");
+    spyDetachedTransactions(tx -> doThrow(commitFailure).when(tx).commit());
+
+    final SegmentedKeyValueStorageTransaction scratchTx = detachedCapture(1L, nk);
+    assertThatThrownBy(() -> trieNodeWriter.onBeforeCommit(scratchTx)).isSameAs(commitFailure);
+
+    verify(detachedTx.get()).rollback();
+    assertThat(historyStore.getLatestBefore(nk, 1L).orElseThrow().block()).isZero();
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
+  }
+
+  @Test
+  void detachedRollbackFailureIsSuppressedIntoTheOriginalFailure() {
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
+    final RuntimeException commitFailure = new RuntimeException("commit failed");
+    final RuntimeException rollbackFailure = new RuntimeException("rollback failed");
+    spyDetachedTransactions(
+        tx -> {
+          doThrow(commitFailure).when(tx).commit();
+          doThrow(rollbackFailure).when(tx).rollback();
+        });
+
+    final SegmentedKeyValueStorageTransaction scratchTx = detachedCapture(1L, nk);
+    assertThatThrownBy(() -> trieNodeWriter.onBeforeCommit(scratchTx))
+        .isSameAs(commitFailure)
+        .satisfies(e -> assertThat(e.getSuppressed()).containsExactly(rollbackFailure));
   }
 
   @Test

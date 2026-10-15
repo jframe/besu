@@ -235,7 +235,12 @@ public class ArchiveTrieNodeWriter implements Closeable {
           writeEntries(detached, entries, buf.block);
           detached.commit();
         } catch (final RuntimeException e) {
-          detached.rollback();
+          // a failing rollback must not mask the original failure
+          try {
+            detached.rollback();
+          } catch (final RuntimeException rollbackFailure) {
+            e.addSuppressed(rollbackFailure);
+          }
           throw e;
         }
       } else {
