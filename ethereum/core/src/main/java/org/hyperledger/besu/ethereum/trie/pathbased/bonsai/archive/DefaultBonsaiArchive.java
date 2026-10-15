@@ -95,7 +95,8 @@ final class DefaultBonsaiArchive implements BonsaiArchive {
       return;
     }
     final ArchiveTrieNodeRoller trieNodeRoller =
-        new ArchiveTrieNodeRoller(provider, blockchain, strategy, frontier, rollerExecutor);
+        new ArchiveTrieNodeRoller(
+            provider, blockchain, strategy, frontier, rollerExecutor, maxLayersToLoad);
     roller = trieNodeRoller;
     trieNodeRoller.start();
   }

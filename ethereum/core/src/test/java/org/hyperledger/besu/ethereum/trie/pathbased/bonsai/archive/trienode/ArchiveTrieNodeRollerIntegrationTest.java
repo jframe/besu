@@ -68,6 +68,7 @@ class ArchiveTrieNodeRollerIntegrationTest {
   private BonsaiArchiveWorldStateProvider provider;
   private ArchiveTrieNodeStrategy strategy;
   private ArchiveTrieNodeRoller roller;
+  private long maxLayersToLoad;
 
   @AfterEach
   void tearDown() {
@@ -80,6 +81,7 @@ class ArchiveTrieNodeRollerIntegrationTest {
   }
 
   private void setUpChain(final long maxLayersToLoad) {
+    this.maxLayersToLoad = maxLayersToLoad;
     final DataStorageConfiguration config =
         ImmutableDataStorageConfiguration.builder()
             .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
@@ -121,13 +123,18 @@ class ArchiveTrieNodeRollerIntegrationTest {
   }
 
   private ArchiveTrieNodeRoller roller(final int maxBatch) {
+    return roller(1, maxBatch);
+  }
+
+  private ArchiveTrieNodeRoller roller(final int minBatch, final int maxBatch) {
     return new ArchiveTrieNodeRoller(
         provider,
         chain.getBlockchain(),
         strategy,
         frontier::get,
         Executors.newSingleThreadScheduledExecutor(),
-        1,
+        maxLayersToLoad,
+        minBatch,
         maxBatch);
   }
 
@@ -343,11 +350,29 @@ class ArchiveTrieNodeRollerIntegrationTest {
   }
 
   @Test
-  void catchesUpBeyondHistoricalBlockLimit() {
-    setUpChain(8L); // historical queries refuse blocks more than 8 behind head
+  void stopsWhenGapExceedsHistoricalBlockLimit() {
+    setUpChain(8L); // the roller's seed span is capped at --bonsai-historical-block-limit
     frontier.set(4L);
     chain.importAllBlocks();
     assertThat(head() - lastIndexed()).isGreaterThan(8L);
+    final Map<Bytes, Bytes> archiveBefore = segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE);
+
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(256);
+    roller.catchUp();
+
+    assertThat(roller.isStopped()).isTrue();
+    assertThat(lastIndexed()).isEqualTo(4L);
+    assertThat(segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE)).isEqualTo(archiveBefore);
+  }
+
+  @Test
+  void catchesUpWhenGapIsWithinHistoricalBlockLimit() {
+    setUpChain(8L); // historical queries refuse blocks more than 8 behind head
+    frontier.set(chain.getBlock(chain.blockCount() - 1).getHeader().getNumber() - 8L);
+    chain.importAllBlocks();
+    final long start = lastIndexed();
+    assertThat(head() - start).isEqualTo(8L);
 
     frontier.set(Long.MAX_VALUE);
     roller = roller(256);
@@ -355,12 +380,44 @@ class ArchiveTrieNodeRollerIntegrationTest {
 
     assertThat(lastIndexed()).isEqualTo(head());
     // archive proof roots must hash to the header state root for every recovered block
-    for (long block = 5; block <= head(); block++) {
+    for (long block = start + 1; block <= head(); block++) {
       for (final Address address : touchedAddresses()) {
         final List<Bytes> proof = archiveAccountProof(block, address).orElseThrow();
         assertThat(Hash.hash(proof.get(0))).isEqualTo(header(block).getStateRoot());
       }
     }
+  }
+
+  @Test
+  void residualGapBelowMinBatchDoesNotReseed() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+
+    frontier.set(18L); // one batch 11..15, then a residual gap of 3 < minBatch 4
+    roller = roller(4, 5);
+    roller.catchUp();
+
+    assertThat(lastIndexed()).isEqualTo(15L);
+  }
+
+  @Test
+  void missingNextTrieLogStopsTheRoller() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    final var trieLogTx = storage.getTrieLogStorage().startTransaction();
+    trieLogTx.remove(header(11L).getHash().getBytes().toArrayUnsafe());
+    trieLogTx.commit();
+    final Map<Bytes, Bytes> archiveBefore = segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE);
+
+    frontier.set(Long.MAX_VALUE);
+    roller = roller(256);
+    roller.catchUp();
+
+    assertThat(roller.isStopped()).isTrue();
+    assertThat(lastIndexed()).isEqualTo(10L);
+    assertThat(segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE)).isEqualTo(archiveBefore);
   }
 
   @Test

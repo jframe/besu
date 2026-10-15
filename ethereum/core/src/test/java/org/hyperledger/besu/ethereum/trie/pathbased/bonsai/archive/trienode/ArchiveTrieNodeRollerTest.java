@@ -26,16 +26,28 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
+import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -49,9 +61,24 @@ class ArchiveTrieNodeRollerTest {
   private ScheduledExecutorService executor;
   private ArchiveTrieNodeRoller roller;
   private SegmentedKeyValueStorage storage;
+  private TrieLogManager trieLogManager;
+  private final List<LogEvent> logEvents = new CopyOnWriteArrayList<>();
+  private AbstractAppender appender;
+
+  private static final long MAX_LAYERS = 512L;
 
   @BeforeEach
   void setUp() {
+    appender =
+        new AbstractAppender("roller-test-capture", null, null, false, Property.EMPTY_ARRAY) {
+          @Override
+          public void append(final LogEvent event) {
+            logEvents.add(event.toImmutable());
+          }
+        };
+    appender.start();
+    rollerLogger().addAppender(appender);
+
     storage =
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
@@ -60,9 +87,36 @@ class ArchiveTrieNodeRollerTest {
     provider = mock(BonsaiWorldStateProvider.class);
     strategy = mock(ArchiveTrieNodeStrategy.class);
     when(strategy.getCoverageTracker()).thenReturn(coverage);
+    trieLogManager = mock(TrieLogManager.class);
+    when(provider.getTrieLogManager()).thenReturn(trieLogManager);
     executor = mock(ScheduledExecutorService.class);
     roller =
-        new ArchiveTrieNodeRoller(provider, blockchain, strategy, frontier::get, executor, 4, 8);
+        new ArchiveTrieNodeRoller(
+            provider, blockchain, strategy, frontier::get, executor, MAX_LAYERS, 4, 8);
+  }
+
+  @AfterEach
+  void tearDown() {
+    rollerLogger().removeAppender(appender);
+    appender.stop();
+  }
+
+  @SuppressWarnings("BannedMethod")
+  private static Logger rollerLogger() {
+    return (Logger) LogManager.getLogger(ArchiveTrieNodeRoller.class);
+  }
+
+  private long logCount(final Level level) {
+    return logEvents.stream().filter(e -> level.equals(e.getLevel())).count();
+  }
+
+  /** Stubs a canonical header at {@code number}, with or without a stored trie log. */
+  private BlockHeader headerAt(final long number, final boolean hasTrieLog) {
+    final BlockHeader header = new BlockHeaderTestFixture().number(number).buildHeader();
+    when(blockchain.getBlockHeader(number)).thenReturn(Optional.of(header));
+    when(trieLogManager.getTrieLogLayer(header.getHash()))
+        .thenReturn(hasTrieLog ? Optional.of(mock(TrieLog.class)) : Optional.empty());
+    return header;
   }
 
   private void coverageAt(final long block) {
@@ -128,12 +182,83 @@ class ArchiveTrieNodeRollerTest {
   void catchUpFailureIsContainedAndLeavesCoverage() {
     coverageAt(10L);
     when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    headerAt(11L, true);
     when(blockchain.getBlockHeader(10L)).thenReturn(Optional.empty());
     frontier.set(20L);
 
     roller.catchUp(); // missing cursor header → logged, not thrown
 
     assertThat(coverage.lastIndexedBlock()).hasValue(10L);
+    assertThat(roller.isStopped()).isFalse();
+  }
+
+  @Test
+  void missingNextTrieLogStopsTheRollerWithoutSeeding() {
+    // snap-synced node: genesis indexed, no trie logs below the pivot
+    coverageAt(0L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    headerAt(1L, false);
+    frontier.set(100L);
+
+    roller.catchUp();
+    roller.catchUp();
+    roller.scheduleCatchUpIfNeeded();
+
+    verify(provider, never()).rollWorldStateToBlockHash(any(), any());
+    verify(provider, never()).createUncachedWorldState(any());
+    verify(executor, never()).execute(any());
+    assertThat(roller.isStopped()).isTrue();
+    assertThat(coverage.lastIndexedBlock()).hasValue(0L);
+    assertThat(logCount(Level.WARN)).isEqualTo(1L);
+    assertThat(logCount(Level.ERROR)).isZero();
+  }
+
+  @Test
+  void missingNextHeaderStopsTheRollerWithoutSeeding() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    when(blockchain.getBlockHeader(11L)).thenReturn(Optional.empty());
+    frontier.set(100L);
+
+    roller.catchUp();
+
+    verify(provider, never()).rollWorldStateToBlockHash(any(), any());
+    assertThat(roller.isStopped()).isTrue();
+    assertThat(logCount(Level.WARN)).isEqualTo(1L);
+  }
+
+  @Test
+  void gapBeyondHistoricalBlockLimitStopsTheRollerWithoutSeeding() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(10L + MAX_LAYERS + 1L);
+    headerAt(11L, true);
+    frontier.set(10L + MAX_LAYERS);
+
+    roller.catchUp();
+    roller.catchUp();
+    roller.scheduleCatchUpIfNeeded();
+
+    verify(provider, never()).rollWorldStateToBlockHash(any(), any());
+    verify(provider, never()).createUncachedWorldState(any());
+    verify(executor, never()).execute(any());
+    assertThat(roller.isStopped()).isTrue();
+    assertThat(coverage.lastIndexedBlock()).hasValue(10L);
+    assertThat(logCount(Level.WARN)).isEqualTo(1L);
+    assertThat(logCount(Level.ERROR)).isZero();
+  }
+
+  @Test
+  void gapAtHistoricalBlockLimitStillSeeds() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(10L + MAX_LAYERS);
+    headerAt(11L, true);
+    when(blockchain.getBlockHeader(10L)).thenReturn(Optional.empty()); // fail right after the cap
+    frontier.set(10L + MAX_LAYERS);
+
+    roller.catchUp();
+
+    verify(blockchain).getBlockHeader(10L); // reached the seed
+    assertThat(roller.isStopped()).isFalse();
   }
 
   @Test

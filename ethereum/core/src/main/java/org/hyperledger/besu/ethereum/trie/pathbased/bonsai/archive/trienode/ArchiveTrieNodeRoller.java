@@ -46,6 +46,10 @@ import org.slf4j.LoggerFactory;
  * <p>Each catch-up seeds an uncached world state over a layer on a snapshot of head, rolls it back
  * to the last indexed block, then rolls forward one block per persist so every block's trie-node
  * changes are captured individually. Runs on its own single thread, single-flight.
+ *
+ * <p>The roller stops for good (until restart) rather than retrying when it can never succeed: the
+ * trie log for the next block is missing (the node was not fully synced from genesis), or the seed
+ * would roll back more than {@code maxLayersToLoad} blocks, whose cost scales with the gap.
  */
 public class ArchiveTrieNodeRoller implements Closeable {
 
@@ -60,10 +64,12 @@ public class ArchiveTrieNodeRoller implements Closeable {
   private final ArchiveCoverageTracker coverage;
   private final LongSupplier frontier;
   private final ScheduledExecutorService executor;
+  private final long maxLayersToLoad;
   private final int minBatch;
   private final int maxBatch;
   private final AtomicBoolean running = new AtomicBoolean(false);
   private volatile boolean closed;
+  private volatile boolean stopped;
   private OptionalLong observerId = OptionalLong.empty();
 
   public ArchiveTrieNodeRoller(
@@ -71,8 +77,9 @@ public class ArchiveTrieNodeRoller implements Closeable {
       final Blockchain blockchain,
       final ArchiveTrieNodeStrategy strategy,
       final LongSupplier frontier,
-      final ScheduledExecutorService executor) {
-    this(provider, blockchain, strategy, frontier, executor, MIN_BATCH, MAX_BATCH);
+      final ScheduledExecutorService executor,
+      final long maxLayersToLoad) {
+    this(provider, blockchain, strategy, frontier, executor, maxLayersToLoad, MIN_BATCH, MAX_BATCH);
   }
 
   @VisibleForTesting
@@ -82,6 +89,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
       final ArchiveTrieNodeStrategy strategy,
       final LongSupplier frontier,
       final ScheduledExecutorService executor,
+      final long maxLayersToLoad,
       final int minBatch,
       final int maxBatch) {
     this.provider = Objects.requireNonNull(provider);
@@ -90,6 +98,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
     this.coverage = strategy.getCoverageTracker();
     this.frontier = Objects.requireNonNull(frontier);
     this.executor = Objects.requireNonNull(executor);
+    this.maxLayersToLoad = maxLayersToLoad;
     this.minBatch = minBatch;
     this.maxBatch = maxBatch;
   }
@@ -112,7 +121,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
   }
 
   void scheduleCatchUpIfNeeded() {
-    if (closed) {
+    if (closed || stopped) {
       return;
     }
     final OptionalLong last = coverage.lastIndexedBlock();
@@ -132,13 +141,18 @@ public class ArchiveTrieNodeRoller implements Closeable {
   void catchUp() {
     boolean failed = false;
     try {
-      while (!closed) {
+      while (!closed && !stopped) {
         final OptionalLong last = coverage.lastIndexedBlock();
         if (last.isEmpty()) {
           return;
         }
         final long target = target();
-        if (target <= last.getAsLong()) {
+        // a residual gap below minBatch waits for more blocks rather than paying for a reseed
+        if (target - last.getAsLong() < minBatch) {
+          return;
+        }
+        if (!canSeed(last.getAsLong())) {
+          stopped = true;
           return;
         }
         rollBatch(last.getAsLong(), Math.min(target, last.getAsLong() + maxBatch));
@@ -155,6 +169,39 @@ public class ArchiveTrieNodeRoller implements Closeable {
         scheduleCatchUpIfNeeded();
       }
     }
+  }
+
+  /**
+   * Whether a batch can be seeded at {@code cursor}. False means it never will be on this run, so
+   * the caller stops the roller; the reason is logged once at WARN.
+   */
+  private boolean canSeed(final long cursor) {
+    final long next = cursor + 1L;
+    final boolean hasNextTrieLog =
+        blockchain
+            .getBlockHeader(next)
+            .flatMap(header -> provider.getTrieLogManager().getTrieLogLayer(header.getHash()))
+            .isPresent();
+    if (!hasNextTrieLog) {
+      LOG.warn(
+          "Bonsai archive proofs cannot advance past block {}: trie log for block {} is missing "
+              + "(archive proofs require a full sync from genesis); proof capture stopped until "
+              + "restart",
+          cursor,
+          next);
+      return false;
+    }
+    final long gap = blockchain.getChainHeadBlockNumber() - cursor;
+    if (gap > maxLayersToLoad) {
+      LOG.warn(
+          "Bonsai archive proofs stopped at block {}: {} blocks behind head exceeds "
+              + "--bonsai-historical-block-limit={}; raise the limit and restart to catch up",
+          cursor,
+          gap,
+          maxLayersToLoad);
+      return false;
+    }
+    return true;
   }
 
   private void rollBatch(final long cursor, final long end) {
@@ -215,6 +262,11 @@ public class ArchiveTrieNodeRoller implements Closeable {
     return blockchain
         .getBlockHeader(number)
         .orElseThrow(() -> new IllegalStateException("missing block header " + number));
+  }
+
+  @VisibleForTesting
+  boolean isStopped() {
+    return stopped;
   }
 
   @Override
