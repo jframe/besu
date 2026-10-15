@@ -113,7 +113,7 @@ class ArchiveTrieNodeStrategyTest {
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putTrieNode(storage, tx, location, hash(node), node);
-    strategy.onBeforeCommit(storage, tx);
+    strategy.onBeforeBlockCommit(storage, tx, 0L);
     tx.commit();
 
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 0L)).isPresent();
@@ -129,7 +129,7 @@ class ArchiveTrieNodeStrategyTest {
 
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putTrieNode(storage, tx, TrieNodeKey.of(accountHash, location), hash(node), node);
-    strategy.onBeforeCommit(storage, tx);
+    strategy.onBeforeBlockCommit(storage, tx, 0L);
     tx.commit();
 
     assertThat(
@@ -150,7 +150,7 @@ class ArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putTrieNode(storage, tx, location1, hash(node1), node1);
     strategy.putTrieNode(storage, tx, location2, hash(node2), node2);
-    strategy.onBeforeCommit(storage, tx);
+    strategy.onBeforeBlockCommit(storage, tx, 0L);
     tx.commit();
 
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location1), 0L)).isPresent();
@@ -223,7 +223,7 @@ class ArchiveTrieNodeStrategyTest {
     setStoredBlockNumber(0L);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.removeTrieNode(storage, tx, location);
-    strategy.onBeforeCommit(storage, tx);
+    strategy.onBeforeBlockCommit(storage, tx, 1L);
     tx.commit();
 
     final var tombstone = historyStore.getLatestBefore(ArchiveNodeKey.account(location), 1L);
@@ -249,7 +249,7 @@ class ArchiveTrieNodeStrategyTest {
     setStoredBlockNumber(0L);
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.removeTrieNode(storage, tx, TrieNodeKey.of(accountHash, location));
-    strategy.onBeforeCommit(storage, tx);
+    strategy.onBeforeBlockCommit(storage, tx, 1L);
     tx.commit();
 
     final var tombstone =
@@ -337,7 +337,7 @@ class ArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = other.startTransaction();
     final Bytes node = Bytes.fromHexString("0xeeee");
     strategy.putTrieNode(other, tx, Bytes.of(0x0e), hash(node), node);
-    strategy.onBeforeCommit(other, tx);
+    strategy.onBeforeBlockCommit(other, tx, 1L);
     tx.commit();
 
     assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
@@ -359,7 +359,7 @@ class ArchiveTrieNodeStrategyTest {
     final SegmentedKeyValueStorageTransaction tx = roller.startTransaction();
     final Bytes node = Bytes.fromHexString("0xf0f0");
     strategy.putTrieNode(roller, tx, Bytes.of(0x0f), hash(node), node);
-    strategy.onBeforeCommit(roller, tx);
+    strategy.onBeforeBlockCommit(roller, tx, 1L);
     tx.rollback(); // scratch writes discarded
 
     assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.of(0x0f)), 1L))
@@ -375,7 +375,7 @@ class ArchiveTrieNodeStrategyTest {
     strategy.unregisterRollerStorage(roller);
     final SegmentedKeyValueStorageTransaction after = roller.startTransaction();
     strategy.putTrieNode(roller, after, Bytes.of(0x0f), hash(node), node);
-    strategy.onBeforeCommit(roller, after);
+    strategy.onBeforeBlockCommit(roller, after, 2L);
     after.rollback();
     assertThat(coverageTracker.lastIndexedBlock()).hasValue(1L);
   }
@@ -452,6 +452,30 @@ class ArchiveTrieNodeStrategyTest {
     tx.commit();
 
     assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
+  }
+
+  @Test
+  void plainCommitWithPutsIsNotArchivedAndDoesNotAdvanceCoverage() {
+    // a non-block commit on live storage whose block would pass the gate must never be archived
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    seedCoverageAt(0L);
+    setStoredBlockNumber(0L);
+    final Bytes location = Bytes.of(0x23);
+    final Bytes node = Bytes.fromHexString("0x2323");
+    final long archiveEntriesBefore = storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE).count();
+
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putTrieNode(storage, tx, location, hash(node), node);
+    strategy.onBeforeCommit(storage, tx);
+    tx.commit();
+
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(location), 1L)).isEmpty();
+    assertThat(storage.stream(TRIE_BRANCH_STORAGE_ARCHIVE).count()).isEqualTo(archiveEntriesBefore);
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
+
+    // the discarded capture leaves nothing behind for the next block persist
+    put(strategy, Bytes.of(0x24), Bytes.fromHexString("0x2424"));
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(1L);
   }
 
   @Test

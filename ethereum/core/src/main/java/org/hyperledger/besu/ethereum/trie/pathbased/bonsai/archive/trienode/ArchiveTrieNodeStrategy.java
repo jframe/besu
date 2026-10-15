@@ -289,12 +289,20 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
         txCapture.mode());
   }
 
+  // Only block persists archive. A plain commit carries no block, so any captures it buffered are
+  // discarded and coverage never advances: its write set is not the content of a block.
   @Override
   public void onBeforeCommit(
       final SegmentedKeyValueStorage storage,
       final SegmentedKeyValueStorageTransaction transaction) {
+    final TxCapture txCapture = txCaptureCache.getIfPresent(transaction);
     txCaptureCache.invalidate(transaction);
-    trieNodeWriter.onBeforeCommit(transaction);
+    if (txCapture != null && txCapture.capture()) {
+      LOG.debug(
+          "archive decided block {} on a non-block commit; discarding its captures",
+          txCapture.block());
+    }
+    trieNodeWriter.onRollback(transaction);
   }
 
   @Override
