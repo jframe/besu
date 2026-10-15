@@ -16,6 +16,8 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -51,17 +53,17 @@ class BonsaiWorldStateKeyValueStorageTrieNodeStrategyTest {
     updaterWith(strategy).commit();
 
     verify(strategy, times(2)).onBeforeCommit(any(), any());
-    verify(strategy, never()).onBeforeBlockCommit(any(), any());
+    verify(strategy, never()).onBeforeBlockCommit(any(), any(), anyLong());
   }
 
   @Test
   void markedCommitsUseOnBeforeBlockCommit() {
     final TrieNodeStrategy strategy = mock(TrieNodeStrategy.class);
 
-    updaterWith(strategy).markBlockPersist().commitComposedOnly();
-    updaterWith(strategy).markBlockPersist().commit();
+    updaterWith(strategy).markBlockPersist(42L).commitComposedOnly();
+    updaterWith(strategy).markBlockPersist(42L).commit();
 
-    verify(strategy, times(2)).onBeforeBlockCommit(any(), any());
+    verify(strategy, times(2)).onBeforeBlockCommit(any(), any(), eq(42L));
     verify(strategy, never()).onBeforeCommit(any(), any());
   }
 

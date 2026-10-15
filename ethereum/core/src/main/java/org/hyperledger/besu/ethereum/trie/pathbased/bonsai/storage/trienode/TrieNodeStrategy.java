@@ -52,10 +52,12 @@ public interface TrieNodeStrategy {
    *
    * @param storage the storage the transaction writes to
    * @param transaction the transaction about to be committed
+   * @param blockNumber the number of the block header being persisted
    */
   default void onBeforeBlockCommit(
       final SegmentedKeyValueStorage storage,
-      final SegmentedKeyValueStorageTransaction transaction) {
+      final SegmentedKeyValueStorageTransaction transaction,
+      final long blockNumber) {
     onBeforeCommit(storage, transaction);
   }
 

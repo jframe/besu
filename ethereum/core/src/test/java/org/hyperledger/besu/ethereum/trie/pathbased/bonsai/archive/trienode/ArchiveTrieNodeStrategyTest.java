@@ -86,8 +86,15 @@ class ArchiveTrieNodeStrategyTest {
   private void put(final ArchiveTrieNodeStrategy strategy, final Bytes key, final Bytes node) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     strategy.putTrieNode(storage, tx, key, hash(node), node);
-    strategy.onBeforeBlockCommit(storage, tx);
+    strategy.onBeforeBlockCommit(storage, tx, nextBlock());
     tx.commit();
+  }
+
+  private long nextBlock() {
+    return storage
+        .get(TRIE_BRANCH_STORAGE, WORLD_BLOCK_NUMBER_KEY)
+        .map(b -> Bytes.wrap(b).toLong() + 1L)
+        .orElse(0L);
   }
 
   private void setStoredBlockNumber(final long block) {
@@ -406,7 +413,7 @@ class ArchiveTrieNodeStrategyTest {
 
   private void blockCommitWithoutPuts(final ArchiveTrieNodeStrategy strategy) {
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
-    strategy.onBeforeBlockCommit(storage, tx);
+    strategy.onBeforeBlockCommit(storage, tx, nextBlock());
     tx.commit();
   }
 
@@ -453,5 +460,44 @@ class ArchiveTrieNodeStrategyTest {
     blockCommitWithoutPuts(strategy);
 
     assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
+  }
+
+  @Test
+  void mergedRollPersistIsNotArchivedAndDoesNotLeak() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    seedCoverageAt(0L);
+    setStoredBlockNumber(0L);
+    final Bytes node = Bytes.fromHexString("0x3131");
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putTrieNode(storage, tx, Bytes.of(0x31), hash(node), node);
+    strategy.onBeforeBlockCommit(storage, tx, 5L); // decided block 1, persisting 5
+    tx.commit();
+
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.of(0x31)), 10L)).isEmpty();
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(0L);
+
+    put(strategy, Bytes.of(0x32), Bytes.fromHexString("0x3232")); // normal block 1
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.of(0x32)), 1L))
+        .isPresent();
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.of(0x31)), 1L)).isEmpty();
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(1L);
+  }
+
+  @Test
+  void rollbackShapedPersistIsNotArchived() {
+    final ArchiveTrieNodeStrategy strategy = strategy();
+    seedCoverageAt(0L);
+    seedCoverageAt(1L);
+    seedCoverageAt(2L);
+    seedCoverageAt(3L);
+    setStoredBlockNumber(3L); // candidate 4
+    final Bytes node = Bytes.fromHexString("0x4141");
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    strategy.putTrieNode(storage, tx, Bytes.of(0x41), hash(node), node);
+    strategy.onBeforeBlockCommit(storage, tx, 2L);
+    tx.commit();
+
+    assertThat(historyStore.getLatestBefore(ArchiveNodeKey.account(Bytes.of(0x41)), 10L)).isEmpty();
+    assertThat(coverageTracker.lastIndexedBlock()).hasValue(3L);
   }
 }

@@ -224,8 +224,9 @@ public abstract class PathBasedWorldState
         trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this);
       }
 
-      if (blockHeader != null) {
-        stateUpdater.markBlockPersist();
+      // A frozen persist never applies trie writes, so it is never a block persist.
+      if (blockHeader != null && !isStorageFrozen()) {
+        stateUpdater.markBlockPersist(blockHeader.getNumber());
       }
       stateUpdater.commitComposedOnly();
       // Advance in-memory head only after trielog + composed commit succeeded, so a failing

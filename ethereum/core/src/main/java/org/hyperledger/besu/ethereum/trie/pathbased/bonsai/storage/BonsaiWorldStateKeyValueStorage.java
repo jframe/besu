@@ -54,6 +54,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -531,7 +532,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     // code keyed by its hash is shared by every account holding it, so it is written only once
     private final Set<Hash> writtenCodeHashes = ConcurrentHashMap.newKeySet();
 
-    private boolean persistingBlock;
+    private OptionalLong persistingBlock = OptionalLong.empty();
 
     public Updater(
         final SegmentedKeyValueStorageTransaction composedWorldStateTransaction,
@@ -638,16 +639,18 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
      * Marks this updater as persisting a block's world state, so the trie-node strategy sees a
      * block commit rather than an arbitrary one.
      *
+     * @param blockNumber the number of the block header being persisted
      * @return this updater
      */
-    public Updater markBlockPersist() {
-      persistingBlock = true;
+    public Updater markBlockPersist(final long blockNumber) {
+      persistingBlock = OptionalLong.of(blockNumber);
       return this;
     }
 
     private void notifyBeforeCommit() {
-      if (persistingBlock) {
-        trieNodeStrategy.onBeforeBlockCommit(worldStorage, composedWorldStateTransaction);
+      if (persistingBlock.isPresent()) {
+        trieNodeStrategy.onBeforeBlockCommit(
+            worldStorage, composedWorldStateTransaction, persistingBlock.getAsLong());
       } else {
         trieNodeStrategy.onBeforeCommit(worldStorage, composedWorldStateTransaction);
       }

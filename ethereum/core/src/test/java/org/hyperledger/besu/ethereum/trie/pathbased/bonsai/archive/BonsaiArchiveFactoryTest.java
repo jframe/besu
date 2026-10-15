@@ -214,7 +214,7 @@ class BonsaiArchiveFactoryTest {
     final SegmentedKeyValueStorageTransaction tx = live.startTransaction();
     final Bytes node = Bytes.fromHexString("0xabcd");
     strategy.putTrieNode(live, tx, Bytes.of(0x01), Bytes32.wrap(Hash.hash(node).getBytes()), node);
-    strategy.onBeforeBlockCommit(live, tx);
+    strategy.onBeforeBlockCommit(live, tx, 1L);
     tx.commit();
 
     assertThat(strategy.getCoverageTracker().lastIndexedBlock()).hasValue(1L);

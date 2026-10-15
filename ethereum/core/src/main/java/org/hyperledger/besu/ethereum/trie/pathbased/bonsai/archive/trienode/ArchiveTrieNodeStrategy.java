@@ -280,13 +280,23 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
   @Override
   public void onBeforeBlockCommit(
       final SegmentedKeyValueStorage storage,
-      final SegmentedKeyValueStorageTransaction transaction) {
+      final SegmentedKeyValueStorageTransaction transaction,
+      final long blockNumber) {
     // A block persist records coverage even if it wrote no captured nodes (empty blocks, no-op
     // rewrites), otherwise coverage would freeze at the first such block.
     final TxCapture txCapture = txCaptureCache.get(transaction, ignored -> decide(storage));
     txCaptureCache.invalidate(transaction);
-    if (txCapture.capture()) {
+    if (txCapture.capture() && txCapture.block() == blockNumber) {
       trieNodeWriter.beginBlock(transaction, txCapture.block(), txCapture.mode());
+    } else if (txCapture.capture()) {
+      // e.g. a rollFullWorldStateToBlockHash persist merging rollbacks and roll-forwards: the write
+      // set is not the content of any single block, so it must never be archived.
+      LOG.debug(
+          "archive decided block {} but persisting block {}; not archiving",
+          txCapture.block(),
+          blockNumber);
+      trieNodeWriter.onRollback(transaction);
+      return;
     }
     trieNodeWriter.onBeforeCommit(transaction);
   }
