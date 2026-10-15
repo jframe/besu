@@ -42,8 +42,10 @@ import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
+import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,8 +53,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.LongStream;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -139,16 +143,91 @@ class ArchiveTrieNodeRollerIntegrationTest {
     return chain.getBlockchain().getBlockHeader(number).orElseThrow();
   }
 
-  /** Addresses touched by the test chain's transactions (senders and recipients). */
+  /** Storage slots requested in every full proof comparison. */
+  private static final List<UInt256> STORAGE_SLOTS =
+      LongStream.rangeClosed(0, 7).mapToObj(UInt256::valueOf).toList();
+
+  /**
+   * Addresses touched by the test chain: block coinbases, transaction senders, recipients and
+   * created contracts.
+   */
   private Set<Address> touchedAddresses() {
     final Set<Address> addresses = new LinkedHashSet<>();
     for (final Block block : chain.getBlocks()) {
+      addresses.add(block.getHeader().getCoinbase());
       for (final Transaction tx : block.getBody().getTransactions()) {
         addresses.add(tx.getSender());
-        tx.getTo().ifPresent(addresses::add);
+        tx.getTo()
+            .ifPresentOrElse(
+                addresses::add,
+                () -> addresses.add(Address.contractAddress(tx.getSender(), tx.getNonce())));
       }
     }
     return addresses;
+  }
+
+  /** Structural view of a {@link WorldStateProof}, which does not implement equals. */
+  private record ProofView(
+      List<Bytes> accountProof,
+      Map<UInt256, List<Bytes>> storageProofs,
+      Map<UInt256, UInt256> storageValues) {
+
+    static ProofView of(final WorldStateProof proof) {
+      final Map<UInt256, List<Bytes>> storageProofs = new LinkedHashMap<>();
+      final Map<UInt256, UInt256> storageValues = new LinkedHashMap<>();
+      for (final UInt256 slot : STORAGE_SLOTS) {
+        storageProofs.put(slot, proof.getStorageProof(slot));
+        storageValues.put(slot, proof.getStorageValue(slot));
+      }
+      return new ProofView(proof.getAccountProof(), storageProofs, storageValues);
+    }
+
+    boolean hasNonTrivialStorage() {
+      return storageValues.values().stream().anyMatch(value -> !value.isZero())
+          || storageProofs.values().stream().anyMatch(nodes -> nodes.size() > 1);
+    }
+  }
+
+  private Optional<ProofView> archiveFullProof(final long block, final Address address) {
+    return provider.getAccountProof(
+        header(block), address, STORAGE_SLOTS, maybeProof -> maybeProof.map(ProofView::of));
+  }
+
+  /** Oracle: the full proof (account and storage slots) from a trie-log-rolled world state. */
+  private ProofView rolledFullProof(final long block, final Address address) {
+    final BlockHeader blockHeader = header(block);
+    try (var worldState =
+        provider.getWorldState(withBlockHeaderAndNoUpdateNodeHead(blockHeader)).orElseThrow()) {
+      final BonsaiWorldStateKeyValueStorage rolledStorage =
+          ((BonsaiWorldState) worldState).getWorldStateStorage();
+      return ProofView.of(
+          new WorldStateProofProvider(new WorldStateStorageCoordinator(rolledStorage))
+              .getAccountProof(blockHeader.getStateRoot(), address, STORAGE_SLOTS)
+              .orElseThrow());
+    } catch (final Exception e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  /**
+   * Asserts {@code block} is served from the archive (not the trie-log fallback) and that every
+   * touched address's full proof matches the rolled oracle byte for byte.
+   *
+   * @return true if any compared proof carried non-trivial storage
+   */
+  private boolean assertArchiveProofsMatchRolled(final long block) {
+    assertThat(strategy.getCoverageTracker().hasArchiveBlock(block))
+        .as("archive coverage for block %d", block)
+        .isTrue();
+    boolean sawStorage = false;
+    for (final Address address : touchedAddresses()) {
+      final ProofView rolled = rolledFullProof(block, address);
+      assertThat(archiveFullProof(block, address))
+          .as("block %d address %s", block, address)
+          .contains(rolled);
+      sawStorage |= rolled.hasNonTrivialStorage();
+    }
+    return sawStorage;
   }
 
   private Optional<List<Bytes>> archiveAccountProof(final long block, final Address address) {
@@ -159,24 +238,7 @@ class ArchiveTrieNodeRollerIntegrationTest {
         maybeProof -> maybeProof.map(WorldStateProof::getAccountProof));
   }
 
-  /** Oracle: the proof from a world state rolled to {@code block} via trie logs. */
-  private List<Bytes> rolledAccountProof(final long block, final Address address) {
-    final BlockHeader blockHeader = header(block);
-    try (var worldState =
-        provider.getWorldState(withBlockHeaderAndNoUpdateNodeHead(blockHeader)).orElseThrow()) {
-      final BonsaiWorldStateKeyValueStorage rolledStorage =
-          ((BonsaiWorldState) worldState).getWorldStateStorage();
-      return new WorldStateProofProvider(new WorldStateStorageCoordinator(rolledStorage))
-          .getAccountProof(blockHeader.getStateRoot(), address, List.of())
-          .orElseThrow()
-          .getAccountProof();
-    } catch (final Exception e) {
-      throw new IllegalStateException(e);
-    }
-  }
-
-  private Map<Bytes, Bytes> segmentContents(
-      final org.hyperledger.besu.plugin.services.storage.SegmentIdentifier segment) {
+  private Map<Bytes, Bytes> segmentContents(final SegmentIdentifier segment) {
     final Map<Bytes, Bytes> contents = new HashMap<>();
     storage.getComposedWorldStateStorage().stream(segment)
         .forEach(pair -> contents.put(Bytes.wrap(pair.getKey()), Bytes.wrap(pair.getValue())));
@@ -212,14 +274,13 @@ class ArchiveTrieNodeRollerIntegrationTest {
     frontier.set(Long.MAX_VALUE);
     roller = roller(5); // reseeds every 5 blocks: boundaries at 15/16, 20/21, ...
     roller.catchUp();
+    assertThat(lastIndexed()).isEqualTo(head());
 
+    boolean sawStorage = false;
     for (long block = 1; block <= head(); block++) {
-      for (final Address address : touchedAddresses()) {
-        assertThat(archiveAccountProof(block, address))
-            .as("block %d address %s", block, address)
-            .contains(rolledAccountProof(block, address));
-      }
+      sawStorage |= assertArchiveProofsMatchRolled(block);
     }
+    assertThat(sawStorage).as("at least one compared proof carries non-trivial storage").isTrue();
   }
 
   @Test
@@ -274,12 +335,11 @@ class ArchiveTrieNodeRollerIntegrationTest {
     roller = roller(5);
     roller.catchUp();
     assertThat(lastIndexed()).isEqualTo(head());
+    boolean sawStorage = false;
     for (long block = 13; block <= 18; block++) {
-      for (final Address address : touchedAddresses()) {
-        assertThat(archiveAccountProof(block, address))
-            .contains(rolledAccountProof(block, address));
-      }
+      sawStorage |= assertArchiveProofsMatchRolled(block);
     }
+    assertThat(sawStorage).as("at least one compared proof carries non-trivial storage").isTrue();
   }
 
   @Test
@@ -311,11 +371,13 @@ class ArchiveTrieNodeRollerIntegrationTest {
     final var trieLogTx = storage.getTrieLogStorage().startTransaction();
     trieLogTx.remove(header(14L).getHash().getBytes().toArrayUnsafe());
     trieLogTx.commit();
+    final Map<Bytes, Bytes> archiveBefore = segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE);
 
     frontier.set(Long.MAX_VALUE);
     roller = roller(256);
     roller.catchUp(); // seeding needs block 14's trie log → fails, logged
 
     assertThat(lastIndexed()).isEqualTo(10L);
+    assertThat(segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE)).isEqualTo(archiveBefore);
   }
 }
