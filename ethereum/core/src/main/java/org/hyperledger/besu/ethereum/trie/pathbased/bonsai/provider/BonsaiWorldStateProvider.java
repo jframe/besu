@@ -20,8 +20,11 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldSt
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.PathBasedWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.WorldStateConfig;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.NoOpBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache.BonsaiWorldStateCacheManager;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache.NoOpBonsaiWorldStateCacheManager;
 import org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.plugin.ServiceManager;
@@ -36,6 +39,7 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
 
   private final BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader;
   private final Optional<Long> amsterdamMilestone;
+  private final BonsaiCodeCache codeCache;
 
   public BonsaiWorldStateProvider(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
@@ -68,6 +72,7 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
     super(worldStateKeyValueStorage, blockchain, extraStorageConfiguration, pluginContext);
     this.bonsaiCachedMerkleTrieLoader = bonsaiCachedMerkleTrieLoader;
     this.amsterdamMilestone = amsterdamMilestone;
+    this.codeCache = codeCache;
     this.evmConfiguration = evmConfiguration;
     provideWorldStateCacheManager(
         new BonsaiWorldStateCacheManager(
@@ -90,11 +95,31 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
     super(worldStateKeyValueStorage, blockchain, extraStorageConfiguration, trieLogManager);
     this.bonsaiCachedMerkleTrieLoader = bonsaiCachedMerkleTrieLoader;
     this.amsterdamMilestone = Optional.empty();
+    this.codeCache = codeCache;
     this.evmConfiguration = evmConfiguration;
     provideWorldStateCacheManager(bonsaiWorldStateCacheManager);
     initializeHeadWorldState(
         new BonsaiWorldState(
             this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
+  }
+
+  /**
+   * Creates a mutable, trie-enabled world state over {@code storage} that is never added to the
+   * shared world-state cache and never populates the shared trie-node preload cache. The caller
+   * owns its lifecycle.
+   *
+   * @param storage the storage the world state reads and writes
+   * @return a new uncached world state
+   */
+  public BonsaiWorldState createUncachedWorldState(final BonsaiWorldStateKeyValueStorage storage) {
+    return new BonsaiWorldState(
+        storage,
+        new NoOpBonsaiCachedMerkleTrieLoader(),
+        new NoOpBonsaiWorldStateCacheManager(storage, evmConfiguration, codeCache),
+        trieLogManager,
+        evmConfiguration,
+        WorldStateConfig.newBuilder(worldStateConfig).build(),
+        codeCache);
   }
 
   public BonsaiCachedMerkleTrieLoader getCachedMerkleTrieLoader() {

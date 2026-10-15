@@ -396,6 +396,20 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
     return worldStateConfig;
   }
 
+  /**
+   * Rolls {@code worldState} to {@code blockHash} by replaying trie logs, persisting once at the
+   * target. Unlike historical queries this applies no historical-block limit, so callers must only
+   * use it where every needed trie log is retained (e.g. Bonsai archive, which never prunes them).
+   *
+   * @param worldState the world state to roll
+   * @param blockHash the target block hash
+   * @return {@code true} if the world state now sits at {@code blockHash}
+   */
+  public boolean rollWorldStateToBlockHash(
+      final PathBasedWorldState worldState, final Hash blockHash) {
+    return rollFullWorldStateToBlockHash(worldState, blockHash, Level.DEBUG).isPresent();
+  }
+
   public BonsaiWorldStateKeyValueStorage getWorldStateKeyValueStorage() {
     return worldStateKeyValueStorage;
   }

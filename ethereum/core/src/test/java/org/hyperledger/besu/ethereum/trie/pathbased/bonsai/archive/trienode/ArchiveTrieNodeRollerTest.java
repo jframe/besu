@@ -1,0 +1,144 @@
+/*
+ * Copyright contributors to Besu.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import org.hyperledger.besu.ethereum.chain.Blockchain;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
+import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+class ArchiveTrieNodeRollerTest {
+
+  private final AtomicLong frontier = new AtomicLong();
+  private Blockchain blockchain;
+  private BonsaiWorldStateProvider provider;
+  private ArchiveTrieNodeStrategy strategy;
+  private ArchiveCoverageTracker coverage;
+  private ScheduledExecutorService executor;
+  private ArchiveTrieNodeRoller roller;
+  private SegmentedKeyValueStorage storage;
+
+  @BeforeEach
+  void setUp() {
+    storage =
+        new SegmentedInMemoryKeyValueStorage(
+            List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
+    coverage = new ArchiveCoverageTracker(storage);
+    blockchain = mock(Blockchain.class);
+    provider = mock(BonsaiWorldStateProvider.class);
+    strategy = mock(ArchiveTrieNodeStrategy.class);
+    when(strategy.getCoverageTracker()).thenReturn(coverage);
+    executor = mock(ScheduledExecutorService.class);
+    roller =
+        new ArchiveTrieNodeRoller(provider, blockchain, strategy, frontier::get, executor, 4, 8);
+  }
+
+  private void coverageAt(final long block) {
+    for (long b = coverage.lastIndexedBlock().orElse(-1L) + 1L; b <= block; b++) {
+      final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+      coverage.record(tx, b);
+      tx.commit();
+    }
+  }
+
+  @Test
+  void doesNotScheduleWhenCoverageEmpty() {
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    frontier.set(100L);
+    roller.scheduleCatchUpIfNeeded();
+    verifyNoInteractions(executor);
+  }
+
+  @Test
+  void doesNotScheduleBelowMinBatch() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    frontier.set(13L); // gap 3 < minBatch 4
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, never()).execute(any());
+  }
+
+  @Test
+  void targetIsCappedAtLocalHead() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(12L);
+    frontier.set(1_000L); // frontier ahead of local head: target = 12, gap 2 < 4
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, never()).execute(any());
+  }
+
+  @Test
+  void schedulesOnceWhileACatchUpIsPending() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    frontier.set(20L);
+    roller.scheduleCatchUpIfNeeded();
+    roller.scheduleCatchUpIfNeeded();
+    verify(executor, times(1)).execute(any());
+  }
+
+  @Test
+  void closeStopsFurtherCatchUp() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    frontier.set(20L);
+    roller.close();
+
+    roller.scheduleCatchUpIfNeeded();
+    roller.catchUp();
+
+    verify(executor, never()).execute(any());
+    verify(executor).shutdownNow();
+    verifyNoInteractions(provider);
+  }
+
+  @Test
+  void catchUpFailureIsContainedAndLeavesCoverage() {
+    coverageAt(10L);
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(100L);
+    when(blockchain.getBlockHeader(10L)).thenReturn(Optional.empty());
+    frontier.set(20L);
+
+    roller.catchUp(); // missing cursor header → logged, not thrown
+
+    assertThat(coverage.lastIndexedBlock()).hasValue(10L);
+  }
+
+  @Test
+  void startRegistersCanonicalHeadObserver() {
+    roller.start();
+    verify(blockchain).observeBlockAdded(any());
+  }
+}
