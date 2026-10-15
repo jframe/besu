@@ -18,6 +18,7 @@ import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
@@ -27,12 +28,18 @@ import java.util.function.LongSupplier;
  * <p>{@code max(finalized, bestChainHeight − maxLayersToLoad / 2, 0)}. Finality drives it on
  * proof-of-stake chains; the distance term drives it on chains without finality (QBFT, IBFT,
  * Clique) and during initial sync, where a stored finalized block can be stale.
+ *
+ * <p>The frontier never moves backwards: each call returns the highest value computed so far. The
+ * best peer height can drop transiently during sync (a peer disconnects, a lagging peer becomes
+ * best); a lower frontier would fail the capture gate for the next head block and hand capture
+ * from inline to the roller, which then has to reseed. Thread-safe.
  */
 public final class ArchiveFrontier implements LongSupplier {
 
   private final Blockchain blockchain;
   private final LongSupplier bestChainHeight;
   private final long distance;
+  private final AtomicLong highest = new AtomicLong(0L);
 
   public ArchiveFrontier(
       final Blockchain blockchain, final LongSupplier bestChainHeight, final long maxLayersToLoad) {
@@ -49,6 +56,7 @@ public final class ArchiveFrontier implements LongSupplier {
             .flatMap(blockchain::getBlockHeader)
             .map(BlockHeader::getNumber)
             .orElse(0L);
-    return Math.max(0L, Math.max(finalized, bestChainHeight.getAsLong() - distance));
+    final long computed = Math.max(finalized, bestChainHeight.getAsLong() - distance);
+    return highest.accumulateAndGet(computed, Math::max);
   }
 }

@@ -86,4 +86,25 @@ class ArchiveFrontierTest {
     best[0] = 2_000L;
     assertThat(frontier.getAsLong()).isEqualTo(1_744L);
   }
+
+  @Test
+  void holdsWhenBestChainHeightDrops() {
+    // a peer-height drop during sync must not hand capture back from inline to the roller
+    final long[] best = {2_000L};
+    final ArchiveFrontier frontier = new ArchiveFrontier(blockchain, () -> best[0], MAX_LAYERS);
+    assertThat(frontier.getAsLong()).isEqualTo(1_744L);
+    best[0] = 1_000L;
+    assertThat(frontier.getAsLong()).isEqualTo(1_744L);
+    best[0] = 2_100L;
+    assertThat(frontier.getAsLong()).isEqualTo(1_844L);
+  }
+
+  @Test
+  void holdsWhenFinalizedRegresses() {
+    finalizedAt(9_990L, true);
+    final ArchiveFrontier frontier = new ArchiveFrontier(blockchain, () -> 10_000L, MAX_LAYERS);
+    assertThat(frontier.getAsLong()).isEqualTo(9_990L);
+    finalizedAt(9_900L, false); // finalized header no longer local
+    assertThat(frontier.getAsLong()).isEqualTo(9_990L);
+  }
 }
