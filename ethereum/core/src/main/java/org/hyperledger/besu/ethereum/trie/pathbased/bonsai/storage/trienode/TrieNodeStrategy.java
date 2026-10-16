@@ -62,4 +62,14 @@ public interface TrieNodeStrategy {
   }
 
   default void onRollback(final SegmentedKeyValueStorageTransaction transaction) {}
+
+  /**
+   * Whether a multi-block roll of the head world state must persist each block separately rather
+   * than once at the target, because this strategy acts on the content of each block persist.
+   *
+   * @return true to persist each rolled block separately
+   */
+  default boolean requiresPerBlockPersist() {
+    return false;
+  }
 }

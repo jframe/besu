@@ -226,7 +226,11 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
     // a failure here keeps the chain head from moving, so it must be visible at the default level
     return withHeadWorldStateLock(
         () ->
-            rollFullWorldStateToBlockHash(headWorldState, blockHash, Level.WARN)
+            rollFullWorldStateToBlockHash(
+                    headWorldState,
+                    blockHash,
+                    Level.WARN,
+                    worldStateKeyValueStorage.getTrieNodeStrategy().requiresPerBlockPersist())
                 .map(MutableWorldState.class::cast));
   }
 
@@ -296,6 +300,18 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
       final PathBasedWorldState mutableState,
       final Hash blockHash,
       final Level rollingFailureLogLevel) {
+    return rollFullWorldStateToBlockHash(mutableState, blockHash, rollingFailureLogLevel, false);
+  }
+
+  // persistEachBlock: persist each rolled-forward block on its own instead of once at the target.
+  // Applies only to a forward-only roll (no rollbacks) over more than one block, as when a failed
+  // head persist left the world state behind the chain head. A rollback can leave Bonsai nodes at
+  // locations unreachable in the rolled-back state, so rolls with rollbacks keep a single persist.
+  private Optional<PathBasedWorldState> rollFullWorldStateToBlockHash(
+      final PathBasedWorldState mutableState,
+      final Hash blockHash,
+      final Level rollingFailureLogLevel,
+      final boolean persistEachBlock) {
     if (blockHash.equals(mutableState.blockHash())) {
       return Optional.of(mutableState);
     } else {
@@ -351,14 +367,29 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
             LOG.debug("Attempting Rollback of {}", rollBack.getBlockHash());
             pathBasedUpdater.rollBack(rollBack);
           }
-          for (int i = rollForwards.size() - 1; i >= 0; i--) {
-            final var forward = rollForwards.get(i);
-            LOG.debug("Attempting Rollforward of {}", rollForwards.get(i).getBlockHash());
-            pathBasedUpdater.rollForward(forward);
-          }
-          pathBasedUpdater.commit();
+          if (persistEachBlock
+              && maybePersistedHeader.isPresent()
+              && rollBacks.isEmpty()
+              && rollForwards.size() > 1) {
+            // e.g. the Bonsai archive captures trie-node history per block persist, and a merged
+            // persist is not the content of any single block
+            for (int i = rollForwards.size() - 1; i >= 0; i--) {
+              final var forward = rollForwards.get(i);
+              LOG.debug("Attempting Rollforward of {}", forward.getBlockHash());
+              pathBasedUpdater.rollForward(forward);
+              pathBasedUpdater.commit();
+              mutableState.persist(headerOrThrow(forward.getBlockHash()));
+            }
+          } else {
+            for (int i = rollForwards.size() - 1; i >= 0; i--) {
+              final var forward = rollForwards.get(i);
+              LOG.debug("Attempting Rollforward of {}", rollForwards.get(i).getBlockHash());
+              pathBasedUpdater.rollForward(forward);
+            }
+            pathBasedUpdater.commit();
 
-          mutableState.persist(headerOrThrow(blockHash));
+            mutableState.persist(headerOrThrow(blockHash));
+          }
 
           LOG.debug(
               "Archive rolling finished, {} now at {}",

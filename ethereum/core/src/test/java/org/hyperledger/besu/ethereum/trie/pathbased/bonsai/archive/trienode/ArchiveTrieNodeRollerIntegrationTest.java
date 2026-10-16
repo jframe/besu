@@ -20,14 +20,17 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead;
+import static org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.BlockProcessingResult;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockchainSetupUtil;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateProvider;
@@ -293,6 +296,56 @@ class ArchiveTrieNodeRollerIntegrationTest {
 
     boolean sawStorage = false;
     for (long block = 1; block <= head(); block++) {
+      sawStorage |= assertArchiveProofsMatchRolled(block);
+    }
+    assertThat(sawStorage).as("at least one compared proof carries non-trivial storage").isTrue();
+  }
+
+  /**
+   * Imports {@code block} like {@code MainnetBlockImporter} but without its final step, moving the
+   * head world state: as when that head persist fails, the chain head moves past the world state.
+   */
+  private void appendWithoutMovingHead(final Block block) {
+    final BlockProcessingResult result =
+        chain
+            .getProtocolSchedule()
+            .getByBlockHeader(block.getHeader())
+            .getBlockValidator()
+            .validateAndProcessBlock(
+                chain.getProtocolContext(),
+                block,
+                HeaderValidationMode.FULL,
+                HeaderValidationMode.FULL,
+                Optional.empty(),
+                false);
+    assertThat(result.isSuccessful())
+        .as("process block %d", block.getHeader().getNumber())
+        .isTrue();
+    final var outputs = result.getYield().orElseThrow();
+    chain.getBlockchain().appendBlock(block, outputs.getReceipts(), outputs.getBlockAccessList());
+  }
+
+  @Test
+  void multiBlockHeadRollStillCapturesEveryBlockInline() {
+    // A failed head persist (e.g. an interrupted import) leaves the world state behind the chain
+    // head; the next head move then rolls several blocks at once. Each block must still be
+    // archived inline, otherwise inline capture never resumes.
+    setUpChain(512L);
+    chain.importFirstBlocks(11);
+    assertThat(lastIndexed()).isEqualTo(10L);
+    for (int i = 11; i < chain.blockCount(); i++) {
+      appendWithoutMovingHead(chain.getBlock(i));
+    }
+    final long chainHead = head();
+    assertThat(chainHead).isGreaterThan(11L);
+    assertThat(lastIndexed()).isEqualTo(10L);
+
+    assertThat(provider.getWorldState(withBlockHeaderAndUpdateNodeHead(header(chainHead))))
+        .isPresent();
+
+    assertThat(lastIndexed()).isEqualTo(chainHead);
+    boolean sawStorage = false;
+    for (long block = 11; block <= chainHead; block++) {
       sawStorage |= assertArchiveProofsMatchRolled(block);
     }
     assertThat(sawStorage).as("at least one compared proof carries non-trivial storage").isTrue();

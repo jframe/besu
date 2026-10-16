@@ -334,6 +334,13 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
     trieNodeWriter.onBeforeCommit(transaction);
   }
 
+  // A merged multi-block persist can never be archived inline (see onBeforeBlockCommit), so a head
+  // roll over several blocks, e.g. after a failed head persist, would hand capture to the roller.
+  @Override
+  public boolean requiresPerBlockPersist() {
+    return true;
+  }
+
   @Override
   public void onRollback(final SegmentedKeyValueStorageTransaction transaction) {
     txCaptureCache.invalidate(transaction);
