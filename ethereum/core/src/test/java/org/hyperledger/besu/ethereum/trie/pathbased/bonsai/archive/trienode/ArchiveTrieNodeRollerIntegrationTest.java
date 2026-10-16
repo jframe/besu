@@ -21,6 +21,9 @@ import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -33,12 +36,16 @@ import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.code.BonsaiCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableDataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableExtraStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
@@ -56,6 +63,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.LongStream;
 
@@ -349,6 +358,66 @@ class ArchiveTrieNodeRollerIntegrationTest {
       sawStorage |= assertArchiveProofsMatchRolled(block);
     }
     assertThat(sawStorage).as("at least one compared proof carries non-trivial storage").isTrue();
+  }
+
+  @Test
+  void flatDbArchiveUpgradeMidBatchReseedsInsteadOfFailing() throws Exception {
+    // The flat-archive migrator's switch to ARCHIVE closes every snapshot of the head storage,
+    // including the roller's in the middle of a batch. The roller must reseed and carry on rather
+    // than fail and back off.
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    frontier.set(Long.MAX_VALUE);
+
+    final BonsaiArchiveWorldStateProvider spyProvider = spy(provider);
+    final TrieLogManager trieLogManager = spy(provider.getTrieLogManager());
+    doReturn(trieLogManager).when(spyProvider).getTrieLogManager();
+    final Hash block13 = header(13L).getHash();
+    final AtomicBoolean upgraded = new AtomicBoolean(false);
+    doAnswer(
+            invocation -> {
+              if (upgraded.compareAndSet(false, true)) {
+                migrator().migrate().get(30, TimeUnit.SECONDS);
+              }
+              return invocation.callRealMethod();
+            })
+        .when(trieLogManager)
+        .getTrieLogLayer(block13);
+
+    roller =
+        new ArchiveTrieNodeRoller(
+            spyProvider,
+            chain.getBlockchain(),
+            strategy,
+            frontier::get,
+            Executors.newSingleThreadScheduledExecutor(),
+            new NoOpMetricsSystem(),
+            maxLayersToLoad,
+            1,
+            256);
+    roller.catchUp();
+
+    assertThat(upgraded).isTrue();
+    assertThat(storage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
+    assertThat(lastIndexed()).isEqualTo(head());
+    boolean sawStorage = false;
+    for (long block = 11; block <= head(); block++) {
+      sawStorage |= assertArchiveProofsMatchRolled(block);
+    }
+    assertThat(sawStorage).as("at least one compared proof carries non-trivial storage").isTrue();
+  }
+
+  private BonsaiFlatDbToArchiveMigrator migrator() {
+    final NoOpMetricsSystem metricsSystem = new NoOpMetricsSystem();
+    return new BonsaiFlatDbToArchiveMigrator(
+        storage,
+        provider.getTrieLogManager(),
+        chain.getBlockchain(),
+        Executors.newSingleThreadScheduledExecutor(),
+        metricsSystem,
+        new BonsaiArchiveFlatDbStrategy(
+            metricsSystem, storage.getFlatDbStrategy().getCodeStorageStrategy()));
   }
 
   @Test

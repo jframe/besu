@@ -19,6 +19,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiSnapshotWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateLayerStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.StorageSubscriber;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
@@ -60,6 +61,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
   static final int MIN_BATCH = 16;
   static final int MAX_BATCH = 256;
   static final long MAX_BACKOFF_BLOCKS = 1024L;
+  static final int MAX_RESEEDS_PER_CATCH_UP = 3;
   private static final long PROGRESS_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
   private final BonsaiWorldStateProvider provider;
@@ -172,6 +174,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
   void catchUp() {
     boolean failed = false;
     final long startedAfter = coverage.lastIndexedBlock().orElse(-1L);
+    int reseeds = 0;
     try {
       while (!closed && !stopped) {
         final OptionalLong last = coverage.lastIndexedBlock();
@@ -187,7 +190,17 @@ public class ArchiveTrieNodeRoller implements Closeable {
           stopped = true;
           return;
         }
-        rollBatch(last.getAsLong(), Math.min(target, last.getAsLong() + maxBatch));
+        try {
+          rollBatch(last.getAsLong(), Math.min(target, last.getAsLong() + maxBatch));
+        } catch (final SnapshotInvalidatedException e) {
+          if (++reseeds > MAX_RESEEDS_PER_CATCH_UP) {
+            throw e;
+          }
+          LOG.info(
+              "Bonsai archive proofs: world state storage changed under the roller (e.g. the "
+                  + "flat-archive upgrade); reseeding after block {}",
+              coverage.lastIndexedBlock().orElse(-1L));
+        }
       }
     } catch (final RuntimeException e) {
       failed = true;
@@ -292,6 +305,18 @@ public class ArchiveTrieNodeRoller implements Closeable {
     final BlockHeader cursorHeader = header(cursor);
     final BonsaiSnapshotWorldStateKeyValueStorage snapshot =
         new BonsaiSnapshotWorldStateKeyValueStorage(provider.getWorldStateKeyValueStorage());
+    // The head storage closes its snapshots when it is cleared or its flat DB is upgraded to
+    // ARCHIVE; reads and writes on a closed snapshot fail, and nothing failing that way was
+    // archived (persist verifies the root first), so the batch reseeds on fresh storage.
+    final AtomicBoolean invalidated = new AtomicBoolean(false);
+    final long subscriberId =
+        snapshot.subscribe(
+            new StorageSubscriber() {
+              @Override
+              public void onCloseStorage() {
+                invalidated.set(true);
+              }
+            });
     try {
       // a bare snapshot's transaction is a shared no-op, so a mutable layer holds the scratch
       // writes
@@ -313,11 +338,20 @@ public class ArchiveTrieNodeRoller implements Closeable {
       } finally {
         worldState.close();
       }
+    } catch (final RuntimeException e) {
+      if (invalidated.get()) {
+        throw new SnapshotInvalidatedException(e);
+      }
+      throw e;
     } finally {
-      try {
-        snapshot.close();
-      } catch (final Exception e) {
-        LOG.debug("Failed to close roller snapshot", e);
+      snapshot.unSubscribe(subscriberId);
+      // an invalidated snapshot is already closed; closing it again only logs a warning
+      if (!invalidated.get()) {
+        try {
+          snapshot.close();
+        } catch (final Exception e) {
+          LOG.debug("Failed to close roller snapshot", e);
+        }
       }
     }
     LOG.debug("Archive trie-node roller indexed blocks {}..{}", cursor + 1, end);
@@ -346,6 +380,13 @@ public class ArchiveTrieNodeRoller implements Closeable {
     return blockchain
         .getBlockHeader(number)
         .orElseThrow(() -> new IllegalStateException("missing block header " + number));
+  }
+
+  /** The roller's snapshot was closed under it mid-batch by a change to the head storage. */
+  private static final class SnapshotInvalidatedException extends RuntimeException {
+    SnapshotInvalidatedException(final Throwable cause) {
+      super("roller snapshot was closed by a change to the head storage", cause);
+    }
   }
 
   @VisibleForTesting
