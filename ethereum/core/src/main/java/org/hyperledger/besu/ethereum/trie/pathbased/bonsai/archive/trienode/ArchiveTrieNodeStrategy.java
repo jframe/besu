@@ -171,6 +171,11 @@ public class ArchiveTrieNodeStrategy implements TrieNodeStrategy, Closeable {
     return coverageTracker;
   }
 
+  /** The reader over this strategy's trie-node history. */
+  ArchiveHistoryReader historyReader() {
+    return archiveHistoryReader;
+  }
+
   // Capture rule: only the canonical head storage or the registered roller storage, only the block
   // directly after the last indexed one (genesis when nothing is indexed), and only at or below
   // the frontier. Everything else (RPC and cache layers, reorg rolls) is never captured.
