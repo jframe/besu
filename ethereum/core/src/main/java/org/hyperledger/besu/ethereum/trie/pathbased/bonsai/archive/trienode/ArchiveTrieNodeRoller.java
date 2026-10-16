@@ -24,6 +24,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorld
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
@@ -64,6 +65,17 @@ public class ArchiveTrieNodeRoller implements Closeable {
   static final int MAX_RESEEDS_PER_CATCH_UP = 3;
   private static final long PROGRESS_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
+  /**
+   * How a batch's starting world state is built. HEAD_SNAPSHOT is removed once ARCHIVE is
+   * benchmarked.
+   */
+  public enum SeedMode {
+    /** Roll a snapshot of head back to the cursor (bounded by maxLayersToLoad). */
+    HEAD_SNAPSHOT,
+    /** Read the cursor's state from the trie-node archive. */
+    ARCHIVE
+  }
+
   private final BonsaiWorldStateProvider provider;
   private final Blockchain blockchain;
   private final ArchiveTrieNodeStrategy strategy;
@@ -73,6 +85,9 @@ public class ArchiveTrieNodeRoller implements Closeable {
   private final long maxLayersToLoad;
   private final int minBatch;
   private final int maxBatch;
+  private final SeedMode seedMode;
+  private final Counter indexedBlocks;
+  private RollerWorldStateStorage rollerStorage; // roller thread only, built on first ARCHIVE batch
   private final AtomicBoolean running = new AtomicBoolean(false);
   private volatile boolean closed;
   private volatile boolean stopped;
@@ -106,11 +121,12 @@ public class ArchiveTrieNodeRoller implements Closeable {
         metricsSystem,
         maxLayersToLoad,
         MIN_BATCH,
-        MAX_BATCH);
+        MAX_BATCH,
+        SeedMode.HEAD_SNAPSHOT);
   }
 
-  @VisibleForTesting
-  ArchiveTrieNodeRoller(
+  /** Full constructor; public for the archive roller benchmark. */
+  public ArchiveTrieNodeRoller(
       final BonsaiWorldStateProvider provider,
       final Blockchain blockchain,
       final ArchiveTrieNodeStrategy strategy,
@@ -119,7 +135,8 @@ public class ArchiveTrieNodeRoller implements Closeable {
       final MetricsSystem metricsSystem,
       final long maxLayersToLoad,
       final int minBatch,
-      final int maxBatch) {
+      final int maxBatch,
+      final SeedMode seedMode) {
     this.provider = Objects.requireNonNull(provider);
     this.blockchain = Objects.requireNonNull(blockchain);
     this.strategy = Objects.requireNonNull(strategy);
@@ -129,6 +146,12 @@ public class ArchiveTrieNodeRoller implements Closeable {
     this.maxLayersToLoad = maxLayersToLoad;
     this.minBatch = minBatch;
     this.maxBatch = maxBatch;
+    this.seedMode = Objects.requireNonNull(seedMode);
+    this.indexedBlocks =
+        metricsSystem.createCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "bonsai_archive_proofs_roller_indexed_blocks",
+            "Blocks whose trie-node history the archive roller indexed");
     metricsSystem.createLongGauge(
         BesuMetricCategory.BLOCKCHAIN,
         "bonsai_archive_proofs_last_indexed_block",
@@ -289,7 +312,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
       return false;
     }
     final long gap = blockchain.getChainHeadBlockNumber() - cursor;
-    if (gap > maxLayersToLoad) {
+    if (seedMode == SeedMode.HEAD_SNAPSHOT && gap > maxLayersToLoad) {
       LOG.warn(
           "Bonsai archive proofs stopped at block {}: {} blocks behind head exceeds "
               + "--bonsai-historical-block-limit={}; raise the limit and restart to catch up",
@@ -302,6 +325,38 @@ public class ArchiveTrieNodeRoller implements Closeable {
   }
 
   private void rollBatch(final long cursor, final long end) {
+    if (seedMode == SeedMode.ARCHIVE) {
+      rollBatchFromArchive(cursor, end);
+    } else {
+      rollBatchFromHeadSnapshot(cursor, end);
+    }
+  }
+
+  private void rollBatchFromArchive(final long cursor, final long end) {
+    final BlockHeader cursorHeader = header(cursor);
+    if (rollerStorage == null) {
+      rollerStorage =
+          new RollerWorldStateStorage(provider.getWorldStateKeyValueStorage(), strategy);
+    }
+    final BonsaiWorldStateLayerStorage layer = rollerStorage.seed(cursorHeader);
+    final SegmentedKeyValueStorage scratch = layer.getComposedWorldStateStorage();
+    final BonsaiWorldState worldState = provider.createUncachedWorldState(layer);
+    try {
+      strategy.registerRollerStorage(scratch);
+      try {
+        for (long block = cursor + 1; block <= end && !closed; block++) {
+          rollForward(worldState, header(block));
+        }
+      } finally {
+        strategy.unregisterRollerStorage(scratch);
+      }
+    } finally {
+      worldState.close();
+    }
+    LOG.debug("Archive trie-node roller indexed blocks {}..{}", cursor + 1, end);
+  }
+
+  private void rollBatchFromHeadSnapshot(final long cursor, final long end) {
     final BlockHeader cursorHeader = header(cursor);
     final BonsaiSnapshotWorldStateKeyValueStorage snapshot =
         new BonsaiSnapshotWorldStateKeyValueStorage(provider.getWorldStateKeyValueStorage());
@@ -374,6 +429,7 @@ public class ArchiveTrieNodeRoller implements Closeable {
       throw new IllegalStateException(
           "roller persisted block " + header.getNumber() + " but archive coverage did not advance");
     }
+    indexedBlocks.inc();
   }
 
   private BlockHeader header(final long number) {

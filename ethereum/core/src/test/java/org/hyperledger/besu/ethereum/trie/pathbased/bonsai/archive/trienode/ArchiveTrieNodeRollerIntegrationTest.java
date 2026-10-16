@@ -21,9 +21,16 @@ import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams.withBlockHeaderAndNoUpdateNodeHead;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -40,6 +47,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchive
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchiveWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.code.BonsaiCodeCache;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateLayerStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
@@ -53,6 +61,8 @@ import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
+import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 
@@ -143,21 +153,45 @@ class ArchiveTrieNodeRollerIntegrationTest {
             });
   }
 
+  private ArchiveTrieNodeRoller newRoller(
+      final BonsaiWorldStateProvider rollerProvider,
+      final MetricsSystem metricsSystem,
+      final int minBatch,
+      final int maxBatch,
+      final ArchiveTrieNodeRoller.SeedMode seedMode) {
+    return new ArchiveTrieNodeRoller(
+        rollerProvider,
+        chain.getBlockchain(),
+        strategy,
+        frontier::get,
+        Executors.newSingleThreadScheduledExecutor(),
+        metricsSystem,
+        maxLayersToLoad,
+        minBatch,
+        maxBatch,
+        seedMode);
+  }
+
   private ArchiveTrieNodeRoller roller(final int maxBatch) {
     return roller(1, maxBatch);
   }
 
   private ArchiveTrieNodeRoller roller(final int minBatch, final int maxBatch) {
-    return new ArchiveTrieNodeRoller(
+    return newRoller(
         provider,
-        chain.getBlockchain(),
-        strategy,
-        frontier::get,
-        Executors.newSingleThreadScheduledExecutor(),
         new NoOpMetricsSystem(),
-        maxLayersToLoad,
         minBatch,
-        maxBatch);
+        maxBatch,
+        ArchiveTrieNodeRoller.SeedMode.HEAD_SNAPSHOT);
+  }
+
+  private ArchiveTrieNodeRoller archiveRoller(final int minBatch, final int maxBatch) {
+    return newRoller(
+        provider,
+        new NoOpMetricsSystem(),
+        minBatch,
+        maxBatch,
+        ArchiveTrieNodeRoller.SeedMode.ARCHIVE);
   }
 
   private long lastIndexed() {
@@ -320,6 +354,130 @@ class ArchiveTrieNodeRollerIntegrationTest {
   }
 
   @Test
+  void archiveSeedProofsMatchRolledStateAcrossBatchBoundaries() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    frontier.set(Long.MAX_VALUE);
+    roller = archiveRoller(1, 5); // reseeds every 5 blocks
+    roller.catchUp();
+
+    assertThat(lastIndexed()).isEqualTo(head());
+    boolean sawStorage = false;
+    for (long block = 11; block <= head(); block++) {
+      sawStorage |= assertArchiveProofsMatchRolled(block);
+    }
+    assertThat(sawStorage).as("at least one compared proof carries non-trivial storage").isTrue();
+  }
+
+  @Test
+  void archiveSeedCatchesUpFarBeyondTheHistoricalBlockLimit() {
+    setUpChain(8L);
+    frontier.set(4L);
+    chain.importAllBlocks();
+    assertThat(head() - lastIndexed()).isGreaterThan(8L);
+
+    frontier.set(Long.MAX_VALUE);
+    roller = archiveRoller(1, 256);
+    roller.catchUp();
+
+    assertThat(roller.isStopped()).isFalse();
+    assertThat(lastIndexed()).isEqualTo(head());
+    // the rolled oracle refuses blocks beyond the limit; archive proof roots must hash to the
+    // header
+    for (long block = 5; block <= head(); block++) {
+      for (final Address address : touchedAddresses()) {
+        final List<Bytes> proof = archiveAccountProof(block, address).orElseThrow();
+        assertThat(Hash.hash(proof.get(0))).isEqualTo(header(block).getStateRoot());
+      }
+    }
+  }
+
+  @Test
+  void archiveSeedIsUnaffectedByFlatDbArchiveUpgradeMidBatch() throws Exception {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    frontier.set(Long.MAX_VALUE);
+
+    final BonsaiArchiveWorldStateProvider spyProvider = spy(provider);
+    final TrieLogManager trieLogManager = spy(provider.getTrieLogManager());
+    doReturn(trieLogManager).when(spyProvider).getTrieLogManager();
+    final AtomicBoolean upgraded = new AtomicBoolean(false);
+    doAnswer(
+            invocation -> {
+              if (upgraded.compareAndSet(false, true)) {
+                migrator().migrate().get(30, TimeUnit.SECONDS);
+              }
+              return invocation.callRealMethod();
+            })
+        .when(trieLogManager)
+        .getTrieLogLayer(header(13L).getHash());
+
+    roller =
+        newRoller(
+            spyProvider, new NoOpMetricsSystem(), 1, 256, ArchiveTrieNodeRoller.SeedMode.ARCHIVE);
+    final List<String> infos = rollerInfoLogs(roller::catchUp);
+
+    assertThat(upgraded).isTrue();
+    assertThat(storage.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
+    assertThat(infos).noneMatch(message -> message.contains("reseeding"));
+    assertThat(lastIndexed()).isEqualTo(head());
+    for (long block = 11; block <= head(); block++) {
+      assertArchiveProofsMatchRolled(block);
+    }
+  }
+
+  @Test
+  void archiveSeedWithMissingArchiveNodeFailsWithoutArchiving() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    // drop every archived version of the account-trie root at or below the cursor
+    final Bytes rootKey = ArchiveNodeKey.of(Bytes.EMPTY); // account-trie root location
+    final List<Bytes> rootVersions =
+        storage
+            .getComposedWorldStateStorage()
+            .streamKeys(TRIE_BRANCH_STORAGE_ARCHIVE)
+            .map(Bytes::wrap)
+            .filter(k -> k.size() > ArchiveNodeKey.BLOCK_SUFFIX_BYTES)
+            .filter(k -> ArchiveNodeKey.naturalKeyFromHistoryKey(k).equals(rootKey))
+            .filter(k -> ArchiveNodeKey.blockFromHistoryKey(k) <= 10L)
+            .toList();
+    assertThat(rootVersions).as("archived root versions at or below block 10").isNotEmpty();
+    final var tx = storage.getComposedWorldStateStorage().startTransaction();
+    rootVersions.forEach(k -> tx.remove(TRIE_BRANCH_STORAGE_ARCHIVE, k.toArrayUnsafe()));
+    tx.commit();
+    final Map<Bytes, Bytes> archiveBefore = segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE);
+
+    frontier.set(Long.MAX_VALUE);
+    roller = archiveRoller(1, 256);
+    roller.catchUp();
+
+    assertThat(roller.isStopped()).isFalse();
+    assertThat(lastIndexed()).isEqualTo(10L);
+    assertThat(segmentContents(TRIE_BRANCH_STORAGE_ARCHIVE)).isEqualTo(archiveBefore);
+  }
+
+  @Test
+  void archiveSeedCountsIndexedBlocks() {
+    setUpChain(512L);
+    frontier.set(10L);
+    chain.importAllBlocks();
+    frontier.set(Long.MAX_VALUE);
+    final MetricsSystem metricsSystem = mock(MetricsSystem.class);
+    final Counter indexed = mock(Counter.class);
+    when(metricsSystem.createCounter(
+            any(), eq("bonsai_archive_proofs_roller_indexed_blocks"), anyString()))
+        .thenReturn(indexed);
+
+    roller = newRoller(provider, metricsSystem, 1, 256, ArchiveTrieNodeRoller.SeedMode.ARCHIVE);
+    roller.catchUp();
+
+    verify(indexed, times((int) (head() - 10L))).inc();
+  }
+
+  @Test
   void inlineCaptureTracksHeadWhileFrontierIsAhead() {
     setUpChain(512L);
     chain.importAllBlocks();
@@ -433,16 +591,12 @@ class ArchiveTrieNodeRollerIntegrationTest {
         .getTrieLogLayer(block13);
 
     roller =
-        new ArchiveTrieNodeRoller(
+        newRoller(
             spyProvider,
-            chain.getBlockchain(),
-            strategy,
-            frontier::get,
-            Executors.newSingleThreadScheduledExecutor(),
             new NoOpMetricsSystem(),
-            maxLayersToLoad,
             1,
-            256);
+            256,
+            ArchiveTrieNodeRoller.SeedMode.HEAD_SNAPSHOT);
     roller.catchUp();
 
     assertThat(upgraded).isTrue();

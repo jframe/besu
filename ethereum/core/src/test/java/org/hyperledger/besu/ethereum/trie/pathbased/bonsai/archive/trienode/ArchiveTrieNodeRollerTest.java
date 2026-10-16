@@ -18,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -33,6 +34,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldS
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
@@ -97,6 +99,8 @@ class ArchiveTrieNodeRollerTest {
     when(provider.getTrieLogManager()).thenReturn(trieLogManager);
     executor = mock(ScheduledExecutorService.class);
     metricsSystem = mock(MetricsSystem.class);
+    when(metricsSystem.createCounter(any(), anyString(), anyString()))
+        .thenReturn(mock(Counter.class));
     roller =
         new ArchiveTrieNodeRoller(
             provider,
@@ -107,7 +111,8 @@ class ArchiveTrieNodeRollerTest {
             metricsSystem,
             MAX_LAYERS,
             4,
-            8);
+            8,
+            ArchiveTrieNodeRoller.SeedMode.HEAD_SNAPSHOT);
   }
 
   @AfterEach
