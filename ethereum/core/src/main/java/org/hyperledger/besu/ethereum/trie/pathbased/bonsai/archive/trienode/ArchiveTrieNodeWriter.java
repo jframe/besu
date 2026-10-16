@@ -28,6 +28,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.util.concurrent.Uninterruptibles;
 import org.apache.tuweni.bytes.Bytes;
 
 /**
@@ -218,13 +219,13 @@ public class ArchiveTrieNodeWriter implements Closeable {
         dispatchBatch(buf);
       }
       final List<EncodedEntry> entries = new ArrayList<>();
+      // Wait uninterruptibly: an interrupt (e.g. a sync pipeline abort) must not fail the block
+      // commit, which would leave the chain head ahead of the world state. The interrupt flag is
+      // restored for the caller once the wait completes.
       try {
         for (final Future<List<EncodedEntry>> future : buf.inFlight) {
-          entries.addAll(future.get());
+          entries.addAll(Uninterruptibles.getUninterruptibly(future));
         }
-      } catch (final InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new RuntimeException("interrupted while flushing trie-node captures", e);
       } catch (final ExecutionException e) {
         throw new RuntimeException("trie-node capture failed", e.getCause());
       }

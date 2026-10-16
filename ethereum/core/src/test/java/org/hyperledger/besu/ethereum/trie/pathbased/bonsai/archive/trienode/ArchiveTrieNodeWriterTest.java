@@ -31,6 +31,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
@@ -369,6 +370,58 @@ class ArchiveTrieNodeWriterTest {
     tx.commit();
 
     assertThat(historyStore.getLatestBefore(nk, 0L)).isPresent();
+  }
+
+  @Test
+  void interruptDuringFlushStillWritesCapturesAndKeepsInterruptFlag() throws Exception {
+    // A sync pipeline abort interrupts the import thread mid-persist. The flush must not fail the
+    // block commit: that leaves the chain head ahead of the world state, and the next import then
+    // persists two blocks at once, which can never be archived inline.
+    final CountDownLatch release = new CountDownLatch(1);
+    final ExecutorService pool = Executors.newSingleThreadExecutor();
+    // occupy the only worker so the capture is still in flight when the flush waits on it
+    pool.submit(
+        () -> {
+          release.await();
+          return null;
+        });
+    final ArchiveTrieNodeWriter writer =
+        new ArchiveTrieNodeWriter(
+            historyStore,
+            coverageTracker,
+            pool,
+            DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    writer.capture(nk, LOCATION, 0L, branchNode(0), null, tx);
+
+    final Thread releaser =
+        new Thread(
+            () -> {
+              try {
+                Thread.sleep(100);
+              } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
+              release.countDown();
+            });
+    releaser.start();
+    Thread.currentThread().interrupt();
+    final boolean interruptedAfterFlush;
+    try {
+      writer.onBeforeCommit(tx);
+    } finally {
+      // read and clear the flag so it cannot leak into later tests
+      interruptedAfterFlush = Thread.interrupted();
+      releaser.join();
+      writer.close();
+    }
+    tx.commit();
+
+    assertThat(interruptedAfterFlush).isTrue();
+    assertThat(historyStore.getLatestBefore(nk, 0L)).isPresent();
+    assertThat(coverageTracker.hasArchiveBlock(0L)).isTrue();
   }
 
   @Test
