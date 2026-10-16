@@ -41,6 +41,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiArchive
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.BonsaiFlatDbToArchiveMigrator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.code.BonsaiCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateLayerStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
@@ -49,6 +50,7 @@ import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableDataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableExtraStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
+import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
@@ -270,6 +272,51 @@ class ArchiveTrieNodeRollerIntegrationTest {
     storage.getComposedWorldStateStorage().stream(segment)
         .forEach(pair -> contents.put(Bytes.wrap(pair.getKey()), Bytes.wrap(pair.getValue())));
     return contents;
+  }
+
+  @Test
+  void rollerStorageSeededFromTheArchiveReadsTheStateAtTheSeedBlock() throws Exception {
+    setUpChain(512L);
+    chain.importAllBlocks(); // inline capture archives every block
+    final long seedBlock = 15L;
+
+    final BonsaiWorldStateLayerStorage layer =
+        new RollerWorldStateStorage(storage, strategy).seed(header(seedBlock));
+    final BonsaiWorldState seeded = provider.createUncachedWorldState(layer);
+    try (var rolled =
+        provider
+            .getWorldState(withBlockHeaderAndNoUpdateNodeHead(header(seedBlock)))
+            .orElseThrow()) {
+      assertThat(seeded.rootHash()).isEqualTo(header(seedBlock).getStateRoot());
+      boolean sawStorage = false;
+      boolean sawCode = false;
+      for (final Address address : touchedAddresses()) {
+        final Account expected = rolled.get(address);
+        final Account actual = seeded.get(address);
+        if (expected == null) {
+          assertThat(actual).as("account %s at %d", address, seedBlock).isNull();
+          continue;
+        }
+        assertThat(actual).as("account %s at %d", address, seedBlock).isNotNull();
+        assertThat(actual.getNonce()).as("nonce %s", address).isEqualTo(expected.getNonce());
+        assertThat(actual.getBalance()).as("balance %s", address).isEqualTo(expected.getBalance());
+        assertThat(actual.getCodeHash())
+            .as("code hash %s", address)
+            .isEqualTo(expected.getCodeHash());
+        assertThat(actual.getCode()).as("code %s", address).isEqualTo(expected.getCode());
+        sawCode |= !expected.getCode().isEmpty();
+        for (final UInt256 slot : STORAGE_SLOTS) {
+          assertThat(actual.getStorageValue(slot))
+              .as("slot %s of %s", slot, address)
+              .isEqualTo(expected.getStorageValue(slot));
+          sawStorage |= !expected.getStorageValue(slot).isZero();
+        }
+      }
+      assertThat(sawCode).as("at least one compared account has code").isTrue();
+      assertThat(sawStorage).as("at least one compared slot is non-zero").isTrue();
+    } finally {
+      seeded.close();
+    }
   }
 
   @Test
