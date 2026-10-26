@@ -146,7 +146,8 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
             archiveCoverageTracker,
             trieCapturePool,
             unstable.getBonsaiArchiveShallowCheckpointInterval(),
-            unstable.getBonsaiArchiveDeepCheckpointInterval()),
+            unstable.getBonsaiArchiveDeepCheckpointInterval(),
+            Optional.empty()),
         archiveCoverageTracker,
         storage -> storage == liveStorage,
         this::isFinal);

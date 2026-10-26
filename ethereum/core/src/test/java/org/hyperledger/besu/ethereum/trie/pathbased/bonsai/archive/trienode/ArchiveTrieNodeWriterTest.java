@@ -32,6 +32,7 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.IntFunction;
@@ -86,7 +87,8 @@ class ArchiveTrieNodeWriterTest {
             coverageTracker,
             Executors.newFixedThreadPool(2),
             DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
-            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL,
+            Optional.empty());
   }
 
   private void enqueueAndCommit(
@@ -151,6 +153,50 @@ class ArchiveTrieNodeWriterTest {
         .contains(new ArchiveCoverageTracker.Coverage(0L, 1L, header(1L).getBlockHash()));
   }
 
+  private ArchiveTrieNodeWriter ownCommitWriter() {
+    return new ArchiveTrieNodeWriter(
+        historyStore,
+        coverageTracker,
+        Executors.newFixedThreadPool(2),
+        DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
+        DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL,
+        Optional.of(storage));
+  }
+
+  @Test
+  void ownCommitStorageReceivesEntriesAndCoverageInsteadOfPersistTransaction() {
+    final ArchiveTrieNodeWriter writer = ownCommitWriter();
+    final SegmentedKeyValueStorage persistStorage =
+        new SegmentedInMemoryKeyValueStorage(
+            List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+
+    final SegmentedKeyValueStorageTransaction tx = persistStorage.startTransaction();
+    writer.beginBlock(tx, header(0L));
+    writer.capture(nk, LOCATION, 0L, branchNode(0), null, tx);
+    writer.onBeforeCommit(tx);
+
+    assertThat(historyStore.getLatestBefore(nk, 0L)).isPresent();
+    assertThat(coverageTracker.hasArchiveBlock(0L)).isTrue();
+    tx.commit();
+    assertThat(persistStorage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isEmpty();
+  }
+
+  @Test
+  void ownCommitStorageGetsNothingWhenTheBlockFails() {
+    final ArchiveTrieNodeWriter writer = ownCommitWriter();
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+
+    // Block 5 with no coverage: record refuses the gap after the entries are written.
+    final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
+    writer.beginBlock(tx, header(5L));
+    writer.capture(nk, LOCATION, 5L, branchNode(0), null, tx);
+    assertThatThrownBy(() -> writer.onBeforeCommit(tx)).isInstanceOf(IllegalStateException.class);
+
+    assertThat(historyStore.getLatestBefore(nk, 5L)).isEmpty();
+    assertThat(coverageTracker.getCoverage()).isEmpty();
+  }
+
   @Test
   void freshWriterDiffsWhenCoverageIsContiguous() {
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
@@ -163,7 +209,8 @@ class ArchiveTrieNodeWriterTest {
             coverageTracker,
             Executors.newFixedThreadPool(2),
             DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
-            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL,
+            Optional.empty());
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     restarted.beginBlock(tx, header(1L));
     restarted.capture(nk, LOCATION, 1L, branchNode(1), branchNode(0), tx);
@@ -212,7 +259,8 @@ class ArchiveTrieNodeWriterTest {
             coverageTracker,
             Executors.newFixedThreadPool(2),
             DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
-            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL,
+            Optional.empty());
     final SegmentedKeyValueStorageTransaction tx = storage.startTransaction();
     writer.beginBlock(tx, header(block));
     writer.capture(nk, LOCATION, block, branchNode((int) block), prior, tx);
@@ -365,7 +413,12 @@ class ArchiveTrieNodeWriterTest {
     final int deep = 8;
     final ArchiveTrieNodeWriter writer =
         new ArchiveTrieNodeWriter(
-            historyStore, coverageTracker, Executors.newFixedThreadPool(1), shallow, deep);
+            historyStore,
+            coverageTracker,
+            Executors.newFixedThreadPool(1),
+            shallow,
+            deep,
+            Optional.empty());
     assertThat(writer.checkpointIntervalForDepth(0)).isEqualTo(shallow);
     assertThat(writer.checkpointIntervalForDepth(1)).isEqualTo(shallow);
     assertThat(writer.checkpointIntervalForDepth(2)).isEqualTo(shallow);
@@ -385,7 +438,8 @@ class ArchiveTrieNodeWriterTest {
             coverageTracker,
             Executors.newFixedThreadPool(1),
             shallowInterval,
-            deepInterval);
+            deepInterval,
+            Optional.empty());
 
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
     Bytes prior = null;
@@ -462,7 +516,8 @@ class ArchiveTrieNodeWriterTest {
             new ArchiveCoverageTracker(storage),
             pool,
             DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
-            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL,
+            Optional.empty());
     Bytes prior = null;
     for (int block = 0; block < blocks; block++) {
       final Bytes node = nodeAt.apply(block);

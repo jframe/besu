@@ -77,7 +77,8 @@ class BonsaiArchiveStateProofIntegrationTest {
             coverageTracker,
             Executors.newFixedThreadPool(2),
             DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
-            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL);
+            DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL,
+            Optional.empty());
     archiveStrategy =
         new ArchiveTrieNodeStrategy(
             baseStrategy, capture, coverageTracker, s -> s == storage, b -> true);
