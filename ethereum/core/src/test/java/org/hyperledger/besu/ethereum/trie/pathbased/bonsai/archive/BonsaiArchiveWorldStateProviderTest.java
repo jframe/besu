@@ -15,7 +15,9 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage.WORLD_BLOCK_HASH_KEY;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -24,6 +26,7 @@ import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveCoverageTracker;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode.ArchiveTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.code.BonsaiCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
@@ -39,6 +42,8 @@ import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 
 import java.util.Optional;
 
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -50,6 +55,7 @@ public class BonsaiArchiveWorldStateProviderTest {
   private Blockchain blockchain;
   private BlockHeader chainHeadHeader;
   private BonsaiArchiveWorldStateProvider provider;
+  private byte[] seededCoverage;
 
   @BeforeEach
   void setup() {
@@ -197,6 +203,7 @@ public class BonsaiArchiveWorldStateProviderTest {
 
   @Test
   void installsInlineStrategyWhenProofsEnabled() {
+    seededCoverage = coverage(0, 4);
     final BonsaiArchiveWorldStateProvider proofsProvider = createProvider(true, true);
 
     assertThat(proofsProvider.getWorldStateKeyValueStorage().getTrieNodeStrategy())
@@ -225,6 +232,52 @@ public class BonsaiArchiveWorldStateProviderTest {
 
     assertThat(provider.isFinal(3)).isTrue();
     assertThat(provider.isFinal(4)).isFalse();
+  }
+
+  @Test
+  void startupFailsWhenProofsEnabledPastGenesisWithoutCoverage() {
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(5L);
+
+    assertThatThrownBy(() -> createProvider(true, true))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("no proof history");
+  }
+
+  @Test
+  void startupFailsWhenCoverageDoesNotStartAtGenesis() {
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(5L);
+    seededCoverage = coverage(3, 5);
+
+    assertThatThrownBy(() -> createProvider(true, true))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("starting at block 3");
+  }
+
+  @Test
+  void startupSucceedsOnFreshChain() {
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(0L);
+
+    createProvider(true, true).close();
+  }
+
+  @Test
+  void startupSucceedsWithCoverageFromGenesis() {
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(5L);
+    seededCoverage = coverage(0, 4);
+
+    createProvider(true, true).close();
+  }
+
+  @Test
+  void startupIgnoresCoverageWhenProofsDisabled() {
+    when(blockchain.getChainHeadBlockNumber()).thenReturn(5L);
+
+    createProvider(true, false);
+  }
+
+  private static byte[] coverage(final long start, final long last) {
+    return Bytes.concatenate(Bytes.ofUnsignedLong(start), Bytes.ofUnsignedLong(last), Bytes32.ZERO)
+        .toArrayUnsafe();
   }
 
   private BonsaiArchiveWorldStateProvider createProvider(final boolean archiveModeReady) {
@@ -259,6 +312,9 @@ public class BonsaiArchiveWorldStateProviderTest {
         TRIE_BRANCH_STORAGE,
         WORLD_BLOCK_HASH_KEY,
         chainHeadHeader.getHash().getBytes().toArrayUnsafe());
+    if (seededCoverage != null) {
+      tx.put(TRIE_BRANCH_STORAGE_ARCHIVE, ArchiveCoverageTracker.COVERAGE_KEY, seededCoverage);
+    }
     tx.commit();
 
     return new BonsaiArchiveWorldStateProvider(

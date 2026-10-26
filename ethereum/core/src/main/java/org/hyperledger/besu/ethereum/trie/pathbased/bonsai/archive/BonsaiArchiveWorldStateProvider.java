@@ -109,12 +109,27 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     this.archiveHistoryReader = new ArchiveHistoryReader(archiveHistoryStore);
     final ExtraStorageConfiguration.Unstable unstable =
         dataStorageConfiguration.getExtraStorageConfiguration().getUnstable();
-    this.archiveTrieNodeStrategy =
-        unstable.getBonsaiArchiveStateProofsEnabled()
-            ? Optional.of(
-                createInlineStrategy(unstable, archiveHistoryStore, trieCaptureParallelism))
-            : Optional.empty();
+    if (unstable.getBonsaiArchiveStateProofsEnabled()) {
+      requireCoverageFromGenesis(blockchain);
+      this.archiveTrieNodeStrategy =
+          Optional.of(createInlineStrategy(unstable, archiveHistoryStore, trieCaptureParallelism));
+    } else {
+      this.archiveTrieNodeStrategy = Optional.empty();
+    }
     archiveTrieNodeStrategy.ifPresent(worldStateKeyValueStorage::setTrieNodeStrategy);
+  }
+
+  private void requireCoverageFromGenesis(final Blockchain blockchain) {
+    final Optional<ArchiveCoverageTracker.Coverage> coverage = archiveCoverageTracker.getCoverage();
+    if (blockchain.getChainHeadBlockNumber() > 0
+        && coverage.map(c -> c.startBlock() != 0).orElse(true)) {
+      throw new IllegalStateException(
+          "Bonsai archive state proofs need trie-node history from genesis, but this database has "
+              + coverage
+                  .map(c -> "proof history starting at block " + c.startBlock())
+                  .orElse("no proof history")
+              + ". Proofs require a full sync from genesis with archive state proofs enabled.");
+    }
   }
 
   private ArchiveTrieNodeStrategy createInlineStrategy(

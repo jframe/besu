@@ -24,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Optional;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
@@ -41,7 +42,9 @@ public final class ArchiveCoverageTracker {
   /** The contiguous block range {@code [startBlock, lastBlock]} that has been archived. */
   public record Coverage(long startBlock, long lastBlock, Hash lastBlockHash) {}
 
-  static final byte[] COVERAGE_KEY = "ARCHIVE_TRIE_COVERAGE_KEY".getBytes(StandardCharsets.UTF_8);
+  @VisibleForTesting
+  public static final byte[] COVERAGE_KEY =
+      "ARCHIVE_TRIE_COVERAGE_KEY".getBytes(StandardCharsets.UTF_8);
 
   private final SegmentedKeyValueStorage storage;
 
