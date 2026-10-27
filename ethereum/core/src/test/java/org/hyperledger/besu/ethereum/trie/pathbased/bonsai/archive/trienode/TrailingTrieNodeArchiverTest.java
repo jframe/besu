@@ -71,8 +71,9 @@ class TrailingTrieNodeArchiverTest {
   }
 
   @Test
-  void targetWithoutFinalityIsHead() {
-    assertThat(TrailingTrieNodeArchiver.targetFor(1000, false, 512)).isEqualTo(1000);
+  void targetWithoutFinalityIsOneBehindHead() {
+    assertThat(TrailingTrieNodeArchiver.targetFor(1000, false, 512)).isEqualTo(999);
+    assertThat(TrailingTrieNodeArchiver.targetFor(1, false, 512)).isEqualTo(0);
     assertThat(TrailingTrieNodeArchiver.targetFor(0, false, 512)).isEqualTo(0);
   }
 
@@ -83,9 +84,9 @@ class TrailingTrieNodeArchiverTest {
 
     appendBlocks(5);
 
-    assertThat(step.calls).hasSize(5);
-    assertThat(step.calls.getLast()).isEqualTo(new Call(4, 5));
-    assertThat(lastCovered()).isEqualTo(5);
+    assertThat(step.calls).hasSize(4);
+    assertThat(step.calls.getLast()).isEqualTo(new Call(3, 4));
+    assertThat(lastCovered()).isEqualTo(4);
   }
 
   @Test
@@ -95,8 +96,8 @@ class TrailingTrieNodeArchiverTest {
 
     start(MAX_LAYERS);
 
-    assertThat(step.calls).containsExactly(new Call(0, 5));
-    assertThat(lastCovered()).isEqualTo(5);
+    assertThat(step.calls).containsExactly(new Call(0, 4));
+    assertThat(lastCovered()).isEqualTo(4);
   }
 
   @Test
@@ -123,8 +124,8 @@ class TrailingTrieNodeArchiverTest {
 
     appendBlocks(1);
 
-    assertThat(step.calls).containsExactly(new Call(0, 3));
-    assertThat(lastCovered()).isEqualTo(3);
+    assertThat(step.calls).containsExactly(new Call(0, 2));
+    assertThat(lastCovered()).isEqualTo(2);
   }
 
   @Test
@@ -142,7 +143,7 @@ class TrailingTrieNodeArchiverTest {
     step.makeProgress = false;
     start(MAX_LAYERS);
 
-    appendBlocks(3);
+    appendBlocks(4);
 
     assertThat(step.calls).containsExactly(new Call(0, 1), new Call(0, 2), new Call(0, 3));
   }
@@ -150,7 +151,7 @@ class TrailingTrieNodeArchiverTest {
   @Test
   void resubmitsWhenTargetRoseDuringRunWithoutProgress() {
     recordCoverage(0);
-    appendBlocks(1);
+    appendBlocks(2);
     step.makeProgress = false;
     step.onCall =
         () -> {
@@ -169,7 +170,7 @@ class TrailingTrieNodeArchiverTest {
     step.failure = new TrieNodeArchiveStep.ArchiveGapException("missing trie log");
     start(MAX_LAYERS);
 
-    appendBlocks(1);
+    appendBlocks(2);
     assertThat(archiver.isHalted()).isTrue();
     step.failure = null;
     appendBlocks(2);
@@ -189,7 +190,7 @@ class TrailingTrieNodeArchiverTest {
     step.failure = new IllegalStateException("boom");
     start(MAX_LAYERS);
 
-    appendBlocks(1);
+    appendBlocks(2);
     step.failure = null;
     appendBlocks(1);
 
@@ -202,7 +203,7 @@ class TrailingTrieNodeArchiverTest {
   void closeStopsObservingAndRunning() {
     recordCoverage(0);
     start(MAX_LAYERS);
-    appendBlocks(1);
+    appendBlocks(2);
 
     archiver.close();
     appendBlocks(2);
