@@ -117,6 +117,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
     final ExtraStorageConfiguration.Unstable unstable = extraStorage.getUnstable();
     if (unstable.getBonsaiArchiveStateProofsEnabled()) {
       requireCoverageFromGenesis(blockchain);
+      LOG.info("Bonsai archive state proofs are enabled");
       final ExecutorService capturePool = Executors.newFixedThreadPool(trieCaptureParallelism);
       final ArchiveTrieNodeStrategy strategy = createInlineStrategy(unstable, capturePool);
       worldStateKeyValueStorage.setTrieNodeStrategy(strategy);
@@ -130,8 +131,11 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
 
   private void requireCoverageFromGenesis(final Blockchain blockchain) {
     final Optional<ArchiveCoverageTracker.Coverage> coverage = archiveCoverageTracker.getCoverage();
-    if (blockchain.getChainHeadBlockNumber() > 0
-        && coverage.map(c -> c.startBlock() != 0).orElse(true)) {
+    // a persisted world state without coverage means genesis was written without proofs
+    final boolean statePersisted =
+        blockchain.getChainHeadBlockNumber() > 0
+            || worldStateKeyValueStorage.getWorldStateBlockHash().isPresent();
+    if (statePersisted && coverage.map(c -> c.startBlock() != 0).orElse(true)) {
       throw new IllegalStateException(
           "Bonsai archive state proofs need trie-node history from genesis, but this database has "
               + coverage
@@ -184,7 +188,7 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
   }
 
   private void rollTo(final PathBasedWorldState state, final Hash blockHash) {
-    if (rollFullWorldStateToBlockHash(state, blockHash, Level.WARN).isEmpty()) {
+    if (rollFullWorldStateToBlockHash(state, blockHash, Level.DEBUG).isEmpty()) {
       throw new IllegalStateException("Could not roll to " + blockHash);
     }
   }
