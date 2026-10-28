@@ -503,6 +503,88 @@ class SyncChainTest {
     order.verify(workers).awaitTermination(anyLong(), any());
   }
 
+  @Test
+  void review_aPivotAtTheCheckpointCompletesWithNothingToDownload() {
+    final SyncChain chain = chain(Optional.of(checkpoint()), true);
+
+    chain.start(header(MERGE));
+    final CompletableFuture<Void> window = chain.downloadWindow(header(MERGE));
+    executor.runAll();
+    windowWorkers.runAll();
+    chain.setChainHead(header(MERGE));
+
+    assertThat(chain.headersDone()).isCompleted();
+    assertThat(window).isCompleted();
+    assertThat(blockchain.getChainHeadHeader()).isEqualTo(header(MERGE));
+  }
+
+  @Test
+  void review_aPivotJustAboveTheCheckpointCompletesTheHeadersInStart() {
+    final SyncChain chain = chain(Optional.of(checkpoint()), true);
+
+    chain.start(header(MERGE + 1));
+
+    assertThat(chain.headersDone()).isCompleted();
+    final CompletableFuture<Void> window = chain.downloadWindow(header(MERGE + 1));
+    executor.runAll();
+    windowWorkers.runAll();
+    assertThat(window).isCompleted();
+    chain.setChainHead(header(MERGE + 1));
+    assertThat(blockchain.getChainHead().getTotalDifficulty())
+        .isEqualTo(totalDifficulty(MERGE + 1));
+  }
+
+  @Test
+  void review_aNetworkThatDoesNotMergeStoresNoTotalsAndTheHeadComputesThem() {
+    final SyncChain chain =
+        new SyncChain(
+            blockchain,
+            ProtocolScheduleFixture.MAINNET,
+            sender,
+            new HeaderFetcher(sender, ProtocolScheduleFixture.MAINNET, Optional::empty, 4),
+            Optional.of(checkpoint()),
+            new SyncChain.Settings(4, 16, WINDOW, true, false, Optional.empty()),
+            new NoOpMetricsSystem(),
+            executor,
+            windowWorkers,
+            delay -> resumes,
+            pauses::add);
+    chain.start(header(PIVOT));
+    executor.runAll();
+    assertThat(blockchain.getTotalDifficultyByHash(header(PIVOT - 1).getHash())).isEmpty();
+
+    chain.setChainHead(header(PIVOT));
+
+    assertThat(blockchain.getChainHead().getTotalDifficulty()).isEqualTo(totalDifficulty(PIVOT));
+  }
+
+  @Test
+  void review_theChainHeadIsSetWithoutTheWindow() {
+    final SyncChain chain = chain(Optional.empty(), false);
+    chain.start(header(PIVOT));
+    chain.downloadWindow(header(PIVOT - 4));
+    executor.runAll();
+
+    // the window is for another pivot and has not run
+    chain.setChainHead(header(PIVOT));
+
+    assertThat(blockchain.getChainHeadHeader()).isEqualTo(header(PIVOT));
+    assertThat(blockchain.getBlockBody(header(PIVOT).getHash())).isEmpty();
+  }
+
+  @Test
+  void review_aSecondStartLeavesTheFirstDownloadRunningAfterCancel() {
+    final SyncChain chain = chain(Optional.empty(), false);
+    chain.start(header(PIVOT));
+    chain.start(header(PIVOT));
+
+    chain.cancel();
+    executor.runAll();
+
+    // the first download was never stopped, and its writes do not check the cancel
+    assertThat(blockchain.getBlockHeader(PIVOT - 1)).isPresent();
+  }
+
   private SyncChain chain(final Optional<Checkpoint> checkpoint, final boolean toCheckpointOnly) {
     return chain(checkpoint, toCheckpointOnly, windowWorkers);
   }
