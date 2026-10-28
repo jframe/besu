@@ -287,6 +287,118 @@ class SyncChainTest {
   }
 
   @Test
+  void edgeCase2_aGenesisFloorBelowTheTerminalTotalStoresNoTotalsThenTheSlowPathComputesThem() {
+    final SyncChain chain = chain(Optional.empty(), false);
+    chain.start(header(PIVOT));
+    executor.runAll();
+
+    // no total above a proof-of-work floor, so the fast path cannot match
+    for (long number = 1; number <= PIVOT; number++) {
+      assertThat(blockchain.getTotalDifficultyByHash(header(number).getHash())).isEmpty();
+    }
+
+    chain.setChainHead(header(PIVOT));
+
+    for (long number = 1; number <= PIVOT; number++) {
+      assertThat(blockchain.getTotalDifficultyByHash(header(number).getHash()))
+          .contains(totalDifficulty(number));
+    }
+  }
+
+  @Test
+  void edgeCase2_aProofOfStakeCheckpointStoresItsTotalSoTheFastPathMatches() {
+    final SyncChain chain = chain(Optional.of(checkpoint()), true);
+    chain.start(header(PIVOT));
+    executor.runAll();
+    assertThat(blockchain.getTotalDifficultyByHash(header(PIVOT).getHash()))
+        .contains(totalDifficulty(MERGE));
+
+    chain.setChainHead(header(PIVOT));
+
+    assertThat(blockchain.getChainHead().getTotalDifficulty()).isEqualTo(totalDifficulty(PIVOT));
+  }
+
+  @Test
+  void edgeCase4_theHeaderDownloadOverwritesAStaleCanonicalEntryBelowThePivot() {
+    // left by an earlier attempt: another block at PIVOT - 3, with the checkpoint's total
+    final BlockHeader stale =
+        new BlockHeaderTestFixture()
+            .number(PIVOT - 3)
+            .parentHash(Hash.ZERO)
+            .difficulty(Difficulty.ZERO)
+            .buildHeader();
+    blockchain.storeBlockHeaders(List.of(stale), totalDifficulty(MERGE));
+    final SyncChain chain = chain(Optional.of(checkpoint()), true);
+
+    chain.start(header(PIVOT));
+    executor.runAll();
+
+    assertThat(chain.headersDone()).isCompleted();
+    assertThat(blockchain.getBlockHashByNumber(PIVOT - 3)).contains(header(PIVOT - 3).getHash());
+  }
+
+  @Test
+  void edgeCase4_aResumedHeaderDownloadOverwritesAStaleCanonicalEntry() {
+    final BlockHeader stale =
+        new BlockHeaderTestFixture()
+            .number(10)
+            .parentHash(Hash.ZERO)
+            .difficulty(Difficulty.ZERO)
+            .buildHeader();
+    blockchain.storeBlockHeaders(List.of(stale), totalDifficulty(MERGE));
+    final SyncChain chain = chain(Optional.of(checkpoint()), true);
+    // all but the first request by hash, which fetches the checkpoint
+    final java.util.concurrent.atomic.AtomicInteger byHash =
+        new java.util.concurrent.atomic.AtomicInteger();
+    sender.fail(
+        message ->
+            startOf(message).isEmpty()
+                ? byHash.incrementAndGet() > 1
+                : startOf(message).getAsLong() < 12);
+    chain.start(header(PIVOT));
+    executor.runAll();
+    assertThat(blockchain.getBlockHashByNumber(10)).contains(stale.getHash());
+
+    sender.fail(message -> false);
+    resumes.runAll();
+    executor.runAll();
+
+    assertThat(chain.headersDone()).isCompleted();
+    assertThat(blockchain.getBlockHashByNumber(10)).contains(header(10).getHash());
+  }
+
+  @Test
+  void edgeCase7_aChainThatDoesNotLinkFailsWithoutRetrying() {
+    final SyncChain chain = chain(Optional.empty(), false);
+    chain.start(header(PIVOT));
+    executor.runAll();
+    doThrow(new IllegalStateException("block 5 does not follow the canonical chain"))
+        .when(blockchain)
+        .unsafeSetSyncChainHead(any(), any());
+
+    assertThatThrownBy(() -> chain.setChainHead(header(PIVOT)))
+        .isInstanceOf(IllegalStateException.class);
+    verify(blockchain, times(1)).unsafeSetSyncChainHead(any(), any());
+    assertThat(pauses).isEmpty();
+  }
+
+  @Test
+  void edgeCase7_aStorageFailureOfTheSyncChainHeadIsRetried() {
+    final SyncChain chain = chain(Optional.empty(), false);
+    chain.start(header(PIVOT));
+    executor.runAll();
+    doThrow(new StorageException("not committed"))
+        .doCallRealMethod()
+        .when(blockchain)
+        .unsafeSetSyncChainHead(any(), any());
+
+    chain.setChainHead(header(PIVOT));
+
+    verify(blockchain, times(2)).unsafeSetSyncChainHead(any(), any());
+    assertThat(blockchain.getChainHeadHeader()).isEqualTo(header(PIVOT));
+  }
+
+  @Test
   void triesAWriteAgainUntilItCommits() {
     doThrow(new StorageException("not committed"))
         .doThrow(new StorageException("not committed"))
