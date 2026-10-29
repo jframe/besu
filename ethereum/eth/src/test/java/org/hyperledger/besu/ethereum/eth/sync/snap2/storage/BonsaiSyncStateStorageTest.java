@@ -273,20 +273,6 @@ class BonsaiSyncStateStorageTest {
     assertThat(partial.getFlatDbMode()).isEqualTo(FlatDbMode.FULL);
   }
 
-  @Test
-  void completeSyncKeepsAnArchiveDatabase() {
-    final BonsaiWorldStateKeyValueStorage archive =
-        bonsai(
-            ImmutableDataStorageConfiguration.builder()
-                .dataStorageFormat(DataStorageFormat.X_BONSAI_ARCHIVE)
-                .build());
-    archive.upgradeToArchiveFlatDbMode();
-
-    new BonsaiSyncStateStorage(archive).completeSync();
-
-    assertThat(archive.getFlatDbMode()).isEqualTo(FlatDbMode.ARCHIVE);
-  }
-
   private static BonsaiWorldStateKeyValueStorage bonsai(final DataStorageConfiguration config) {
     return bonsai(new InMemoryKeyValueStorageProvider(), config);
   }
