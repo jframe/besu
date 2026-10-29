@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.archive.trienode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_ARCHIVE_LATEST;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE_ARCHIVE;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL;
@@ -78,7 +79,7 @@ class ArchiveTrieNodeWriterTest {
   void setUp() {
     storage =
         new SegmentedInMemoryKeyValueStorage(
-            List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
+            List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE, TRIE_BRANCH_ARCHIVE_LATEST));
     historyStore = new ArchiveNodeHistoryStore(storage);
     coverageTracker = new ArchiveCoverageTracker(storage);
     trieNodeWriter =
@@ -104,6 +105,10 @@ class ArchiveTrieNodeWriterTest {
     tx.commit();
   }
 
+  private Optional<Integer> latestCounter(final Bytes naturalKey) {
+    return Optional.ofNullable(historyStore.getLatestCounters(List.of(naturalKey)).get(naturalKey));
+  }
+
   @Test
   void creationIsStoredAsFull() {
     final Bytes node = branchNode(0);
@@ -112,7 +117,7 @@ class ArchiveTrieNodeWriterTest {
 
     final var entry = historyStore.getLatestBefore(nk, 0L).orElseThrow();
     assertThat(entry.codecEntry().isFull()).isTrue();
-    assertThat(entry.counter()).isZero();
+    assertThat(latestCounter(nk)).contains(0);
     assertThat(coverageTracker.hasArchiveBlock(0L)).isTrue();
   }
 
@@ -124,7 +129,7 @@ class ArchiveTrieNodeWriterTest {
 
     final var diff = historyStore.getLatestBefore(nk, 1L).orElseThrow();
     assertThat(diff.block()).isEqualTo(1L);
-    assertThat(diff.counter()).isEqualTo(1);
+    assertThat(latestCounter(nk)).contains(1);
     assertThat(diff.codecEntry().isFull()).isFalse();
     assertThat(diff.codecEntry().isDeletion()).isFalse();
   }
@@ -138,6 +143,7 @@ class ArchiveTrieNodeWriterTest {
     final var tombstone = historyStore.getLatestBefore(nk, 1L).orElseThrow();
     assertThat(tombstone.block()).isEqualTo(1L);
     assertThat(tombstone.codecEntry().isDeletion()).isTrue();
+    assertThat(latestCounter(nk)).isEmpty();
   }
 
   @Test
@@ -177,6 +183,7 @@ class ArchiveTrieNodeWriterTest {
     writer.onBeforeCommit(tx);
 
     assertThat(historyStore.getLatestBefore(nk, 0L)).isPresent();
+    assertThat(latestCounter(nk)).contains(0);
     assertThat(coverageTracker.hasArchiveBlock(0L)).isTrue();
     tx.commit();
     assertThat(persistStorage.stream(TRIE_BRANCH_STORAGE_ARCHIVE)).isEmpty();
@@ -194,6 +201,7 @@ class ArchiveTrieNodeWriterTest {
     assertThatThrownBy(() -> writer.onBeforeCommit(tx)).isInstanceOf(IllegalStateException.class);
 
     assertThat(historyStore.getLatestBefore(nk, 5L)).isEmpty();
+    assertThat(latestCounter(nk)).isEmpty();
     assertThat(coverageTracker.getCoverage()).isEmpty();
   }
 
@@ -220,7 +228,7 @@ class ArchiveTrieNodeWriterTest {
     final var entry = historyStore.getLatestBefore(nk, 1L).orElseThrow();
     assertThat(entry.block()).isEqualTo(1L);
     assertThat(entry.codecEntry().isFull()).isFalse();
-    assertThat(entry.counter()).isEqualTo(1);
+    assertThat(latestCounter(nk)).contains(1);
   }
 
   @Test
@@ -229,10 +237,7 @@ class ArchiveTrieNodeWriterTest {
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
     final SegmentedKeyValueStorageTransaction seedTx = storage.startTransaction();
     historyStore.putEncoded(
-        seedTx,
-        ArchiveNodeKey.historyKey(nk, 0L),
-        ArchiveNodeHistoryStore.encodeStoredValue(
-            0, ArchiveTrieNodeCodec.encodeFull(branchNode(0))));
+        seedTx, ArchiveNodeKey.historyKey(nk, 0L), ArchiveTrieNodeCodec.encodeFull(branchNode(0)));
     seedTx.commit();
 
     assertNonContiguousBlockWritesFull(nk, 1L, branchNode(0));
@@ -266,11 +271,11 @@ class ArchiveTrieNodeWriterTest {
     writer.capture(nk, LOCATION, block, branchNode((int) block), prior, tx);
     assertThatThrownBy(() -> writer.onBeforeCommit(tx)).isInstanceOf(IllegalStateException.class);
 
-    final ArgumentCaptor<Bytes> storedValue = ArgumentCaptor.forClass(Bytes.class);
+    final ArgumentCaptor<Bytes> codecEntry = ArgumentCaptor.forClass(Bytes.class);
     verify(spiedStore)
-        .putEncoded(eq(tx), eq(ArchiveNodeKey.historyKey(nk, block)), storedValue.capture());
-    assertThat(storedValue.getValue().get(0)).as("counter").isZero();
-    assertThat(ArchiveTrieNodeEntry.isFullEncoded(storedValue.getValue().slice(1))).isTrue();
+        .putEncoded(eq(tx), eq(ArchiveNodeKey.historyKey(nk, block)), codecEntry.capture());
+    assertThat(ArchiveTrieNodeEntry.isFullEncoded(codecEntry.getValue())).isTrue();
+    verify(spiedStore).putLatestCounter(tx, nk, 0);
   }
 
   @Test
@@ -299,12 +304,11 @@ class ArchiveTrieNodeWriterTest {
 
     final var creation = historyStore.getLatestBefore(nk, 0L).orElseThrow();
     assertThat(creation.codecEntry().isFull()).isTrue();
-    assertThat(creation.counter()).isZero();
 
     final var diff = historyStore.getLatestBefore(nk, 1L).orElseThrow();
     assertThat(diff.codecEntry().isFull()).isFalse();
     assertThat(diff.codecEntry().isDeletion()).isFalse();
-    assertThat(diff.counter()).isEqualTo(1);
+    assertThat(latestCounter(nk)).contains(1);
   }
 
   @Test
@@ -331,9 +335,9 @@ class ArchiveTrieNodeWriterTest {
     assertThat(entry1.codecEntry().isFull())
         .as("drastic change must produce a FULL entry")
         .isTrue();
-    assertThat(entry1.counter())
-        .as("FULL entry produced by encodeDiff fallback must have counter == 0")
-        .isZero();
+    assertThat(latestCounter(nk))
+        .as("FULL entry produced by encodeDiff fallback must reset the counter")
+        .contains(0);
   }
 
   @Test
@@ -460,6 +464,35 @@ class ArchiveTrieNodeWriterTest {
             historyStore.getLatestBefore(nk, shallowInterval).orElseThrow().codecEntry().isFull())
         .as("shallow node must checkpoint at the shallow interval (%d)", shallowInterval)
         .isTrue();
+    assertThat(latestCounter(nk)).contains(0);
+  }
+
+  @Test
+  void missingLatestCounterWritesFullEvenWithPriorHistory() {
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
+    final SegmentedKeyValueStorageTransaction clear = storage.startTransaction();
+    historyStore.removeLatestCounter(clear, nk);
+    clear.commit();
+
+    enqueueAndCommit(1L, nk, LOCATION, branchNode(1), branchNode(0));
+
+    assertThat(historyStore.getLatestBefore(nk, 1L).orElseThrow().codecEntry().isFull()).isTrue();
+    assertThat(latestCounter(nk)).contains(0);
+  }
+
+  @Test
+  void latestCounterAtIntervalWritesFull() {
+    final Bytes nk = ArchiveNodeKey.account(LOCATION);
+    enqueueAndCommit(0L, nk, LOCATION, branchNode(0), null);
+    final SegmentedKeyValueStorageTransaction seed = storage.startTransaction();
+    historyStore.putLatestCounter(seed, nk, DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL - 1);
+    seed.commit();
+
+    enqueueAndCommit(1L, nk, LOCATION, branchNode(1), branchNode(0));
+
+    assertThat(historyStore.getLatestBefore(nk, 1L).orElseThrow().codecEntry().isFull()).isTrue();
+    assertThat(latestCounter(nk)).contains(0);
   }
 
   // ~530-byte node in which exactly one byte changes per block — a small, diff-friendly per-block
