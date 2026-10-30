@@ -160,19 +160,9 @@ class ArchiveTrieNodeWriterTest {
         .contains(new ArchiveCoverageTracker.Coverage(0L, 1L, header(1L).getBlockHash()));
   }
 
-  private ArchiveTrieNodeWriter lowPriorityWriter() {
-    return new ArchiveTrieNodeWriter(
-        historyStore,
-        coverageTracker,
-        Executors.newFixedThreadPool(2),
-        DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL,
-        DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL,
-        storage::startLowPriorityTransaction);
-  }
-
   @Test
   void archiveTransactionReceivesEntriesAndCoverageInsteadOfPersistTransaction() {
-    final ArchiveTrieNodeWriter writer = lowPriorityWriter();
+    final ArchiveTrieNodeWriter writer = trieNodeWriter;
     final SegmentedKeyValueStorage persistStorage =
         new SegmentedInMemoryKeyValueStorage(
             List.of(TRIE_BRANCH_STORAGE, TRIE_BRANCH_STORAGE_ARCHIVE));
@@ -205,7 +195,7 @@ class ArchiveTrieNodeWriterTest {
 
   @Test
   void archiveTransactionGetsNothingWhenTheBlockFails() {
-    final ArchiveTrieNodeWriter writer = lowPriorityWriter();
+    final ArchiveTrieNodeWriter writer = trieNodeWriter;
     final Bytes nk = ArchiveNodeKey.account(LOCATION);
 
     // Block 5 with no coverage: record refuses the gap after the entries are written.
